@@ -1,0 +1,7 @@
+/* admin-lottery.css — Binance Dark Theme */
+.detail-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;}
+.detail-item{padding:14px;background:var(--bg-card2);border:1px solid var(--border);border-radius:10px;}
+.detail-label{display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;}
+.detail-value{font-size:15px;font-weight:700;color:var(--text-primary);}
+.winner-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;background:linear-gradient(135deg,rgba(240,185,11,0.15),rgba(252,213,53,0.08));color:#F0B90B;border:1px solid rgba(240,185,11,0.25);}
+html.light .detail-item{background:#fafafa;}

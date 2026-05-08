@@ -1,0 +1,263 @@
+/* user-crypto-deposit.css - Generated from inline styles */
+
+.network-selection {
+    background: white;
+    border-radius: 10px;
+    padding: 30px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    margin-bottom: 25px;
+}
+
+.network-selection h3 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 25px 0;
+    font-size: 18px;
+    color: #333;
+}
+
+.network-selection h3 i {
+    color: #4fc3f7;
+    font-size: 28px;
+}
+
+.network-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.network-card {
+    position: relative;
+    cursor: pointer;
+}
+
+.network-card input[type="radio"] {
+    display: none;
+}
+
+.network-card label {
+    display: block;
+    padding: 25px;
+    border: 3px solid #e0e0e0;
+    border-radius: 15px;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    background: white;
+}
+
+.network-card:hover label {
+    border-color: #4fc3f7;
+    box-shadow: 0 4px 15px rgba(79, 195, 247, 0.2);
+    transform: translateY(-3px);
+}
+
+.network-card input:checked + label {
+    border-color: #4fc3f7;
+    background: rgba(79, 195, 247, 0.05);
+    box-shadow: 0 4px 15px rgba(79, 195, 247, 0.3);
+}
+
+.network-icon {
+    width: 60px;
+    height: 60px;
+    border-radius: 15px;
+    background: linear-gradient(135deg, #ffa726 0%, #fb8c00 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 15px;
+}
+
+.network-icon.trc20 {
+    background: linear-gradient(135deg, #f44336 0%, #e53935 100%);
+}
+
+.network-icon i {
+    font-size: 32px;
+    color: white;
+}
+
+.network-card h4 {
+    margin: 0 0 15px 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+}
+
+.network-features {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.feature {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    background: #f5f5f5;
+    border-radius: 20px;
+    font-size: 12px;
+    color: #666;
+}
+
+.feature i {
+    font-size: 16px;
+    color: #4fc3f7;
+}
+
+.wallet-address-card {
+    background: white;
+    border-radius: 15px;
+    padding: 30px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    margin-bottom: 25px;
+}
+
+.network-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 15px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 20px;
+}
+
+.network-badge.bnb20 {
+    background: rgba(255, 167, 38, 0.1);
+    color: #fb8c00;
+}
+
+.network-badge.trc20 {
+    background: rgba(244, 67, 54, 0.1);
+    color: #f44336;
+}
+
+.network-badge i {
+    font-size: 18px;
+}
+
+.wallet-address-card h3 {
+    margin: 0 0 20px 0;
+    font-size: 16px;
+    color: #333;
+}
+
+.address-display {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 25px;
+}
+
+.address-text {
+    flex: 1;
+    padding: 15px;
+    background: #f5f5f5;
+    border: 2px solid #e0e0e0;
+    border-radius: 10px;
+    font-family: monospace;
+    font-size: 13px;
+    word-break: break-all;
+    direction: ltr;
+}
+
+.copy-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 15px 20px;
+    background: #4fc3f7;
+    border: none;
+    border-radius: 10px;
+    color: white;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+}
+
+.copy-btn:hover {
+    background: #29b6f6;
+    transform: scale(1.05);
+}
+
+.copy-btn i {
+    font-size: 20px;
+}
+
+.qr-code {
+    text-align: center;
+    padding: 20px;
+    background: #fafafa;
+    border-radius: 10px;
+    margin-bottom: 20px;
+}
+
+.qr-code canvas {
+    margin: 0 auto;
+}
+
+.qr-code p {
+    margin: 10px 0 0 0;
+    font-size: 13px;
+    color: #666;
+}
+
+.verification-info {
+    display: flex;
+    gap: 15px;
+    padding: 20px;
+    background: rgba(76, 175, 80, 0.05);
+    border-radius: 10px;
+    border-right: 4px solid #4caf50;
+    margin: 25px 0;
+}
+
+.info-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: #4caf50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.info-icon i {
+    font-size: 28px;
+    color: white;
+}
+
+.info-content h4 {
+    margin: 0 0 8px 0;
+    font-size: 15px;
+    color: #333;
+}
+
+.info-content p {
+    margin: 0;
+    font-size: 13px;
+    color: #666;
+    line-height: 1.8;
+}
+
+@media (max-width: 768px) {
+    .network-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .address-display {
+        flex-direction: column;
+    }
+    
+    .copy-btn {
+        width: 100%;
+        justify-content: center;
+    }
+}

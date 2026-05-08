@@ -1,0 +1,9 @@
+/* Vazirmatn - Self-hosted */
+/* پس از اجرای download-vendors.bat فونت به این مسیر دانلود می‌شود */
+@font-face {
+  font-family: 'Vazirmatn';
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  src: url('Vazirmatn.woff2') format('woff2');
+}

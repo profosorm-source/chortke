@@ -1,0 +1,5 @@
+/* admin-notifications.css — Binance Dark Theme */
+.notification-item { border-right:3px solid transparent; transition:background 0.2s; }
+.notification-item.unread { background:rgba(240,185,11,0.05); border-right-color:var(--gold-primary,#F0B90B); }
+.notification-item:hover { background:rgba(255,255,255,0.03); }
+.notification-item.unread:hover { background:rgba(240,185,11,0.08); }

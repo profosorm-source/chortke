@@ -1,0 +1,6 @@
+/* admin-content.css — Binance Dark Theme */
+.calc-preview{background:var(--bg-card2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-top:20px;}
+.calc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-top:10px;}
+.calc-item{padding:14px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;text-align:center;}
+.calc-item .label{font-size:11px;color:var(--text-muted);} .calc-item .value{font-size:18px;font-weight:800;color:var(--text-primary);}
+html.light .calc-preview{background:#f8f9fa;} html.light .calc-item{background:#fff;}

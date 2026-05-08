@@ -1,0 +1,23 @@
+/* admin-withdrawals.css — Binance Dark Theme */
+
+.amount-badge { display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700; }
+.amount-badge.negative { background:rgba(246,70,93,0.1); color:#F6465D; border:1px solid rgba(246,70,93,0.2); }
+.amount-badge.positive { background:rgba(14,203,129,0.1); color:#0ECB81; border:1px solid rgba(14,203,129,0.2); }
+
+.destination-info,.wallet-info { display:flex;flex-direction:column;gap:5px; }
+
+.wallet-address {
+    font-family:monospace; font-size:11px;
+    background:rgba(255,255,255,0.06);
+    border:1px solid rgba(255,255,255,0.08);
+    padding:4px 8px; border-radius:6px;
+    direction:ltr; color:#B7BDC6;
+}
+
+.status-badge { display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600; }
+.status-badge.pending    { background:rgba(255,165,0,0.1);    color:#FFA500;   border:1px solid rgba(255,165,0,0.2); }
+.status-badge.processing { background:rgba(6,182,212,0.1);    color:#06b6d4;   border:1px solid rgba(6,182,212,0.2); }
+.status-badge.completed  { background:rgba(14,203,129,0.1);   color:#0ECB81;   border:1px solid rgba(14,203,129,0.2); }
+.status-badge.rejected   { background:rgba(246,70,93,0.1);    color:#F6465D;   border:1px solid rgba(246,70,93,0.2); }
+
+html.light .wallet-address { background:rgba(0,0,0,0.04); border-color:rgba(0,0,0,0.08); color:#474D57; }

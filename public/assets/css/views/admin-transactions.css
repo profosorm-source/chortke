@@ -1,0 +1,19 @@
+/* admin-transactions.css — Binance Dark Theme */
+
+.type-badge,.status-badge,.amount-badge {
+    display:inline-flex;align-items:center;gap:4px;
+    padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;
+}
+
+.type-badge.deposit     { background:rgba(14,203,129,0.1);  color:#0ECB81;   border:1px solid rgba(14,203,129,0.2); }
+.type-badge.withdraw    { background:rgba(246,70,93,0.1);   color:#F6465D;   border:1px solid rgba(246,70,93,0.2); }
+.type-badge.transfer    { background:rgba(6,182,212,0.1);   color:#06b6d4;   border:1px solid rgba(6,182,212,0.2); }
+.type-badge.commission  { background:rgba(240,185,11,0.1);  color:#F0B90B;   border:1px solid rgba(240,185,11,0.2); }
+.type-badge.task_reward { background:rgba(168,85,247,0.1);  color:#a855f7;   border:1px solid rgba(168,85,247,0.2); }
+.type-badge.penalty     { background:rgba(246,70,93,0.1);   color:#F6465D;   border:1px solid rgba(246,70,93,0.2); }
+
+.status-badge.pending    { background:rgba(255,165,0,0.1);  color:#FFA500;   border:1px solid rgba(255,165,0,0.2); }
+.status-badge.processing { background:rgba(6,182,212,0.1);  color:#06b6d4;   border:1px solid rgba(6,182,212,0.2); }
+.status-badge.completed  { background:rgba(14,203,129,0.1); color:#0ECB81;   border:1px solid rgba(14,203,129,0.2); }
+.status-badge.failed     { background:rgba(246,70,93,0.1);  color:#F6465D;   border:1px solid rgba(246,70,93,0.2); }
+.status-badge.cancelled  { background:rgba(132,142,156,0.1);color:#848E9C;   border:1px solid rgba(132,142,156,0.2); }

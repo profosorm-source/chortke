@@ -1,0 +1,15 @@
+/* admin-login.css — Binance Dark Theme (standalone page) */
+/* This file is kept for backward compatibility
+   The actual login page has its own inline styles */
+
+/* Login page variables */
+:root {
+    --gold: #F0B90B;
+    --gold-bright: #FCD535;
+    --gold-glow: rgba(240,185,11,0.35);
+    --bg-deep: #0B0E11;
+    --bg-card: #1E2329;
+    --border: #2B3139;
+    --text-primary: #EAECEF;
+    --text-muted: #848E9C;
+}

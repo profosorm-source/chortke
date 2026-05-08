@@ -1,0 +1,129 @@
+/* =============================================
+   user-social-tasks.css
+   ============================================= */
+
+/* ── Task Cards ── */
+.task-card {
+    transition: box-shadow 0.2s;
+    border: 1px solid var(--border-color, #e0e0e0);
+}
+.task-card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,.08);
+}
+
+/* ── Platform Badges ── */
+.platform-instagram { background: linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888); color:#fff; }
+.platform-telegram  { background: #2ca5e0; color: #fff; }
+.platform-twitter   { background: #1da1f2; color: #fff; }
+.platform-tiktok    { background: #010101; color: #fff; }
+
+/* ── Trust Score Bar ── */
+.trust-bar-wrap {
+    height: 6px;
+    background: #e0e0e0;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.trust-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width .4s ease;
+}
+.trust-bar-fill.high   { background: #4caf50; }
+.trust-bar-fill.mid    { background: #ff9800; }
+.trust-bar-fill.low    { background: #f44336; }
+
+/* ── Score Badges ── */
+.score-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.score-badge.good    { background: #e8f5e9; color: #2e7d32; }
+.score-badge.mid     { background: #fff3e0; color: #e65100; }
+.score-badge.bad     { background: #ffebee; color: #c62828; }
+
+/* ── Execute Page ── */
+.execute-timer {
+    font-size: 2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--primary-color, #1976d2);
+}
+
+.camera-verify-box {
+    border: 2px dashed #ff9800;
+    border-radius: 8px;
+    padding: 16px;
+    background: #fff8e1;
+    text-align: center;
+}
+.camera-verify-box .camera-icon {
+    font-size: 48px;
+    color: #ff9800;
+}
+
+/* ── History Table ── */
+.history-table th {
+    font-weight: 600;
+    font-size: 13px;
+    color: #666;
+    border-bottom: 2px solid #e0e0e0;
+}
+.history-table td {
+    font-size: 13px;
+    vertical-align: middle;
+}
+
+/* ── Dashboard Stats ── */
+.kpi-card {
+    text-align: center;
+    padding: 16px 12px;
+    border-radius: 8px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+}
+.kpi-card .kpi-value {
+    font-size: 1.8rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.kpi-card .kpi-label {
+    font-size: 11px;
+    color: #888;
+    margin-top: 4px;
+}
+
+/* ── Rating Stars ── */
+.star-rating {
+    display: inline-flex;
+    gap: 2px;
+}
+.star-rating .star {
+    cursor: pointer;
+    font-size: 20px;
+    color: #ccc;
+    transition: color .15s;
+}
+.star-rating .star.active,
+.star-rating .star:hover,
+.star-rating .star:hover ~ .star {
+    color: #ffc107;
+}
+
+/* ── Restriction Warning (silent) ──
+   این element در UI نشان داده نمی‌شود،
+   فقط برای اطلاع داخلی developer است */
+.restriction-debug { display: none; }
+
+/* ── Mobile Camera UI ── */
+@media (max-width: 576px) {
+    .camera-verify-box {
+        padding: 24px 12px;
+    }
+    .execute-timer {
+        font-size: 2.5rem;
+    }
+}

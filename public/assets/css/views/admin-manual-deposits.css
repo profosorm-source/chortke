@@ -1,0 +1,17 @@
+/* admin-manual-deposits.css — Binance Dark Theme */
+
+.amount-badge {
+    display:inline-block; padding:4px 10px;
+    background:rgba(14,203,129,0.1); color:#0ECB81;
+    border:1px solid rgba(14,203,129,0.2);
+    border-radius:20px; font-weight:700; font-size:12px;
+}
+.bank-name { display:block; font-size:11px; color:var(--text-muted); margin-top:3px; }
+.tracking-code {
+    font-family:monospace; font-size:12px;
+    background:rgba(255,255,255,0.06); border:1px solid var(--border);
+    padding:3px 8px; border-radius:6px; direction:ltr; color:#B7BDC6;
+}
+.time-badge { font-family:monospace; font-size:11px; color:var(--text-muted); }
+
+html.light .tracking-code { background:rgba(0,0,0,0.05); color:#474D57; }

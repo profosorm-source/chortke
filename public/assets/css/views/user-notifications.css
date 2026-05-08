@@ -1,0 +1,38 @@
+/* user-notifications.css - Generated from inline styles */
+
+.page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:15px}
+.notifications-list{max-width:950px;margin:0 auto}
+.notification-item{
+    background:#fff;border-radius:12px;padding:18px;margin-bottom:12px;display:flex;gap:16px;
+    box-shadow:0 2px 8px rgba(0,0,0,.06);transition:all .25s ease;border-right:4px solid transparent
+}
+.notification-item:hover{box-shadow:0 4px 12px rgba(0,0,0,.1);transform:translateX(-3px)}
+.notification-item.unread{background:#f0f8ff;border-right-color:#4fc3f7}
+.notification-item.read{opacity:.9}
+.notification-item.priority-urgent{border-right-color:#f44336}
+.notification-item.priority-high{border-right-color:#ffa726}
+
+.notif-icon{
+    width:52px;height:52px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+    flex-shrink:0;color:#fff;font-size:20px
+}
+.notif-icon.type-system{background:#2196f3}
+.notif-icon.type-task{background:#00bcd4}
+.notif-icon.type-payment{background:#3f51b5}
+.notif-icon.type-withdrawal{background:#ff9800}
+.notif-icon.type-deposit{background:#4caf50}
+.notif-icon.type-investment{background:#607d8b}
+.notif-icon.type-lottery{background:#9c27b0}
+.notif-icon.type-referral{background:#795548}
+.notif-icon.type-kyc{background:#009688}
+.notif-icon.type-security{background:#f44336}
+.notif-icon.type-promotion{background:#e91e63}
+
+.notif-content{flex:1}
+.notif-content h6{margin:0 0 6px;font-size:15px;font-weight:700}
+.notif-content p{margin:0 0 10px;font-size:13px;color:#555;line-height:1.9}
+.notif-action{display:inline-block;font-size:13px;color:#4fc3f7;text-decoration:none;font-weight:700}
+.notif-action:hover{text-decoration:underline}
+.notif-meta{display:flex;gap:10px;align-items:center;color:#999;font-size:12px}
+
+.notif-actions{display:flex;flex-direction:column;gap:8px}

@@ -1,0 +1,91 @@
+/* ===== Chortke Banner System ===== */
+
+.chortke-banner-container {
+    position: relative;
+    overflow: hidden;
+    border-radius: 10px;
+    margin-bottom: 15px;
+}
+
+.chortke-banner-slide {
+    display: none;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+}
+
+.chortke-banner-slide.active {
+    display: block;
+    opacity: 1;
+}
+
+.chortke-banner-item {
+    display: block;
+    width: 100%;
+}
+
+.chortke-banner-link {
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.chortke-banner-link:hover {
+    opacity: 0.95;
+}
+
+.chortke-banner-img {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 10px;
+    transition: transform 0.3s ease;
+}
+
+.chortke-banner-link:hover .chortke-banner-img {
+    transform: scale(1.01);
+}
+
+/* نقاط چرخش */
+.chortke-banner-dots {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    z-index: 10;
+}
+
+.chortke-banner-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.5);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.chortke-banner-dot.active {
+    background: #4fc3f7;
+    transform: scale(1.2);
+}
+
+.chortke-banner-dot:hover {
+    background: rgba(255,255,255,0.8);
+}
+
+/* ریسپانسیو */
+@media (max-width: 768px) {
+    .chortke-banner-container {
+        border-radius: 6px;
+    }
+    .chortke-banner-img {
+        border-radius: 6px;
+    }
+    .chortke-banner-dots {
+        bottom: 6px;
+    }
+    .chortke-banner-dot {
+        width: 8px;
+        height: 8px;
+    }
+}

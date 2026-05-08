@@ -1,0 +1,9 @@
+/* admin-cron.css */
+
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+/* Binance theme additions */
+.cron-status-active  {color:var(--green,#0ECB81);}
+.cron-status-error   {color:var(--red,#F6465D);}
+.cron-status-warning {color:var(--orange,#FFA500);}
+.cron-last-run       {font-size:11px;color:var(--text-muted);}
