@@ -1,0 +1,36 @@
+{
+    "name": "chortke/platform",
+    "description": "پلتفرم کسب درآمد آنلاین چرتکه",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "phpmailer/phpmailer": "^7.0",
+        "ext-pdo": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Core\\": "core/",
+            "App\\": "app/"
+        },
+        "files": [
+            "helpers/functions.php",
+            "helpers/config_helper.php",
+            "helpers/csrf_helper.php",
+            "helpers/security.php",
+            "helpers/view_helper.php",
+            "helpers/url_helper.php",
+            "helpers/auth_helper.php",
+            "helpers/date_helper.php",
+            "helpers/file_helper.php",
+            "helpers/response_helper.php",
+            "helpers/rate_limit_helper.php",
+            "helpers/captcha_helper.php",
+            "helpers/feature_flag_helpers.php",
+            "helpers/site_helper.php",
+            "helpers/JalaliDate.php"
+        ]
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}

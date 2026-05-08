@@ -1,0 +1,215 @@
+<?php
+
+declare(strict_types=1);
+namespace Core;
+
+/**
+ * Redis Session Handler
+ * 
+ * مدیریت Session با Redis + Fallback به File
+ * خودکار بین Redis و فایل سوئیچ می‌کند
+ */
+class RedisSessionHandler implements \SessionHandlerInterface
+{
+    private ?\Redis $redis = null;
+    private bool $useRedis = false;
+    private string $prefix = 'chortke:session:';
+    private int $ttl = 7200; // 2 hours default
+    private string $savePath = '';
+
+    public function __construct()
+    {
+        $this->tryConnectRedis();
+        $this->ttl = (int) config('session.lifetime', 7200);
+    }
+
+    private function tryConnectRedis(): void
+    {
+        // استفاده از تنظیمات مشترک Cache
+        $cache = \Core\Cache::getInstance();
+
+        if ($cache->driver() === 'redis') {
+            $this->redis = $cache->redis();
+            $this->useRedis = true;
+
+            if (function_exists('logger')) {
+                try {
+                    logger()->info('Session handler: Redis connected via Cache', []);
+                } catch (\Throwable $e) {
+                    // ignore logger errors
+                }
+            }
+        } else {
+            $this->redis = null;
+            $this->useRedis = false;
+
+            if (function_exists('logger')) {
+                try {
+                    logger()->info('Session handler: Fallback to file', []);
+                } catch (\Throwable $e) {
+                    // ignore logger errors
+                }
+            }
+        }
+    }
+
+    public function open(string $path, string $name): bool
+    {
+        if (!$this->useRedis) {
+            $this->savePath = $path ?: __DIR__ . '/../storage/sessions';
+            if (!is_dir($this->savePath)) {
+                mkdir($this->savePath, 0755, true);
+            }
+        }
+        return true;
+    }
+
+    public function close(): bool
+    {
+        return true;
+    }
+
+    public function read(string $id): string|false
+    {
+        if ($this->useRedis) {
+            try {
+                $data = $this->redis->get($this->prefix . $id);
+                return $data === false ? '' : $data;
+            } catch (\Throwable $e) {
+                $this->fallbackToFile($e);
+                return $this->fileRead($id);
+            }
+        }
+
+        return $this->fileRead($id);
+    }
+
+    public function write(string $id, string $data): bool
+    {
+        if ($this->useRedis) {
+            try {
+                return (bool) $this->redis->setEx(
+                    $this->prefix . $id,
+                    $this->ttl,
+                    $data
+                );
+            } catch (\Throwable $e) {
+                $this->fallbackToFile($e);
+                return $this->fileWrite($id, $data);
+            }
+        }
+
+        return $this->fileWrite($id, $data);
+    }
+
+    public function destroy(string $id): bool
+    {
+        if ($this->useRedis) {
+            try {
+                return (bool) $this->redis->del($this->prefix . $id);
+            } catch (\Throwable $e) {
+                $this->fallbackToFile($e);
+                return $this->fileDestroy($id);
+            }
+        }
+
+        return $this->fileDestroy($id);
+    }
+
+    public function gc(int $max_lifetime): int|false
+    {
+        if ($this->useRedis) {
+            // Redis automatically handles TTL
+            return 0;
+        }
+
+        return $this->fileGc($max_lifetime);
+    }
+
+    // ─────────────────────────────────────────────────
+    //  File Fallback Methods
+    // ─────────────────────────────────────────────────
+
+    private function fileRead(string $id): string|false
+    {
+        $file = $this->getFilePath($id);
+        if (!file_exists($file)) {
+            return '';
+        }
+
+        $data = @file_get_contents($file);
+        if ($data === false) {
+            return '';
+        }
+
+        return $data;
+    }
+
+    private function fileWrite(string $id, string $data): bool
+    {
+        $file = $this->getFilePath($id);
+        return file_put_contents($file, $data, LOCK_EX) !== false;
+    }
+
+    private function fileDestroy(string $id): bool
+    {
+        $file = $this->getFilePath($id);
+        if (file_exists($file)) {
+            return @unlink($file);
+        }
+        return true;
+    }
+
+    private function fileGc(int $max_lifetime): int|false
+    {
+        $files = glob($this->savePath . '/sess_*') ?: [];
+        $now = time();
+        $deleted = 0;
+
+        foreach ($files as $file) {
+            if (is_file($file) && ($now - filemtime($file) > $max_lifetime)) {
+                if (@unlink($file)) {
+                    $deleted++;
+                }
+            }
+        }
+
+        return $deleted;
+    }
+
+    private function getFilePath(string $id): string
+    {
+        return $this->savePath . '/sess_' . $id;
+    }
+
+    private function fallbackToFile(\Throwable $e): void
+    {
+        if ($this->useRedis) {
+            $this->useRedis = false;
+            $this->redis = null;
+
+            if (function_exists('logger')) {
+                try {
+                    logger()->warning('Redis session error, fallback to file', [
+                        'channel' => 'session',
+                        'error' => $e->getMessage()
+                    ]);
+                } catch (\Throwable $ignore) {}
+            }
+
+            // Initialize file path
+            $this->savePath = __DIR__ . '/../storage/sessions';
+            if (!is_dir($this->savePath)) {
+                mkdir($this->savePath, 0755, true);
+            }
+        }
+    }
+
+    /**
+     * Get current driver
+     */
+    public function driver(): string
+    {
+        return $this->useRedis ? 'redis' : 'file';
+    }
+}

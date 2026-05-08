@@ -1,0 +1,126 @@
+<?php
+/**
+ * تنظیمات اصلی سیستم
+ * 
+ * این فایل تنظیمات از .env را بارگذاری می‌کند
+ */
+
+return [
+    'app' => [
+        'name' => env('APP_NAME', 'Chortke'),
+        'env' => env('APP_ENV', 'local'),
+        'debug' => env('APP_DEBUG', true),
+        'url' => env('APP_URL', 'http://localhost'),
+        'timezone' => env('APP_TIMEZONE', 'Asia/Tehran'),
+        'key' => env('APP_KEY', ''),
+    ],
+    
+    'database' => [
+        'host' => env('DB_HOST', 'localhost'),
+        'port' => env('DB_PORT', 3306),
+        'name' => env('DB_NAME', 'chortke'),
+        'user' => env('DB_USER', 'root'),
+        'pass' => env('DB_PASS', ''),
+        'charset' => env('DB_CHARSET', 'utf8mb4'),
+    ],
+    
+    'session' => [
+        'lifetime' => env('SESSION_LIFETIME', 7200),
+        'name' => 'CHORTKE_SESSION',
+        // ── Fix #1: Lax برای سازگاری با OAuth callback (Google/Facebook)
+        // ── Fix #2: secure بر اساس HTTPS واقعی + trusted proxy (نه فقط APP_ENV)
+        'secure' => (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on')
+                 || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https'
+                     && in_array($_SERVER['REMOTE_ADDR'] ?? '', array_filter(array_map('trim', explode(',', env('TRUSTED_PROXIES', '127.0.0.1')))), true)),
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ],
+    
+    'csrf' => [
+        'token_name' => env('CSRF_TOKEN_NAME', '_csrf_token'),
+        'token_length' => 64,
+    ],
+    
+    'rate_limits' => [
+        'login' => [
+            'max_attempts' => env('RATE_LIMIT_LOGIN_MAX_ATTEMPTS', 5),
+            'decay_minutes' => env('RATE_LIMIT_LOGIN_DECAY_MINUTES', 15),
+        ],
+        'api' => [
+            'max_attempts' => env('RATE_LIMIT_API_MAX_ATTEMPTS', 100),
+            'decay_minutes' => env('RATE_LIMIT_API_DECAY_MINUTES', 1),
+        ],
+        'upload' => [
+            'max_attempts' => env('RATE_LIMIT_UPLOAD_MAX_ATTEMPTS', 10),
+            'decay_minutes' => env('RATE_LIMIT_UPLOAD_DECAY_MINUTES', 60),
+        ],
+    ],
+
+    'retry_policy' => [
+        'max_attempts' => env('RETRY_MAX_ATTEMPTS', 3),
+        'initial_delay_ms' => env('RETRY_INITIAL_DELAY_MS', 100),
+        'multiplier' => env('RETRY_BACKOFF_MULTIPLIER', 2),
+        'max_delay_ms' => env('RETRY_MAX_DELAY_MS', 2000),
+    ],
+
+    'circuit_breaker' => [
+        'failure_threshold' => env('CIRCUIT_FAILURE_THRESHOLD', 5),
+        'retry_timeout_seconds' => env('CIRCUIT_RETRY_TIMEOUT_SECONDS', 60),
+    ],
+    
+    // ── Fix #5: feature_flags از اینجا حذف شد
+    // ── منبع حقیقت واحد: config/feature_flags.php
+    // ── (برای دسترسی: config_load('feature_flags')['cache_enabled'])
+    
+    'upload' => [
+        'max_size' => env('MAX_UPLOAD_SIZE', 10485760), // 10MB
+        // ── Fix #3: مسیر آپلود خارج از public (برای فایل‌های خصوصی)
+        // ── UploadService خودش public/uploads vs storage/uploads را مدیریت می‌کند
+        'path' => __DIR__ . '/../storage/uploads/',
+        // ── Fix #4: allowed_videos حذف شد
+        // ── UploadService منبع حقیقت واحد برای MIME های مجاز است (IMAGE_MIMES)
+        // ── ویدیو توسط UploadService::DANGEROUS_EXT صریحاً رد می‌شود
+    ],
+    
+    'mail' => [
+        'driver' => env('MAIL_DRIVER', 'smtp'),
+        'host' => env('MAIL_HOST'),
+        'port' => env('MAIL_PORT', 587),
+        'username' => env('MAIL_USERNAME'),
+        'password' => env('MAIL_PASSWORD'),
+        'encryption' => env('MAIL_ENCRYPTION', 'tls'),
+        'from' => [
+            'address' => env('MAIL_FROM_ADDRESS'),
+            'name' => env('MAIL_FROM_NAME'),
+        ],
+    ],
+    
+    'payment' => [
+        'zarinpal' => [
+            'merchant_id' => env('ZARINPAL_MERCHANT_ID'),
+        ],
+        'nextpay' => [
+            'api_key' => env('NEXTPAY_API_KEY'),
+        ],
+        'idpay' => [
+            'api_key' => env('IDPAY_API_KEY'),
+        ],
+        'dgpay' => [
+            'api_key' => env('DGPAY_API_KEY'),
+        ],
+    ],
+    
+    'crypto' => [
+        'usdt' => [
+            'bnb20' => env('USDT_BNB20_ADDRESS'),
+            'trc20' => env('USDT_TRC20_ADDRESS'),
+            'erc20' => env('USDT_ERC20_ADDRESS'),
+            'ton' => env('USDT_TON_ADDRESS'),
+            'sol' => env('USDT_SOL_ADDRESS'),
+        ],
+    ],
+	'captcha' => [
+  'recaptcha_site_key'   => env('RECAPTCHA_SITE_KEY', ''),
+  'recaptcha_secret_key' => env('RECAPTCHA_SECRET_KEY', ''),
+],
+];
