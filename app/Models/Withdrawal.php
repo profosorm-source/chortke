@@ -74,10 +74,15 @@ class Withdrawal extends Model
             $params['currency'] = $currency;
         }
 
-        $sql .= " ORDER BY w.created_at DESC LIMIT {$limit} OFFSET {$offset}";
+        $sql .= " ORDER BY w.created_at DESC LIMIT :limit OFFSET :offset";
 
         $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
+        foreach ($params as $key => $val) {
+            $stmt->bindValue(':' . \ltrim($key, ':'), $val);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
 
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
@@ -108,28 +113,98 @@ class Withdrawal extends Model
         ?int $processedBy = null,
         ?string $transactionId = null
     ): bool {
-        $sql = "UPDATE " . static::$table . " SET status = :status, updated_at = NOW()";
-        $params = ['id' => $id, 'status' => $status];
-
-        if ($rejectionReason) {
-            $sql .= ", rejection_reason = :rejection_reason";
-            $params['rejection_reason'] = $rejectionReason;
+        try {
+            $this->db->beginTransaction();
+            
+            // 1. دریافت withdrawal
+            $withdrawal = $this->find($id);
+            if (!$withdrawal) {
+                $this->db->rollback();
+                return false;
+            }
+            
+            // 2. Validate state transition
+            $validTransitions = [
+                'pending' => ['processing', 'rejected'],
+                'processing' => ['completed', 'rejected'],
+                'completed' => [], // state terminal
+                'rejected' => [], // state terminal
+            ];
+            
+            $currentStatus = (string)($withdrawal->status ?? '');
+            if (!isset($validTransitions[$currentStatus]) || 
+                !\in_array($status, $validTransitions[$currentStatus], true)) {
+                $this->db->rollback();
+                return false;
+            }
+            
+            // 3. اگر completed شد → پردازش مالی کسر موجودی قفل‌شده
+            if ($status === 'completed') {
+                $walletModel = new Wallet($this->db);
+                
+                // بررسی موجودی قفل‌شده کافی
+                $lockedBalance = $walletModel->getLockedBalance((int)$withdrawal->user_id, (string)$withdrawal->currency);
+                if ($lockedBalance < (float)$withdrawal->amount) {
+                    $this->db->rollback();
+                    throw new \Exception('Insufficient locked balance to complete withdrawal.');
+                }
+                
+                // کسر از قفل‌شده
+                $walletModel->deductLocked((int)$withdrawal->user_id, (float)$withdrawal->amount, (string)$withdrawal->currency);
+                
+                // بروزرسانی زمان آخرین برداشت
+                $walletModel->updateLastWithdrawal((int)$withdrawal->user_id);
+                
+                // ثبت transaction log
+                $transactionModel = new Transaction($this->db, \Core\Container::getInstance()->make(\App\Contracts\LoggerInterface::class));
+                $transactionModel->create([
+                    'user_id' => $withdrawal->user_id,
+                    'type' => 'withdraw',
+                    'amount' => $withdrawal->amount,
+                    'currency' => $withdrawal->currency,
+                    'status' => 'completed',
+                    'reference_id' => "withdrawal_{$id}",
+                    'metadata' => ['withdrawal_id' => $id]
+                ]);
+            }
+            
+            // 4. اگر rejected شد → بازگرداندن و آزاد کردن موجودی قفل‌شده
+            if ($status === 'rejected') {
+                $walletModel = new Wallet($this->db);
+                $walletModel->unlockBalance((int)$withdrawal->user_id, (float)$withdrawal->amount, (string)$withdrawal->currency);
+            }
+            
+            // 5. Update withdrawal record
+            $sql = "UPDATE " . static::$table . " SET status = :status, updated_at = NOW()";
+            $params = ['id' => $id, 'status' => $status];
+            
+            if ($rejectionReason !== null) {
+                $sql .= ", rejection_reason = :rejection_reason";
+                $params['rejection_reason'] = $rejectionReason;
+            }
+            
+            if ($processedBy !== null) {
+                $sql .= ", processed_by = :processed_by, processed_at = NOW()";
+                $params['processed_by'] = $processedBy;
+            }
+            
+            if ($transactionId !== null) {
+                $sql .= ", transaction_id = :transaction_id";
+                $params['transaction_id'] = $transactionId;
+            }
+            
+            $sql .= " WHERE id = :id";
+            
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+            
+            $this->db->commit();
+            return true;
+            
+        } catch (\Exception $e) {
+            $this->db->rollback();
+            throw $e;
         }
-
-        if ($processedBy) {
-            $sql .= ", processed_by = :processed_by, processed_at = NOW()";
-            $params['processed_by'] = $processedBy;
-        }
-
-        if ($transactionId) {
-            $sql .= ", transaction_id = :transaction_id";
-            $params['transaction_id'] = $transactionId;
-        }
-
-        $sql .= " WHERE id = :id";
-
-        $stmt = $this->db->prepare($sql);
-        return $stmt->execute($params);
     }
 
     /**
@@ -146,9 +221,11 @@ class Withdrawal extends Model
                 LEFT JOIN user_bank_cards c ON w.card_id = c.id
                 WHERE w.status = 'pending'
                 ORDER BY w.created_at ASC
-                LIMIT {$limit} OFFSET {$offset}";
+                LIMIT :limit OFFSET :offset";
 
         $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
         $stmt->execute();
 
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
@@ -193,10 +270,15 @@ class Withdrawal extends Model
             $params['currency'] = $currency;
         }
 
-        $sql .= " ORDER BY w.created_at DESC LIMIT {$limit} OFFSET {$offset}";
+        $sql .= " ORDER BY w.created_at DESC LIMIT :limit OFFSET :offset";
 
         $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
+        foreach ($params as $key => $val) {
+            $stmt->bindValue(':' . \ltrim($key, ':'), $val);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
 
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
