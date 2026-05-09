@@ -22,7 +22,8 @@ use App\Contracts\LoggerInterface;
  * - Event-driven notifications
  * - Connection fallback
  */
-class WebSocketServiceextends \App\Services\BaseService
+class WebSocketService
+extends \App\Services\BaseService
 {
     private Redis $redis;
     private Database $db;
@@ -359,7 +360,8 @@ class WebSocketServiceextends \App\Services\BaseService
     public function getOnlineCount(): int
     {
         $pattern = self::PRESENCE_PREFIX . '*';
-        $keys = $this->redis->keys($pattern) ?? [];
+        // ✅ Using scanKeys() instead of keys() for performance
+        $keys = $this->redis->scanKeys($pattern);
         return count($keys);
     }
 

@@ -23,7 +23,7 @@ use Core\Database;
  * این سرویس هیچ‌وقت مستقیم صدا زده نمی‌شود
  * همه کال‌ها از طریق Core\Logger می‌آیند
  */
-class LogService
+class LogService extends BaseService
 {
     private Database $db;
     private ActivityLog $activityLog;
@@ -68,24 +68,37 @@ class LogService
     private int $maxContextSize = 5000;
     private int $retentionDays  = 90;
 
-   public function __construct(
-       Database $db,
-       ActivityLog $activityLog,
-       SystemLog $systemLog,
-       SecurityLog $securityLog,
-       PerformanceLog $performanceLog
-   ) {
-       $this->db = $db;
-       $this->activityLog = $activityLog;
-       $this->systemLog = $systemLog;
-       $this->securityLog = $securityLog;
-       $this->performanceLog = $performanceLog;
-       $this->logDir = dirname(__DIR__, 2) . '/storage/logs/';
+    public function __construct(
+        Database $db,
+        ActivityLog $activityLog,
+        SystemLog $systemLog,
+        SecurityLog $securityLog,
+        PerformanceLog $performanceLog,
+        ?LoggerInterface $logger = null
+    ) {
+        $realLogger = $logger ?? new class implements LoggerInterface {
+            public function emergency(string $message, array $context = []): void {}
+            public function alert(string $message, array $context = []): void {}
+            public function critical(string $message, array $context = []): void {}
+            public function error(string $message, array $context = []): void {}
+            public function warning(string $message, array $context = []): void {}
+            public function notice(string $message, array $context = []): void {}
+            public function info(string $message, array $context = []): void {}
+            public function debug(string $message, array $context = []): void {}
+            public function log(string $level, string $message, array $context = []): void {}
+        };
+        parent::__construct($realLogger);
+        $this->db = $db;
+        $this->activityLog = $activityLog;
+        $this->systemLog = $systemLog;
+        $this->securityLog = $securityLog;
+        $this->performanceLog = $performanceLog;
+        $this->logDir = dirname(__DIR__, 2) . '/storage/logs/';
 
-       if (!is_dir($this->logDir)) {
-           @mkdir($this->logDir, 0755, true);
-       }
-   }
+        if (!is_dir($this->logDir)) {
+            @mkdir($this->logDir, 0755, true);
+        }
+    }
 
     /**
      * ثبت لاگ سیستمی (file + database)
@@ -240,7 +253,7 @@ class LogService
         $this->writeToFile($type, $normalizedLevel, $message, $sanitized);
         
         // Database Log (فقط مهم‌ها یا force)
-        if ($forceDb || in_array($level, ['emergency', 'alert', 'critical', 'error'])) {
+        if ($forceDb || in_array($level, ['emergency', 'alert', 'critical', 'error', 'warning'])) {
             $this->writeToDatabase($type, $normalizedLevel, $message, $sanitized, $userId);
         }
     }
@@ -253,6 +266,9 @@ class LogService
         try {
             $file = $this->logDir . $type . '_' . date('Y-m-d') . '.log';
             $timestamp = date('Y-m-d H:i:s');
+            
+            // Limit message size to prevent disk exhaustion
+            $message = $this->sanitizeString($message, 2000);
             
             // Limit context size to prevent memory exhaustion
             $contextStr = '';

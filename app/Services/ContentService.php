@@ -1,5 +1,6 @@
 <?php
-// app/Services/ContentService.php
+
+declare(strict_types=1);
 
 namespace App\Services;
 
@@ -153,7 +154,7 @@ EOT;
             ]);
 
             // Log activity
-            $this->logInfo('content_submission', "User {$userId} submitted content #{$submissionId}");
+            $this->logInfo('content_submission', ['message' => "User {$userId} submitted content #{$submissionId}"]);
 
             // Clear cache
             $this->clearUserCache($userId);
@@ -164,10 +165,22 @@ EOT;
             );
             
         } catch (BusinessException $e) {
-            $this->logError('Error in submitContent', $e);
+            $this->logError('content.submission.business_failed', [
+                'user_id'   => $userId,
+                'error'     => $e->getMessage(),
+                'exception' => \get_class($e),
+                'file'      => $e->getFile(),
+                'line'      => $e->getLine(),
+            ]);
             throw $e;
         } catch (\Throwable $e) {
-            $this->logError('Unexpected error in submitContent', $e);
+            $this->logError('content.submission.unexpected_failed', [
+                'user_id'   => $userId,
+                'error'     => $e->getMessage(),
+                'exception' => \get_class($e),
+                'file'      => $e->getFile(),
+                'line'      => $e->getLine(),
+            ]);
             return $this->errorResponse('خطا در ثبت محتوا. لطفاً دوباره تلاش کنید.');
         }
     }
@@ -217,13 +230,20 @@ EOT;
                 'approved_by' => $adminId,
             ]);
 
-            $this->logInfo('content_approval', "Admin {$adminId} approved content #{$submissionId}");
+            $this->logInfo('content_approval', ['message' => "Admin {$adminId} approved content #{$submissionId}"]);
             $this->clearUserCache($submission->user_id);
 
             return $this->successResponse('محتوا با موفقیت تأیید شد.');
             
         } catch (\Throwable $e) {
-            $this->logError('Error in approveSubmission', $e);
+            $this->logError('content.approval.failed', [
+                'submission_id' => $submissionId,
+                'admin_id'      => $adminId,
+                'error'         => $e->getMessage(),
+                'exception'     => \get_class($e),
+                'file'          => $e->getFile(),
+                'line'          => $e->getLine(),
+            ]);
             return $this->errorResponse('خطا در تأیید محتوا.');
         }
     }
@@ -271,13 +291,20 @@ EOT;
                 'content_rejected'
             );
 
-            $this->logInfo('content_rejection', "Admin {$adminId} rejected content #{$submissionId}: {$reason}");
+            $this->logInfo('content_rejection', ['message' => "Admin {$adminId} rejected content #{$submissionId}: {$reason}"]);
             $this->clearUserCache($submission->user_id);
 
             return $this->successResponse('محتوا رد شد.');
             
         } catch (\Throwable $e) {
-            $this->logError('Error in rejectSubmission', $e);
+            $this->logError('content.rejection.failed', [
+                'submission_id' => $submissionId,
+                'admin_id'      => $adminId,
+                'error'         => $e->getMessage(),
+                'exception'     => \get_class($e),
+                'file'          => $e->getFile(),
+                'line'          => $e->getLine(),
+            ]);
             return $this->errorResponse('خطا در رد محتوا.');
         }
     }
@@ -329,13 +356,20 @@ EOT;
                 'content_published'
             );
 
-            $this->logInfo('content_publish', "Admin {$adminId} published content #{$submissionId}");
+            $this->logInfo('content_publish', ['message' => "Admin {$adminId} published content #{$submissionId}"]);
             $this->clearUserCache($submission->user_id);
 
             return $this->successResponse('محتوا با موفقیت منتشر شد.');
             
         } catch (\Throwable $e) {
-            $this->logError('Error in publishSubmission', $e);
+            $this->logError('content.publish.failed', [
+                'submission_id' => $submissionId,
+                'admin_id'      => $adminId,
+                'error'         => $e->getMessage(),
+                'exception'     => \get_class($e),
+                'file'          => $e->getFile(),
+                'line'          => $e->getLine(),
+            ]);
             return $this->errorResponse('خطا در انتشار محتوا.');
         }
     }
@@ -401,16 +435,30 @@ EOT;
             // Send notification
             $this->sendRevenueNotification($submission, $revenueData, $period);
 
-            $this->logInfo('content_revenue', "Admin {$adminId} added revenue #{$revenueId} for content #{$submissionId}");
+            $this->logInfo('content_revenue', ['message' => "Admin {$adminId} added revenue #{$revenueId} for content #{$submissionId}"]);
             $this->clearUserCache($submission->user_id);
 
             return $this->successResponse('درآمد با موفقیت ثبت شد.', ['revenue_id' => $revenueId]);
             
         } catch (BusinessException $e) {
-            $this->logError('Error in recordRevenue', $e);
+            $this->logError('content.revenue.business_failed', [
+                'submission_id' => $submissionId,
+                'admin_id'      => $adminId,
+                'error'         => $e->getMessage(),
+                'exception'     => \get_class($e),
+                'file'          => $e->getFile(),
+                'line'          => $e->getLine(),
+            ]);
             throw $e;
         } catch (\Throwable $e) {
-            $this->logError('Unexpected error in recordRevenue', $e);
+            $this->logError('content.revenue.unexpected_failed', [
+                'submission_id' => $submissionId,
+                'admin_id'      => $adminId,
+                'error'         => $e->getMessage(),
+                'exception'     => \get_class($e),
+                'file'          => $e->getFile(),
+                'line'          => $e->getLine(),
+            ]);
             return $this->errorResponse('خطا در ثبت درآمد.');
         }
     }
@@ -488,7 +536,7 @@ EOT;
 
             $this->logInfo(
                 'content_payment',
-                "Admin {$adminId} paid revenue #{$revenueId} = {$revenue->net_user_amount} {$currency}"
+                ['message' => "Admin {$adminId} paid revenue #{$revenueId} = {$revenue->net_user_amount} {$currency}"]
             );
             
             $this->clearUserCache($revenue->user_id);
@@ -496,7 +544,14 @@ EOT;
             return $this->successResponse("مبلغ {$amount} {$currencyLabel} با موفقیت واریز شد.");
             
         } catch (\Throwable $e) {
-            $this->logError('Error in payRevenue', $e);
+            $this->logError('content.pay_revenue.failed', [
+                'revenue_id' => $revenueId,
+                'admin_id'   => $adminId,
+                'error'      => $e->getMessage(),
+                'exception'  => \get_class($e),
+                'file'       => $e->getFile(),
+                'line'       => $e->getLine(),
+            ]);
             return $this->errorResponse('خطا در پرداخت درآمد.');
         }
     }
@@ -538,13 +593,20 @@ EOT;
                 'content_suspended'
             );
 
-            $this->logInfo('content_suspended', "Admin {$adminId} suspended content #{$submissionId}: {$reason}");
+            $this->logInfo('content_suspended', ['message' => "Admin {$adminId} suspended content #{$submissionId}: {$reason}"]);
             $this->clearUserCache($submission->user_id);
 
             return $this->successResponse('محتوا تعلیق شد.');
             
         } catch (\Throwable $e) {
-            $this->logError('Error in suspendSubmission', $e);
+            $this->logError('content.suspension.failed', [
+                'submission_id' => $submissionId,
+                'admin_id'      => $adminId,
+                'error'         => $e->getMessage(),
+                'exception'     => \get_class($e),
+                'file'          => $e->getFile(),
+                'line'          => $e->getLine(),
+            ]);
             return $this->errorResponse('خطا در تعلیق محتوا.');
         }
     }
@@ -868,7 +930,14 @@ EOT;
         try {
             $this->notificationService->send($userId, $type, $title, $message);
         } catch (\Throwable $e) {
-            $this->logError('Failed to send notification', $e);
+            $this->logError('content.notification.failed', [
+                'user_id'   => $userId,
+                'title'     => $title,
+                'error'     => $e->getMessage(),
+                'exception' => \get_class($e),
+                'file'      => $e->getFile(),
+                'line'      => $e->getLine(),
+            ]);
         }
     }
 
@@ -884,7 +953,13 @@ EOT;
             $this->cache->forget("user_content_stats_{$userId}");
             $this->cache->forget("user_revenue_{$userId}");
         } catch (\Throwable $e) {
-            $this->logError('Failed to clear cache', $e);
+            $this->logError('content.cache_clear.failed', [
+                'user_id'   => $userId,
+                'error'     => $e->getMessage(),
+                'exception' => \get_class($e),
+                'file'      => $e->getFile(),
+                'line'      => $e->getLine(),
+            ]);
         }
     }
 

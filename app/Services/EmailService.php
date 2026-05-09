@@ -1,13 +1,15 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
-use Core\Logger;
-
+use App\Contracts\LoggerInterface;
 use App\Models\EmailQueue;
 use App\Models\NotificationPreference;
 use App\Models\Setting;
 use App\Models\User;
+use Core\Queue;
 
 /**
  * EmailService — سرویس مرکزی ارسال ایمیل
@@ -27,7 +29,7 @@ class EmailService extends \App\Services\BaseService
     private Setting                $settingModel;
     private EmailQueue             $emailQueue;
     private NotificationPreference $prefModel;
-    private \Core\Queue            $queue;
+    private Queue                  $queue;
 
     private string $smtpHost;
     private int    $smtpPort;
@@ -38,12 +40,12 @@ class EmailService extends \App\Services\BaseService
     private string $fromName;
 
     public function __construct(
-        Logger                 $logger,
+        LoggerInterface        $logger,
         EmailQueue             $emailQueue,
         NotificationPreference $prefModel,
         Setting                $settingModel,
         User                   $userModel,
-        \Core\Queue            $queue
+        Queue                  $queue
     ) {
         parent::__construct($logger);
         $this->emailQueue   = $emailQueue;
@@ -63,13 +65,13 @@ class EmailService extends \App\Services\BaseService
     {
         $s = $this->settingModel;
 
-        $this->smtpHost       = $this->resolve($s->get('smtp_host'),       env('MAIL_HOST',         '127.0.0.1'));
+        $this->smtpHost       = (string) $this->resolve($s->get('smtp_host'),       env('MAIL_HOST',         '127.0.0.1'));
         $this->smtpPort       = (int) $this->resolve($s->get('smtp_port'), env('MAIL_PORT',         1025));
-        $this->smtpUsername   = $this->resolve($s->get('smtp_username'),   env('MAIL_USERNAME',     ''));
-        $this->smtpPassword   = $this->resolve($s->get('smtp_password'),   env('MAIL_PASSWORD',     ''));
-        $this->smtpEncryption = $this->resolve($s->get('smtp_encryption'), env('MAIL_ENCRYPTION',   ''));
-        $this->fromEmail      = $this->resolve($s->get('smtp_from_email'), env('MAIL_FROM_ADDRESS', 'noreply@example.com'));
-        $this->fromName       = $this->resolve($s->get('smtp_from_name'),  env('MAIL_FROM_NAME',    'سایت'));
+        $this->smtpUsername   = (string) $this->resolve($s->get('smtp_username'),   env('MAIL_USERNAME',     ''));
+        $this->smtpPassword   = (string) $this->resolve($s->get('smtp_password'),   env('MAIL_PASSWORD',     ''));
+        $this->smtpEncryption = (string) $this->resolve($s->get('smtp_encryption'), env('MAIL_ENCRYPTION',   ''));
+        $this->fromEmail      = (string) $this->resolve($s->get('smtp_from_email'), env('MAIL_FROM_ADDRESS', 'noreply@example.com'));
+        $this->fromName       = (string) $this->resolve($s->get('smtp_from_name'),  env('MAIL_FROM_NAME',    'سایت'));
     }
 
     /** اگه DB مقدار داشت همون، وگرنه ENV */
@@ -88,6 +90,24 @@ class EmailService extends \App\Services\BaseService
      */
     public function sendDirect(string $toEmail, string $toName, string $subject, string $bodyHtml): bool
     {
+        // Input validation
+        if (!filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            $this->logger->error('email.send_direct.invalid_email', ['email' => $toEmail]);
+            throw new \InvalidArgumentException('Invalid email address: ' . $toEmail);
+        }
+
+        if (empty($toName) || strlen($toName) > 255) {
+            throw new \InvalidArgumentException('Invalid recipient name: must be non-empty and max 255 chars');
+        }
+
+        if (empty($subject) || strlen($subject) > 255) {
+            throw new \InvalidArgumentException('Invalid subject: must be non-empty and max 255 chars');
+        }
+
+        if (empty($bodyHtml) || strlen($bodyHtml) > 50000) {
+            throw new \InvalidArgumentException('Invalid body: must be non-empty and max 50000 chars');
+        }
+
         try {
             return $this->sendViaSMTP($toEmail, $toName, $subject, $bodyHtml);
         } catch (\Exception $e) {
@@ -118,6 +138,27 @@ class EmailService extends \App\Services\BaseService
         string  $priority    = 'normal',
         ?string $scheduledAt = null
     ): ?int {
+        // Input validation
+        if ($userId <= 0) {
+            throw new \InvalidArgumentException('Invalid user ID: must be positive');
+        }
+
+        if (empty($subject) || strlen($subject) > 255) {
+            throw new \InvalidArgumentException('Invalid subject: must be non-empty and max 255 chars');
+        }
+
+        if (empty($bodyHtml) || strlen($bodyHtml) > 50000) {
+            throw new \InvalidArgumentException('Invalid body: must be non-empty and max 50000 chars');
+        }
+
+        if (!in_array($priority, ['low', 'normal', 'high'], true)) {
+            throw new \InvalidArgumentException('Invalid priority: must be low, normal, or high');
+        }
+
+        if ($scheduledAt !== null && !strtotime($scheduledAt)) {
+            throw new \InvalidArgumentException('Invalid scheduled_at date format');
+        }
+
         try {
             $user = $this->userModel->find($userId);
             if (!$user || !$user->email) {
@@ -395,11 +436,12 @@ class EmailService extends \App\Services\BaseService
                     $mail->Username = $this->smtpUsername;
                     $mail->Password = $this->smtpPassword;
                 }
+                $isProd = (env('APP_ENV', 'production') === 'production');
                 $mail->SMTPOptions = [
                     'ssl' => [
-                        'verify_peer'       => false,
-                        'verify_peer_name'  => false,
-                        'allow_self_signed' => true,
+                        'verify_peer'       => $isProd,
+                        'verify_peer_name'  => $isProd,
+                        'allow_self_signed' => !$isProd,
                     ],
                 ];
             }
@@ -422,17 +464,17 @@ class EmailService extends \App\Services\BaseService
             return true;
 
         } catch (\Exception $e) {
-    $this->logger->error('email.smtp.failed', [
-        'channel' => 'email',
-        'to' => $toEmail,
-        'error' => $e->getMessage(),
-        'host' => $this->smtpHost . ':' . $this->smtpPort,
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-    return false;
-}
+            $this->logger->error('email.smtp.failed', [
+                'channel' => 'email',
+                'to' => $toEmail,
+                'error' => $e->getMessage(),
+                'host' => $this->smtpHost . ':' . $this->smtpPort,
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            return false;
+        }
     }
 
     // =========================================================================
@@ -447,10 +489,28 @@ class EmailService extends \App\Services\BaseService
             return $this->getDefaultTemplate($vars);
         }
 
-        extract($vars);
-        ob_start();
-        include $templatePath;
-        return ob_get_clean();
+        // کپسوله‌سازی فرآیند اجرای قالب در یک تابع استاتیک منزوی جهت پیشگیری کامل از Variable Injection
+        $render = static function (string $__templatePath, array $__vars): string {
+            extract($__vars, EXTR_SKIP);
+            ob_start();
+            try {
+                include $__templatePath;
+            } catch (\Throwable $e) {
+                ob_end_clean();
+                throw $e;
+            }
+            return ob_get_clean();
+        };
+
+        try {
+            return $render($templatePath, $vars);
+        } catch (\Throwable $e) {
+            $this->logger->error('email.template_render.failed', [
+                'template' => $template,
+                'error' => $e->getMessage()
+            ]);
+            return $this->getDefaultTemplate($vars);
+        }
     }
 
     private function getDefaultTemplate(array $vars): string

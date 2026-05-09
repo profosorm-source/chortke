@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Models\FeatureFlag;
@@ -43,8 +45,22 @@ class FeatureFlagService extends \App\Services\BaseService
             return (bool)$cached;
         }
 
-        $feature = $this->featureModel->findByName($name);
-        if (!$feature || !$feature->enabled) {
+        try {
+            $feature = $this->featureModel->findByName($name);
+        } catch (\Throwable $e) {
+            $feature = null;
+        }
+
+        if (!$feature) {
+            $fallbackEnabled = config("feature_flags.{$name}.enabled");
+            if ($fallbackEnabled !== null) {
+                return (bool)$fallbackEnabled;
+            }
+            $this->cache->put($cacheKey, 0, 5);
+            return false;
+        }
+
+        if (!$feature->enabled) {
             $this->cache->put($cacheKey, 0, 5);
             return false;
         }
@@ -135,6 +151,13 @@ class FeatureFlagService extends \App\Services\BaseService
         if (is_array($config) && isset($config[$configKey])) {
             return $config[$configKey];
         }
+        
+        // بازگشت به فایل کانفیگ به عنوان Fallback لایه زیرساخت
+        $configValue = config("feature_flags.{$featureName}.{$configKey}");
+        if ($configValue !== null) {
+            return $configValue;
+        }
+        
         return $default;
     }
 
@@ -188,10 +211,11 @@ class FeatureFlagService extends \App\Services\BaseService
             $routes = json_decode($feature->targeted_routes, true) ?? [];
             $currentRoute = $userContext['route'] ?? ($_SERVER['REQUEST_URI'] ?? null);
             
-            if (!empty($routes)) {
+            if (!empty($routes) && $currentRoute !== null) {
                 $match = false;
                 foreach ($routes as $route) {
-                    if (strpos($currentRoute, $route) !== false) {
+                    // تطابق دقیق یا تطابق کامل پیشوند پوشه برای تضمین امنیت و عدم دور زدن مسیرها
+                    if ($currentRoute === $route || strpos($currentRoute, $route . '/') === 0 || strpos($currentRoute, $route . '?') === 0) {
                         $match = true;
                         break;
                     }

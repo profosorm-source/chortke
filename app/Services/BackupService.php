@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Models\BackupLog;
@@ -36,6 +38,7 @@ class BackupService extends \App\Services\BaseService
      */
     public function createBackup(?string $description = null): array
     {
+        $cnfFile = null;
         try {
             $timestamp = date('YmdHis');
             $filename = "backup_{$timestamp}.sql";
@@ -47,12 +50,18 @@ class BackupService extends \App\Services\BaseService
             $dbPass = env('DB_PASSWORD', '');
             $dbHost = env('DB_HOST', 'localhost');
 
-            // دستور mysqldump
+            // ساخت فایل موقت تنظیمات جهت مخفی‌سازی پسورد دیتابیس
+            $cnfFile = tempnam(sys_get_temp_dir(), 'mycnf_');
+            $cnfContent = sprintf("[client]\npassword=%s\n", $dbPass);
+            file_put_contents($cnfFile, $cnfContent);
+            chmod($cnfFile, 0600);
+
+            // دستور mysqldump با استفاده از --defaults-extra-file
             $command = sprintf(
-                'mysqldump --host=%s --user=%s --password=%s %s > %s 2>&1',
+                'mysqldump --defaults-extra-file=%s --host=%s --user=%s %s > %s 2>&1',
+                escapeshellarg($cnfFile),
                 escapeshellarg($dbHost),
                 escapeshellarg($dbUser),
-                $dbPass ? escapeshellarg($dbPass) : '',
                 escapeshellarg($dbName),
                 escapeshellarg($filepath)
             );
@@ -98,6 +107,10 @@ class BackupService extends \App\Services\BaseService
                 'success' => false,
                 'error' => $e->getMessage()
             ];
+        } finally {
+            if ($cnfFile && file_exists($cnfFile)) {
+                unlink($cnfFile);
+            }
         }
     }
 
@@ -179,18 +192,34 @@ class BackupService extends \App\Services\BaseService
      */
     public function restoreBackup(string $filename): array
     {
+        $cnfFile = null;
         try {
+            $filename = basename($filename);
             $filepath = $this->backupDir . '/' . $filename;
             $gzFilepath = $filepath . '.gz';
 
+            $baseReal = realpath($this->backupDir);
+            if ($baseReal === false) {
+                throw new \Exception('Backup directory is invalid');
+            }
+
             // بررسی وجود فایل
             if (file_exists($gzFilepath)) {
+                $gzReal = realpath($gzFilepath);
+                if ($gzReal === false || strpos($gzReal, $baseReal) !== 0) {
+                    throw new \Exception('Path traversal detected or file is invalid');
+                }
                 // unzip
                 exec("gunzip " . escapeshellarg($gzFilepath), $output, $exitCode);
                 if ($exitCode !== 0) {
                     throw new \Exception('Failed to unzip backup file');
                 }
-            } elseif (!file_exists($filepath)) {
+            } elseif (file_exists($filepath)) {
+                $fileReal = realpath($filepath);
+                if ($fileReal === false || strpos($fileReal, $baseReal) !== 0) {
+                    throw new \Exception('Path traversal detected or file is invalid');
+                }
+            } else {
                 throw new \Exception('Backup file not found');
             }
 
@@ -200,12 +229,18 @@ class BackupService extends \App\Services\BaseService
             $dbPass = env('DB_PASSWORD', '');
             $dbHost = env('DB_HOST', 'localhost');
 
-            // دستور mysql import
+            // ساخت فایل موقت تنظیمات جهت مخفی‌سازی پسورد دیتابیس
+            $cnfFile = tempnam(sys_get_temp_dir(), 'mycnf_');
+            $cnfContent = sprintf("[client]\npassword=%s\n", $dbPass);
+            file_put_contents($cnfFile, $cnfContent);
+            chmod($cnfFile, 0600);
+
+            // دستور mysql import با استفاده از --defaults-extra-file
             $command = sprintf(
-                'mysql --host=%s --user=%s --password=%s %s < %s 2>&1',
+                'mysql --defaults-extra-file=%s --host=%s --user=%s %s < %s 2>&1',
+                escapeshellarg($cnfFile),
                 escapeshellarg($dbHost),
                 escapeshellarg($dbUser),
-                $dbPass ? escapeshellarg($dbPass) : '',
                 escapeshellarg($dbName),
                 escapeshellarg($filepath)
             );
@@ -235,6 +270,10 @@ class BackupService extends \App\Services\BaseService
                 'success' => false,
                 'error' => $e->getMessage()
             ];
+        } finally {
+            if ($cnfFile && file_exists($cnfFile)) {
+                unlink($cnfFile);
+            }
         }
     }
 

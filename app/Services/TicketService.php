@@ -1,27 +1,34 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Models\Ticket;
 use App\Models\TicketMessage;
-
+use Core\Database;
 use App\Contracts\LoggerInterface;
+use App\Services\Notification\NotificationService;
+
 class TicketService extends \App\Services\BaseService
 {
-    private \Core\Database $db;
+    private Database $db;
     private Ticket $ticketModel;
     private TicketMessage $messageModel;
+    private NotificationService $notificationService;
     
     public function __construct(
-        \App\Models\Ticket $ticketModel,
-        \App\Models\TicketMessage $messageModel,
-        \Core\Database $db,
-        LoggerInterface $logger
+        Ticket $ticketModel,
+        TicketMessage $messageModel,
+        Database $db,
+        LoggerInterface $logger,
+        NotificationService $notificationService
     ) {
         parent::__construct($logger);
         $this->ticketModel = $ticketModel;
         $this->messageModel = $messageModel;
         $this->db = $db;
+        $this->notificationService = $notificationService;
     }
     
     /**
@@ -36,14 +43,25 @@ class TicketService extends \App\Services\BaseService
             ];
         }
 
+        $categoryId = isset($data['category_id']) ? (int)$data['category_id'] : 0;
+        if ($categoryId <= 0) {
+            return [
+                'success' => false,
+                'message' => 'انتخاب دسته‌بندی تیکت الزامی است.'
+            ];
+        }
+
+        // ضدعفونی موضوع جهت مقابله با حملات XSS
+        $subject = htmlspecialchars(strip_tags($data['subject']), ENT_QUOTES, 'UTF-8');
+
         $this->db->beginTransaction();
         
         try {
             // ایجاد تیکت
             $ticketId = $this->ticketModel->create([
                 'user_id' => $userId,
-                'category_id' => $data['category_id'],
-                'subject' => $data['subject'],
+                'category_id' => $categoryId,
+                'subject' => $subject,
                 'priority' => $data['priority'] ?? 'normal'
             ]);
             
@@ -60,14 +78,14 @@ class TicketService extends \App\Services\BaseService
                 'is_admin' => false
             ]);
             
-            // لاگ
-            $this->logger->activity('ticket_created', "تیکت جدید ایجاد شد: {$data['subject']}", $userId, [
+            // لاگ نویسی دقیق بدون آرایه تکراری بی‌اثر
+            $this->logger->activity('ticket_created', "تیکت جدید ایجاد شد: {$subject}", $userId, [
                 'ticket_id' => $ticketId
-            ] ?? []);
+            ]);
             
             // نوتیفیکیشن به ادمین
             if (function_exists('notify_admins')) {
-                notify_admins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$data['subject']}", "/admin/tickets/show/{$ticketId}");
+                notify_admins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$subject}", "/admin/tickets/show/{$ticketId}");
             }
             
             $this->db->commit();
@@ -124,9 +142,9 @@ class TicketService extends \App\Services\BaseService
             // بروزرسانی تیکت
             $this->ticketModel->updateLastReply($ticketId, $isAdmin ? 'admin' : 'user');
             
-            // نوتیفیکیشن
+            // نوتیفیکیشن صریح از طریق وابستگی تزریق شده سازنده (Constructor DI)
             if ($isAdmin) {
-                app(\App\Services\Notification\NotificationService::class)->send($ticket->user_id, 'info', "پاسخ جدید برای تیکت: {$ticket->subject}", "/tickets/show/{$ticketId}");
+                $this->notificationService->send($ticket->user_id, 'info', "پاسخ جدید برای تیکت: {$ticket->subject}", "/tickets/show/{$ticketId}");
             } else {
                 if (function_exists('notify_admins')) {
                     notify_admins('info', 'پاسخ جدید تیکت', "پاسخ جدید از کاربر در تیکت #{$ticketId}", "/admin/tickets/show/{$ticketId}");

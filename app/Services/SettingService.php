@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Models\Setting;
@@ -16,18 +18,20 @@ class SettingService extends \App\Services\BaseService
     private const CACHE_KEY = 'system:settings';
     private const CACHE_TTL = 60; // دقیقه
 
-    // فایل cache قدیمی (سازگاری به عقب)
+    // فایل cache استاندارد JSON
     private string $cacheFile;
 
     public function __construct(
         Setting $model,
         \Core\Database $db,
-        Cache $cache
+        Cache $cache,
+        LoggerInterface $logger
     ) {
+        parent::__construct($logger);
         $this->model     = $model;
         $this->db        = $db;
         $this->cache     = $cache;
-        $this->cacheFile = __DIR__ . '/../../storage/cache/system_settings.php';
+        $this->cacheFile = __DIR__ . '/../../storage/cache/system_settings.json';
     }
 
     // ─────────────────────────────────────────────────
@@ -42,11 +46,14 @@ class SettingService extends \App\Services\BaseService
             return $cached;
         }
 
-        // ② فایل PHP قدیمی (اگر Redis در دسترس نبود و فایل وجود داشت)
+        // ② فایل JSON (اگر Redis در دسترس نبود و فایل وجود داشت)
         if ($this->cache->driver() === 'file' && file_exists($this->cacheFile)) {
-            $data = include $this->cacheFile;
-            if (is_array($data)) {
-                return $data;
+            $raw = @file_get_contents($this->cacheFile);
+            if ($raw !== false && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    return $data;
+                }
             }
         }
 
@@ -56,9 +63,9 @@ class SettingService extends \App\Services\BaseService
         // ذخیره در کش
         $this->cache->put(self::CACHE_KEY, $settings, self::CACHE_TTL);
 
-        // ذخیره فایل PHP (فقط در حالت فایل — برای سازگاری)
+        // ذخیره فایل JSON (فقط در حالت فایل — برای سازگاری)
         if ($this->cache->driver() === 'file') {
-            $this->writePhpCacheFile($settings);
+            $this->writeJsonCacheFile($settings);
         }
 
         return $settings;
@@ -85,10 +92,14 @@ class SettingService extends \App\Services\BaseService
             return false;
         }
 
-        $this->db->query(
+        $stmt = $this->db->query(
             "UPDATE system_settings SET `value` = ?, updated_at = NOW() WHERE id = ?",
             [$value, $id]
         );
+
+        if ($stmt->rowCount() === 0) {
+            return false;
+        }
 
         $this->clearCache();
         return true;
@@ -119,7 +130,7 @@ class SettingService extends \App\Services\BaseService
     {
         $this->cache->forget(self::CACHE_KEY);
 
-        // فایل PHP قدیمی هم پاک می‌شود
+        // فایل کش JSON هم پاک می‌شود
         if (file_exists($this->cacheFile)) {
             @unlink($this->cacheFile);
         }
@@ -129,15 +140,24 @@ class SettingService extends \App\Services\BaseService
     //  Private
     // ─────────────────────────────────────────────────
 
-    private function writePhpCacheFile(array $settings): void
+    private function writeJsonCacheFile(array $settings): void
     {
-        $dir = dirname($this->cacheFile);
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
-        }
+        try {
+            $dir = dirname($this->cacheFile);
+            if (!is_dir($dir)) {
+                if (!mkdir($dir, 0750, true) && !is_dir($dir)) {
+                    $this->logger->error('settings.mkdir_failed', ['dir' => $dir]);
+                    return;
+                }
+            }
 
-        $export = "<?php\nreturn " . var_export($settings, true) . ";\n";
-        file_put_contents($this->cacheFile, $export);
+            $json = json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            if ($json !== false) {
+                file_put_contents($this->cacheFile, $json);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('settings.write_cache_failed', ['error' => $e->getMessage()]);
+        }
     }
 }
 

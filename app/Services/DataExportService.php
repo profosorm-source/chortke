@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Models\DataExport;
@@ -10,10 +12,11 @@ use App\Models\UserSetting;
 use App\Models\Wallet;
 use Core\Cache;
 use App\Contracts\LoggerInterface;
+
 /**
  * DataExportService — صادرکردن داده‌های کاربر
  */
-class DataExportServiceextends \App\Services\BaseService
+class DataExportService extends \App\Services\BaseService
 {
     private DataExport $exportModel;
     private User $userModel;
@@ -48,7 +51,7 @@ class DataExportServiceextends \App\Services\BaseService
      */
     public function requestExport(int $userId, string $format): ?int
     {
-        if (!in_array($format, ['json', 'csv'])) {
+        if (!in_array($format, ['json', 'csv'], true)) {
             $this->logger->warning('data_export.invalid_format', ['format' => $format, 'user_id' => $userId]);
             return null;
         }
@@ -168,9 +171,17 @@ class DataExportServiceextends \App\Services\BaseService
             $expiredExports = $this->exportModel->getExpiredExports();
             $deleted = 0;
 
+            $baseExportDir = function_exists('storage_path') ? realpath(storage_path('exports')) : null;
+
             foreach ($expiredExports as $export) {
-                if (!empty($export['file_path']) && file_exists($export['file_path'])) {
-                    unlink($export['file_path']);
+                if (!empty($export['file_path'])) {
+                    $realPath = realpath($export['file_path']);
+                    // تایید قرار داشتن مسیر فایل در پوشه مجاز exports جهت جلوگیری از Path Traversal
+                    if ($realPath !== false && $baseExportDir !== false && strpos($realPath, $baseExportDir) === 0) {
+                        if (file_exists($realPath)) {
+                            unlink($realPath);
+                        }
+                    }
                 }
 
                 $this->exportModel->clearFilePath((int)$export['id']);
@@ -264,4 +275,3 @@ class DataExportServiceextends \App\Services\BaseService
         ];
     }
 }
-

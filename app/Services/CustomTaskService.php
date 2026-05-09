@@ -42,6 +42,7 @@ class CustomTaskService extends \App\Services\BaseService
     private IPQualityService $ipQualityService;
     private SessionAnomalyService $sessionAnomalyService;
     private SettingService $settingService;
+    private \App\Services\XPEngine $xpEngine;
 
     public function __construct(
         Logger $logger,
@@ -59,7 +60,8 @@ class CustomTaskService extends \App\Services\BaseService
         BrowserFingerprintService $fingerprintService,
         IPQualityService $ipQualityService,
         SessionAnomalyService $sessionAnomalyService,
-        SettingService $settingService
+        SettingService $settingService,
+        \App\Services\XPEngine $xpEngine
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -77,6 +79,7 @@ class CustomTaskService extends \App\Services\BaseService
         $this->ipQualityService = $ipQualityService;
         $this->sessionAnomalyService = $sessionAnomalyService;
         $this->settingService = $settingService;
+        $this->xpEngine = $xpEngine;
     }
 
     /**
@@ -629,11 +632,19 @@ class CustomTaskService extends \App\Services\BaseService
                 'reward_transaction_id' => $txId['transaction_id'],
             ]);
 
-            // پرداخت کمیسیون
-            $this->referralService->processMultiTierCommissions(
-                $submission->worker_id,
+            // پرداخت پورسانت داینامیک و ماژولار رفرال
+            $this->referralService->processModularCommission(
+                (int) $submission->worker_id,
+                'custom_tasks',
                 (float) $submission->reward_amount,
                 $submission->reward_currency
+            );
+
+            // تخصیص امتیاز تجربه (XP) گیمیفای شده
+            $this->xpEngine->awardXP(
+                (int) $submission->worker_id,
+                'custom_tasks',
+                'custom_task_approved'
             );
         }
     }

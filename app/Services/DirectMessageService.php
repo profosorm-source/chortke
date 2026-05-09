@@ -212,7 +212,8 @@ class DirectMessageService extends \App\Services\BaseService
     public function getTypingUsers(int $userId): array
     {
         $pattern = self::TYPING_PREFIX . $userId . ':*';
-        $keys = $this->redis->keys($pattern) ?? [];
+        // ✅ Using scanKeys() instead of keys() for performance
+        $keys = $this->redis->scanKeys($pattern);
 
         $typingUsers = [];
         foreach ($keys as $key) {

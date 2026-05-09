@@ -17,7 +17,8 @@ use App\Contracts\LoggerInterface;
  * 
  * Currently: Long Polling + Redis for presence
  */
-class RealTimeServiceextends \App\Services\BaseService
+class RealTimeService
+extends \App\Services\BaseService
 {
     private Database $db;
     private Redis    $redis;
@@ -230,8 +231,8 @@ class RealTimeServiceextends \App\Services\BaseService
         $pattern = "room:*";
         $rooms = [];
 
-        // ✅ Get all room keys
-        $keys = $this->redis->keys($pattern);
+        // ✅ Using scanKeys() instead of keys() for performance
+        $keys = $this->redis->scanKeys($pattern);
         foreach ($keys as $key) {
             if ($this->redis->sismember($key, $userId)) {
                 $rooms[] = str_replace('room:', '', $key);

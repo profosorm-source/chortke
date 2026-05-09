@@ -25,6 +25,7 @@ class StoryPromotionService extends \App\Services\BaseService
     private AuditTrail                 $auditTrail;
     private InfluencerReputationService $reputationService;
     private SettingService             $settingService;
+    private \App\Services\Shared\RatingService $ratingService;
 
     public function __construct(
         Database                    $db,
@@ -35,7 +36,8 @@ class StoryPromotionService extends \App\Services\BaseService
         InfluencerModel           $profileModel,
         StoryOrder                  $orderModel,
         InfluencerReputationService $reputationService,
-        SettingService             $settingService
+        SettingService             $settingService,
+        \App\Services\Shared\RatingService $ratingService
     ) {
         $this->db                  = $db;
         $this->walletService       = $walletService;
@@ -46,6 +48,7 @@ class StoryPromotionService extends \App\Services\BaseService
         $this->orderModel          = $orderModel;
         $this->reputationService   = $reputationService;
         $this->settingService      = $settingService;
+        $this->ratingService       = $ratingService;
     }
 
     // ══════════════════════════════════════════════════════
@@ -199,8 +202,12 @@ class StoryPromotionService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'خطا در ثبت سفارش.'];
             }
 
-            $this->referralService->processCommission(
-                $customerId, 	'influencer_order', (int)$order->id, $price, $profile->currency
+            $this->referralService->processModularCommission(
+                $customerId,
+                'influencer',
+                $price,
+                $profile->currency,
+                ['order_id' => $order->id]
             );
             $this->profileModel->update($influencerId, [
                 'total_orders' => (int)$profile->total_orders + 1,
@@ -472,6 +479,14 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
                 (int)$order->influencer_user_id,
                 $orderId
             );
+
+            // تخصیص امتیاز تجربه (XP) گیمیفای شده به اینفلوئنسر
+            try {
+                $xpEngine = \Core\Container::getInstance()->make(\App\Services\XPEngine::class);
+                $xpEngine->awardXP((int)$order->influencer_user_id, 'youtube', 'influencer_order_completed');
+            } catch (\Throwable $t) {
+                $this->logger->error('xp_error', ['error' => $t->getMessage()]);
+            }
         }
 
         return ['success' => true, 'message' => 'سفارش تکمیل و درآمد واریز شد.'];
@@ -743,5 +758,65 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
     return (int) $stmt->fetchColumn();
 }
 
+    /**
+     * ثبت گزارش تخلف برای سفارش تبلیغ/پست یوتیوب
+     */
+    public function reportOrder(int $reporterId, int $orderId, string $reason, string $description = ''): array
+    {
+        $order = $this->orderModel->find($orderId);
+        if (!$order) {
+            return ['success' => false, 'message' => 'سفارش یافت نشد'];
+        }
+
+        try {
+            $ok = $this->ratingService->report([
+                'reporter_id' => $reporterId,
+                'ref_type' => 'story_order',
+                'ref_id' => $orderId,
+                'reason' => $reason,
+                'description' => $description
+            ]);
+
+            if (!$ok) {
+                return ['success' => false, 'message' => 'خطا در ثبت گزارش'];
+            }
+
+            return ['success' => true, 'message' => 'گزارش تخلف با موفقیت ثبت شد'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * امتیازدهی به اینفلوئنسر/سفارش استوری
+     */
+    public function rateInfluencer(int $raterId, int $orderId, int $stars, string $comment = ''): array
+    {
+        $order = $this->orderModel->find($orderId);
+        if (!$order) {
+            return ['success' => false, 'message' => 'سفارش یافت نشد'];
+        }
+
+        $stars = max(1, min(5, $stars));
+
+        try {
+            $ok = $this->ratingService->rate(
+                $raterId,
+                (int)$order->influencer_user_id,
+                'story_order',
+                $orderId,
+                $stars,
+                $comment
+            );
+
+            if (!$ok) {
+                return ['success' => false, 'message' => 'خطا در ثبت امتیاز'];
+            }
+
+            return ['success' => true, 'message' => 'امتیاز با موفقیت ثبت شد'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+        }
+    }
 }
 

@@ -92,7 +92,7 @@ class LotteryService extends \App\Services\BaseService
                 'prize_amount' => max(0, (float)($data['prize_amount'] ?? 0)),
                 'currency' => in_array($data['currency'] ?? 'irt', ['irt', 'usdt']) ? $data['currency'] : 'irt',
                 'ticket_price' => max(0, (float)($data['entry_fee'] ?? 0)),
-                'max_tickets' => 10000,
+                'max_tickets' => (int)feature_value('lottery', 'max_participants', 10000),
                 'status' => LotteryRound::STATUS_ACTIVE,
             ]);
 
@@ -498,61 +498,81 @@ class LotteryService extends \App\Services\BaseService
 
     public function selectWinner(int $roundId, int $adminId): array
     {
-        $round = $this->roundModel->find($roundId);
-        
-        if (!$round) {
-            return ['success' => false, 'message' => 'دوره یافت نشد.'];
-        }
-
-        if ($round->status === LotteryRound::STATUS_COMPLETED) {
-            return ['success' => false, 'message' => 'برنده قبلاً انتخاب شده.', 'winner_user_id' => $round->winner_user_id];
-        }
-
-        $participants = $this->participationModel->getAllActiveByRound($roundId);
-        
-        if (empty($participants)) {
-            return ['success' => false, 'message' => 'شرکت‌کننده‌ای وجود ندارد.'];
-        }
-
-        $totalScore = $this->participationModel->getTotalChanceScore($roundId);
-        
-        if ($totalScore <= 0) {
-            return ['success' => false, 'message' => 'مجموع امتیازات صفر است.'];
-        }
-
-        $randomPoint = (mt_rand(0, (int)($totalScore * 100000)) / 100000);
-        $cumulative = 0;
-        $winner = null;
-
-        foreach ($participants as $p) {
-            $cumulative += (float)$p->chance_score;
-            if ($randomPoint <= $cumulative) {
-                $winner = $p;
-                break;
-            }
-        }
-
-        if (!$winner && !empty($participants)) {
-            $winner = $participants[array_rand($participants)];
-        }
-
-        if (!$winner) {
-            return ['success' => false, 'message' => 'خطا در انتخاب برنده.'];
-        }
-
-        $finalSeedData = implode('|', [$roundId, $winner->user_id, $winner->chance_score, $totalScore, $randomPoint, microtime(true), bin2hex(random_bytes(16))]);
-        $finalSeed = hash('sha256', $finalSeedData);
-
-        $this->db->beginTransaction();
-
         try {
+            $this->db->beginTransaction();
+
+            // 🔒 PESSIMISTIC LOCKING: Lock the round row to prevent concurrent winner selection
+            $round = $this->db->selectOne(
+                "SELECT * FROM lottery_rounds WHERE id = ? FOR UPDATE",
+                [$roundId]
+            );
+
+            if (!$round) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'دوره یافت نشد.'];
+            }
+
+            // 🔒 RECHECK after acquiring lock: Ensure round is still ACTIVE
+            // This prevents race condition where status changed before lock was acquired
+            if ($round->status === \App\Models\LotteryRound::STATUS_COMPLETED) {
+                $this->db->rollBack();
+                $this->logger->warning('lottery.select_winner.already_completed', [
+                    'round_id' => $roundId,
+                    'winner_user_id' => $round->winner_user_id
+                ]);
+                return ['success' => false, 'message' => 'برنده قبلاً انتخاب شده.', 'winner_user_id' => $round->winner_user_id];
+            }
+
+            $participants = $this->participationModel->getAllActiveByRound($roundId);
+
+            if (empty($participants)) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'شرکت‌کننده‌ای وجود ندارد.'];
+            }
+
+            $totalScore = $this->participationModel->getTotalChanceScore($roundId);
+
+            if ($totalScore <= 0) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'مجموع امتیازات صفر است.'];
+            }
+
+            // Perform weighted random selection
+            $randomPoint = (mt_rand(0, (int)($totalScore * 100000)) / 100000);
+            $cumulative = 0;
+            $winner = null;
+
+            foreach ($participants as $p) {
+                $cumulative += (float)$p->chance_score;
+                if ($randomPoint <= $cumulative) {
+                    $winner = $p;
+                    break;
+                }
+            }
+
+            // Fallback to random participant if winner not found (shouldn't happen with proper math)
+            if (!$winner && !empty($participants)) {
+                $winner = $participants[array_rand($participants)];
+            }
+
+            if (!$winner) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در انتخاب برنده.'];
+            }
+
+            // Generate final seed for transparency
+            $finalSeedData = implode('|', [$roundId, $winner->user_id, $winner->chance_score, $totalScore, $randomPoint, microtime(true), bin2hex(random_bytes(16))]);
+            $finalSeed = hash('sha256', $finalSeedData);
+
+            // 🔒 Update round with LOCK HELD - ensures atomicity
             $this->roundModel->update($roundId, [
-                'status' => LotteryRound::STATUS_COMPLETED,
+                'status' => \App\Models\LotteryRound::STATUS_COMPLETED,
                 'winner_user_id' => $winner->user_id,
                 'winner_chance_score' => $winner->chance_score,
                 'final_seed' => $finalSeed,
             ]);
 
+            // Mark participants
             $this->participationModel->update($winner->id, ['status' => 'winner']);
 
             foreach ($participants as $p) {
@@ -561,6 +581,7 @@ class LotteryService extends \App\Services\BaseService
                 }
             }
 
+            // Process prize if applicable
             if ($round->prize_amount > 0) {
                 $depositResult = $this->walletService->deposit(
                     $winner->user_id,
@@ -568,6 +589,49 @@ class LotteryService extends \App\Services\BaseService
                     $round->currency,
                     'lottery_prize',
                     ['round_id' => $roundId, 'description' => "جایزه قرعه‌کشی: {$round->title}"]
+                );
+
+                if (!$depositResult['success']) {
+                    $this->db->rollBack();
+                    $this->logger->error('lottery.select_winner.deposit_failed', [
+                        'round_id' => $roundId,
+                        'winner_user_id' => $winner->user_id,
+                        'error' => $depositResult['message'] ?? 'Unknown error'
+                    ]);
+                    return ['success' => false, 'message' => 'خطا در واریز جایزه.'];
+                }
+            }
+
+            // Commit transaction with lock held
+            $this->db->commit();
+
+            $this->logger->info('lottery.select_winner.success', [
+                'round_id' => $roundId,
+                'winner_user_id' => $winner->user_id,
+                'total_participants' => count($participants),
+                'admin_id' => $adminId
+            ]);
+
+            return [
+                'success' => true,
+                'message' => 'برنده با موفقیت انتخاب شد.',
+                'round_id' => $roundId,
+                'winner_user_id' => $winner->user_id,
+                'winner_username' => $winner->username ?? 'Unknown',
+                'prize_amount' => $round->prize_amount,
+                'final_seed' => $finalSeed
+            ];
+
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            $this->logger->error('lottery.select_winner.failed', [
+                'round_id' => $roundId,
+                'admin_id' => $adminId,
+                'error' => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سیستمی در انتخاب برنده.'];
+        }
+    }
                 );
 
                 if (!$depositResult['success']) {

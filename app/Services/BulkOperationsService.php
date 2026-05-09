@@ -528,7 +528,8 @@ class BulkOperationsService extends \App\Services\BaseService
         if ($this->cache->driver() === 'redis') {
             $redis = $this->cache->redis();
             if ($redis) {
-                $keys = $redis->keys($pattern);
+                // ✅ Using scanKeys() instead of keys() for performance
+                $keys = $redis->scanKeys($pattern);
                 if (!empty($keys)) {
                     $redis->del($keys);
                 }

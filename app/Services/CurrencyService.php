@@ -66,10 +66,23 @@ class CurrencyService extends \App\Services\BaseService
     /**
      * آیا این قسمت باید USDT باشد؟
      */
-    public function isInvestmentSection(): bool
+    public function isInvestmentSection(?string $uri = null): bool
     {
-        $uri = $_SERVER['REQUEST_URI'] ?? '';
-        return strpos($uri, '/investment') !== false;
+        if ($uri === null) {
+            try {
+                if (\class_exists('\Core\Container')) {
+                    $container = \Core\Container::getInstance();
+                    if ($container->has(\Core\Request::class)) {
+                        $request = $container->get(\Core\Request::class);
+                        $uri = $request ? $request->uri() : '';
+                    }
+                }
+            } catch (\Throwable $e) {
+                $uri = '';
+            }
+        }
+        $uri = $uri ?? '';
+        return \strpos($uri, '/investment') !== false;
     }
     
     /**

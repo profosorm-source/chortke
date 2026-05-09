@@ -1,29 +1,34 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
+
 use Core\Database;
 use App\Contracts\LoggerInterface;
-
 use App\Models\BugReport;
 use App\Models\BugReportComment;
 use App\Models\Notification;
+use App\Services\UploadService;
 
 class BugReportService extends \App\Services\BaseService
 {
-    private \App\Services\UploadService $uploadService;
-    private \App\Models\Notification $notificationModel;
-    private \App\Models\BugReportComment $bugReportCommentModel;
+    private UploadService $uploadService;
+    private Notification $notificationModel;
+    private BugReportComment $bugReportCommentModel;
     private Database $db;
+    private BugReport $bugReportModel;
 
-    private $bugReportModel;
+    private const MAX_DAILY_REPORTS = 2;
+    private const SUSPICIOUS_CONSECUTIVE_DAYS = 5;
 
     public function __construct(
         LoggerInterface $logger,
         Database $db,
-        \App\Models\BugReport $bugReportModel,
-        \App\Models\BugReportComment $bugReportCommentModel,
-        \App\Models\Notification $notificationModel,
-        \App\Services\UploadService $uploadService
+        BugReport $bugReportModel,
+        BugReportComment $bugReportCommentModel,
+        Notification $notificationModel,
+        UploadService $uploadService
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -32,8 +37,6 @@ class BugReportService extends \App\Services\BaseService
         $this->notificationModel = $notificationModel;
         $this->uploadService = $uploadService;
     }
-    private const MAX_DAILY_REPORTS = 2;
-    private const SUSPICIOUS_CONSECUTIVE_DAYS = 5;
 
     /**
      * ثبت گزارش باگ توسط کاربر
@@ -41,7 +44,7 @@ class BugReportService extends \App\Services\BaseService
     public function submitReport(int $userId, array $data): array
     {
         // بررسی محدودیت روزانه
-        $todayCount = $this->bugReportModel->countTodayByUser($userId);
+        $todayCount = (int)$this->bugReportModel->countTodayByUser($userId);
         if ($todayCount >= self::MAX_DAILY_REPORTS) {
             return [
                 'success' => false,
@@ -56,11 +59,11 @@ class BugReportService extends \App\Services\BaseService
         }
 
         // بررسی مشکوک بودن (گزارش مداوم روزانه)
-        $consecutiveDays = $this->bugReportModel->countConsecutiveDays($userId, self::SUSPICIOUS_CONSECUTIVE_DAYS);
+        $consecutiveDays = (int)$this->bugReportModel->countConsecutiveDays($userId, self::SUSPICIOUS_CONSECUTIVE_DAYS);
         $isSuspicious = ($consecutiveDays >= self::SUSPICIOUS_CONSECUTIVE_DAYS - 1); // اگر 4 روز متوالی قبلش هم ارسال کرده
 
         // تشخیص مرورگر و سیستم‌عامل
-        $userAgent = get_user_agent();
+        $userAgent = $data['user_agent'] ?? null;
         $browserInfo = $this->parseBrowser($userAgent);
 
         // آپلود اسکرین‌شات
@@ -77,14 +80,14 @@ class BugReportService extends \App\Services\BaseService
 
         $reportData = [
             'user_id' => $userId,
-            'page_url' => \mb_substr($data['page_url'] ?? '', 0, 500),
-            'page_title' => \mb_substr($data['page_title'] ?? '', 0, 255),
+            'page_url' => \mb_substr((string)($data['page_url'] ?? ''), 0, 500),
+            'page_title' => \mb_substr((string)($data['page_title'] ?? ''), 0, 255),
             'category' => $data['category'] ?? 'other',
             'priority' => $priority,
             'description' => $data['description'],
             'screenshot_path' => $screenshotPath,
             'status' => 'open',
-            'ip_address' => get_client_ip(),
+            'ip_address' => $data['ip_address'] ?? null,
             'user_agent' => $userAgent ? \mb_substr($userAgent, 0, 500) : null,
             'device_fingerprint' => $data['device_fingerprint'] ?? null,
             'browser' => $browserInfo['browser'] ?? null,
@@ -102,15 +105,15 @@ class BugReportService extends \App\Services\BaseService
 
         // لاگ
         $level = $isSuspicious ? 'warning' : 'info';
-$this->logger->log(
-    $level,
-    'bug_report_submitted',
-    ['message' => "گزارش باگ #{$id} توسط کاربر {$userId} ثبت شد" . ($isSuspicious ? ' [مشکوک]' : '')]
-);
+        $this->logger->log(
+            $level,
+            'bug_report_submitted',
+            ['message' => "گزارش باگ #{$id} توسط کاربر {$userId} ثبت شد" . ($isSuspicious ? ' [مشکوک]' : '')]
+        );
 
         // نوتیفیکیشن به ادمین‌ها (اگر بحرانی یا امنیتی)
-        if ($priority === 'critical' || $data['category'] === 'security') {
-            $this->notifyAdmins($id, $priority, $data['category']);
+        if ($priority === 'critical' || ($data['category'] ?? '') === 'security') {
+            $this->notifyAdmins((int)$id, $priority, (string)($data['category'] ?? ''));
         }
 
         return [
@@ -132,7 +135,7 @@ $this->logger->log(
         }
 
         $validStatuses = ['open', 'in_progress', 'resolved', 'closed', 'duplicate', 'wont_fix'];
-        if (!\in_array($status, $validStatuses)) {
+        if (!\in_array($status, $validStatuses, true)) {
             return ['success' => false, 'message' => 'وضعیت نامعتبر'];
         }
 
@@ -146,7 +149,7 @@ $this->logger->log(
             $updateData['assigned_to'] = $adminId;
         }
 
-        if (\in_array($status, ['resolved', 'closed'])) {
+        if (\in_array($status, ['resolved', 'closed'], true)) {
             $updateData['resolved_by'] = $adminId;
             $updateData['resolved_at'] = \date('Y-m-d H:i:s');
         }
@@ -160,7 +163,7 @@ $this->logger->log(
             'duplicate' => 'تکراری', 'wont_fix' => 'رد شده'
         ];
 
-        ($this->bugReportCommentModel)->create([
+        $this->bugReportCommentModel->create([
             'bug_report_id' => $id,
             'user_id' => $adminId,
             'user_type' => 'admin',
@@ -169,15 +172,13 @@ $this->logger->log(
         ]);
 
         // نوتیفیکیشن به کاربر
-        if (\class_exists('\\App\\Models\\Notification')) {
-            ($this->notificationModel)->create([
-                'user_id' => $report->user_id,
-                'type' => 'bug_report_update',
-                'title' => 'بروزرسانی گزارش باگ',
-                'message' => "وضعیت گزارش #{$id} به «{$statusLabels[$status]}» تغییر یافت.",
-                'link' => "/bug-reports/{$id}",
-            ]);
-        }
+        $this->notificationModel->create([
+            'user_id' => $report->user_id,
+            'type' => 'bug_report_update',
+            'title' => 'بروزرسانی گزارش باگ',
+            'message' => "وضعیت گزارش #{$id} به «{$statusLabels[$status]}» تغییر یافت.",
+            'link' => "/bug-reports/{$id}",
+        ]);
 
         $this->logger->info('bug_report_status_changed', ['message' => "وضعیت گزارش #{$id} به {$status} تغییر یافت توسط ادمین {$adminId}"]);
 
@@ -195,7 +196,7 @@ $this->logger->log(
         }
 
         $validPriorities = ['low', 'normal', 'high', 'critical'];
-        if (!\in_array($priority, $validPriorities)) {
+        if (!\in_array($priority, $validPriorities, true)) {
             return ['success' => false, 'message' => 'اولویت نامعتبر'];
         }
 
@@ -238,7 +239,7 @@ $this->logger->log(
             }
         }
 
-        $commentId = ($this->bugReportCommentModel)->create([
+        $commentId = $this->bugReportCommentModel->create([
             'bug_report_id' => $reportId,
             'user_id' => $userId,
             'user_type' => $userType,
@@ -252,8 +253,8 @@ $this->logger->log(
         }
 
         // نوتیفیکیشن
-        if ($userType === 'admin' && !$isInternal && \class_exists('\\App\\Models\\Notification')) {
-            ($this->notificationModel)->create([
+        if ($userType === 'admin' && !$isInternal) {
+            $this->notificationModel->create([
                 'user_id' => $report->user_id,
                 'type' => 'bug_report_comment',
                 'title' => 'پاسخ جدید به گزارش باگ',
@@ -320,7 +321,7 @@ $this->logger->log(
         }
 
         $validCategories = ['ui_issue', 'functional', 'payment', 'security', 'performance', 'content', 'other'];
-        if (!empty($data['category']) && !\in_array($data['category'], $validCategories)) {
+        if (!empty($data['category']) && !\in_array($data['category'], $validCategories, true)) {
             $errors['category'] = 'دسته‌بندی نامعتبر';
         }
 
@@ -366,8 +367,7 @@ $this->logger->log(
      */
     private function uploadScreenshot(array $file): array
     {
-        $uploadService = $this->uploadService;
-        $result = $uploadService->upload(
+        $result = $this->uploadService->upload(
             $file,
             'bug_reports',
             ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
@@ -380,7 +380,6 @@ $this->logger->log(
 
         return ['success' => true, 'path' => $result['path']];
     }
-
 
     /**
      * تشخیص مرورگر
@@ -395,18 +394,30 @@ $this->logger->log(
         $os = 'نامشخص';
 
         // Browser
-        if (\preg_match('/Edg[e]?\/(\S+)/i', $ua)) $browser = 'Edge';
-        elseif (\preg_match('/OPR\/(\S+)/i', $ua)) $browser = 'Opera';
-        elseif (\preg_match('/Chrome\/(\S+)/i', $ua)) $browser = 'Chrome';
-        elseif (\preg_match('/Firefox\/(\S+)/i', $ua)) $browser = 'Firefox';
-        elseif (\preg_match('/Safari\/(\S+)/i', $ua) && !\preg_match('/Chrome/i', $ua)) $browser = 'Safari';
+        if (\preg_match('/Edg[e]?\/(\S+)/i', $ua)) {
+            $browser = 'Edge';
+        } elseif (\preg_match('/OPR\/(\S+)/i', $ua)) {
+            $browser = 'Opera';
+        } elseif (\preg_match('/Chrome\/(\S+)/i', $ua)) {
+            $browser = 'Chrome';
+        } elseif (\preg_match('/Firefox\/(\S+)/i', $ua)) {
+            $browser = 'Firefox';
+        } elseif (\preg_match('/Safari\/(\S+)/i', $ua) && !\preg_match('/Chrome/i', $ua)) {
+            $browser = 'Safari';
+        }
 
         // OS
-        if (\preg_match('/Windows NT/i', $ua)) $os = 'Windows';
-        elseif (\preg_match('/Macintosh/i', $ua)) $os = 'macOS';
-        elseif (\preg_match('/Linux/i', $ua)) $os = 'Linux';
-        elseif (\preg_match('/Android/i', $ua)) $os = 'Android';
-        elseif (\preg_match('/iPhone|iPad/i', $ua)) $os = 'iOS';
+        if (\preg_match('/Windows NT/i', $ua)) {
+            $os = 'Windows';
+        } elseif (\preg_match('/Macintosh/i', $ua)) {
+            $os = 'macOS';
+        } elseif (\preg_match('/Linux/i', $ua)) {
+            $os = 'Linux';
+        } elseif (\preg_match('/Android/i', $ua)) {
+            $os = 'Android';
+        } elseif (\preg_match('/iPhone|iPad/i', $ua)) {
+            $os = 'iOS';
+        }
 
         return ['browser' => $browser, 'os' => $os];
     }
@@ -416,10 +427,6 @@ $this->logger->log(
      */
     private function notifyAdmins(int $reportId, string $priority, string $category): void
     {
-        if (!\class_exists('\\App\\Models\\Notification')) {
-            return;
-        }
-
         $admins = $this->db->fetchAll("SELECT id FROM users WHERE role IN ('admin','superadmin') AND status = 1");
 
         $categoryLabels = [
@@ -431,8 +438,8 @@ $this->logger->log(
         $priText = $priority === 'critical' ? '🔴 بحرانی' : '🟠 بالا';
 
         foreach ($admins as $admin) {
-            $adminId = \is_array($admin) ? $admin['id'] : $admin->id;
-            ($this->notificationModel)->create([
+            $adminId = (int)(\is_array($admin) ? $admin['id'] : ($admin->id ?? $admin));
+            $this->notificationModel->create([
                 'user_id' => $adminId,
                 'type' => 'bug_report_critical',
                 'title' => "گزارش باگ {$priText}",
@@ -441,8 +448,6 @@ $this->logger->log(
             ]);
         }
     }
-    
-
 
     // ─── Query Methods (برای Controllers) ───────────────────────
 
@@ -458,7 +463,6 @@ $this->logger->log(
 
     public function getComments(int $reportId, bool $includeInternal = false): array
     {
-        return ($this->bugReportCommentModel)->getByReport($reportId, $includeInternal);
+        return $this->bugReportCommentModel->getByReport($reportId, $includeInternal);
     }
 }
-

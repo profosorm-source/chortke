@@ -1,32 +1,35 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Models\Banner;
 use App\Models\BannerPlacement;
-
 use App\Contracts\LoggerInterface;
+use App\Services\UploadService;
+
 class BannerService extends \App\Services\BaseService
 {
-    private \App\Models\BannerPlacement $bannerPlacementModel;
     private Banner $bannerModel;
     private BannerPlacement $placementModel;
-    private \App\Services\UploadService $uploadService;
+    private UploadService $uploadService;
 
     public function __construct(
-        \App\Models\Banner $bannerModel,
-        \App\Models\BannerPlacement $placementModel,
-        \App\Models\BannerPlacement $bannerPlacementModel,
-        \App\Services\UploadService $uploadService,
-        \App\Contracts\LoggerInterface $logger
+        Banner $bannerModel,
+        BannerPlacement $placementModel,
+        UploadService $uploadService,
+        LoggerInterface $logger
     ) {
         parent::__construct($logger);
         $this->bannerModel = $bannerModel;
         $this->placementModel = $placementModel;
-        $this->bannerPlacementModel = $bannerPlacementModel;
         $this->uploadService = $uploadService;
     }
 
+    /**
+     * دریافت بنرهای فعال با اعمال به‌روزرسانی دسته‌جمعی آماری
+     */
     public function getActiveBanners(string $placement): array
     {
         $placementObj = $this->placementModel->findBySlug($placement);
@@ -40,8 +43,10 @@ class BannerService extends \App\Services\BaseService
             $banners = \array_slice($banners, 0, $placementObj->max_banners);
         }
 
-        foreach ($banners as $banner) {
-            $this->bannerModel->incrementImpression($banner->id);
+        // به‌روزرسانی دسته‌جمعی بازدیدها (Bulk Update) جهت جلوگیری از N+1 Updates
+        $bannerIds = array_map(fn($b) => (int)$b->id, $banners);
+        if (!empty($bannerIds)) {
+            $this->bannerModel->bulkIncrementImpressions($bannerIds);
         }
 
         return [
@@ -96,11 +101,9 @@ class BannerService extends \App\Services\BaseService
                 return ['success' => false, 'errors' => ['image' => $uploadResult['error']]];
             }
 
+            // حذف تصویر قبلی با مکانیزم ضد Path Traversal
             if ($banner->image_path) {
-                $oldPath = \rtrim($_SERVER['DOCUMENT_ROOT'] ?? '.', '/') . '/' . \ltrim($banner->image_path, '/');
-                if (\file_exists($oldPath)) {
-                    @\unlink($oldPath);
-                }
+                $this->deleteBannerImage($banner->image_path);
             }
 
             $data['image_path'] = $uploadResult['path'];
@@ -126,15 +129,36 @@ class BannerService extends \App\Services\BaseService
 
         $this->bannerModel->softDelete($id);
 
+        // حذف ایمن تصویر بنر با تضمین کامل جلوگیری از Path Traversal
         if ($banner->image_path) {
-            $filePath = \rtrim($_SERVER['DOCUMENT_ROOT'] ?? '.', '/') . '/' . \ltrim($banner->image_path, '/');
-            if (\file_exists($filePath)) {
-                @\unlink($filePath);
-            }
+            $this->deleteBannerImage($banner->image_path);
         }
 
         $this->logger->warning('banner_deleted', ['message' => "بنر {$id} حذف شد"]);
         return ['success' => true, 'message' => 'بنر با موفقیت حذف شد'];
+    }
+
+    /**
+     * متد کمکی امن برای حذف فایل تصویر بنر جهت پیشگیری کامل از آسیب‌پذیری Path Traversal
+     */
+    private function deleteBannerImage(?string $imagePath): void
+    {
+        if (empty($imagePath)) {
+            return;
+        }
+
+        $docRoot = realpath($_SERVER['DOCUMENT_ROOT'] ?? '.');
+        if (!$docRoot) {
+            return;
+        }
+
+        $fullPath = rtrim($docRoot, '/\\') . '/' . ltrim(str_replace(['\\', '..'], ['/', ''], $imagePath), '/');
+        $realPath = realpath($fullPath);
+
+        // تایید صد درصدی قرارگیری فایل در دایرکتوری معتبر وب‌سرور جهت حذف فیزیکی
+        if ($realPath && str_starts_with($realPath, $docRoot)) {
+            @unlink($realPath);
+        }
     }
 
     public function toggleBanner(int $id): array
@@ -260,4 +284,3 @@ class BannerService extends \App\Services\BaseService
         return $errors;
     }
 }
-

@@ -77,6 +77,16 @@ EOT;
     {
         $amount = (float)($data['amount'] ?? 0);
 
+        $minAmount = (float)$this->settingService->get('investment_min_amount', 10);
+        $maxAmount = (float)$this->settingService->get('investment_max_amount', 10000);
+
+        if ($amount < $minAmount) {
+            return ['success' => false, 'message' => "حداقل مبلغ سرمایه‌گذاری {$minAmount} تتر است."];
+        }
+        if ($amount > $maxAmount) {
+            return ['success' => false, 'message' => "حداکثر مبلغ سرمایه‌گذاری {$maxAmount} تتر است."];
+        }
+
         $balance = $this->walletService->getBalance($userId, 'usdt');
         if ($balance < $amount) {
             return ['success' => false, 'message' => 'موجودی تتری کیف پول شما کافی نیست'];

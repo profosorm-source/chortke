@@ -39,6 +39,7 @@ class VitrineService extends \App\Services\BaseService
         private readonly RealTimeService    $realTime,
         private readonly SettingService     $settings,
         private readonly UserService        $userService,
+        private readonly \App\Services\Shared\RatingService $ratingService,
     ) {}
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -75,24 +76,29 @@ class VitrineService extends \App\Services\BaseService
 
 public function adminApproveListing(int $listingId, int $adminId): array
 {
+    $this->db->beginTransaction();
     try {
         $listing = $this->listing->getSafe($listingId);
         if (!$listing) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'آگهی یافت نشد'];
         }
 
         // ✅ State machine validation
         if (!$this->stateMachine->canTransitionVitrineListing('pending', 'active')) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'وضعیت آگهی قابل تایید نیست'];
         }
 
         // ✅ Prevent self-approval
         if ($this->listing->isSelfApproval($listingId, $adminId)) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'خود تایید فروشنده ممکن نیست'];
         }
 
         $ok = $this->listing->updateStatus($listingId, 'active');
         if (!$ok) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'خطا در تایید آگهی'];
         }
 
@@ -103,30 +109,37 @@ public function adminApproveListing(int $listingId, int $adminId): array
             ['vitrine_listing', $listingId, 'pending', 'active', $adminId, 'admin_approval']
         );
 
+        $this->db->commit();
+
         // ✅ Send real-time notification to seller
         $this->realTime->notifyListingApproved($listingId, (int)$listing->seller_id);
 
         return ['success' => true, 'message' => 'آگهی تایید شد'];
     } catch (\Throwable $e) {
+        $this->db->rollBack();
         return ['success' => false, 'message' => 'خطا در تایید: ' . $e->getMessage()];
     }
 }
 
 public function adminRejectListing(int $listingId, string $reason, int $adminId): array
 {
+    $this->db->beginTransaction();
     try {
         $listing = $this->listing->getSafe($listingId);
         if (!$listing) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'آگهی یافت نشد'];
         }
 
         // ✅ State machine validation
         if (!$this->stateMachine->canTransitionVitrineListing('pending', 'rejected')) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'آگهی قابل رد نیست'];
         }
 
         $ok = $this->listing->updateStatus($listingId, 'rejected', ['rejection_reason' => $reason]);
         if (!$ok) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'خطا در رد آگهی'];
         }
 
@@ -137,17 +150,21 @@ public function adminRejectListing(int $listingId, string $reason, int $adminId)
             ['vitrine_listing', $listingId, 'pending', 'rejected', $adminId, $reason]
         );
 
+        $this->db->commit();
         return ['success' => true, 'message' => 'آگهی رد شد'];
     } catch (\Throwable $e) {
+        $this->db->rollBack();
         return ['success' => false, 'message' => 'خطا در رد: ' . $e->getMessage()];
     }
 }
 
 public function adminRefundListing(int $listingId, int $adminId): array
 {
+    $this->db->beginTransaction();
     try {
         $listing = $this->listing->getSafe($listingId);
         if (!$listing) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'آگهی یافت نشد'];
         }
 
@@ -159,16 +176,20 @@ public function adminRefundListing(int $listingId, int $adminId): array
         );
 
         if (!$result['ok']) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => $result['error'] ?? 'خطا در بازگشت وجه'];
         }
 
         $ok = $this->listing->updateStatus($listingId, 'cancelled');
         if (!$ok) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'ریفاند انجام شد ولی تغییر وضعیت آگهی ناموفق بود'];
         }
 
+        $this->db->commit();
         return ['success' => true, 'message' => 'ریفاند با موفقیت انجام شد'];
     } catch (\Throwable $e) {
+        $this->db->rollBack();
         return ['success' => false, 'message' => 'خطا در ریفاند: ' . $e->getMessage()];
     }
 }
@@ -699,6 +720,67 @@ public function adminRefundListing(int $listingId, int $adminId): array
         }
 
         return $results;
+    }
+
+    /**
+     * ثبت امتیاز و نظر برای آگهی ویترین
+     */
+    public function rateListing(int $raterId, int $listingId, int $stars, string $comment = ''): array
+    {
+        $listing = $this->listing->find($listingId);
+        if (!$listing) {
+            return ['success' => false, 'message' => 'آگهی یافت نشد'];
+        }
+
+        $stars = max(1, min(5, $stars));
+
+        try {
+            $ok = $this->ratingService->rate(
+                $raterId,
+                (int)$listing->seller_id,
+                'vitrine_listing',
+                $listingId,
+                $stars,
+                $comment
+            );
+
+            if (!$ok) {
+                return ['success' => false, 'message' => 'خطا در ثبت امتیاز'];
+            }
+
+            return ['success' => true, 'message' => 'امتیاز با موفقیت ثبت شد'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * ثبت گزارش تخلف برای آگهی ویترین
+     */
+    public function reportListing(int $reporterId, int $listingId, string $reason, string $description = ''): array
+    {
+        $listing = $this->listing->find($listingId);
+        if (!$listing) {
+            return ['success' => false, 'message' => 'آگهی یافت نشد'];
+        }
+
+        try {
+            $ok = $this->ratingService->report([
+                'reporter_id' => $reporterId,
+                'ref_type' => 'vitrine_listing',
+                'ref_id' => $listingId,
+                'reason' => $reason,
+                'description' => $description
+            ]);
+
+            if (!$ok) {
+                return ['success' => false, 'message' => 'خطا در ثبت گزارش'];
+            }
+
+            return ['success' => true, 'message' => 'گزارش تخلف با موفقیت ثبت شد'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+        }
     }
 }
 

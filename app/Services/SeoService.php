@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Models\SeoAd;
@@ -17,6 +19,8 @@ use App\Contracts\LoggerInterface;
  */
 class SeoService extends \App\Services\BaseService
 {
+    public const MAX_TASKS_PER_HOUR = 5;
+    public const MAX_IP_TASKS_PER_HOUR = 10;
     private SeoAd $adModel;
     private SeoExecution $executionModel;
     private UserScoreService $scoreService;
@@ -25,6 +29,7 @@ class SeoService extends \App\Services\BaseService
     private WalletService $walletService;
     private ReferralService $referralService;
     private Database $db;
+    private \App\Services\Shared\RatingService $ratingService;
 
     public function __construct(
         SeoAd $adModel,
@@ -34,8 +39,11 @@ class SeoService extends \App\Services\BaseService
         SeoFraudDetector $fraudDetector,
         WalletService $walletService,
         ReferralService $referralService,
-        Database $db
+        Database $db,
+        \App\Services\Shared\RatingService $ratingService,
+        LoggerInterface $logger
     ) {
+        parent::__construct($logger);
         $this->adModel = $adModel;
         $this->executionModel = $executionModel;
         $this->scoreService = $scoreService;
@@ -44,6 +52,7 @@ class SeoService extends \App\Services\BaseService
         $this->walletService = $walletService;
         $this->referralService = $referralService;
         $this->db = $db;
+        $this->ratingService = $ratingService;
     }
 
     /**
@@ -78,14 +87,14 @@ class SeoService extends \App\Services\BaseService
 
         // بررسی محدودیت ساعتی
         $hourlyCount = $this->executionModel->countByUserLastHour($userId);
-        if ($hourlyCount >= 5) {
-            return ['success' => false, 'message' => 'حداکثر 5 تسک در ساعت مجاز است. لطفاً کمی صبر کنید'];
+        if ($hourlyCount >= self::MAX_TASKS_PER_HOUR) {
+            return ['success' => false, 'message' => 'حداکثر ' . self::MAX_TASKS_PER_HOUR . ' تسک در ساعت مجاز است. لطفاً کمی صبر کنید'];
         }
 
         // بررسی IP
         $ip = get_client_ip();
         $ipHourly = $this->executionModel->countByIPLastHour($ip);
-        if ($ipHourly >= 10) {
+        if ($ipHourly >= self::MAX_IP_TASKS_PER_HOUR) {
             return ['success' => false, 'message' => 'محدودیت IP. لطفاً بعداً تلاش کنید'];
         }
 
@@ -111,7 +120,7 @@ class SeoService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'خطا در شروع تسک'];
             }
 
-            logger('seo_task', "User {$userId} started task for ad #{$adId}");
+            $this->logger->info('seo_task.started', ['user_id' => $userId, 'ad_id' => $adId]);
 
             return [
                 'success' => true,
@@ -127,7 +136,7 @@ class SeoService extends \App\Services\BaseService
             ];
 
         } catch (\Exception $e) {
-            logger('seo_error', "Start task failed: " . $e->getMessage());
+            $this->logger->error('seo_task.start_failed', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطای سیستمی'];
         }
     }
@@ -175,7 +184,7 @@ class SeoService extends \App\Services\BaseService
                 
                 $this->db->commit();
                 
-                logger('seo_fraud', "Fraud detected for user {$userId}, execution {$executionId}");
+                $this->logger->warning('seo_task.fraud_detected', ['user_id' => $userId, 'execution_id' => $executionId, 'flags' => $fraudCheck['flags']]);
                 
                 return [
                     'success' => false,
@@ -229,26 +238,34 @@ class SeoService extends \App\Services\BaseService
 
             if (!$walletResult['success']) {
                 $this->db->rollBack();
-                logger('seo_error', "Wallet credit failed for user {$userId}");
+                $this->logger->error('seo_task.wallet_credit_failed', ['user_id' => $userId]);
                 return ['success' => false, 'message' => 'خطا در واریز پاداش'];
             }
 
-            // 9. پورسانت ریفرال
+            // 9. پورسانت ریفرال داینامیک و ماژولار چورتکه
             try {
-                $this->referralService->processCommission(
+                $this->referralService->processModularCommission(
                     $userId,
+                    'google_search',
                     $payout,
                     'irt',
                     ['type' => 'seo_task', 'execution_id' => $executionId]
                 );
             } catch (\Exception $e) {
-                // اگر پورسانت خطا داد، ادامه بده (غیرضروری)
-                logger('referral_error', $e->getMessage());
+                $this->logger->error('seo_task.referral_commission_failed', ['error' => $e->getMessage()]);
+            }
+
+            // 10. تخصیص امتیاز تجربه (XP) گیمیفای شده
+            try {
+                $xpEngine = \Core\Container::getInstance()->make(\App\Services\XPEngine::class);
+                $xpEngine->awardXP($userId, 'google_search', 'seo_task_completed');
+            } catch (\Throwable $t) {
+                $this->logger->error('seo_task.xp_award_failed', ['error' => $t->getMessage()]);
             }
 
             $this->db->commit();
 
-            logger('seo_task', "User {$userId} completed task #{$executionId}, earned {$payout}");
+            $this->logger->info('seo_task.completed', ['user_id' => $userId, 'execution_id' => $executionId, 'payout' => $payout]);
 
             return [
                 'success' => true,
@@ -260,7 +277,7 @@ class SeoService extends \App\Services\BaseService
 
         } catch (\Exception $e) {
             $this->db->rollBack();
-            logger('seo_error', "Complete task failed: " . $e->getMessage());
+            $this->logger->error('seo_task.complete_failed', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطای سیستمی'];
         }
     }
@@ -333,6 +350,67 @@ class SeoService extends \App\Services\BaseService
             'final_score' => round($finalScore, 2),
             'engagement_data' => $data,
         ];
+    }
+
+    /**
+     * گزارش تخلف تسک سئو
+     */
+    public function reportTask(int $reporterId, int $adId, string $reason, string $description = ''): array
+    {
+        $ad = $this->adModel->find($adId);
+        if (!$ad) {
+            return ['success' => false, 'message' => 'تسک یافت نشد'];
+        }
+
+        try {
+            $ok = $this->ratingService->report([
+                'reporter_id' => $reporterId,
+                'ref_type' => 'seo_task',
+                'ref_id' => $adId,
+                'reason' => $reason,
+                'description' => $description
+            ]);
+
+            if (!$ok) {
+                return ['success' => false, 'message' => 'خطا در ثبت گزارش'];
+            }
+
+            return ['success' => true, 'message' => 'گزارش با موفقیت ثبت شد'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * امتیازدهی به تسک سئو
+     */
+    public function rateTask(int $raterId, int $adId, int $stars, string $comment = ''): array
+    {
+        $ad = $this->adModel->find($adId);
+        if (!$ad) {
+            return ['success' => false, 'message' => 'تسک یافت نشد'];
+        }
+
+        $stars = max(1, min(5, $stars));
+
+        try {
+            $ok = $this->ratingService->rate(
+                $raterId,
+                (int)$ad->user_id,
+                'seo_task',
+                $adId,
+                $stars,
+                $comment
+            );
+
+            if (!$ok) {
+                return ['success' => false, 'message' => 'خطا در ثبت امتیاز'];
+            }
+
+            return ['success' => true, 'message' => 'امتیاز با موفقیت ثبت شد'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+        }
     }
 }
 

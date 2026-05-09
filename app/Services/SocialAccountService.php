@@ -15,10 +15,12 @@ class SocialAccountService extends \App\Services\BaseService
     private $userModel;
 
     public function __construct(
+        LoggerInterface $logger,
         \App\Models\SocialAccount $socialAccountModel,
         \App\Models\User $userModel,
-        \App\Models\Notification $notificationModel)
-    {
+        \App\Models\Notification $notificationModel
+    ) {
+        parent::__construct($logger);
         $this->socialAccountModel = $socialAccountModel;
         $this->userModel = $userModel;
         $this->notificationModel = $notificationModel;

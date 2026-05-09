@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 use Core\Database;
 
@@ -98,8 +100,9 @@ class UploadService extends \App\Services\BaseService
     private string $publicRoot;
     private string $captchaRoot;
 
-    public function __construct(Database $db)
+    public function __construct(Database $db, LoggerInterface $logger)
     {
+        parent::__construct($logger);
         $this->db = $db;
         $root = realpath(__DIR__ . '/../../') ?: (__DIR__ . '/../../');
         $root = rtrim($root, '/\\');

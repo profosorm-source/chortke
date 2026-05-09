@@ -240,4 +240,123 @@ class CronService extends \App\Services\BaseService
 
         return ['success' => true, 'completed_count' => $count, 'message' => "{$count} تسک به صورت خودکار تکمیل شد."];
     }
+
+    /**
+     * اجرای خودکار ریزش تصاعدی امتیاز عدم فعالیت (Inactivity Score Decay)
+     */
+    public function applyInactivityScoreDecay(): array
+    {
+        // دریافت همه کاربران فعال
+        $users = $this->db->fetchAll("
+            SELECT id, email, level_slug FROM users
+            WHERE status = 'active' AND deleted_at IS NULL
+        ");
+
+        $processed = 0;
+        $decayedCount = 0;
+
+        foreach ($users as $user) {
+            $userId = (int)$user->id;
+
+            // ۱. بررسی اینکه آیا کاربر در مرخصی فعال به سر می‌برد یا خیر
+            $isOnVacation = $this->db->fetchColumn("
+                SELECT COUNT(*) FROM user_vacations
+                WHERE user_id = ? AND status = 'active'
+                AND CURRENT_DATE() BETWEEN start_date AND end_date
+                LIMIT 1
+            ", [$userId]) > 0;
+
+            if ($isOnVacation) {
+                continue; // معاف از ریزش امتیاز به علت داشتن مرخصی فعال
+            }
+
+            // ۲. پیدا کردن تاریخ آخرین فعالیت کاربر
+            $lastActivityStr = $this->db->fetchColumn("
+                SELECT MAX(created_at) FROM activity_logs
+                WHERE user_id = ?
+            ", [$userId]);
+
+            if (!$lastActivityStr) {
+                // اگر هیچ لاگی نبود، تاریخ ثبت‌نام را به عنوان آخرین فعالیت در نظر می‌گیریم
+                $lastActivityStr = $this->db->fetchColumn("
+                    SELECT created_at FROM users WHERE id = ?
+                ", [$userId]);
+            }
+
+            if (!$lastActivityStr) {
+                continue;
+            }
+
+            $lastActivity = new \DateTime($lastActivityStr);
+            $now = new \DateTime();
+            $interval = $now->diff($lastActivity);
+            $inactiveDays = $interval->days;
+
+            if ($inactiveDays >= 1) {
+                $processed++;
+
+                // بررسی نوع کاربر (عادی در مقابل VIP)
+                $isPaidUser = ($user->level_slug !== 'beginner' && $user->level_slug !== 'bronze' && !empty($user->level_slug));
+
+                $decayPercent = 0.0;
+
+                if ($isPaidUser) {
+                    // قانون کاربران پولی: روز اول ۵۰٪ کسر امتیاز و روزهای بعد با شیب تندتر
+                    if ($inactiveDays === 1) {
+                        $decayPercent = 0.50; // ۵۰٪ کسر امتیاز
+                    } else {
+                        $decayPercent = 0.10; // ۱۰٪ کسر روزانه برای روزهای بعدی
+                    }
+                } else {
+                    // قانون کاربران عادی: روز اول ۲۰٪، روز دوم ۱۵٪، روز سوم ۱۰٪، روز چهارم به بعد ۵٪
+                    if ($inactiveDays === 1) {
+                        $decayPercent = 0.20;
+                    } elseif ($inactiveDays === 2) {
+                        $decayPercent = 0.15;
+                    } elseif ($inactiveDays === 3) {
+                        $decayPercent = 0.10;
+                    } else {
+                        $decayPercent = 0.05;
+                    }
+                }
+
+                if ($decayPercent > 0.0) {
+                    // واکشی دامنه‌های فعال برای کسر امتیاز
+                    $activeDomains = ['xp_youtube', 'xp_custom_tasks', 'xp_social_tasks', 'xp_google_search'];
+
+                    foreach ($activeDomains as $domain) {
+                        // دریافت امتیاز فعلی دامنه
+                        $currentScore = (float)$this->db->fetchColumn("
+                            SELECT COALESCE(SUM(delta), 0.0) FROM score_events
+                            WHERE entity_id = ? AND entity_type = 'user' AND domain = ?
+                        ", [$userId, $domain]);
+
+                        if ($currentScore > 0.0) {
+                            $penalty = -($currentScore * $decayPercent);
+
+                            // ثبت رویداد کسر امتیاز
+                            $this->db->query("
+                                INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at)
+                                VALUES ('user', ?, ?, ?, 'inactivity_decay', ?, NOW())
+                            ", [
+                                $userId,
+                                $domain,
+                                $penalty,
+                                json_encode(['inactive_days' => $inactiveDays, 'decay_percent' => $decayPercent])
+                            ]);
+
+                            $decayedCount++;
+                        }
+                    }
+                }
+            }
+        }
+
+        return [
+            'success' => true,
+            'processed_users' => $processed,
+            'decayed_records' => $decayedCount,
+            'message' => "کاهش امتیاز عدم فعالیت برای {$processed} کاربر غایب اعمال شد."
+        ];
+    }
 }
