@@ -270,21 +270,24 @@ private function parseBody(): array
             && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
     }
 
-    /**
-     * آیا اتصال امن است (HTTPS)
-     */
     public function isSecure(): bool
     {
         if (!empty($_SERVER['HTTPS']) && strtolower($_SERVER['HTTPS']) !== 'off') {
             return true;
         }
 
-        if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') {
+        if (!empty($_SERVER['REQUEST_SCHEME']) && strtolower($_SERVER['REQUEST_SCHEME']) === 'https') {
             return true;
         }
 
-        if (!empty($_SERVER['REQUEST_SCHEME']) && strtolower($_SERVER['REQUEST_SCHEME']) === 'https') {
-            return true;
+        // فقط در صورتی که آی‌پی فرستنده جزو پروکسی‌های معتبر باشد، به هدر X-Forwarded-Proto اعتماد می‌کنیم
+        $trustedProxies = config('trusted_proxies', ['127.0.0.1']);
+        $clientIp = $_SERVER['REMOTE_ADDR'] ?? '';
+
+        if (in_array($clientIp, $trustedProxies, true)) {
+            if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') {
+                return true;
+            }
         }
 
         return false;

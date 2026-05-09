@@ -101,16 +101,17 @@ class Response
         return (string)$this->content;
     }
 
-    /**
-     * پاسخ JSON
-     */
     public function json(array $data, int $statusCode = 200): void
     {
         http_response_code($statusCode);
         if (!headers_sent()) {
             header('Content-Type: application/json; charset=utf-8');
         }
-        echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        $options = JSON_UNESCAPED_UNICODE;
+        if (config('app.debug')) {
+            $options |= JSON_PRETTY_PRINT;
+        }
+        echo json_encode($data, $options);
         if (defined('TESTING') && TESTING === true) {
             return;
         }
@@ -198,9 +199,6 @@ class Response
         exit;
     }
     
-    /**
-     * ✅ Validate file path to prevent directory traversal
-     */
     private function validateFilePath(string $filePath): bool
     {
         // ✅ Prevent directory traversal
@@ -214,9 +212,21 @@ class Response
             throw new \InvalidArgumentException("فایل پیدا نشد");
         }
         
-        // ✅ Ensure file is within uploads directory
-        $uploadBase = realpath(__DIR__ . '/../public/uploads');
-        if (strpos($realPath, $uploadBase) !== 0) {
+        // ✅ Ensure file is within allowed base directories (public/uploads or secure storage)
+        $allowedBases = [
+            realpath(__DIR__ . '/../public/uploads'),
+            realpath(__DIR__ . '/../storage'),
+        ];
+        
+        $isAllowed = false;
+        foreach ($allowedBases as $base) {
+            if ($base !== false && str_starts_with($realPath, $base)) {
+                $isAllowed = true;
+                break;
+            }
+        }
+        
+        if (!$isAllowed) {
             throw new \InvalidArgumentException("فایل خارج از دایرکتوری مجاز است");
         }
         

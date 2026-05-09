@@ -148,7 +148,10 @@ class Router
         try {
             $this->container->make(\Core\Session::class)->ensureStarted();
         } catch (\Throwable $e) {
-            // Session start failed - continue without session
+            // برای متدهایی که تغییر دهنده حالت هستند، اگر سشن لود نشد عملیات را به سرعت و با امنیت متوقف می‌کنیم (Fail-Closed)
+            if (in_array(strtoupper($this->request->method()), ['POST', 'PUT', 'DELETE', 'PATCH'], true)) {
+                throw new \RuntimeException('Session failed to initialize. Request aborted for security reasons.', 500, $e);
+            }
         }
 
         $method = $this->request->method();
@@ -253,6 +256,12 @@ class Router
         }
         if (is_string($result)) {
             echo $result;
+            return;
+        }
+        if (is_array($result) || is_object($result)) {
+            $response = new Response();
+            $response->json((array)$result);
+            return;
         }
     }
 
@@ -310,7 +319,7 @@ class Router
     {
         http_response_code(404);
 
-        if (config('app.debug')) {
+        if (config('app.debug') && config('app.env') === 'local') {
             echo "<!DOCTYPE html><html lang='fa' dir='rtl'><head><meta charset='UTF-8'>";
             echo "<title>404 - صفحه یافت نشد</title>";
             echo "<style>body{font-family:Tahoma,Arial;padding:40px;background:#f5f5f5;}";

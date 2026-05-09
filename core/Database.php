@@ -305,6 +305,7 @@ throw $e;
     }
 
     $sql = $this->normalizeSql($sql);
+    $startTime = microtime(true);
 
     try {
         $stmt = $this->pdo->prepare($sql);
@@ -321,12 +322,23 @@ throw $e;
         }
 
         $stmt->execute();
+
+        // بررسی کوئری‌های کند (Slow Queries)
+        $duration = microtime(true) - $startTime;
+        if ($duration > 0.1) { // آستانه ۱۰۰ میلی‌ثانیه
+            $this->logSlowQuery($sql, $params, $duration);
+        }
+
         return $stmt;
     } catch (\PDOException $e) {
         $ctx = $this->buildSqlErrorContext($sql, $params, $e);
-self::$lastSqlErrorContext = $ctx;
-self::fallbackLog('database.fetch.failed', $ctx);
-throw $e;
+        self::$lastSqlErrorContext = $ctx;
+        self::fallbackLog('database.fetch.failed', $ctx);
+
+        // ارسال خطای دیتابیس به Sentry شخصی‌سازی شده
+        $this->logQueryErrorToSentry($sql, $params, $e);
+
+        throw $e;
     } finally {
         self::$queryDepth--;
     }
@@ -516,6 +528,58 @@ public function lastInsertId(): int
     public function inTransaction(): bool
     {
         return $this->pdo->inTransaction();
+    }
+
+    private function logSlowQuery(string $sql, array $params, float $duration): void
+    {
+        try {
+            $container = \Core\Container::getInstance();
+            if ($container && $container->has(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class)) {
+                $sentry = $container->make(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class);
+                if ($sentry) {
+                    $interpolatedSql = $this->interpolateSql($sql, $params);
+                    $sentry->captureMessage(
+                        "Slow query detected: " . mb_substr($interpolatedSql, 0, 200),
+                        'warning',
+                        null,
+                        [
+                            'sql' => $sql,
+                            'params_count' => count($params),
+                            'duration_seconds' => $duration,
+                            'interpolated_sql' => mb_substr($interpolatedSql, 0, 1000),
+                            'backtrace' => array_slice(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10), 2)
+                        ]
+                    );
+                }
+            }
+        } catch (\Throwable $ignore) {
+            // کاملاً فیل‌سیف
+        }
+    }
+
+    private function logQueryErrorToSentry(string $sql, array $params, \Throwable $e): void
+    {
+        try {
+            $container = \Core\Container::getInstance();
+            if ($container && $container->has(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class)) {
+                $sentry = $container->make(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class);
+                if ($sentry) {
+                    $interpolatedSql = $this->interpolateSql($sql, $params);
+                    $sentry->captureException(
+                        $e,
+                        null,
+                        [
+                            'sql' => $sql,
+                            'params_count' => count($params),
+                            'interpolated_sql' => mb_substr($interpolatedSql, 0, 1000),
+                        ],
+                        'error'
+                    );
+                }
+            }
+        } catch (\Throwable $ignore) {
+            // کاملاً فیل‌سیف
+        }
     }
 
     /**

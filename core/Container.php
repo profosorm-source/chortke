@@ -29,7 +29,8 @@ class Container
     /** @var array<string, object|null>  null = ثبت‌شده ولی هنوز build نشده */
     private array $singletons = [];
 
-   private $reflectionCache = [];
+    private $reflectionCache = [];
+    private bool $isLoggingMissing = false;
     // ─────────────────────────────────────────────────────────────
     // Singleton Access
     // ─────────────────────────────────────────────────────────────
@@ -85,6 +86,8 @@ class Container
     // Resolution
     // ─────────────────────────────────────────────────────────────
 
+    private static array $traceStack = [];
+
     /**
      * ساخت / دریافت instance
      *
@@ -92,35 +95,28 @@ class Container
      */
     public function make(string $abstract): object
 {
-    // Singleton cache
-    if (array_key_exists($abstract, $this->singletons)) {
-        if ($this->singletons[$abstract] === null) {
-            $this->singletons[$abstract] = $this->resolve($abstract);
-        }
-        return $this->singletons[$abstract];
+    if (in_array($abstract, self::$traceStack, true)) {
+        throw new \RuntimeException("Circular dependency detected: " . implode(" -> ", self::$traceStack) . " -> " . $abstract);
     }
+    self::$traceStack[] = $abstract;
+    try {
+        // Singleton cache
+        if (array_key_exists($abstract, $this->singletons)) {
+            if ($this->singletons[$abstract] === null) {
+                $this->singletons[$abstract] = $this->resolve($abstract);
+            }
+            return $this->singletons[$abstract];
+        }
 
-    return $this->resolve($abstract);
+        return $this->resolve($abstract);
+    } finally {
+        array_pop(self::$traceStack);
+    }
 }
 
     private function resolve(string $abstract): object
 {
     $concrete = $this->bindings[$abstract] ?? $abstract;
-
-    // Log missing binding for debugging
-    if (!isset($this->bindings[$abstract]) && $abstract !== $concrete) {
-        try {
-            if (function_exists('logger')) {
-                logger()->debug('container.binding.missing', [
-                    'abstract' => $abstract,
-                    'concrete' => $concrete,
-                    'available_bindings' => array_keys($this->bindings),
-                ]);
-            }
-        } catch (\Throwable $ignore) {
-            // Ignore logging failures during bootstrap
-        }
-    }
 
     // closure binding
     if ($concrete instanceof \Closure) {

@@ -430,8 +430,12 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
 
     public function cleanup(): int
     {
+        $logger = function_exists('logger') ? logger() : null;
+
         if ($this->driver === 'redis') {
-            $this->logger->info('Cache cleanup skipped — Redis manages TTL automatically', []);
+            if ($logger) {
+                $logger->info('Cache cleanup skipped — Redis manages TTL automatically', []);
+            }
             return 0;
         }
 
@@ -440,18 +444,21 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
 
         foreach ($files as $file) {
             $raw = file_get_contents($file);
-$data = $this->safeUnserialize($raw === false ? null : $raw);
+            $data = $this->safeUnserialize($raw === false ? null : $raw);
             if ($data === false || $data['expire_at'] < time()) {
                 @unlink($file);
                 $cleaned++;
             }
         }
 
-        $this->logger->info('cache.file.cleanup.completed', [
-    'channel' => 'cache',
-    'cleaned' => $cleaned,
-]);
-return $cleaned;
+        if ($logger) {
+            $logger->info('cache.file.cleanup.completed', [
+                'channel' => 'cache',
+                'cleaned' => $cleaned,
+            ]);
+        }
+        
+        return $cleaned;
     }
 
     // ─────────────────────────────────────────────────

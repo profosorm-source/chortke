@@ -191,4 +191,70 @@ abstract class Model
     {
         $this->db->rollback();
     }
+
+    /**
+     * Escape LIKE wildcards to prevent injection
+     */
+    protected function escapeLikeValue(string $value, int $maxLength = 100): string
+    {
+        $value = trim($value);
+        
+        if (strlen($value) > $maxLength) {
+            throw new \InvalidArgumentException("Search term exceeds {$maxLength} characters");
+        }
+        
+        return addcslashes($value, '%_');
+    }
+    
+    /**
+     * Chunked update helper
+     */
+    protected function chunkedUpdate(
+        string $sql, 
+        array $params, 
+        int $chunkSize = 1000,
+        int $maxIterations = 100
+    ): int {
+        $totalAffected = 0;
+        
+        for ($i = 0; $i < $maxIterations; $i++) {
+            $stmt = $this->db->prepare($sql . " LIMIT ?");
+            // Bind parameters plus the chunkSize
+            $allParams = array_merge($params, [$chunkSize]);
+            
+            // Execute using the statement wrapper
+            $stmt->execute();
+            $affected = $stmt->rowCount();
+            $totalAffected += $affected;
+            
+            if ($affected < $chunkSize) {
+                break;
+            }
+            
+            usleep(50000); // 50ms delay
+        }
+        
+        return $totalAffected;
+    }
+    
+    /**
+     * Validate integer ID
+     */
+    protected function validateId(int $id, string $field = 'id'): void
+    {
+        if ($id <= 0) {
+            throw new \InvalidArgumentException("Invalid {$field}: must be positive integer");
+        }
+    }
+    
+    /**
+     * Validate date string
+     */
+    protected function validateDate(string $date, string $field = 'date'): void
+    {
+        $d = \DateTime::createFromFormat('Y-m-d H:i:s', $date);
+        if (!$d || $d->format('Y-m-d H:i:s') !== $date) {
+            throw new \InvalidArgumentException("Invalid {$field} format");
+        }
+    }
 }

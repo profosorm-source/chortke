@@ -31,17 +31,15 @@ class IdempotencyKey
         $this->db = Database::getInstance();
     }
 
-    /**
-     * تولید کلید جدید با امنیت بالا
-     * 
-     * @param string|null $seed داده اختیاری برای تولید deterministic key
-     * @return string
-     */
     public static function generate(?string $seed = null): string
     {
         if ($seed !== null) {
+            $key = config('app.key');
+            if (empty($key) || $key === 'default_key') {
+                throw new \RuntimeException('Secure APP_KEY is not defined in configurations.');
+            }
             // تولید deterministic key برای debugging
-            return hash('sha256', $seed . config('app_key', 'default_key'));
+            return hash('sha256', $seed . $key);
         }
         
         // تولید random key با امنیت بالا

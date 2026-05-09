@@ -7,6 +7,7 @@ class Session
 {
     private static ?Session $instance = null;
     private bool $started = false;
+    private bool $isStarting = false;
     private string $fingerprint;
 
     private function __construct() {}
@@ -32,15 +33,17 @@ class Session
      */
     public function start(): void
     {
-        if ($this->started || session_status() === PHP_SESSION_ACTIVE) {
+        if ($this->started || $this->isStarting || session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
 
-        $config = config('session');
+        $this->isStarting = true;
+        try {
+            $config = config('session');
 
-        // Set Redis session handler
-        $handler = new \Core\RedisSessionHandler();
-        session_set_save_handler($handler, true);
+            // Set Redis session handler
+            $handler = new \Core\RedisSessionHandler();
+            session_set_save_handler($handler, true);
 
         session_name($config['name']);
 
@@ -61,6 +64,9 @@ class Session
         }
 
         $this->validateFingerprint();
+        } finally {
+            $this->isStarting = false;
+        }
     }
 
     /* -------------------------
@@ -69,25 +75,30 @@ class Session
 
     public function set(string $key, $value): void
     {
+        $this->ensureStarted();
         $_SESSION[$key] = $value;
     }
 
     public function get(string $key, $default = null)
     {
+        $this->ensureStarted();
         return $_SESSION[$key] ?? $default;
     }
 
     public function has(string $key): bool
     {
+        $this->ensureStarted();
         return isset($_SESSION[$key]);
     }
 
     public function remove(string $key): void
     {
+        $this->ensureStarted();
         unset($_SESSION[$key]);
     }
 public function delete(string $key): void
 {
+    $this->ensureStarted();
     unset($_SESSION[$key]);
 }
     /* -------------------------
@@ -96,11 +107,13 @@ public function delete(string $key): void
 
     public function setFlash(string $key, $value): void
     {
+        $this->ensureStarted();
         $_SESSION['__flash'][$key] = $value;
     }
 
     public function getFlash(string $key)
     {
+        $this->ensureStarted();
         if (!isset($_SESSION['__flash'][$key])) {
             return null;
         }
@@ -113,11 +126,13 @@ public function delete(string $key): void
 
     public function hasFlash(string $key): bool
     {
+        $this->ensureStarted();
         return isset($_SESSION['__flash'][$key]);
     }
 
     public function flashInput(array $data): void
     {
+        $this->ensureStarted();
         foreach ($data as $key => $value) {
             $this->setFlash('old_' . $key, $value);
         }

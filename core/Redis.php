@@ -64,6 +64,54 @@ class Redis
         return $this->client;
     }
 
+    /**
+     * Get keys matching pattern using SCAN (non-blocking alternative to keys())
+     * 
+     * ✅ Performance: O(N) with server-side iteration (doesn't block Redis)
+     * ❌ keys(): O(N) but blocks Redis server completely
+     * 
+     * @param string $pattern Key pattern to match (e.g., "user:*")
+     * @param int $count Hint about number of keys to return per iteration
+     * @return array<string> All matching keys
+     */
+    public function scanKeys(string $pattern, int $count = 100): array
+    {
+        if (!$this->isAvailable()) {
+            return [];
+        }
+
+        $keys = [];
+        $iterator = null;
+
+        // SCAN returns [iterator, keys]
+        while (true) {
+            $result = $this->client->scan($iterator, $pattern, $count);
+            
+            if ($result === false) {
+                break;
+            }
+
+            // PhpRedis returns [new_iterator, keys_array]
+            if (is_array($result) && isset($result[1])) {
+                $keys = array_merge($keys, $result[1]);
+                $iterator = $result[0];
+            } else {
+                // Fallback for different Redis implementations
+                if (is_array($result)) {
+                    $keys = array_merge($keys, $result);
+                }
+                break;
+            }
+
+            // If iterator is 0, scan completed
+            if ($iterator === '0' || $iterator === 0) {
+                break;
+            }
+        }
+
+        return $keys;
+    }
+
     public function __call(string $name, array $arguments)
     {
         if (!$this->isAvailable()) {

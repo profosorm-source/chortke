@@ -51,40 +51,64 @@ class Queue
         return (bool)$result;
     }
 
-    /**
-     * گرفتن job از صف
-     */
     public function pop(string $queue = null): ?array
     {
         $queue = $queue ?: $this->defaultQueue;
 
-        // پیدا کردن job قابل اجرا
-        $job = $this->db->table('queues')
-            ->where('queue', '=', $queue)
-            ->where('attempts', '<', $this->maxAttempts)
-            ->where('available_at', '<=', date('Y-m-d H:i:s'))
-            ->whereNull('reserved_at')
-            ->orderBy('created_at', 'ASC')
-            ->first();
+        try {
+            $this->db->beginTransaction();
 
-        if (!$job) {
-            return null;
+            $nowStr = date('Y-m-d H:i:s');
+
+            // SELECT ... FOR UPDATE قفل امن برای جلوگیری از همپوشانی در سیستم‌های توزیع شده
+            $job = $this->db->selectOne(
+                "SELECT * FROM queues 
+                 WHERE queue = :queue 
+                   AND attempts < :max_attempts 
+                   AND available_at <= :now 
+                   AND reserved_at IS NULL 
+                 ORDER BY created_at ASC 
+                 LIMIT 1 FOR UPDATE",
+                [
+                    'queue' => $queue,
+                    'max_attempts' => $this->maxAttempts,
+                    'now' => $nowStr
+                ]
+            );
+
+            if (!$job) {
+                $this->db->commit();
+                return null;
+            }
+
+            $reservedAt = date('Y-m-d H:i:s');
+            $newAttempts = (int)$job->attempts + 1;
+
+            $this->db->execute(
+                "UPDATE queues 
+                 SET reserved_at = :reserved_at, attempts = :attempts 
+                 WHERE id = :id",
+                [
+                    'reserved_at' => $reservedAt,
+                    'attempts' => $newAttempts,
+                    'id' => $job->id
+                ]
+            );
+
+            $this->db->commit();
+
+            $payload = json_decode($job->payload, true) ?? [];
+
+            return [
+                'id' => (int)$job->id,
+                'job' => $payload['job'] ?? '',
+                'data' => $payload['data'] ?? [],
+                'attempts' => $newAttempts
+            ];
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            throw $e;
         }
-
-        // رزرو job
-        $this->db->table('queues')
-            ->where('id', '=', $job->id)
-            ->update([
-                'reserved_at' => date('Y-m-d H:i:s'),
-                'attempts' => $job->attempts + 1
-            ]);
-
-        return [
-            'id' => $job->id,
-            'job' => json_decode($job->payload, true)['job'],
-            'data' => json_decode($job->payload, true)['data'],
-            'attempts' => $job->attempts + 1
-        ];
     }
 
     /**
