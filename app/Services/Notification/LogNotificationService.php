@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace App\Services\Notification;
 
 use App\Services\Notification\Adapters\LogNotificationAdapter;
-
 use App\Contracts\LoggerInterface;
-class LogNotificationServiceextends \App\Services\BaseService
+
+class LogNotificationService extends \App\Services\BaseService
 {
     public function __construct(
-        private LogNotificationAdapter $adapter
-    ) {}
+        private LogNotificationAdapter $adapter,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     public function sendAlert(string $title, string $message, string $severity = 'medium'): void
     {
@@ -23,4 +26,3 @@ class LogNotificationServiceextends \App\Services\BaseService
         $this->adapter->checkAlertRules();
     }
 }
-

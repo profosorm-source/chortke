@@ -6,15 +6,16 @@ namespace App\Services;
 
 use App\Models\ApiToken;
 use App\Models\User;
-
 use App\Contracts\LoggerInterface;
-class ApiTokenServiceextends \App\Services\BaseService
+
+class ApiTokenService extends \App\Services\BaseService
 {
     private ApiToken $apiTokenModel;
     private User $userModel;
 
-    public function __construct(ApiToken $apiTokenModel, User $userModel)
+    public function __construct(LoggerInterface $logger, ApiToken $apiTokenModel, User $userModel)
     {
+        parent::__construct($logger);
         $this->apiTokenModel = $apiTokenModel;
         $this->userModel = $userModel;
     }
@@ -25,6 +26,8 @@ class ApiTokenServiceextends \App\Services\BaseService
         ?string $search = null,
         ?string $statusFilter = null
     ): array {
+        $page = max(1, $page);
+        $perPage = min(max(1, $perPage), 100);
         $offset = ($page - 1) * $perPage;
 
         $tokens = $this->apiTokenModel->findAllPaginated($perPage, $offset, $search, $statusFilter);
@@ -43,6 +46,7 @@ class ApiTokenServiceextends \App\Services\BaseService
 
     public function revokeToken(int $tokenId): bool
     {
+        $this->logger->info('api_token.revoked_by_id', ['token_id' => $tokenId]);
         return $this->apiTokenModel->revokeById($tokenId);
     }
 
@@ -57,6 +61,11 @@ class ApiTokenServiceextends \App\Services\BaseService
 
         $this->apiTokenModel->revokeByHash($hashedToken);
 
+        $this->logger->info('api_token.revoked_by_hash', [
+            'token_id' => $record['id'] ?? null,
+            'user_id' => $record['user_id'] ?? null
+        ]);
+
         return ['success' => true];
     }
 
@@ -70,10 +79,19 @@ class ApiTokenServiceextends \App\Services\BaseService
         return $this->apiTokenModel->countActiveByUserId($userId);
     }
 
-    public function createTokenForUser(int $userId, string $name, int $expiresIn): array
+    public function createTokenForUser(int $userId, string $name, int $expiresIn, string $scope = 'read'): array
     {
         if ($name === '') {
             return ['success' => false, 'message' => 'نام توکن الزامی است'];
+        }
+
+        $activeCount = $this->getActiveTokenCountForUser($userId);
+        if ($activeCount >= 10) {
+            return [
+                'success' => false,
+                'message' => 'حداکثر تعداد توکن‌های فعال (10) به حد خود رسیده است',
+                'code' => 'TOKEN_LIMIT_REACHED'
+            ];
         }
 
         $token = bin2hex(random_bytes(32));
@@ -85,14 +103,25 @@ class ApiTokenServiceextends \App\Services\BaseService
         $name = trim($name);
         $name = $name === '' ? 'api-token-' . date('Ymd') : mb_substr($name, 0, 80);
 
-        $this->apiTokenModel->createToken($userId, $hashedToken, $name, 'read', $expiresAt);
+        $validScopes = ['read', 'write', 'admin'];
+        if (!in_array($scope, $validScopes, true)) {
+            $scope = 'read';
+        }
+
+        $this->apiTokenModel->createToken($userId, $hashedToken, $name, $scope, $expiresAt);
+
+        $this->logger->info('api_token.created_for_user', [
+            'user_id' => $userId,
+            'name' => $name,
+            'scope' => $scope
+        ]);
 
         return [
             'success' => true,
             'payload' => [
                 'token' => $token,
                 'name' => $name,
-                'scopes' => 'read',
+                'scopes' => $scope,
                 'expires_at' => $expiresAt,
             ],
         ];
@@ -107,6 +136,11 @@ class ApiTokenServiceextends \App\Services\BaseService
         }
 
         $this->apiTokenModel->revokeById($tokenId);
+
+        $this->logger->info('api_token.revoked_by_user', [
+            'user_id' => $userId,
+            'token_id' => $tokenId
+        ]);
 
         return ['success' => true];
     }
@@ -124,7 +158,10 @@ class ApiTokenServiceextends \App\Services\BaseService
         }
 
         $user = $this->userModel->findByEmail($email);
-        if (!$user || !password_verify($password, $user->password)) {
+        $dummyHash = '$2y$10$abcdefghijklmnopqrstuvwx'; // bcrypt hash
+        $passwordValid = password_verify($password, $user ? $user->password : $dummyHash);
+
+        if (!$user || !$passwordValid) {
             return [
                 'success' => false,
                 'message' => 'ایمیل یا رمز عبور اشتباه است',
@@ -176,4 +213,3 @@ class ApiTokenServiceextends \App\Services\BaseService
         return $this->apiTokenModel->revokeAllExpired();
     }
 }
-

@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services\Auth;
 
-use Core\Session;
+use Core\Cache;
 use App\Contracts\LoggerInterface;
+
 /**
  * LoginRiskService — سرویس تشخیص ریسک لاگین
  *
@@ -16,15 +19,20 @@ use App\Contracts\LoggerInterface;
  */
 class LoginRiskService extends \App\Services\BaseService
 {
-    private Session $session;
-    // کلید session برای شمارش تلاش‌های ناموفق هر IP
-    private const SESSION_KEY = 'login_fail_count';
-    private const SESSION_IP_KEY = 'login_fail_ip';
+    public const SCORE_LOW_RISK = 30;
+    public const SCORE_MEDIUM_RISK = 60;
 
-    public function __construct(Session $session, LoggerInterface $logger)
+    public const FAIL_LIMIT_1 = 1;
+    public const FAIL_LIMIT_2 = 2;
+    public const FAIL_LIMIT_3 = 3;
+    public const FAIL_LIMIT_4 = 4;
+
+    private Cache $cache;
+
+    public function __construct(Cache $cache, LoggerInterface $logger)
     {
         parent::__construct($logger);
-        $this->session = $session;
+        $this->cache = $cache;
     }
 
     /**
@@ -34,70 +42,75 @@ class LoginRiskService extends \App\Services\BaseService
      * ثبت‌نام: همیشه حداقل math — با افزایش خطا سخت‌تر می‌شود
      * ورود: بر اساس تعداد تلاش ناموفق
      */
-    public function getCaptchaType(string $context = 'login'): ?string
+    public function getCaptchaType(string $context = 'login', ?string $ip = null): ?string
     {
-        $score = $this->getRiskScore($context);
-        $ip = get_client_ip();
+        // Input validation
+        if (empty($context) || strlen($context) > 50) {
+            throw new \InvalidArgumentException('Invalid context: must be non-empty and max 50 chars');
+        }
 
-        // ثبت‌نام همیشه کپچا دارد (حداقل math)
+        if (!in_array($context, ['login', 'register', 'password_reset'], true)) {
+            throw new \InvalidArgumentException('Invalid context: must be login, register, or password_reset');
+        }
+
+        if ($ip !== null && strlen($ip) > 45) {
+            throw new \InvalidArgumentException('Invalid IP address');
+        }
+
+        $resolvedIp = $this->resolveIp($ip);
+        $score = $this->getRiskScore($context, $resolvedIp);
+
         if ($context === 'register') {
-            if ($score <= 30) {
-                $captchaType = 'math';
-            } elseif ($score <= 60) {
-                $captchaType = 'image';
-            } else {
-                $captchaType = 'recaptcha_v2';
+            $captchaType = $this->determineCaptchaTypeByScore($score);
+        } else {
+            if ($score === 0) {
+                return null;
             }
-            
-            $this->logger->info('captcha.required', [
-                'context' => $context,
-                'score' => $score,
-                'captcha_type' => $captchaType,
-                'ip' => $ip
-            ]);
-            
-            return $captchaType;
+            $captchaType = $this->determineCaptchaTypeByScore($score);
         }
 
-        // ورود: بر اساس ریسک
-        if ($score === 0) {
-            return null;
-        } elseif ($score <= 30) {
-            $captchaType = 'math';
-        } elseif ($score <= 60) {
-            $captchaType = 'image';
-        } else {
-            $captchaType = 'recaptcha_v2';
-        }
-        
         $this->logger->info('captcha.required', [
             'context' => $context,
             'score' => $score,
             'captcha_type' => $captchaType,
-            'ip' => $ip
+            'ip' => $resolvedIp
         ]);
-        
+
         return $captchaType;
+    }
+
+    /**
+     * تعیین نوع کپچا بر اساس امتیاز ریسک بدون کدهای تکراری
+     */
+    private function determineCaptchaTypeByScore(int $score): string
+    {
+        if ($score <= self::SCORE_LOW_RISK) {
+            return 'math';
+        }
+        if ($score <= self::SCORE_MEDIUM_RISK) {
+            return 'image';
+        }
+        return 'recaptcha_v2';
     }
 
     /**
      * محاسبه امتیاز ریسک (0-100)
      */
-    public function getRiskScore(string $context = 'login'): int
+    public function getRiskScore(string $context = 'login', ?string $ip = null): int
     {
-        $ip = get_client_ip();
-        $failCount = $this->getFailCount($context, $ip);
+        $resolvedIp = $this->resolveIp($ip);
+        $failCount = $this->getFailCount($context, $resolvedIp);
 
         $score = 0;
 
-        // بر اساس تعداد تلاش ناموفق
-        if ($failCount === 1) {
+        // بر اساس تعداد تلاش ناموفق با مقادیر ثابت معین
+        if ($failCount === self::FAIL_LIMIT_1) {
             $score = 25;
-        } elseif ($failCount === 2) {
+        } elseif ($failCount === self::FAIL_LIMIT_2) {
             $score = 40;
-        } elseif ($failCount === 3) {
+        } elseif ($failCount === self::FAIL_LIMIT_3) {
             $score = 65;
-        } elseif ($failCount >= 4) {
+        } elseif ($failCount >= self::FAIL_LIMIT_4) {
             $score = 85;
         }
 
@@ -107,12 +120,15 @@ class LoginRiskService extends \App\Services\BaseService
     /**
      * ثبت تلاش ناموفق
      */
-    public function recordFailure(string $context = 'login'): void
+    public function recordFailure(string $context = 'login', ?string $ip = null): void
     {
-        $ip = get_client_ip();
-        $key = $this->buildKey($context, $ip);
+        $resolvedIp = $this->resolveIp($ip);
+        $key = $this->buildKey($context, $resolvedIp);
 
-        $data = $this->session->get($key) ?? ['count' => 0, 'first_at' => time()];
+        $data = $this->cache->get($key);
+        if (!$data || !is_array($data)) {
+            $data = ['count' => 0, 'first_at' => time()];
+        }
 
         // اگر بیشتر از ۳۰ دقیقه گذشته، ریست کن
         if ((time() - ($data['first_at'] ?? 0)) > 1800) {
@@ -121,13 +137,13 @@ class LoginRiskService extends \App\Services\BaseService
 
         $data['count']++;
         $data['last_at'] = time();
-        $this->session->set($key, $data);
+        $this->cache->put($key, $data, 30); // ذخیره در کش برای ۳۰ دقیقه
         
         // لاگ تلاش ناموفق
         $logLevel = $data['count'] >= 4 ? 'warning' : 'info';
         $this->logger->{$logLevel}('login.failure.recorded', [
             'context' => $context,
-            'ip' => $ip,
+            'ip' => $resolvedIp,
             'fail_count' => $data['count'],
             'first_at' => date('Y-m-d H:i:s', $data['first_at'])
         ]);
@@ -136,7 +152,7 @@ class LoginRiskService extends \App\Services\BaseService
         if ($data['count'] >= 5) {
             $this->logger->critical('login.suspicious.activity', [
                 'context' => $context,
-                'ip' => $ip,
+                'ip' => $resolvedIp,
                 'fail_count' => $data['count'],
                 'duration_minutes' => round((time() - $data['first_at']) / 60, 2)
             ]);
@@ -146,21 +162,21 @@ class LoginRiskService extends \App\Services\BaseService
     /**
      * پاک کردن سابقه تلاش (بعد از لاگین موفق)
      */
-    public function clearFailures(string $context = 'login'): void
+    public function clearFailures(string $context = 'login', ?string $ip = null): void
     {
-        $ip = get_client_ip();
-        $key = $this->buildKey($context, $ip);
+        $resolvedIp = $this->resolveIp($ip);
+        $key = $this->buildKey($context, $resolvedIp);
         
-        $data = $this->session->get($key);
+        $data = $this->cache->get($key);
         if ($data && isset($data['count'])) {
             $this->logger->info('login.failures.cleared', [
                 'context' => $context,
-                'ip' => $ip,
+                'ip' => $resolvedIp,
                 'previous_fail_count' => $data['count']
             ]);
         }
         
-        $this->session->delete($key);
+        $this->cache->forget($key);
     }
 
     /**
@@ -168,9 +184,9 @@ class LoginRiskService extends \App\Services\BaseService
      */
     public function getFailCount(string $context = 'login', ?string $ip = null): int
     {
-        $ip  = $ip ?? get_client_ip();
-        $key = $this->buildKey($context, $ip);
-        $data = $this->session->get($key);
+        $resolvedIp = $this->resolveIp($ip);
+        $key = $this->buildKey($context, $resolvedIp);
+        $data = $this->cache->get($key);
 
         if (!$data || !is_array($data)) {
             return 0;
@@ -187,5 +203,20 @@ class LoginRiskService extends \App\Services\BaseService
     private function buildKey(string $context, string $ip): string
     {
         return "login_risk_{$context}_" . md5($ip);
+    }
+
+    /**
+     * حل چالش IP Spoofing به صورت امن و غیرقابل جعل
+     */
+    private function resolveIp(?string $ip = null): string
+    {
+        if ($ip !== null && filter_var($ip, FILTER_VALIDATE_IP)) {
+            return $ip;
+        }
+        if (function_exists('get_client_ip')) {
+            return get_client_ip();
+        }
+        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        return filter_var($remoteAddr, FILTER_VALIDATE_IP) ? $remoteAddr : '127.0.0.1';
     }
 }

@@ -15,12 +15,21 @@ use App\Contracts\LoggerInterface;
  */
 class TwoFactorService extends \App\Services\BaseService
 {
+    private User $userModel;
+    private SecurityModel $securityModel;
+    private Session $session;
+
     public function __construct(
-        private User $userModel,
-        private SecurityModel $securityModel,
-        private Session $session,
-        protected LoggerInterface $logger
-    ) {}
+        User $userModel,
+        SecurityModel $securityModel,
+        Session $session,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+        $this->userModel = $userModel;
+        $this->securityModel = $securityModel;
+        $this->session = $session;
+    }
 
     public function generateSecret(): string
     {
@@ -34,10 +43,8 @@ class TwoFactorService extends \App\Services\BaseService
 
     public function getQRCodeUrl(string $username, string $secret): string
     {
-        $appName = urlencode(config('app.name', 'Chortke'));
-        $username = urlencode($username);
-        $otpauthUrl = "otpauth://totp/{$appName}:{$username}?secret={$secret}&issuer={$appName}";
-        return "https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=" . urlencode($otpauthUrl);
+        $appName = config('app.name', 'Chortke');
+        return "otpauth://totp/" . rawurlencode($appName) . ":" . rawurlencode($username) . "?secret=" . rawurlencode($secret) . "&issuer=" . rawurlencode($appName);
     }
 
     public function verifyCode(string $secret, string $code, ?int $userId = null): bool

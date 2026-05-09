@@ -11,8 +11,9 @@ class BrowserFingerprintService extends \App\Services\BaseService
 {
     private IpAndDeviceModel $model;
     
-    public function __construct(IpAndDeviceModel $model)
+    public function __construct(IpAndDeviceModel $model, LoggerInterface $logger)
     {
+        parent::__construct($logger);
         $this->model = $model;
     }
     

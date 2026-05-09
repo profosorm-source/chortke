@@ -34,8 +34,11 @@ class SilentAntiFraudService extends \App\Services\BaseService
         private TrustScoreService $trustService,
         private SocialTaskScoringService $scoringService,
         private AuditTrail $auditTrail,
-        private NotificationService $notificationService
-    ) {}
+        private NotificationService $notificationService,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * Risk Score ترکیبی

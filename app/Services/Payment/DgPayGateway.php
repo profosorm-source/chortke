@@ -1,26 +1,48 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services\Payment;
 
 use App\Models\PaymentGateway;
 use App\Contracts\LoggerInterface;
-use App\Contracts\PaymentGatewayInterface;
+use App\Exceptions\PaymentGatewayConnectionException;
+use App\Exceptions\PaymentVerificationException;
 
-class DgPayGateway implements PaymentGatewayInterface
+/**
+ * DgPayGateway - درگاه دی‌جی‌پی
+ * 
+ * یک درگاه پیمنٹ ایرانی قابل اعتماد۔
+ * 
+ * نوٹ: Amount Rial میں ہے لیکن DgPay Toman میں چاہتا ہے (divide by 10)
+ * 
+ * Retry Strategy:
+ * - Connection timeouts: Retry 3x with exponential backoff
+ * - Server errors (5xx): Retry 3x with exponential backoff
+ * - Invalid merchant key (4xx): Do NOT retry
+ */
+class DgPayGateway extends BasePaymentGateway
 {
     private \App\Models\PaymentGateway $paymentGatewayModel;
     private ?object $config;
-    protected LoggerInterface $logger;
 
     public function __construct(
         \App\Models\PaymentGateway $paymentGatewayModel,
         LoggerInterface            $logger
     ) {
+        parent::__construct($logger);
         $this->paymentGatewayModel = $paymentGatewayModel;
         $this->config = $paymentGatewayModel->getActiveGateway('dgpay');
-        $this->logger = $logger;
     }
 
+    /**
+     * نیا پیمنٹ بنائیں
+     * 
+     * Retry Logic:
+     * - Connection timeouts: ✅ Retry
+     * - Server errors (5xx): ✅ Retry
+     * - Invalid merchant key: ❌ Do not retry
+     */
     public function createPayment(float $amount, string $description, string $callbackUrl): array
     {
         if (!$this->config) {
@@ -30,36 +52,47 @@ class DgPayGateway implements PaymentGatewayInterface
             ];
         }
 
-        // توجه: این یک نمونه است - API واقعی DgPay ممکن است متفاوت باشد
+        // Input validation (should not retry)
+        if ($amount <= 0) {
+            $this->logger->warning('payment.dgpay.invalid_amount', ['amount' => $amount]);
+            throw new \InvalidArgumentException('Amount must be greater than 0');
+        }
+
+        // DgPay expects amount in Toman, input is in Rial
+        // Conversion: Rial → Toman (1 Toman = 10 Rial)
         $data = [
             'merchant' => $this->config->merchant_id,
-            'amount' => $amount / 10,
+            'amount' => (int)($amount / 10), // DgPay requires Toman (divide Rial by 10)
             'description' => $description,
             'callback' => $callbackUrl,
         ];
 
         $url = 'https://dgpay.ir/api/v1/payment/request';
 
+        $headers = [
+            'Content-Type: application/json',
+        ];
+
         try {
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_POST, true);
-            \curl_setopt($ch, CURLOPT_POSTFIELDS, \json_encode($data));
-            \curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Content-Type: application/json',
-            ]);
+            // 🔄 Execute with retry and exponential backoff
+            $response = $this->executeWithRetry($url, $data, 'POST', $headers);
 
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            \curl_close($ch);
-
-            if ($httpCode !== 200) {
-                throw new \Exception('خطا در اتصال به درگاه');
+            // DgPay returns 200 on success
+            if (!$response['success'] || $response['http_code'] !== 200) {
+                return [
+                    'success' => false,
+                    'message' => 'خطا در اتصال به درگاه'
+                ];
             }
 
-            $result = \json_decode($response, true);
+            $result = $response['data'];
 
             if (isset($result['status']) && $result['status'] === 'success') {
+                $this->logger->info('payment.dgpay.payment_created', [
+                    'token' => $result['token'],
+                    'amount_toman' => (int)($amount / 10)
+                ]);
+
                 return [
                     'success' => true,
                     'authority' => $result['token'],
@@ -73,6 +106,13 @@ class DgPayGateway implements PaymentGatewayInterface
                 'message' => $result['message'] ?? 'خطای نامشخص'
             ];
 
+        } catch (PaymentGatewayConnectionException $e) {
+            // Connection failed after retries
+            $this->logger->error('payment.dgpay.connection_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در برقراری ارتباط با درگاه (بعد از تلاش مجدد)'
+            ];
         } catch (\Exception $e) {
             $this->logger->error('payment.dgpay.request_failed', ['error' => $e->getMessage()]);
             return [
@@ -82,6 +122,14 @@ class DgPayGateway implements PaymentGatewayInterface
         }
     }
 
+    /**
+     * پرداخت کی تصدیق کریں
+     * 
+     * Retry Logic:
+     * - Connection timeouts: ✅ Retry
+     * - Server errors (5xx): ✅ Retry
+     * - Invalid transaction: ❌ Do not retry
+     */
     public function verifyPayment(string $authority, float $amount): array
     {
         if (!$this->config) {
@@ -91,6 +139,11 @@ class DgPayGateway implements PaymentGatewayInterface
             ];
         }
 
+        // Input validation (should not retry)
+        if (empty($authority)) {
+            throw new \InvalidArgumentException('Authority cannot be empty');
+        }
+
         $data = [
             'merchant' => $this->config->merchant_id,
             'token' => $authority,
@@ -98,26 +151,31 @@ class DgPayGateway implements PaymentGatewayInterface
 
         $url = 'https://dgpay.ir/api/v1/payment/verify';
 
+        $headers = [
+            'Content-Type: application/json',
+        ];
+
         try {
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_POST, true);
-            \curl_setopt($ch, CURLOPT_POSTFIELDS, \json_encode($data));
-            \curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Content-Type: application/json',
-            ]);
+            // 🔄 Execute with retry and exponential backoff
+            $response = $this->executeWithRetry($url, $data, 'POST', $headers);
 
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            \curl_close($ch);
-
-            if ($httpCode !== 200) {
-                throw new \Exception('خطا در اتصال به درگاه');
+            // DgPay returns 200 on success
+            if (!$response['success'] || $response['http_code'] !== 200) {
+                throw new PaymentVerificationException(
+                    'Failed to verify payment',
+                    $authority,
+                    ['http_code' => $response['http_code']]
+                );
             }
 
-            $result = \json_decode($response, true);
+            $result = $response['data'];
 
             if (isset($result['status']) && $result['status'] === 'success') {
+                $this->logger->info('payment.dgpay.verified', [
+                    'authority' => $authority,
+                    'ref_id' => $result['ref_id'] ?? 'unknown'
+                ]);
+
                 return [
                     'success' => true,
                     'ref_id' => $result['ref_id'] ?? $authority,
@@ -130,6 +188,19 @@ class DgPayGateway implements PaymentGatewayInterface
                 'message' => $result['message'] ?? 'تراکنش ناموفق'
             ];
 
+        } catch (PaymentGatewayConnectionException $e) {
+            // Connection failed after retries
+            $this->logger->error('payment.dgpay.verification_connection_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در تأیید پرداخت (خطای شبکه)'
+            ];
+        } catch (PaymentVerificationException $e) {
+            $this->logger->warning('payment.dgpay.verification_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در تأیید پرداخت'
+            ];
         } catch (\Exception $e) {
             $this->logger->error('payment.dgpay.verify_failed', ['error' => $e->getMessage()]);
             return [
@@ -149,6 +220,11 @@ class DgPayGateway implements PaymentGatewayInterface
     }
 
     public function getName(): string
+    {
+        return 'dgpay';
+    }
+
+    public function getGatewayName(): string
     {
         return 'dgpay';
     }

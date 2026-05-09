@@ -24,8 +24,11 @@ class RatingService extends \App\Services\BaseService
         private SharedRatingService $sharedRating,
         private SocialTaskExecutionModel $executionModel,
         private SocialTaskAnalyticsModel $analyticsModel,
-        private ScoreService $trust
-    ) {}
+        private ScoreService $trust,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * Executor به Advertiser امتیاز می‌دهد

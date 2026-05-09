@@ -1,11 +1,13 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Policies\RateLimitPolicy;
 use Core\Container;
-
 use App\Contracts\LoggerInterface;
+
 /**
  * ApiRateLimiter (Deprecated Wrapper)
  * 
@@ -16,8 +18,9 @@ class ApiRateLimiter extends \App\Services\BaseService
 {
     private RateLimitPolicy $policy;
 
-    public function __construct(RateLimitPolicy $policy)
+    public function __construct(RateLimitPolicy $policy, LoggerInterface $logger)
     {
+        parent::__construct($logger);
         $this->policy = $policy;
     }
 
@@ -33,9 +36,7 @@ class ApiRateLimiter extends \App\Services\BaseService
 
     public function remaining(string $action, int $userId): int
     {
-        // For backwards compatibility, assume 1 as a generic return if needed, 
-        // or properly proxy to a remaining method.
-        return 1; 
+        return $this->policy->remaining($action, $userId);
     }
 
     public function retryAfter(string $action, int $userId): int

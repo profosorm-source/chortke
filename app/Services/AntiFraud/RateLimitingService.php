@@ -16,8 +16,9 @@ class RateLimitingService extends \App\Services\BaseService
 {
     private RateLimitPolicy $policy;
 
-    public function __construct(RateLimitPolicy $policy)
+    public function __construct(RateLimitPolicy $policy, LoggerInterface $logger)
     {
+        parent::__construct($logger);
         $this->policy = $policy;
     }
 

@@ -59,7 +59,7 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
 
     public function calculateCost(float $amount, array $context = []): float
     {
-        return $amount * ((float) $this->settingService->get('adtube_site_fee_percent', 20) / 100);
+        return $amount * ((float) $this->settingService->get('adtube_site_fee_percent', PercentageConstants::AD_TUBE_FEE_PERCENT) / 100);
     }
 
     public function processPayment(int $adId, int $userId, float $amount, string $currency): array

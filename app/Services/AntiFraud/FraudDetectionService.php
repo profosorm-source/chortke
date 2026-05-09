@@ -6,6 +6,7 @@ namespace App\Services\AntiFraud;
 
 use App\Models\AntiFraudModel;
 use App\Contracts\LoggerInterface;
+
 /**
  * FraudDetectionService - سیستم تشخیص تقلب پیشرفته
  *
@@ -21,9 +22,10 @@ use App\Contracts\LoggerInterface;
  * - امتیاز > 85: بررسی دستی
  * - امتیاز > 95: تعلیق حساب
  */
-class FraudDetectionServiceextends \App\Services\BaseService
+class FraudDetectionService extends \App\Services\BaseService
 {
     private AntiFraudModel $fraudModel;
+
     // آستانه‌های امتیاز تقلب
     private const RISK_THRESHOLDS = [
         'flag'     => 50,
@@ -116,22 +118,28 @@ class FraudDetectionServiceextends \App\Services\BaseService
     }
 
     /**
-     * محاسبه عامل سرعت تراکنش
+     * محاسبه عامل سرعت تراکنش با اصلاح کلیدهای متناظر
      */
     private function calculateVelocityFactor(array $velocity): float
     {
         $score = 0;
 
+        $daily = (int)($velocity['daily'] ?? 0);
+        $weekly = (int)($velocity['weekly'] ?? 0);
+        $prevWeekly = (int)($velocity['prev_weekly'] ?? 0);
+
         // بررسی تعداد تراکنش‌های روزانه
-        if ($velocity['daily_orders'] > 10) $score += 30;
-        elseif ($velocity['daily_orders'] > 5) $score += 15;
+        if ($daily > 10) $score += 30;
+        elseif ($daily > 5) $score += 15;
 
         // بررسی تعداد تراکنش‌های هفتگی
-        if ($velocity['weekly_orders'] > 50) $score += 40;
-        elseif ($velocity['weekly_orders'] > 20) $score += 20;
+        if ($weekly > 50) $score += 40;
+        elseif ($weekly > 20) $score += 20;
 
-        // بررسی تغییرات ناگهانی
-        if ($velocity['sudden_spike']) $score += 30;
+        // بررسی تغییرات ناگهانی (Sudden Spike)
+        if ($prevWeekly > 0 && ($weekly / $prevWeekly) >= 2.0 && $weekly > 5) {
+            $score += 30;
+        }
 
         return min(100, $score);
     }
@@ -315,6 +323,7 @@ class FraudDetectionServiceextends \App\Services\BaseService
             'thresholds' => self::RISK_THRESHOLDS
         ];
     }
+
     /**
      * گرفتن لیست کاربران پر ریسک
      */

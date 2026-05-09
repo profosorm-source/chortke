@@ -1,23 +1,26 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Contracts\AdSystemContract;
+use App\Contracts\LoggerInterface;
 use RuntimeException;
 
-use App\Contracts\LoggerInterface;
 /**
  * AdSystemManager — مدیریت یکپارچه تمام سیستم‌های تبلیغاتی
  * 
  * این کلاس با استفاده از Strategy Pattern تمام سیستم‌های تبلیغاتی را یکسان‌سازی می‌کند
  * و به Controller‌ها کمک می‌کند بدون نگرانی درباره نوع سیستم، عمل انجام دهند.
  */
-class AdSystemManagerextends \App\Services\BaseService
+class AdSystemManager extends \App\Services\BaseService
 {
     private array $adapters = [];
 
-    public function __construct(array $adapters)
+    public function __construct(array $adapters, LoggerInterface $logger)
     {
+        parent::__construct($logger);
         $this->adapters = $adapters;
     }
 
@@ -103,7 +106,7 @@ class AdSystemManagerextends \App\Services\BaseService
      */
     public function getSupportedTypes(): array
     {
-        return array_keys(self::ADAPTER_MAP);
+        return array_keys($this->adapters);
     }
 
     /**
@@ -111,7 +114,6 @@ class AdSystemManagerextends \App\Services\BaseService
      */
     public function isSupported(string $type): bool
     {
-        return isset(self::ADAPTER_MAP[$type]);
+        return isset($this->adapters[$type]);
     }
 }
-

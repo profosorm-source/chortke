@@ -17,8 +17,11 @@ class CouponService extends \App\Services\BaseService
 {
     public function __construct(
         private Coupon $couponModel,
-        private CouponRedemption $redemptionModel
-    ) {}
+        private CouponRedemption $redemptionModel,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * اعتبارسنجی و محاسبه تخفیف
@@ -88,21 +91,52 @@ class CouponService extends \App\Services\BaseService
         string $entityType,
         ?int $entityId = null
     ): bool {
-        $redemptionId = $this->redemptionModel->create([
-            'coupon_id' => $couponId,
-            'user_id' => $userId,
-            'original_amount' => $originalAmount,
-            'discount_amount' => $discountAmount,
-            'final_amount' => $finalAmount,
-            'currency' => $currency,
-            'entity_type' => $entityType,
-            'entity_id' => $entityId,
-            'ip_address' => get_client_ip()
-        ]);
+        $db = \Core\Container::getInstance()->make(\Core\Database::class);
+        try {
+            $db->beginTransaction();
 
-        if (!$redemptionId) return false;
+            // Pre-execution validation check
+            if ($this->redemptionModel->hasUserUsedCoupon($userId, $couponId)) {
+                $db->rollback();
+                throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
+            }
 
-        return $this->couponModel->incrementUsage($couponId);
+            $redemptionId = $this->redemptionModel->create([
+                'coupon_id' => $couponId,
+                'user_id' => $userId,
+                'original_amount' => $originalAmount,
+                'discount_amount' => $discountAmount,
+                'final_amount' => $finalAmount,
+                'currency' => $currency,
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+                'ip_address' => \get_client_ip()
+            ]);
+
+            if (!$redemptionId) {
+                $db->rollback();
+                return false;
+            }
+
+            $success = $this->couponModel->incrementUsage($couponId);
+            if (!$success) {
+                $db->rollback();
+                return false;
+            }
+
+            $db->commit();
+            return true;
+
+        } catch (\PDOException $e) {
+            $db->rollback();
+            if ($e->getCode() == '23000') { // Integrity constraint violation (Duplicate entry)
+                throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
+            }
+            throw $e;
+        } catch (\Exception $e) {
+            $db->rollback();
+            throw $e;
+        }
     }
 
     /**

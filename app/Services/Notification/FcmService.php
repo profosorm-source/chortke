@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace App\Services\Notification;
 
 use App\Services\Notification\Adapters\FcmNotificationAdapter;
-
 use App\Contracts\LoggerInterface;
-class FcmServiceextends \App\Services\BaseService
+
+class FcmService extends \App\Services\BaseService
 {
     public function __construct(
-        private FcmNotificationAdapter $adapter
-    ) {}
+        private FcmNotificationAdapter $adapter,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     public function sendToUser(int $userId, string $title, string $body, array $data = [], ?string $imageUrl = null, ?string $clickUrl = null): bool
     {
@@ -43,4 +46,3 @@ class FcmServiceextends \App\Services\BaseService
         return $this->adapter->isConfigured();
     }
 }
-

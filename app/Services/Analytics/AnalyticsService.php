@@ -5,20 +5,24 @@ declare(strict_types=1);
 namespace App\Services\Analytics;
 
 use App\Models\CustomTaskModel;
-
 use App\Contracts\LoggerInterface;
-/**
+
+
+class AnalyticsService extends \App\Services\BaseService
+{
+
+    /**
  * AnalyticsService - Orchestrator
  * خدمات تحلیل و گزارش‌گیری
  * Consolidated from: AnalyticsService, KpiService, CustomTaskAnalyticsService, ReportService
  */
-class AnalyticsServiceextends \App\Services\BaseService
-{
     public function __construct(
         private AnalyticsDataRepository $repository,
         private AnalyticsExporter $exporter,
         protected LoggerInterface $logger
-    ) {}
+    ) {
+        parent::__construct($logger);
+    }
 
     // ==========================================
     //  Metrics - داشبورد جامع
@@ -281,5 +285,12 @@ class AnalyticsServiceextends \App\Services\BaseService
     {
         $this->logger->info("Analytics event: {$eventType}", $data);
     }
-}
 
+    /**
+     * دریافت آمار کلی تسک‌ها جهت انطباق با نسخه‌های قدیمی
+     */
+    public function getStats(): array
+    {
+        return $this->getTaskMetrics();
+    }
+}

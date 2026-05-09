@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services\CryptoDeposit;
 
 use App\Services\Adapters\CryptoVerificationAdapter;
@@ -10,6 +12,7 @@ use App\Models\CryptoDepositIntent;
 use App\Models\CryptoDeposit;
 use Core\Database;
 use App\Contracts\LoggerInterface;
+
 class CryptoDepositService extends \App\Services\BaseService
 {
     private Database $db;
@@ -27,7 +30,8 @@ class CryptoDepositService extends \App\Services\BaseService
         CryptoDepositIntent $intentModel,
         CryptoDeposit $depositModel,
         LoggerInterface $logger,
-        CryptoVerificationAdapter $verifier, SettingService $settingService
+        CryptoVerificationAdapter $verifier,
+        SettingService $settingService
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -42,8 +46,13 @@ class CryptoDepositService extends \App\Services\BaseService
     /**
      * Create a new crypto deposit intent
      */
-    public function createIntent(int $userId, string $network, float $requestedAmount): array
-    {
+    public function createIntent(
+        int $userId,
+        string $network,
+        float $requestedAmount,
+        ?string $ipAddress = null,
+        ?string $userAgent = null
+    ): array {
         $this->logger->info('crypto.intent.create.started', [
             'user_id' => $userId,
             'network' => $network,
@@ -86,8 +95,8 @@ class CryptoDepositService extends \App\Services\BaseService
                 'to_wallet' => $toWallet,
                 'expires_at' => $expiresAt,
                 'status' => 'open',
-                'ip_address' => get_client_ip(),
-                'user_agent' => get_user_agent(),
+                'ip_address' => $ipAddress,
+                'user_agent' => $userAgent,
                 'created_at' => \date('Y-m-d H:i:s'),
                 'updated_at' => \date('Y-m-d H:i:s'),
             ]);
@@ -98,7 +107,7 @@ class CryptoDepositService extends \App\Services\BaseService
                 'network' => $network,
                 'requested_amount' => $requestedAmount,
                 'error' => $e->getMessage(),
-                'exception' => get_class($e),
+                'exception' => \get_class($e),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
             ]);
@@ -168,7 +177,7 @@ class CryptoDepositService extends \App\Services\BaseService
 
             $this->depositModel->update($depositId, [
                 'verification_status' => 'verified',
-                'reviewed_at' => date('Y-m-d H:i:s'),
+                'reviewed_at' => \date('Y-m-d H:i:s'),
                 'reviewed_by' => $adminId,
                 'wallet_transaction_id' => $depositResult['transaction_id'] ?? null,
             ]);
@@ -225,14 +234,14 @@ class CryptoDepositService extends \App\Services\BaseService
         ]);
 
         // فقط داخل پنجره 30 دقیقه
-        if ($d->auto_check_deadline && strtotime((string)$d->auto_check_deadline) < time()) {
+        if ($d->auto_check_deadline && \strtotime((string)$d->auto_check_deadline) < \time()) {
             // اگر هنوز pending است => reject timeout
             if ($d->verification_status === 'pending') {
                 $this->depositModel->update($depositId, [
                     'verification_status' => 'rejected',
                     'mismatch_reason' => 'مهلت بررسی خودکار (۳۰ دقیقه) تمام شد',
                     'risk_score' => 20,
-                    'reviewed_at' => date('Y-m-d H:i:s'),
+                    'reviewed_at' => \date('Y-m-d H:i:s'),
                 ]);
 
                 $this->logger->warning('crypto.verify.timeout', [
@@ -282,7 +291,7 @@ class CryptoDepositService extends \App\Services\BaseService
                 if ($ok) {
                     $this->depositModel->update($depositId, [
                         'verification_status' => 'verified',
-                        'reviewed_at' => date('Y-m-d H:i:s'),
+                        'reviewed_at' => \date('Y-m-d H:i:s'),
                         'auto_verified' => 1,
                     ]);
 
@@ -354,7 +363,7 @@ class CryptoDepositService extends \App\Services\BaseService
     private function generateUniqueAmount(string $network, float $requestedAmount): float
     {
         // Add small random amount to make it unique
-        $randomAddition = mt_rand(1, 99) / 10000; // 0.0001 to 0.0099
-        return round($requestedAmount + $randomAddition, 4);
+        $randomAddition = \mt_rand(1, 99) / 10000; // 0.0001 to 0.0099
+        return \round($requestedAmount + $randomAddition, 4);
     }
 }

@@ -26,7 +26,9 @@ class OAuthService extends \App\Services\BaseService
         private User $userModel,
         private AuthService $authService,
         private NotificationService $notificationService,
-        private AuditTrail $auditTrail
+        private AuditTrail $auditTrail,
+        private \Core\Session $session,
+        private \Core\Database $db
     ) {
         parent::__construct($logger);
         $this->googleClientId = (string)config('oauth.google.client_id', '');
@@ -40,7 +42,7 @@ class OAuthService extends \App\Services\BaseService
     {
         $redirectUri = urlencode("{$this->appUrl}/auth/callback/google");
         $state = bin2hex(random_bytes(16));
-        $_SESSION['oauth_state'] = $state;
+        $this->session->set('oauth_state', $state);
 
         return "https://accounts.google.com/o/oauth2/v2/auth?" . http_build_query([
             'client_id' => $this->googleClientId,
@@ -53,7 +55,7 @@ class OAuthService extends \App\Services\BaseService
 
     public function handleGoogleCallback(string $code, string $state): array
     {
-        if (!isset($_SESSION['oauth_state']) || $_SESSION['oauth_state'] !== $state) {
+        if (!$this->session->has('oauth_state') || $this->session->get('oauth_state') !== $state) {
             return ['success' => false, 'message' => 'Invalid state security check failed.'];
         }
 
@@ -73,27 +75,67 @@ class OAuthService extends \App\Services\BaseService
 
     private function linkOrCreateUser(string $provider, array $userData): array
     {
+        // Input validation
+        if (empty($provider) || strlen($provider) > 50) {
+            throw new \InvalidArgumentException('Invalid provider: must be non-empty and max 50 chars');
+        }
+
+        if (empty($userData) || !is_array($userData)) {
+            throw new \InvalidArgumentException('User data must be a non-empty array');
+        }
+
+        if (empty($userData['id']) || empty($userData['email'])) {
+            throw new \InvalidArgumentException('User data must contain id and email');
+        }
+
+        if (!filter_var($userData['email'], FILTER_VALIDATE_EMAIL)) {
+            throw new \InvalidArgumentException('Invalid email format');
+        }
+
         try {
-            $socialAccount = $this->model->getSocialAccount($provider, (string)$userData['id']);
+            $this->db->beginTransaction();
+
+            // 🔒 PESSIMISTIC LOCKING: Lock social_accounts row to prevent race condition
+            $socialAccount = $this->db->selectOne(
+                "SELECT * FROM social_accounts WHERE provider = ? AND provider_id = ? FOR UPDATE",
+                [$provider, (string)$userData['id']]
+            );
 
             if ($socialAccount) {
                 $user = $this->userModel->find((int)$socialAccount->user_id);
                 if ($user) {
+                    $this->db->commit();
+                    $this->logger->info('oauth.link_or_create.existing_social_account', [
+                        'user_id' => $user->id,
+                        'provider' => $provider
+                    ]);
                     return ['success' => true, 'user_id' => $user->id, 'is_new' => false];
                 }
             }
 
-            $existingUser = $this->userModel->findByEmail((string)$userData['email']);
+            // 🔒 PESSIMISTIC LOCKING: Lock users row by email to prevent duplicate user creation
+            $existingUser = $this->db->selectOne(
+                "SELECT * FROM users WHERE email = ? FOR UPDATE",
+                [(string)$userData['email']]
+            );
+
             if ($existingUser) {
+                // Link existing user to OAuth provider
                 $this->model->createSocialAccount([
                     'user_id' => (int)$existingUser->id,
                     'provider' => $provider,
                     'provider_id' => (string)$userData['id'],
                     'avatar' => $userData['picture'] ?? null
                 ]);
+                $this->db->commit();
+                $this->logger->info('oauth.link_or_create.linked_existing_user', [
+                    'user_id' => $existingUser->id,
+                    'provider' => $provider
+                ]);
                 return ['success' => true, 'user_id' => $existingUser->id, 'is_new' => false];
             }
 
+            // 🔒 No rows locked yet for new user creation - proceed safely
             $newUser = $this->userModel->create([
                 'email' => $userData['email'],
                 'username' => explode('@', (string)$userData['email'])[0],
@@ -111,12 +153,23 @@ class OAuthService extends \App\Services\BaseService
                     'provider_id' => (string)$userData['id'],
                     'avatar' => $userData['picture'] ?? null
                 ]);
+                $this->db->commit();
+                $this->logger->info('oauth.link_or_create.created_new_user', [
+                    'user_id' => $newUser,
+                    'provider' => $provider
+                ]);
                 return ['success' => true, 'user_id' => $newUser, 'is_new' => true];
             }
 
+            $this->db->rollBack();
+            $this->logger->error('oauth.link_or_create.user_creation_failed', ['provider' => $provider]);
             return ['success' => false, 'message' => 'خطا در ایجاد حساب کاربری'];
         } catch (\Exception $e) {
-            $this->logger->error('oauth.link_or_create.failed', ['error' => $e->getMessage()]);
+            $this->db->rollBack();
+            $this->logger->error('oauth.link_or_create.failed', [
+                'error' => $e->getMessage(),
+                'provider' => $provider
+            ]);
             return ['success' => false, 'message' => 'خطا در پردازش اطلاعات'];
         }
     }
@@ -124,7 +177,14 @@ class OAuthService extends \App\Services\BaseService
     private function getGoogleToken(string $code): array
     {
         $ch = curl_init('https://oauth2.googleapis.com/token');
+        if ($ch === false) {
+            return ['success' => false, 'message' => 'Failed to initialize curl'];
+        }
+
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
             'code' => $code,
             'client_id' => $this->googleClientId,
@@ -132,21 +192,64 @@ class OAuthService extends \App\Services\BaseService
             'redirect_uri' => "{$this->appUrl}/auth/callback/google",
             'grant_type' => 'authorization_code',
         ]));
-        $response = json_decode((string)curl_exec($ch), true);
+
+        $rawResponse = curl_exec($ch);
+        if ($rawResponse === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            $this->logger->error('oauth.google.token_curl_error', ['error' => $error]);
+            return ['success' => false, 'message' => 'خطا در ارتباط با سرور گوگل'];
+        }
+
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        return isset($response['access_token']) ? ['success' => true, 'access_token' => $response['access_token']] : ['success' => false, 'message' => 'Token retrieval failed'];
+        $response = json_decode((string)$rawResponse, true);
+        if ($httpCode !== 200 || !isset($response['access_token'])) {
+            $this->logger->error('oauth.google.token_invalid_response', [
+                'http_code' => $httpCode,
+                'response'  => $response
+            ]);
+            return ['success' => false, 'message' => 'خطا در دریافت توکن گوگل'];
+        }
+
+        return ['success' => true, 'access_token' => $response['access_token']];
     }
 
     private function getGoogleUserInfo(string $accessToken): array
     {
         $ch = curl_init('https://www.googleapis.com/oauth2/v2/userinfo');
+        if ($ch === false) {
+            return ['success' => false, 'message' => 'Failed to initialize curl'];
+        }
+
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer $accessToken"]);
-        $response = json_decode((string)curl_exec($ch), true);
+
+        $rawResponse = curl_exec($ch);
+        if ($rawResponse === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            $this->logger->error('oauth.google.userinfo_curl_error', ['error' => $error]);
+            return ['success' => false, 'message' => 'خطا در ارتباط با سرور گوگل'];
+        }
+
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        return isset($response['id']) ? ['success' => true, 'data' => $response] : ['success' => false, 'message' => 'User info retrieval failed'];
+        $response = json_decode((string)$rawResponse, true);
+        if ($httpCode !== 200 || !isset($response['id'])) {
+            $this->logger->error('oauth.google.userinfo_invalid_response', [
+                'http_code' => $httpCode,
+                'response'  => $response
+            ]);
+            return ['success' => false, 'message' => 'خطا در دریافت اطلاعات کاربری گوگل'];
+        }
+
+        return ['success' => true, 'data' => $response];
     }
 }
 

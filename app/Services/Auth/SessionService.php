@@ -14,36 +14,112 @@ use App\Contracts\LoggerInterface;
  */
 class SessionService extends \App\Services\BaseService
 {
+    public const SUSPICIOUS_UA_CHANGE_SECONDS = 300;
+    public const SUSPICIOUS_GEO_CHANGE_SECONDS = 3600;
+    public const UNUSUAL_HOUR_START = 2;
+    public const UNUSUAL_HOUR_END = 6;
+    public const MAX_ACTIONS_PER_MINUTE = 20;
+
     public function __construct(
         private SecurityModel $model,
         private RiskPolicyService $policy,
-        protected LoggerInterface $logger
-    ) {}
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * ثبت نشست جدید
+     * 
+     * @param int $userId شناسه کاربر
+     * @param string $sessionId شناسه نشست
+     * @param string $userAgent User-Agent Header (از HTTP Layer)
+     * @param string $ipAddress آدرس IP کاربر (از HTTP Layer)
+     * @param string $acceptLanguage Accept-Language Header
+     * @param string $acceptEncoding Accept-Encoding Header
+     * @param array|null $geoData داده‌های جغرافیایی
+     * 
+     * @return bool موفقیت عملیات
+     * @throws \InvalidArgumentException اگر ورودی‌ها نادرست باشند
      */
-    public function recordSession(int $userId, string $sessionId, ?array $geoData = null): bool
-    {
-        $deviceInfo = $this->parseUserAgent($_SERVER['HTTP_USER_AGENT'] ?? '');
-
-        $existing = $this->model->findSessionBySessionId($sessionId);
-        if ($existing) {
-            return $this->model->updateSessionActivity($sessionId);
+    public function recordSession(
+        int $userId,
+        string $sessionId,
+        string $userAgent,
+        string $ipAddress,
+        string $acceptLanguage = '',
+        string $acceptEncoding = '',
+        ?array $geoData = null
+    ): bool {
+        // Input validation
+        if ($userId <= 0) {
+            throw new \InvalidArgumentException('Invalid user ID: must be positive');
         }
 
-        return $this->model->upsertSession([
-            'user_id' => $userId,
-            'session_id' => $sessionId,
-            'ip_address' => $this->getClientIp(),
-            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
-            'device_type' => $deviceInfo['device_type'],
-            'browser' => $deviceInfo['browser'],
-            'os' => $deviceInfo['os'],
-            'country' => $geoData['country'] ?? null,
-            'city' => $geoData['city'] ?? null,
-            'fingerprint' => $this->generateFingerprint()
-        ]);
+        if (empty($sessionId) || strlen($sessionId) > 255) {
+            throw new \InvalidArgumentException('Invalid session ID: must be non-empty and max 255 chars');
+        }
+
+        if (empty($userAgent)) {
+            throw new \InvalidArgumentException('User-Agent cannot be empty');
+        }
+
+        if (empty($ipAddress)) {
+            throw new \InvalidArgumentException('IP address cannot be empty');
+        }
+
+        if ($geoData !== null) {
+            if (!is_array($geoData) || empty($geoData['country'])) {
+                throw new \InvalidArgumentException('Invalid geo data: must contain country');
+            }
+        }
+
+        // ✅ استفاده از parameters، نه $_SERVER
+        $deviceInfo = $this->parseUserAgent($userAgent);
+        $fingerprint = $this->generateFingerprint($userAgent, $acceptLanguage, $acceptEncoding);
+
+        try {
+            // 🔒 PESSIMISTIC LOCKING: Prevent race condition in session creation
+            $this->model->getDb()->beginTransaction();
+
+            // Lock existing session if it exists
+            $existing = $this->model->getDb()->selectOne(
+                "SELECT id FROM sessions WHERE session_id = ? FOR UPDATE",
+                [$sessionId]
+            );
+
+            if ($existing) {
+                // Session exists, just update activity timestamp
+                $result = $this->model->updateSessionActivity($sessionId);
+                $this->model->getDb()->commit();
+                return $result;
+            }
+
+            // Session doesn't exist, create it
+            $result = $this->model->upsertSession([
+                'user_id' => $userId,
+                'session_id' => $sessionId,
+                'ip_address' => $ipAddress,
+                'user_agent' => $userAgent,
+                'device_type' => $deviceInfo['device_type'],
+                'browser' => $deviceInfo['browser'],
+                'os' => $deviceInfo['os'],
+                'country' => $geoData['country'] ?? null,
+                'city' => $geoData['city'] ?? null,
+                'fingerprint' => $fingerprint
+            ]);
+
+            $this->model->getDb()->commit();
+            return $result;
+
+        } catch (\Exception $e) {
+            $this->model->getDb()->rollback();
+            $this->logger->error('session.record_session.failed', [
+                'user_id' => $userId,
+                'error' => $e->getMessage()
+            ]);
+            throw $e;
+        }
     }
 
     public function updateActivity(string $sessionId): bool
@@ -92,7 +168,7 @@ class SessionService extends \App\Services\BaseService
         $recentUA = $this->model->getRecentUserAgents($userId, 2);
         if (count($recentUA) >= 2) {
             $timeDiff = strtotime((string)$recentUA[0]->created_at) - strtotime((string)$recentUA[1]->created_at);
-            if ($timeDiff < 300 && $recentUA[0]->user_agent !== $recentUA[1]->user_agent) {
+            if ($timeDiff < self::SUSPICIOUS_UA_CHANGE_SECONDS && $recentUA[0]->user_agent !== $recentUA[1]->user_agent) {
                 $score += $this->policy->getInt('fraud', 'session.ua_change_points', 40);
                 $anomalies[] = 'تغییر ناگهانی User-Agent در کمتر از 5 دقیقه';
             }
@@ -102,7 +178,7 @@ class SessionService extends \App\Services\BaseService
         $recentGeo = $this->model->getRecentGeolocations($userId, 2);
         if (count($recentGeo) >= 2) {
             $timeDiff = strtotime((string)$recentGeo[0]->created_at) - strtotime((string)$recentGeo[1]->created_at);
-            if ($timeDiff < 3600 && $recentGeo[0]->country !== $recentGeo[1]->country) {
+            if ($timeDiff < self::SUSPICIOUS_GEO_CHANGE_SECONDS && $recentGeo[0]->country !== $recentGeo[1]->country) {
                 $score += $this->policy->getInt('fraud', 'session.geo_change_points', 35);
                 $anomalies[] = "تغییر موقعیت از {$recentGeo[1]->country} به {$recentGeo[0]->country} در کمتر از 1 ساعت";
             }
@@ -110,7 +186,7 @@ class SessionService extends \App\Services\BaseService
 
         // Activity time check (2-6 AM)
         $hour = (int)date('H');
-        if ($hour >= 2 && $hour <= 6) {
+        if ($hour >= self::UNUSUAL_HOUR_START && $hour <= self::UNUSUAL_HOUR_END) {
             $unusualCount = $this->model->getUnusualHourActivityCount($userId);
             if ($unusualCount > 5) {
                 $score += $this->policy->getInt('fraud', 'session.activity_time_points', 15);
@@ -120,7 +196,7 @@ class SessionService extends \App\Services\BaseService
 
         // Velocity check
         $actionCount = $this->model->getActionCount($userId, 1);
-        if ($actionCount > 20) {
+        if ($actionCount > self::MAX_ACTIONS_PER_MINUTE) {
             $score += $this->policy->getInt('fraud', 'session.velocity_points', 25);
             $anomalies[] = "{$actionCount} اقدام در 1 دقیقه (سرعت غیرطبیعی)";
         }
@@ -154,11 +230,15 @@ class SessionService extends \App\Services\BaseService
         }
     }
 
+    /**
+     * تجزیه User-Agent string
+     */
     private function parseUserAgent(string $userAgent): array
     {
+        // ✅ Check tablet first (before mobile, since iPad contains "ipad")
         $deviceType = 'desktop';
-        if (preg_match('/mobile|android|iphone|ipad/i', $userAgent)) $deviceType = 'mobile';
-        elseif (preg_match('/tablet|ipad/i', $userAgent)) $deviceType = 'tablet';
+        if (preg_match('/tablet|ipad/i', $userAgent)) $deviceType = 'tablet';
+        elseif (preg_match('/mobile|android|iphone/i', $userAgent)) $deviceType = 'mobile';
 
         $browser = 'Unknown';
         if (preg_match('/Chrome/i', $userAgent)) $browser = 'Chrome';
@@ -166,22 +246,26 @@ class SessionService extends \App\Services\BaseService
         elseif (preg_match('/Safari/i', $userAgent)) $browser = 'Safari';
 
         $os = 'Unknown';
-        if (preg_match('/Windows/i', $userAgent)) $os = 'Windows';
+        // ✅ Check specific mobile OS first (Android, iOS) before generic Linux
+        if (preg_match('/Android/i', $userAgent)) $os = 'Android';
+        elseif (preg_match('/iOS|iPhone|iPad/i', $userAgent)) $os = 'iOS';
+        elseif (preg_match('/Windows/i', $userAgent)) $os = 'Windows';
         elseif (preg_match('/Mac/i', $userAgent)) $os = 'macOS';
         elseif (preg_match('/Linux/i', $userAgent)) $os = 'Linux';
-        elseif (preg_match('/Android/i', $userAgent)) $os = 'Android';
-        elseif (preg_match('/iOS|iPhone|iPad/i', $userAgent)) $os = 'iOS';
 
         return ['device_type' => $deviceType, 'browser' => $browser, 'os' => $os];
     }
 
-    private function getClientIp(): string
-    {
-        return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    /**
+     * تولید Fingerprint از HTTP headers
+     */
+    private function generateFingerprint(
+        string $userAgent,
+        string $acceptLanguage = '',
+        string $acceptEncoding = ''
+    ): string {
+        $entropy = $userAgent . '|' . $acceptLanguage . '|' . $acceptEncoding;
+        return hash('sha256', $entropy);
     }
 
-    private function generateFingerprint(): string
-    {
-        return md5(($_SERVER['HTTP_USER_AGENT'] ?? '') . ($_SERVER['REMOTE_ADDR'] ?? ''));
-    }
 }

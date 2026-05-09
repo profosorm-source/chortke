@@ -16,8 +16,9 @@ class TorListUpdater extends \App\Services\BaseService
 {
     private AntiFraudModel $model;
     
-    public function __construct(AntiFraudModel $model)
+    public function __construct(AntiFraudModel $model, LoggerInterface $logger)
     {
+        parent::__construct($logger);
         $this->model = $model;
     }
     

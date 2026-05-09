@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Models\SocialTaskAnalyticsModel;
 use App\Services\User\UserScoreService;
 use App\Services\InfluencerReputationService;
+use App\Constants\TrustScoreConstants;
 use InvalidArgumentException;
 
 use App\Contracts\LoggerInterface;
@@ -27,20 +28,20 @@ use App\Contracts\LoggerInterface;
  */
 class ScoreService extends \App\Services\BaseService
 {
-    private const TRUST_INITIAL = 50;
-    private const TRUST_MIN = 0;
-    private const TRUST_MAX = 100;
+    private const TRUST_INITIAL = TrustScoreConstants::INITIAL;
+    private const TRUST_MIN = TrustScoreConstants::MINIMUM;
+    private const TRUST_MAX = TrustScoreConstants::MAXIMUM;
 
     // تغییرات مثبت trust score
-    private const TRUST_INC_GOOD_TASK = 2;
-    private const TRUST_INC_NATURAL_BEHAVIOR = 1;
-    private const TRUST_INC_HEALTHY_WEEK = 2;
+    private const TRUST_INC_GOOD_TASK = TrustScoreConstants::INCREMENT_GOOD_TASK;
+    private const TRUST_INC_NATURAL_BEHAVIOR = TrustScoreConstants::INCREMENT_NATURAL_BEHAVIOR;
+    private const TRUST_INC_HEALTHY_WEEK = TrustScoreConstants::INCREMENT_HEALTHY_WEEK;
 
     // جریمه‌های trust score
-    private const TRUST_DEC_REJECTED = -5;
-    private const TRUST_DEC_SUSPICIOUS = -3;
-    private const TRUST_DEC_SOFT_EXCESS = -2;
-    private const TRUST_DEC_CONFIRMED_FRAUD = -10;
+    private const TRUST_DEC_REJECTED = TrustScoreConstants::DECREMENT_REJECTED;
+    private const TRUST_DEC_SUSPICIOUS = TrustScoreConstants::DECREMENT_SUSPICIOUS;
+    private const TRUST_DEC_SOFT_EXCESS = TrustScoreConstants::DECREMENT_SOFT_EXCESS;
+    private const TRUST_DEC_CONFIRMED_FRAUD = TrustScoreConstants::DECREMENT_CONFIRMED_FRAUD;
 
     public function __construct(
         private Database $db,

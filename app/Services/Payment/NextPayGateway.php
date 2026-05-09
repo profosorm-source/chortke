@@ -1,26 +1,48 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services\Payment;
 
 use App\Models\PaymentGateway;
 use App\Contracts\LoggerInterface;
-use App\Contracts\PaymentGatewayInterface;
+use App\Exceptions\PaymentGatewayConnectionException;
+use App\Exceptions\PaymentVerificationException;
 
-class NextPayGateway implements PaymentGatewayInterface
+/**
+ * NextPayGateway - درگاه نکست‌پی
+ * 
+ * یک درگاه پیمنٹ ایرانی سریع و قابل اعتماد۔
+ * 
+ * نوٹ: Amount Rial میں ہے لیکن NextPay Toman میں چاہتا ہے (divide by 10)
+ * 
+ * Retry Strategy:
+ * - Connection timeouts: Retry 3x with exponential backoff
+ * - Server errors (5xx): Retry 3x with exponential backoff
+ * - Invalid API key (4xx): Do NOT retry
+ */
+class NextPayGateway extends BasePaymentGateway
 {
     private \App\Models\PaymentGateway $paymentGatewayModel;
     private ?object $config;
-    protected LoggerInterface $logger;
 
     public function __construct(
         \App\Models\PaymentGateway $paymentGatewayModel,
         LoggerInterface            $logger
     ) {
+        parent::__construct($logger);
         $this->paymentGatewayModel = $paymentGatewayModel;
         $this->config = $paymentGatewayModel->getActiveGateway('nextpay');
-        $this->logger = $logger;
     }
 
+    /**
+     * نیا پیمنٹ بنائیں
+     * 
+     * Retry Logic:
+     * - Connection timeouts: ✅ Retry
+     * - Server errors (5xx): ✅ Retry
+     * - Invalid API key: ❌ Do not retry
+     */
     public function createPayment(float $amount, string $description, string $callbackUrl): array
     {
         if (!$this->config) {
@@ -30,9 +52,17 @@ class NextPayGateway implements PaymentGatewayInterface
             ];
         }
 
+        // Input validation (should not retry)
+        if ($amount <= 0) {
+            $this->logger->warning('payment.nextpay.invalid_amount', ['amount' => $amount]);
+            throw new \InvalidArgumentException('Amount must be greater than 0');
+        }
+
+        // NextPay expects amount in Toman, input is in Rial
+        // Conversion: Rial → Toman (1 Toman = 10 Rial)
         $data = [
             'api_key' => $this->config->api_key,
-            'amount' => $amount / 10, // نکست‌پی تومان می‌خواهد
+            'amount' => (int)($amount / 10), // NextPay requires Toman (divide Rial by 10)
             'order_id' => \uniqid('nextpay_'),
             'callback_uri' => $callbackUrl,
         ];
@@ -40,23 +70,26 @@ class NextPayGateway implements PaymentGatewayInterface
         $url = 'https://nextpay.org/nx/gateway/token';
 
         try {
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_POST, true);
-            \curl_setopt($ch, CURLOPT_POSTFIELDS, \http_build_query($data));
+            // 🔄 Execute with retry and exponential backoff
+            $response = $this->executeWithRetry($url, $data, 'POST', [], 'form');
 
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            \curl_close($ch);
-
-            if ($httpCode !== 200) {
-                throw new \Exception('خطا در اتصال به درگاه');
+            // NextPay returns 200 on success
+            if (!$response['success'] || $response['http_code'] !== 200) {
+                return [
+                    'success' => false,
+                    'message' => 'خطا در اتصال به درگاه'
+                ];
             }
 
-            $result = \json_decode($response, true);
+            $result = $response['data'];
 
             if (isset($result['code']) && $result['code'] == -1) {
                 $transId = $result['trans_id'];
+                $this->logger->info('payment.nextpay.payment_created', [
+                    'trans_id' => $transId,
+                    'amount_toman' => (int)($amount / 10)
+                ]);
+
                 return [
                     'success' => true,
                     'authority' => $transId,
@@ -70,6 +103,13 @@ class NextPayGateway implements PaymentGatewayInterface
                 'message' => 'خطا در ایجاد تراکنش'
             ];
 
+        } catch (PaymentGatewayConnectionException $e) {
+            // Connection failed after retries
+            $this->logger->error('payment.nextpay.connection_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در برقراری ارتباط با درگاه (بعد از تلاش مجدد)'
+            ];
         } catch (\Exception $e) {
             $this->logger->error('payment.nextpay.request_failed', ['error' => $e->getMessage()]);
             return [
@@ -79,6 +119,14 @@ class NextPayGateway implements PaymentGatewayInterface
         }
     }
 
+    /**
+     * پرداخت کی تصدیق کریں
+     * 
+     * Retry Logic:
+     * - Connection timeouts: ✅ Retry
+     * - Server errors (5xx): ✅ Retry
+     * - Invalid transaction: ❌ Do not retry
+     */
     public function verifyPayment(string $authority, float $amount): array
     {
         if (!$this->config) {
@@ -88,31 +136,45 @@ class NextPayGateway implements PaymentGatewayInterface
             ];
         }
 
+        // Input validation (should not retry)
+        if (empty($authority)) {
+            throw new \InvalidArgumentException('Authority cannot be empty');
+        }
+
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException('Amount must be greater than 0');
+        }
+
+        // NextPay expects amount in Toman, input is in Rial
         $data = [
             'api_key' => $this->config->api_key,
             'trans_id' => $authority,
-            'amount' => $amount / 10,
+            'amount' => (int)($amount / 10), // Toman amount for verification
         ];
 
         $url = 'https://nextpay.org/nx/gateway/verify';
 
         try {
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_POST, true);
-            \curl_setopt($ch, CURLOPT_POSTFIELDS, \http_build_query($data));
+            // 🔄 Execute with retry and exponential backoff
+            $response = $this->executeWithRetry($url, $data, 'POST', [], 'form');
 
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            \curl_close($ch);
-
-            if ($httpCode !== 200) {
-                throw new \Exception('خطا در اتصال به درگاه');
+            // NextPay returns 200 on success
+            if (!$response['success'] || $response['http_code'] !== 200) {
+                throw new PaymentVerificationException(
+                    'Failed to verify payment',
+                    $authority,
+                    ['http_code' => $response['http_code']]
+                );
             }
 
-            $result = \json_decode($response, true);
+            $result = $response['data'];
 
             if (isset($result['code']) && $result['code'] == 0) {
+                $this->logger->info('payment.nextpay.verified', [
+                    'authority' => $authority,
+                    'ref_id' => $result['Shaparak_Ref_Id'] ?? 'unknown'
+                ]);
+
                 return [
                     'success' => true,
                     'ref_id' => $result['Shaparak_Ref_Id'] ?? $authority,
@@ -125,6 +187,19 @@ class NextPayGateway implements PaymentGatewayInterface
                 'message' => 'تراکنش ناموفق'
             ];
 
+        } catch (PaymentGatewayConnectionException $e) {
+            // Connection failed after retries
+            $this->logger->error('payment.nextpay.verification_connection_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در تأیید پرداخت (خطای شبکه)'
+            ];
+        } catch (PaymentVerificationException $e) {
+            $this->logger->warning('payment.nextpay.verification_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در تأیید پرداخت'
+            ];
         } catch (\Exception $e) {
             $this->logger->error('payment.nextpay.verify_failed', ['error' => $e->getMessage()]);
             return [
@@ -144,6 +219,11 @@ class NextPayGateway implements PaymentGatewayInterface
     }
 
     public function getName(): string
+    {
+        return 'nextpay';
+    }
+
+    public function getGatewayName(): string
     {
         return 'nextpay';
     }

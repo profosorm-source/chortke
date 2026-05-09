@@ -19,7 +19,9 @@ class RatingService extends \App\Services\BaseService
         private Database $db,
         protected LoggerInterface $logger,
         private Rating $ratingModel
-    ) {}
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * ثبت نظر و امتیاز

@@ -117,6 +117,84 @@ class ReferralService extends \App\Services\BaseService
         }
     }
 
+    /**
+     * پردازش پورسانت داینامیک و تفکیک‌شده بر اساس نوع ماژول و نقش معرف
+     */
+    public function processModularCommission(int $referredUserId, string $module, float $amount, string $currency, array $context = []): array
+    {
+        // پیدا کردن معرف کاربر
+        $referrer = $this->db->query("SELECT referred_by FROM users WHERE id = ? LIMIT 1", [$referredUserId])->fetch();
+        if (!$referrer || !$referrer->referred_by) {
+            return ['success' => true, 'commission' => 0.0, 'message' => 'No referrer found'];
+        }
+
+        $referrerId = (int)$referrer->referred_by;
+
+        // دریافت درصد پورسانت بر اساس نوع ماژول
+        $percentage = 5.0; // پیش‌فرض عمومی
+
+        if ($module === 'custom_tasks') {
+            $percentage = (float)$this->settingService->get('referral_custom_tasks_percent', 5.0);
+        } elseif ($module === 'social_tasks') {
+            $percentage = (float)$this->settingService->get('referral_social_tasks_percent', 7.0);
+        } elseif ($module === 'google_search') {
+            $percentage = (float)$this->settingService->get('referral_google_search_percent', 10.0);
+        } elseif ($module === 'youtube') {
+            $percentage = (float)$this->settingService->get('referral_youtube_percent', 8.0);
+        } elseif ($module === 'influencer') {
+            // بررسی اینکه آیا معرف خودش به عنوان اینفلوئنسر ثبت‌نام شده یا خیر
+            $isInfluencer = false;
+            try {
+                $count = (int)$this->db->query("
+                    SELECT COUNT(*) FROM influencer_profiles 
+                    WHERE user_id = ? AND status = 'approved'
+                    LIMIT 1
+                ", [$referrerId])->fetchColumn();
+                $isInfluencer = $count > 0;
+            } catch (\Throwable $t) {
+                // اگر جدول influencer_profiles هنوز ساخته نشده یا با فیلد دیگری است
+                $isInfluencer = false;
+            }
+
+            if ($isInfluencer) {
+                $percentage = (float)$this->settingService->get('referral_influencer_pro_percent', 10.0);
+            } else {
+                $percentage = (float)$this->settingService->get('referral_influencer_regular_percent', 5.0);
+            }
+        }
+
+        $commission = $amount * ($percentage / 100);
+
+        try {
+            $this->db->beginTransaction();
+
+            $this->commissionModel->create([
+                'referrer_id' => $referrerId,
+                'amount' => $amount,
+                'commission_amount' => $commission,
+                'currency' => $currency,
+                'status' => 'pending',
+                'context' => json_encode(array_merge($context, [
+                    'module' => $module,
+                    'percentage' => $percentage,
+                    'referred_user_id' => $referredUserId
+                ])),
+            ]);
+
+            $this->walletService->deposit($referrerId, $commission, $currency, [
+                'type' => 'referral_commission',
+                'idempotency_key' => "referral_{$referrerId}_modular_" . time(),
+            ]);
+
+            $this->db->commit();
+            return ['success' => true, 'commission' => $commission, 'percentage' => $percentage];
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            $this->logger->error('modular_commission_error', ['error' => $e->getMessage()]);
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
     public function processMultiTierCommissions(int $userId, float $amount, string $currency): array
     {
         $processed = [];

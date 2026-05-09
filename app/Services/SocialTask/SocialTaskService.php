@@ -44,7 +44,8 @@ class SocialTaskService extends \App\Services\BaseService
         protected LoggerInterface $logger,
         private FinancialEscrowService $escrow,
         private StateMachineService $stateMachine,
-        private RealTimeService $realTime
+        private RealTimeService $realTime,
+        private \App\Services\Shared\RatingService $ratingService
     ) {}
 
     /**
@@ -494,6 +495,67 @@ class SocialTaskService extends \App\Services\BaseService
             }
         }
         return $prev;
+    }
+
+    /**
+     * گزارش تخلف تسک شبکه اجتماعی (سوشیال تسک)
+     */
+    public function reportTask(int $reporterId, int $adId, string $reason, string $description = ''): array
+    {
+        $ad = $this->model->getAdById($adId);
+        if (!$ad) {
+            return ['success' => false, 'message' => 'تسک یافت نشد'];
+        }
+
+        try {
+            $ok = $this->ratingService->report([
+                'reporter_id' => $reporterId,
+                'ref_type' => 'social_task',
+                'ref_id' => $adId,
+                'reason' => $reason,
+                'description' => $description
+            ]);
+
+            if (!$ok) {
+                return ['success' => false, 'message' => 'خطا در ثبت گزارش'];
+            }
+
+            return ['success' => true, 'message' => 'گزارش با موفقیت ثبت شد'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * امتیازدهی به تسک شبکه اجتماعی (سوشیال تسک)
+     */
+    public function rateTask(int $raterId, int $adId, int $stars, string $comment = ''): array
+    {
+        $ad = $this->model->getAdById($adId);
+        if (!$ad) {
+            return ['success' => false, 'message' => 'تسک یافت نشد'];
+        }
+
+        $stars = max(1, min(5, $stars));
+
+        try {
+            $ok = $this->ratingService->rate(
+                $raterId,
+                (int)$ad->user_id,
+                'social_task',
+                $adId,
+                $stars,
+                $comment
+            );
+
+            if (!$ok) {
+                return ['success' => false, 'message' => 'خطا در ثبت امتیاز'];
+            }
+
+            return ['success' => true, 'message' => 'امتیاز با موفقیت ثبت شد'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+        }
     }
 }
 

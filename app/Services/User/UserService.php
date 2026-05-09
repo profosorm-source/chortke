@@ -16,7 +16,9 @@ class UserService extends \App\Services\BaseService
     public function __construct(
         private User $model,
         protected LoggerInterface $logger
-    ) {}
+    ) {
+        parent::__construct($logger);
+    }
 
     public function register(array $data): int|false
     {
@@ -38,10 +40,16 @@ class UserService extends \App\Services\BaseService
         return $userId;
     }
 
-    public function generateUniqueReferralCode(): string
+    public function generateUniqueReferralCode(int $maxAttempts = 10): string
     {
+        $attempts = 0;
         do {
             $code = strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+            $attempts++;
+            if ($attempts >= $maxAttempts) {
+                $this->logger->error('user.referral_code_generation_failed', ['attempts' => $attempts]);
+                throw new \RuntimeException('Failed to generate a unique referral code after ' . $maxAttempts . ' attempts.');
+            }
         } while ($this->model->findByReferralCode($code));
 
         return $code;
@@ -84,12 +92,15 @@ class UserService extends \App\Services\BaseService
         ]);
     }
 
-    public function recordLogin(int $userId): bool
+    public function recordLogin(int $userId, ?string $ip = null, ?string $userAgent = null): bool
     {
+        $ipAddress = $ip ?? (function_exists('get_client_ip') ? get_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'));
+        $ua = $userAgent ?? ($_SERVER['HTTP_USER_AGENT'] ?? 'Unknown');
+
         return $this->model->updateLastLogin(
             $userId,
-            $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0',
-            $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown'
+            $ipAddress,
+            $ua
         );
     }
 

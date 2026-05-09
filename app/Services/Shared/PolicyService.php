@@ -26,7 +26,9 @@ class PolicyService extends \App\Services\BaseService
         private User $userModel,
         private Role $roleModel,
         private AuditTrail $auditTrail
-    ) {}
+    ) {
+        parent::__construct($logger);
+    }
 
     public function can(string $action, User $user, $resource = null): bool
     {
@@ -68,10 +70,10 @@ class PolicyService extends \App\Services\BaseService
         }
 
         $result = $this->db->query(
-            "SELECT 1 FROM user_permissions up
-             INNER JOIN roles r ON up.role_id = r.id
-             INNER JOIN permissions p ON up.permission_id = p.id
-             WHERE r.user_id = ? AND p.slug = ? AND up.is_active = 1 LIMIT 1",
+            "SELECT 1 FROM user_roles ur
+             INNER JOIN role_permissions rp ON ur.role_id = rp.role_id
+             INNER JOIN permissions p ON rp.permission_id = p.id
+             WHERE ur.user_id = ? AND p.slug = ? LIMIT 1",
             [$user->id, $action]
         )->fetch();
 
@@ -115,10 +117,10 @@ class PolicyService extends \App\Services\BaseService
         }
 
         $result = $this->db->query(
-            "SELECT 1 FROM user_permissions up
-             INNER JOIN roles r ON up.role_id = r.id
-             INNER JOIN permissions p ON up.permission_id = p.id
-             WHERE r.user_id = ? AND p.slug = ? AND up.is_active = 1 LIMIT 1",
+            "SELECT 1 FROM user_roles ur
+             INNER JOIN role_permissions rp ON ur.role_id = rp.role_id
+             INNER JOIN permissions p ON rp.permission_id = p.id
+             WHERE ur.user_id = ? AND p.slug = ? LIMIT 1",
             [$userId, $action]
         )->fetch();
 
@@ -128,10 +130,10 @@ class PolicyService extends \App\Services\BaseService
     public function getPermissions(User $user): array
     {
         $permissions = $this->db->query(
-            "SELECT p.slug FROM user_permissions up
-             INNER JOIN permissions p ON up.permission_id = p.id
-             INNER JOIN roles r ON up.role_id = r.id
-             WHERE r.user_id = ? AND up.is_active = 1",
+            "SELECT p.slug FROM user_roles ur
+             INNER JOIN role_permissions rp ON ur.role_id = rp.role_id
+             INNER JOIN permissions p ON rp.permission_id = p.id
+             WHERE ur.user_id = ?",
             [$user->id]
         )->fetchAll() ?? [];
 

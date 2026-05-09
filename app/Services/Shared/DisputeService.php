@@ -8,8 +8,8 @@ use Core\Database;
 use App\Services\Notification\NotificationService;
 use App\Models\Dispute;
 use App\Models\Appeal;
-
 use App\Contracts\LoggerInterface;
+
 /**
  * DisputeService - سرویس اشتراکی مدیریت اختلافات و اعتراضات (Appeals)
  * 
@@ -28,39 +28,178 @@ class DisputeService extends \App\Services\BaseService
         private NotificationService $notificationService,
         private Dispute $disputeModel,
         private Appeal $appealModel
-    ) {}
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * باز کردن پرونده اختلاف برای سفارش اینفلوئنسر
      */
     public function openDispute(int $orderId, int $customerId, string $reason): array
     {
-        throw new \Exception('Method not implemented yet');
+        $data = [
+            'ref_type' => 'order',
+            'ref_id' => $orderId,
+            'user_id' => $customerId,
+            'target_user_id' => null,
+            'reason' => $reason
+        ];
+        
+        $dispute = $this->openCase($data);
+        if (!$dispute) {
+            return ['success' => false, 'message' => 'خطا در باز کردن پرونده اختلاف.'];
+        }
+        
+        return ['success' => true, 'dispute_id' => $dispute->id];
     }
 
+    /**
+     * ارسال پیام در پرونده اختلاف
+     */
     public function sendMessage(int $disputeId, int $userId, string $role, string $message, ?string $attachment = null): array
     {
-        throw new \Exception('Method not implemented yet');
+        $ok = $this->disputeModel->addMessage($disputeId, $userId, $message, $attachment, $role);
+        if (!$ok) {
+            return ['success' => false, 'message' => 'خطا در ارسال پیام.'];
+        }
+        
+        $this->logger->info('case.message_sent', [
+            'dispute_id' => $disputeId,
+            'user_id' => $userId,
+            'role' => $role
+        ]);
+        
+        return ['success' => true];
     }
 
+    /**
+     * حل پرونده اختلاف به صورت توافقی و دوستانه
+     */
     public function resolveByAgreement(int $disputeId, int $initiatorId, string $resolution, string $verdict): array
     {
-        throw new \Exception('Method not implemented yet');
+        $dispute = $this->disputeModel->getSafe($disputeId);
+        if (!$dispute) {
+            return ['success' => false, 'message' => 'پرونده یافت نشد.'];
+        }
+        
+        $ok = $this->disputeModel->update($disputeId, [
+            'status' => Dispute::STATUS_RESOLVED_PEER,
+            'resolution_note' => $resolution,
+            'resolved_at' => date('Y-m-d H:i:s'),
+            'resolved_by' => $initiatorId
+        ]);
+        
+        if (!$ok) {
+            return ['success' => false, 'message' => 'خطا در ثبت تفاهم‌نامه.'];
+        }
+        
+        $this->logger->info('case.resolved_peer', [
+            'dispute_id' => $disputeId,
+            'resolved_by' => $initiatorId
+        ]);
+        
+        $this->notificationService->send($dispute->user_id, 'system', 'حل اختلاف به صورت دوستانه', 'اختلاف سفارش شما به توافق طرفین خاتمه یافت.');
+        if ($dispute->target_user_id) {
+            $this->notificationService->send($dispute->target_user_id, 'system', 'حل اختلاف به صورت دوستانه', 'اختلاف سفارش شما به توافق طرفین خاتمه یافت.');
+        }
+        
+        return ['success' => true];
     }
 
+    /**
+     * ارجاع پرونده به مدیر
+     */
     public function escalateToAdmin(int $disputeId, int $requesterId): array
     {
-        throw new \Exception('Method not implemented yet');
+        $dispute = $this->disputeModel->getSafe($disputeId);
+        if (!$dispute) {
+            return ['success' => false, 'message' => 'پرونده یافت نشد.'];
+        }
+        
+        if ($dispute->status !== Dispute::STATUS_OPEN_PEER && $dispute->status !== Dispute::STATUS_OPEN) {
+            return ['success' => false, 'message' => 'امکان ارجاع این پرونده وجود ندارد.'];
+        }
+        
+        $ok = $this->disputeModel->update($disputeId, [
+            'status' => Dispute::STATUS_ESCALATED,
+            'resolved_by' => $requesterId
+        ]);
+        
+        if (!$ok) {
+            return ['success' => false, 'message' => 'خطا در ارجاع پرونده به ادمین.'];
+        }
+        
+        $this->logger->info('case.escalated', [
+            'dispute_id' => $disputeId,
+            'requester_id' => $requesterId
+        ]);
+        
+        return ['success' => true];
     }
 
+    /**
+     * حل پرونده اختلاف توسط مدیر سیستم
+     */
     public function adminResolve(int $disputeId, int $adminId, string $verdict, string $note, float $refundPercent = 0): array
     {
-        throw new \Exception('Method not implemented yet');
+        $dispute = $this->disputeModel->getSafe($disputeId);
+        if (!$dispute) {
+            return ['success' => false, 'message' => 'پرونده یافت نشد.'];
+        }
+        
+        $ok = $this->disputeModel->update($disputeId, [
+            'status' => Dispute::STATUS_RESOLVED_ADMIN,
+            'admin_decision' => $verdict,
+            'admin_id' => $adminId,
+            'admin_note' => $note,
+            'refund_percent' => $refundPercent,
+            'resolved_at' => date('Y-m-d H:i:s'),
+            'resolved_by' => $adminId
+        ]);
+        
+        if (!$ok) {
+            return ['success' => false, 'message' => 'خطا در ثبت رای مدیر.'];
+        }
+        
+        $this->logger->info('case.resolved_admin', [
+            'dispute_id' => $disputeId,
+            'admin_id' => $adminId,
+            'verdict' => $verdict
+        ]);
+        
+        $this->notificationService->send($dispute->user_id, 'system', 'رأی داوری صادر شد', 'داور سیستم رأی پرونده اختلاف را صادر کرد.');
+        if ($dispute->target_user_id) {
+            $this->notificationService->send($dispute->target_user_id, 'system', 'رأی داوری صادر شد', 'داور سیستم رأی پرونده اختلاف را صادر کرد.');
+        }
+        
+        return ['success' => true];
     }
 
+    /**
+     * پردازش خودکار گفتگوهای منقضی شده طرفین
+     */
     public function processExpiredPeerResolutions(): int
     {
-        throw new \Exception('Method not implemented yet');
+        $expired = $this->db->fetchAll(
+            "SELECT id FROM disputes 
+             WHERE status = ? AND peer_deadline < NOW()",
+            [Dispute::STATUS_OPEN_PEER]
+        );
+        
+        $count = 0;
+        foreach ($expired as $row) {
+            $ok = $this->disputeModel->update((int)$row->id, [
+                'status' => Dispute::STATUS_ESCALATED,
+                'resolution_note' => 'سیستم: پایان زمان گفتگوی طرفین و ارجاع خودکار به مدیریت.'
+            ]);
+            
+            if ($ok) {
+                $count++;
+                $this->logger->info('case.auto_escalated', ['dispute_id' => $row->id]);
+            }
+        }
+        
+        return $count;
     }
 
     /**
@@ -295,4 +434,3 @@ class DisputeService extends \App\Services\BaseService
         );
     }
 }
-

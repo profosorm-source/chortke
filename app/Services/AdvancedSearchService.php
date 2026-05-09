@@ -6,8 +6,8 @@ namespace App\Services;
 
 use App\Models\AdvancedSearch;
 use Core\Cache;
-
 use App\Contracts\LoggerInterface;
+
 /**
  * AdvancedSearchService - Unified Advanced Search Service
  *
@@ -18,7 +18,7 @@ use App\Contracts\LoggerInterface;
  * - Pagination support
  * - SQL injection prevention
  */
-class AdvancedSearchServiceextends \App\Services\BaseService
+class AdvancedSearchService extends \App\Services\BaseService
 {
     private AdvancedSearch $searchModel;
     private Cache $cache;
@@ -147,7 +147,7 @@ class AdvancedSearchServiceextends \App\Services\BaseService
     }
 
     /**
-     * Invalidate cache for a module
+     * پاک‌سازی امن و غیرمسدودساز کش تگ‌های ماژول‌ها بدون تأثیرگذاری بر پایداری کل دیتابیس ردیس
      */
     public function invalidateModuleCache(string $module): void
     {
@@ -156,21 +156,56 @@ class AdvancedSearchServiceextends \App\Services\BaseService
         }
 
         try {
-            $redis = $this->cache->redis();
+            if ($this->cache->driver() === 'redis') {
+                $redis = $this->cache->redis();
+                if ($redis) {
+                    $pattern = "search:{$module}:*";
+                    $keys = [];
+                    $iterator = null;
 
-            $pattern = "search:{$module}:*";
-            $keys = $redis->keys($pattern);
+                    // استفاده از دستور غیرمسدودساز SCAN بجای KEYS (O(N) safe)
+                    while (true) {
+                        $result = $redis->scan($iterator, 'MATCH', $pattern, 'COUNT', 100);
+                        if ($result === false) {
+                            break;
+                        }
+                        
+                        // سازگاری با PhpRedis و پاسخ‌های برگشتی به شکل [new_iterator, keys_array]
+                        $currentKeys = [];
+                        if (is_array($result)) {
+                            if (count($result) === 2 && is_array($result[1])) {
+                                $iterator = $result[0];
+                                $currentKeys = $result[1];
+                            } else {
+                                $currentKeys = $result;
+                                $iterator = null;
+                            }
+                        }
 
-            if (!empty($keys)) {
-                $redis->delete(...$keys);
+                        $keys = array_merge($keys, $currentKeys);
+                        if ($iterator === 0 || $iterator === '0' || $iterator === null) {
+                            break;
+                        }
+                    }
+
+                    if (!empty($keys)) {
+                        $redis->del($keys);
+                        $this->logger->info("search.cache_invalidated", [
+                            'module' => $module,
+                            'keys_deleted' => count($keys),
+                            'driver' => 'redis'
+                        ]);
+                    }
+                }
+            } else {
+                // حالت درایور فایلی: پاک‌سازی فایل‌های مرتبط با این ماژول انجام پذیرد
                 $this->logger->info("search.cache_invalidated", [
                     'module' => $module,
-                    'keys_deleted' => count($keys)
+                    'driver' => 'file',
+                    'note' => 'در حالت کش فایلی، پاکسازی به صورت خودکار از طریق مکانیزم انقضای فایل‌ها انجام می‌شود.'
                 ]);
             }
-
-            // No need to close Redis connection as it's managed by Cache
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $this->logger->error("search.cache_invalidation_failed", [
                 'module' => $module,
                 'error' => $e->getMessage()

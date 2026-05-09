@@ -30,8 +30,11 @@ class AnalyticsService extends \App\Services\BaseService
         private Cache $cache,
         private ReferralAnalyticsService $referralAnalytics,
         private NotificationService $notificationService,
-        private AdvancedAnalytics $advancedAnalytics
-    ) {}
+        private AdvancedAnalytics $advancedAnalytics,
+        private \App\Services\Analytics\AnalyticsService $customTaskAnalytics
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * دریافت آمارهای کلی سیستم

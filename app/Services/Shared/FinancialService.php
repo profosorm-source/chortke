@@ -22,7 +22,9 @@ class FinancialService extends \App\Services\BaseService
         protected LoggerInterface $logger,
         private Escrow $escrowModel,
         private LedgerEntry $ledgerModel
-    ) {}
+    ) {
+        parent::__construct($logger);
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Escrow Operations

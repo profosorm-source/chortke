@@ -25,8 +25,14 @@ class GeoIPService extends \App\Services\BaseService
     private bool $useMaxMind = false;
     private $reader = null;
     
-    public function __construct(Database $db, Cache $cache, AntiFraudModel $model, RiskPolicyService $policy)
-    {
+    public function __construct(
+        Database $db,
+        Cache $cache,
+        AntiFraudModel $model,
+        RiskPolicyService $policy,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
         $this->db = $db;
         $this->cache = $cache;
         $this->model = $model;

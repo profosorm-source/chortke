@@ -25,4 +25,36 @@ class TrustScoreService
     {
         return $this->scoreService->getTrustScore($userId);
     }
+
+    /**
+     * دریافت تعدیل‌کننده امتیاز اعتماد
+     */
+    public function getModifier(int $userId): float
+    {
+        return $this->scoreService->getTrustModifier($userId);
+    }
+
+    /**
+     * پاداش تسک خوب
+     */
+    public function rewardGoodTask(int $userId, int $executionId): void
+    {
+        $this->scoreService->rewardGoodTask($userId, $executionId);
+    }
+
+    /**
+     * جریمه رد شدن تسک
+     */
+    public function penalizeRejection(int $userId, int $executionId): void
+    {
+        $this->scoreService->penalizeRejection($userId, $executionId);
+    }
+
+    /**
+     * جریمه رفتار مشکوک
+     */
+    public function penalizeSuspicious(int $userId, string $reason): void
+    {
+        $this->scoreService->penalizeSuspicious($userId, $reason);
+    }
 }

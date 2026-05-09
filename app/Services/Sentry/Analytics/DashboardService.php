@@ -167,7 +167,7 @@ class DashboardService
         ];
     }
 
-    public function getIssueDetails(int $id): ?array
+    public function getIssueDetails(int $id): ?object
     {
         $details = $this->model->getIssueWithEvents($id, 50);
         return $details ?: null;

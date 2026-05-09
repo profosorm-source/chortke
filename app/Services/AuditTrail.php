@@ -63,6 +63,7 @@ class AuditTrail extends \App\Services\BaseService
     ): bool {
         $changes = [];
 
+        // Check for modified or new keys
         foreach ($after as $key => $newVal) {
             if (in_array($key, $ignore, true)) {
                 continue;
@@ -70,6 +71,16 @@ class AuditTrail extends \App\Services\BaseService
             $oldVal = $before[$key] ?? null;
             if ($oldVal !== $newVal) {
                 $changes[$key] = ['from' => $oldVal, 'to' => $newVal];
+            }
+        }
+
+        // Check for deleted keys (present in $before but missing in $after)
+        foreach ($before as $key => $oldVal) {
+            if (in_array($key, $ignore, true)) {
+                continue;
+            }
+            if (!array_key_exists($key, $after)) {
+                $changes[$key] = ['from' => $oldVal, 'to' => null];
             }
         }
 
@@ -87,7 +98,9 @@ public function archiveOlderThan(int $days = 30, int $chunkSize = 2000): array
         $archiveDir = dirname(__DIR__, 2) . '/storage/audit-archives';
 
         if (!is_dir($archiveDir)) {
-            @mkdir($archiveDir, 0755, true);
+            if (!mkdir($archiveDir, 0755, true) && !is_dir($archiveDir)) {
+                throw new \RuntimeException("Failed to create directory: {$archiveDir}");
+            }
         }
 
         $stamp = date('Ymd_His');
@@ -119,7 +132,9 @@ public function archiveOlderThan(int $days = 30, int $chunkSize = 2000): array
         fclose($fp);
 
         if ($total === 0) {
-            @unlink($jsonlFile);
+            if (file_exists($jsonlFile)) {
+                unlink($jsonlFile);
+            }
             return [
                 'archived' => 0,
                 'deleted' => 0,
@@ -129,29 +144,32 @@ public function archiveOlderThan(int $days = 30, int $chunkSize = 2000): array
         }
 
         $in = fopen($jsonlFile, 'rb');
-if (!$in) {
-    throw new \RuntimeException('Cannot open archive temp file');
-}
+        if (!$in) {
+            throw new \RuntimeException('Cannot open archive temp file');
+        }
 
-$out = gzopen($gzFile, 'wb9');
-if (!$out) {
-    fclose($in);
-    throw new \RuntimeException('Cannot create gzip archive');
-}
+        $out = gzopen($gzFile, 'wb9');
+        if (!$out) {
+            fclose($in);
+            throw new \RuntimeException('Cannot create gzip archive');
+        }
 
-while (!feof($in)) {
-    $chunk = fread($in, 8192);
-    if ($chunk === false) {
+        while (!feof($in)) {
+            $chunk = fread($in, 8192);
+            if ($chunk === false) {
+                gzclose($out);
+                fclose($in);
+                throw new \RuntimeException('Cannot read archive temp chunk');
+            }
+            gzwrite($out, $chunk);
+        }
+
         gzclose($out);
         fclose($in);
-        throw new \RuntimeException('Cannot read archive temp chunk');
-    }
-    gzwrite($out, $chunk);
-}
 
-gzclose($out);
-fclose($in);
-@unlink($jsonlFile);
+        if (file_exists($jsonlFile)) {
+            unlink($jsonlFile);
+        }
 
         if (!file_exists($gzFile) || filesize($gzFile) === 0) {
             throw new \RuntimeException('Archive gzip file is invalid');

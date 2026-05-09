@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace App\Services\Notification;
 
 use App\Services\Notification\Adapters\SmsNotificationAdapter;
-
 use App\Contracts\LoggerInterface;
-class SmsNotificationServiceextends \App\Services\BaseService
+
+class SmsNotificationService extends \App\Services\BaseService
 {
     public function __construct(
-        private SmsNotificationAdapter $adapter
-    ) {}
+        private SmsNotificationAdapter $adapter,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     public function send(string $mobile, string $message): bool
     {
@@ -33,4 +36,3 @@ class SmsNotificationServiceextends \App\Services\BaseService
         return $this->adapter->isEnabled();
     }
 }
-

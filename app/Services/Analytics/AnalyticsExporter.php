@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace App\Services\Analytics;
 
-
 use App\Contracts\LoggerInterface;
-/**
- * AnalyticsExporter
- * Export adapter برای تولید گزارش‌های مختلف (CSV, Excel, PDF)
- * Consolidated from: ReportService
- */
-class AnalyticsExporterextends \App\Services\BaseService
+
+class AnalyticsExporter extends \App\Services\BaseService
 {
+    public function __construct(LoggerInterface $logger)
+    {
+        parent::__construct($logger);
+    }
+
     /**
      * تولید CSV
      */
@@ -181,4 +181,3 @@ class AnalyticsExporterextends \App\Services\BaseService
         return $html;
     }
 }
-

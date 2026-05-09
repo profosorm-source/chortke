@@ -98,7 +98,15 @@ class AuthService extends \App\Services\BaseService
             setcookie('remember_token', $token, time() + (30 * 86400), '/', '', true, true);
         }
 
-        $this->sessionService->recordSession((int)$user->id, $this->session->getId());
+        // ✅ Pass HTTP data explicitly (extracted from HTTP Layer)
+        $this->sessionService->recordSession(
+            userId: (int)$user->id,
+            sessionId: $this->session->getId(),
+            userAgent: get_user_agent(),
+            ipAddress: get_client_ip(),
+            acceptLanguage: $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '',
+            acceptEncoding: $_SERVER['HTTP_ACCEPT_ENCODING'] ?? ''
+        );
     }
 
     public function logout(): void

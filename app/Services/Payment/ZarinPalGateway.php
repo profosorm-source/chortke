@@ -1,26 +1,46 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services\Payment;
 
 use App\Models\PaymentGateway;
 use App\Contracts\LoggerInterface;
-use App\Contracts\PaymentGatewayInterface;
+use App\Exceptions\PaymentGatewayConnectionException;
+use App\Exceptions\PaymentVerificationException;
 
-class ZarinPalGateway implements PaymentGatewayInterface
+/**
+ * ZarinPalGateway - درگاه زرین‌پال
+ * 
+ * یک درگاه پیمنٹ ایرانی جو ریئل ٹائم میں پرداخت کی سہولت دیتا ہے۔
+ * 
+ * Retry Strategy:
+ * - Connection timeouts: Retry 3x with exponential backoff
+ * - Server errors (5xx): Retry 3x with exponential backoff
+ * - Client errors (4xx): Do NOT retry
+ */
+class ZarinPalGateway extends BasePaymentGateway
 {
     private \App\Models\PaymentGateway $paymentGatewayModel;
     private ?object $config;
-    protected LoggerInterface $logger;
 
     public function __construct(
         \App\Models\PaymentGateway $paymentGatewayModel,
         LoggerInterface            $logger
     ) {
+        parent::__construct($logger);
         $this->paymentGatewayModel = $paymentGatewayModel;
         $this->config = $paymentGatewayModel->getActiveGateway('zarinpal');
-        $this->logger = $logger;
     }
 
+    /**
+     * نیا پیمنٹ بنائیں
+     * 
+     * Retry Logic:
+     * - Connection timeouts: ✅ Retry
+     * - Server errors (5xx): ✅ Retry
+     * - Invalid amount: ❌ Do not retry
+     */
     public function createPayment(float $amount, string $description, string $callbackUrl): array
     {
         if (!$this->config) {
@@ -28,6 +48,12 @@ class ZarinPalGateway implements PaymentGatewayInterface
                 'success' => false,
                 'message' => 'درگاه زرین‌پال غیرفعال است'
             ];
+        }
+
+        // Input validation (should not retry)
+        if ($amount <= 0) {
+            $this->logger->warning('payment.zarinpal.invalid_amount', ['amount' => $amount]);
+            throw new \InvalidArgumentException('Amount must be greater than 0');
         }
 
         $data = [
@@ -42,30 +68,28 @@ class ZarinPalGateway implements PaymentGatewayInterface
             : 'https://api.zarinpal.com/pg/v4/payment/request.json';
 
         try {
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_POST, true);
-            \curl_setopt($ch, CURLOPT_POSTFIELDS, \json_encode($data));
-            \curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Content-Type: application/json',
-                'Accept: application/json'
-            ]);
+            // 🔄 Execute with retry and exponential backoff
+            $response = $this->executeWithRetry($url, $data, 'POST');
 
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            \curl_close($ch);
-
-            if ($httpCode !== 200) {
-                throw new \Exception('خطا در اتصال به درگاه');
+            if (!$response['success'] || $response['http_code'] !== 200) {
+                return [
+                    'success' => false,
+                    'message' => 'خطا در اتصال به درگاه'
+                ];
             }
 
-            $result = \json_decode($response, true);
+            $result = $response['data'];
 
             if (isset($result['data']['code']) && $result['data']['code'] == 100) {
                 $authority = $result['data']['authority'];
                 $paymentUrl = $this->config->is_test_mode
                     ? "https://sandbox.zarinpal.com/pg/StartPay/{$authority}"
                     : "https://www.zarinpal.com/pg/StartPay/{$authority}";
+
+                $this->logger->info('payment.zarinpal.payment_created', [
+                    'authority' => $authority,
+                    'amount' => $amount
+                ]);
 
                 return [
                     'success' => true,
@@ -80,6 +104,13 @@ class ZarinPalGateway implements PaymentGatewayInterface
                 'message' => $result['errors']['message'] ?? 'خطای نامشخص'
             ];
 
+        } catch (PaymentGatewayConnectionException $e) {
+            // Connection failed after retries
+            $this->logger->error('payment.zarinpal.connection_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در برقراری ارتباط با درگاه (بعد از تلاش مجدد)'
+            ];
         } catch (\Exception $e) {
             $this->logger->error('payment.zarinpal.request_failed', ['error' => $e->getMessage()]);
             return [
@@ -89,6 +120,14 @@ class ZarinPalGateway implements PaymentGatewayInterface
         }
     }
 
+    /**
+     * پرداخت کی تصدیق کریں
+     * 
+     * Retry Logic:
+     * - Connection timeouts: ✅ Retry
+     * - Server errors (5xx): ✅ Retry
+     * - Invalid transaction: ❌ Do not retry
+     */
     public function verifyPayment(string $authority, float $amount): array
     {
         if (!$this->config) {
@@ -96,6 +135,15 @@ class ZarinPalGateway implements PaymentGatewayInterface
                 'success' => false,
                 'message' => 'درگاه زرین‌پال غیرفعال است'
             ];
+        }
+
+        // Input validation (should not retry)
+        if (empty($authority)) {
+            throw new \InvalidArgumentException('Authority cannot be empty');
+        }
+
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException('Amount must be greater than 0');
         }
 
         $data = [
@@ -109,26 +157,25 @@ class ZarinPalGateway implements PaymentGatewayInterface
             : 'https://api.zarinpal.com/pg/v4/payment/verify.json';
 
         try {
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_POST, true);
-            \curl_setopt($ch, CURLOPT_POSTFIELDS, \json_encode($data));
-            \curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Content-Type: application/json',
-                'Accept: application/json'
-            ]);
+            // 🔄 Execute with retry and exponential backoff
+            $response = $this->executeWithRetry($url, $data, 'POST');
 
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            \curl_close($ch);
-
-            if ($httpCode !== 200) {
-                throw new \Exception('خطا در اتصال به درگاه');
+            if (!$response['success'] || $response['http_code'] !== 200) {
+                throw new PaymentVerificationException(
+                    'Failed to verify payment',
+                    $authority,
+                    ['http_code' => $response['http_code']]
+                );
             }
 
-            $result = \json_decode($response, true);
+            $result = $response['data'];
 
             if (isset($result['data']['code']) && $result['data']['code'] == 100) {
+                $this->logger->info('payment.zarinpal.verified', [
+                    'authority' => $authority,
+                    'ref_id' => $result['data']['ref_id'] ?? 'unknown'
+                ]);
+
                 return [
                     'success' => true,
                     'ref_id' => $result['data']['ref_id'],
@@ -141,6 +188,19 @@ class ZarinPalGateway implements PaymentGatewayInterface
                 'message' => $result['errors']['message'] ?? 'تراکنش ناموفق'
             ];
 
+        } catch (PaymentGatewayConnectionException $e) {
+            // Connection failed after retries
+            $this->logger->error('payment.zarinpal.verification_connection_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در تأیید پرداخت (خطای شبکه)'
+            ];
+        } catch (PaymentVerificationException $e) {
+            $this->logger->warning('payment.zarinpal.verification_failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در تأیید پرداخت'
+            ];
         } catch (\Exception $e) {
             $this->logger->error('payment.zarinpal.verify_failed', ['error' => $e->getMessage()]);
             return [
@@ -160,6 +220,11 @@ class ZarinPalGateway implements PaymentGatewayInterface
     }
 
     public function getName(): string
+    {
+        return 'zarinpal';
+    }
+
+    public function getGatewayName(): string
     {
         return 'zarinpal';
     }

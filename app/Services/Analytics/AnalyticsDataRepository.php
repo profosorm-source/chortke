@@ -27,8 +27,11 @@ class AnalyticsDataRepository extends \App\Services\BaseService
         private CustomTaskModel $customTaskModel,
         private User $userModel,
         private KYCVerification $kycModel,
-        private Transaction $transactionModel
-    ) {}
+        private Transaction $transactionModel,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     // ==========================================
     //  آمار کاربران

@@ -5,14 +5,9 @@ declare(strict_types=1);
 namespace App\Services\AntiFraud;
 
 use App\Models\AntiFraudModel;
-
 use App\Contracts\LoggerInterface;
-/**
- * FraudManagementService
- * 
- * مدیریت لیست‌های سیاه و لاگ‌های تقلب
- */
-class FraudManagementServiceextends \App\Services\BaseService
+
+class FraudManagementService extends \App\Services\BaseService
 {
     private AntiFraudModel $model;
     private IPQualityService $ipQualityService;
@@ -21,8 +16,10 @@ class FraudManagementServiceextends \App\Services\BaseService
     public function __construct(
         AntiFraudModel $model,
         IPQualityService $ipQualityService,
-        BrowserFingerprintService $fingerprintService
+        BrowserFingerprintService $fingerprintService,
+        LoggerInterface $logger
     ) {
+        parent::__construct($logger);
         $this->model = $model;
         $this->ipQualityService = $ipQualityService;
         $this->fingerprintService = $fingerprintService;
@@ -75,4 +72,3 @@ class FraudManagementServiceextends \App\Services\BaseService
         ];
     }
 }
-
