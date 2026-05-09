@@ -52,9 +52,13 @@ class Banner extends Model
             $params[] = $filters['user_id'];
         }
         if (!empty($filters['search'])) {
+            $searchTerm = \trim((string)$filters['search']);
+            $escaped = \addcslashes($searchTerm, '%_');
+            $search = "%{$escaped}%";
+
             $where[] = "(b.title LIKE ? OR b.link LIKE ?)";
-            $params[] = '%' . $filters['search'] . '%';
-            $params[] = '%' . $filters['search'] . '%';
+            $params[] = $search;
+            $params[] = $search;
         }
         if (!empty($filters['status'])) {
             if ($filters['status'] === 'pending') {
@@ -217,35 +221,82 @@ class Banner extends Model
         );
     }
 
-    public function registerClick(int $id, ?int $userId, string $ip): bool
+    public function bulkIncrementImpressions(array $ids): bool
     {
-        $recentClick = $this->db->fetch(
-            "SELECT COUNT(*) as count FROM banner_clicks
-             WHERE banner_id = ? AND ip_address = ?
-             AND clicked_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)",
-            [$id, $ip]
-        );
-
-        if ($recentClick && (int)$recentClick->count > 0) {
-            return false;
+        if (empty($ids)) {
+            return true;
         }
 
-        $this->db->query(
-            "INSERT INTO banner_clicks (banner_id, user_id, ip_address, clicked_at)
-             VALUES (?, ?, ?, NOW())",
-            [$id, $userId, $ip]
-        );
-
-        $this->db->query(
-            "UPDATE banners SET clicks = clicks + 1,
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        return (bool)$this->db->query(
+            "UPDATE banners SET impressions = impressions + 1,
              ctr = CASE WHEN impressions > 0
-                   THEN ROUND(((clicks + 1) / impressions) * 100, 2)
+                   THEN ROUND((clicks / (impressions + 1)) * 100, 2)
                    ELSE 0 END
-             WHERE id = ?",
-            [$id]
+             WHERE id IN ($placeholders)",
+            $ids
         );
+    }
 
-        return true;
+    public function registerClick(int $id, ?int $userId, string $ip): bool
+    {
+        try {
+            $this->db->beginTransaction();
+
+            // 1. Lock banner row
+            $stmt = $this->db->prepare(
+                "SELECT id, clicks, impressions FROM banners WHERE id = ? FOR UPDATE"
+            );
+            $stmt->execute([$id]);
+            $banner = $stmt->fetch(\PDO::FETCH_OBJ);
+
+            if (!$banner) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            // 2. Check duplicate click
+            $stmt = $this->db->prepare(
+                "SELECT COUNT(*) as count FROM banner_clicks
+                 WHERE banner_id = ? AND ip_address = ?
+                 AND clicked_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)
+                 FOR UPDATE"
+            );
+            $stmt->execute([$id, $ip]);
+            $recentClick = $stmt->fetch(\PDO::FETCH_OBJ);
+
+            if ($recentClick && (int)$recentClick->count > 0) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            // 3. Insert click record
+            $stmt = $this->db->prepare(
+                "INSERT INTO banner_clicks (banner_id, user_id, ip_address, clicked_at)
+                 VALUES (?, ?, ?, NOW())"
+            );
+            $stmt->execute([$id, $userId, $ip]);
+
+            // 4. Update counters
+            $newClicks = (int)$banner->clicks + 1;
+            $newCtr = (int)$banner->impressions > 0
+                ? \round(($newClicks / (int)$banner->impressions) * 100, 2)
+                : 0.0;
+
+            $stmt = $this->db->prepare(
+                "UPDATE banners SET clicks = ?, ctr = ?, updated_at = NOW() WHERE id = ?"
+            );
+            $stmt->execute([$newClicks, $newCtr, $id]);
+
+            $this->db->commit();
+            return true;
+
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return false;
+        }
     }
 
     public function getPending(int $limit = 50): array

@@ -155,10 +155,18 @@ private function fetchOne(string $sql, array $params = []): ?object
             LEFT JOIN users referred ON referred.id = rc.referred_id
             WHERE {$whereStr}
             ORDER BY rc.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ";
 
-        return $this->fetchAllRows($sql, $params);
+        $stmt = $this->db->prepare($sql);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     public function countByReferrer(int $referrerId, array $filters = []): int
@@ -226,10 +234,16 @@ private function fetchOne(string $sql, array $params = []): ?object
             WHERE u.referred_by = ? AND u.deleted_at IS NULL
             GROUP BY u.id
             ORDER BY u.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ";
 
-        return $this->fetchAllRows($sql, [$referrerId, $referrerId]);
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(1, $referrerId, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $referrerId, \PDO::PARAM_INT);
+        $stmt->bindValue(3, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(4, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     public function countReferredUsers(int $referrerId): int
@@ -297,11 +311,17 @@ private function fetchOne(string $sql, array $params = []): ?object
         $params[] = $s; $params[] = $s; $params[] = $s; $params[] = $s; $params[] = $s;
     }
 
-    $sql .= " ORDER BY rc.created_at DESC LIMIT {$limit} OFFSET {$offset}";
+    $sql .= " ORDER BY rc.created_at DESC LIMIT ? OFFSET ?";
 
-    // اینجا از wrapper های داخل ReferralCommission استفاده کن اگر داری؛ در غیر اینصورت:
-    $stmt = $this->db->query($sql, $params);
-    return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+    $stmt = $this->db->prepare($sql);
+    $index = 1;
+    foreach ($params as $val) {
+        $stmt->bindValue($index++, $val);
+    }
+    $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+    $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+    $stmt->execute();
+    return $stmt->fetchAll(\PDO::FETCH_OBJ);
 }
 
 public function adminCount(array $filters = []): int
@@ -361,7 +381,7 @@ public function topReferrers(string $currency = 'irt', int $limit = 5): array
 {
     $limit = \max(1, (int)$limit);
 
-    $stmt = $this->db->query("
+    $stmt = $this->db->prepare("
         SELECT u.id, u.full_name, u.email,
                COALESCE(SUM(rc.commission_amount),0) as total_commission
         FROM referral_commissions rc
@@ -369,9 +389,12 @@ public function topReferrers(string $currency = 'irt', int $limit = 5): array
         WHERE rc.status='paid' AND rc.currency = ?
         GROUP BY u.id
         ORDER BY total_commission DESC
-        LIMIT {$limit}
-    ", [$currency]);
+        LIMIT ?
+    ");
+    $stmt->bindValue(1, $currency);
+    $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+    $stmt->execute();
 
-    return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+    return $stmt->fetchAll(\PDO::FETCH_OBJ);
 }
 }

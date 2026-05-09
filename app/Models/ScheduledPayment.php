@@ -28,10 +28,35 @@ class ScheduledPayment extends Model
     public function getDuePayments(int $limit = 50): array
     {
         $limit = max(1, (int)$limit);
-        $sql = "SELECT * FROM " . static::$table . " WHERE status = 'active' AND next_run_at <= NOW() ORDER BY next_run_at ASC LIMIT {$limit}";
+        $sql = "SELECT * FROM " . static::$table . " 
+                WHERE status = 'active' AND next_run_at <= NOW() 
+                ORDER BY next_run_at ASC 
+                LIMIT :limit FOR UPDATE";
         $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
         $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
+    }
+
+    /**
+     * دریافت لیست پرداخت‌های معوق با گارانتی تراکنش و قفل ایمن ردیف
+     */
+    public function getDuePaymentsWithTransaction(int $limit = 50): array
+    {
+        try {
+            $this->db->beginTransaction();
+            $payments = $this->getDuePayments($limit);
+            if (empty($payments)) {
+                $this->db->rollBack();
+                return [];
+            }
+            return $payments;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return [];
+        }
     }
 
     public function updateNextRun(int $id, string $nextRunAt, string $status = 'active'): bool

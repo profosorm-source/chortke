@@ -5,27 +5,33 @@ declare(strict_types=1);
 namespace App\Models;
 
 use Core\Database;
+use Core\Model;
 
-class ApiToken
+/**
+ * ApiToken Model - Secured and Optimized
+ */
+class ApiToken extends Model
 {
-    private Database $db;
+    protected static string $table = 'api_tokens';
 
     public function __construct(Database $db)
     {
-        $this->db = $db;
+        parent::__construct($db);
     }
 
     public function findById(int $id): ?array
     {
-        $token = $this->db->query(
+        $this->validateId($id);
+
+        $token = $this->db->fetch(
             "SELECT at.*, u.full_name, u.email 
              FROM api_tokens at
              LEFT JOIN users u ON u.id = at.user_id
              WHERE at.id = ?",
             [$id]
-        )->fetch();
+        );
 
-        return $token ?: null;
+        return $token ? (array)$token : null;
     }
 
     public function findAllPaginated(
@@ -34,62 +40,76 @@ class ApiToken
         ?string $search = null,
         ?string $statusFilter = null
     ): array {
-        $where = 'WHERE 1=1';
-        $params = [];
+        $query = $this->db->table('api_tokens as at')
+            ->leftJoin('users as u', 'u.id', '=', 'at.user_id');
 
         if ($search) {
-            $where .= ' AND (at.name LIKE ? OR u.email LIKE ?)';
-            $params[] = "%{$search}%";
-            $params[] = "%{$search}%";
+            $search = $this->escapeLikeValue($search);
+            $searchParam = "%{$search}%";
+            $query->whereNested(function($q) use ($searchParam) {
+                $q->where('at.name', 'LIKE', $searchParam)
+                  ->orWhere('u.email', 'LIKE', $searchParam);
+            });
         }
 
         if ($statusFilter === 'active') {
-            $where .= ' AND at.revoked = 0 AND (at.expires_at IS NULL OR at.expires_at > NOW())';
+            $query->where('at.revoked', '=', 0)
+                  ->whereNested(function($q) {
+                      $q->whereNull('at.expires_at')
+                        ->orWhere('at.expires_at', '>', date('Y-m-d H:i:s'));
+                  });
         } elseif ($statusFilter === 'revoked') {
-            $where .= ' AND at.revoked = 1';
+            $query->where('at.revoked', '=', 1);
         } elseif ($statusFilter === 'expired') {
-            $where .= ' AND at.revoked = 0 AND at.expires_at < NOW()';
+            $query->where('at.revoked', '=', 0)
+                  ->whereNotNull('at.expires_at')
+                  ->where('at.expires_at', '<', date('Y-m-d H:i:s'));
         }
 
-        $tokens = $this->db->query(
-            "SELECT at.*, u.full_name, u.email FROM api_tokens at
-             LEFT JOIN users u ON u.id = at.user_id {$where}
-             ORDER BY at.created_at DESC LIMIT ? OFFSET ?",
-            array_merge($params, [$limit, $offset])
-        )->fetchAll();
+        $results = $query->select('at.*', 'u.full_name', 'u.email')
+                         ->orderBy('at.created_at', 'DESC')
+                         ->limit($limit)
+                         ->offset($offset)
+                         ->get();
 
-        return $tokens;
+        return $results ?: [];
     }
 
     public function countAll(?string $search = null, ?string $statusFilter = null): int
     {
-        $where = 'WHERE 1=1';
-        $params = [];
+        $query = $this->db->table('api_tokens as at')
+            ->leftJoin('users as u', 'u.id', '=', 'at.user_id');
 
         if ($search) {
-            $where .= ' AND (at.name LIKE ? OR u.email LIKE ?)';
-            $params[] = "%{$search}%";
-            $params[] = "%{$search}%";
+            $search = $this->escapeLikeValue($search);
+            $searchParam = "%{$search}%";
+            $query->whereNested(function($q) use ($searchParam) {
+                $q->where('at.name', 'LIKE', $searchParam)
+                  ->orWhere('u.email', 'LIKE', $searchParam);
+            });
         }
 
         if ($statusFilter === 'active') {
-            $where .= ' AND at.revoked = 0 AND (at.expires_at IS NULL OR at.expires_at > NOW())';
+            $query->where('at.revoked', '=', 0)
+                  ->whereNested(function($q) {
+                      $q->whereNull('at.expires_at')
+                        ->orWhere('at.expires_at', '>', date('Y-m-d H:i:s'));
+                  });
         } elseif ($statusFilter === 'revoked') {
-            $where .= ' AND at.revoked = 1';
+            $query->where('at.revoked', '=', 1);
         } elseif ($statusFilter === 'expired') {
-            $where .= ' AND at.revoked = 0 AND at.expires_at < NOW()';
+            $query->where('at.revoked', '=', 0)
+                  ->whereNotNull('at.expires_at')
+                  ->where('at.expires_at', '<', date('Y-m-d H:i:s'));
         }
 
-        $count = $this->db->query(
-            "SELECT COUNT(*) as count FROM api_tokens at LEFT JOIN users u ON u.id = at.user_id {$where}",
-            $params
-        )->fetch();
-
-        return (int) ($count['count'] ?? 0);
+        return $query->count();
     }
 
     public function revokeById(int $id): bool
     {
+        $this->validateId($id);
+
         $this->db->query(
             "UPDATE api_tokens SET revoked = 1, revoked_at = NOW() WHERE id = ?",
             [$id]
@@ -98,39 +118,81 @@ class ApiToken
         return true;
     }
 
-    public function createToken(int $userId, string $token, string $name, string $scopes, string $expiresAt): int
-    {
+    public function createToken(
+        int $userId, 
+        string $plainToken, 
+        string $name, 
+        string $scopes, 
+        string $expiresAt
+    ): int {
+        $this->validateId($userId, 'user_id');
+
+        if (empty($plainToken) || strlen($plainToken) < 32) {
+            throw new \InvalidArgumentException('Token too weak');
+        }
+        
+        if (empty($name) || strlen($name) > 100) {
+            throw new \InvalidArgumentException('Invalid token name');
+        }
+        
+        $validScopes = ['read', 'write', 'admin', 'delete'];
+        $scopesArray = explode(',', $scopes);
+        foreach ($scopesArray as $scope) {
+            if (!in_array(trim($scope), $validScopes)) {
+                throw new \InvalidArgumentException("Invalid scope: {$scope}");
+            }
+        }
+
+        $this->validateDate($expiresAt, 'expires_at');
+
+        $hashedToken = hash('sha256', $plainToken);
+
         $this->db->query(
             "INSERT INTO api_tokens (user_id, token, name, scopes, expires_at, created_at)
              VALUES (?, ?, ?, ?, ?, NOW())",
-            [$userId, $token, $name, $scopes, $expiresAt]
+            [$userId, $hashedToken, $name, $scopes, $expiresAt]
         );
+
         return (int)$this->db->lastInsertId();
     }
 
     public function findByUserId(int $userId): array
     {
-        return $this->db->query(
+        $this->validateId($userId);
+
+        $results = $this->db->fetchAll(
             "SELECT id, name, scopes, last_used_at, use_count, expires_at, created_at
              FROM api_tokens
              WHERE user_id = ? AND revoked = 0
              ORDER BY created_at DESC",
             [$userId]
-        )->fetchAll();
+        );
+
+        return $results ?: [];
     }
 
     public function countActiveByUserId(int $userId): int
     {
-        $count = $this->db->query(
+        $this->validateId($userId);
+
+        $count = $this->db->fetch(
             "SELECT COUNT(*) as count FROM api_tokens WHERE user_id = ? AND revoked = 0",
             [$userId]
-        )->fetch();
+        );
 
-        return (int) ($count['count'] ?? 0);
+        if (!$count) {
+            return 0;
+        }
+
+        return (int)(is_array($count) ? ($count['count'] ?? 0) : ($count->count ?? 0));
     }
 
     public function revokeByHash(string $hashedToken): bool
     {
+        if (empty($hashedToken)) {
+            throw new \InvalidArgumentException('Token hash cannot be empty');
+        }
+
         $this->db->query(
             "UPDATE api_tokens SET revoked = 1, revoked_at = NOW() WHERE token = ?",
             [$hashedToken]
@@ -141,39 +203,48 @@ class ApiToken
 
     public function findByHash(string $hashedToken): ?array
     {
-        $token = $this->db->query(
+        if (empty($hashedToken)) {
+            throw new \InvalidArgumentException('Token hash cannot be empty');
+        }
+
+        $token = $this->db->fetch(
             "SELECT * FROM api_tokens WHERE token = ? LIMIT 1",
             [$hashedToken]
-        )->fetch();
+        );
 
         return $token ? (array)$token : null;
     }
 
     public function getStats(): array
     {
-        $activeCount = $this->db->query(
+        $activeCount = $this->db->fetch(
             "SELECT COUNT(*) as count FROM api_tokens 
              WHERE revoked = 0 AND (expires_at IS NULL OR expires_at > NOW())"
-        )->fetch();
+        );
 
-        $revokedCount = $this->db->query(
+        $revokedCount = $this->db->fetch(
             "SELECT COUNT(*) as count FROM api_tokens WHERE revoked = 1"
-        )->fetch();
+        );
 
-        $expiredCount = $this->db->query(
+        $expiredCount = $this->db->fetch(
             "SELECT COUNT(*) as count FROM api_tokens 
-             WHERE revoked = 0 AND expires_at < NOW()"
-        )->fetch();
+             WHERE revoked = 0 AND expires_at IS NOT NULL AND expires_at < NOW()"
+        );
 
-        $usedTodayCount = $this->db->query(
+        $usedTodayCount = $this->db->fetch(
             "SELECT COUNT(*) as count FROM api_tokens WHERE DATE(last_used_at) = CURDATE()"
-        )->fetch();
+        );
+
+        $active = $activeCount ? (is_array($activeCount) ? ($activeCount['count'] ?? 0) : ($activeCount->count ?? 0)) : 0;
+        $revoked = $revokedCount ? (is_array($revokedCount) ? ($revokedCount['count'] ?? 0) : ($revokedCount->count ?? 0)) : 0;
+        $expired = $expiredCount ? (is_array($expiredCount) ? ($expiredCount['count'] ?? 0) : ($expiredCount->count ?? 0)) : 0;
+        $usedToday = $usedTodayCount ? (is_array($usedTodayCount) ? ($usedTodayCount['count'] ?? 0) : ($usedTodayCount->count ?? 0)) : 0;
 
         return [
-            'active' => (int) ($activeCount['count'] ?? 0),
-            'revoked' => (int) ($revokedCount['count'] ?? 0),
-            'expired' => (int) ($expiredCount['count'] ?? 0),
-            'used_today' => (int) ($usedTodayCount['count'] ?? 0),
+            'active' => (int)$active,
+            'revoked' => (int)$revoked,
+            'expired' => (int)$expired,
+            'used_today' => (int)$usedToday,
         ];
     }
 }

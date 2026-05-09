@@ -78,17 +78,20 @@ class LotteryParticipation extends Model {
         $limit  = \max(1, (int)$limit);
         $offset = \max(0, (int)$offset);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT lp.*, u.full_name as user_name
              FROM lottery_participations lp
              JOIN users u ON lp.user_id = u.id
              WHERE lp.round_id = ? AND lp.is_deleted = 0
              ORDER BY lp.chance_score DESC
-             LIMIT {$limit} OFFSET {$offset}",
-            [$roundId]
+             LIMIT ? OFFSET ?"
         );
+        $stmt->bindValue(1, $roundId, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(3, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     public function countByRound(int $roundId): int
@@ -215,16 +218,18 @@ class LotteryParticipation extends Model {
     {
         $limit = \max(1, (int)$limit);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT lp.*, lr.title as round_title, lr.status as round_status, lr.prize_amount
              FROM lottery_participations lp
              JOIN lottery_rounds lr ON lp.round_id = lr.id
              WHERE lp.user_id = ? AND lp.is_deleted = 0
              ORDER BY lp.created_at DESC
-             LIMIT {$limit}",
-            [$userId]
+             LIMIT ?"
         );
+        $stmt->bindValue(1, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 }

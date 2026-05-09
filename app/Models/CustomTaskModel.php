@@ -167,14 +167,58 @@ class CustomTaskModel extends Model
      */
     public function incrementCompletedCountAndSpend(int $taskId, float $amount): bool
     {
-        $stmt = $this->db->prepare(
-            "UPDATE custom_tasks
-             SET completed_count = completed_count + 1,
-                 pending_count = GREATEST(0, pending_count - 1),
-                 spent_budget = spent_budget + ?
-             WHERE id = ?"
-        );
-        return $stmt->execute([$amount, $taskId]);
+        try {
+            $this->db->beginTransaction();
+            
+            // 1. Lock row and check budget
+            $stmt = $this->db->prepare(
+                "SELECT id, total_budget, spent_budget, remaining_budget
+                 FROM custom_tasks
+                 WHERE id = ?
+                 FOR UPDATE"
+            );
+            $stmt->execute([$taskId]);
+            $task = $stmt->fetch(\PDO::FETCH_OBJ);
+            
+            if (!$task) {
+                $this->db->rollBack();
+                return false;
+            }
+            
+            // 2. Check budget availability
+            $newSpent = (float)$task->spent_budget + $amount;
+            if ($newSpent > (float)$task->total_budget) {
+                $this->db->rollBack();
+                return false;
+            }
+            
+            // 3. Update
+            $stmt = $this->db->prepare(
+                "UPDATE custom_tasks
+                 SET completed_count = completed_count + 1,
+                     pending_count = GREATEST(0, pending_count - 1),
+                     spent_budget = ?,
+                     remaining_budget = total_budget - ?,
+                     updated_at = NOW()
+                 WHERE id = ?"
+            );
+            
+            $success = $stmt->execute([$newSpent, $newSpent, $taskId]);
+            
+            if (!$success || $stmt->rowCount() === 0) {
+                $this->db->rollBack();
+                return false;
+            }
+            
+            $this->db->commit();
+            return true;
+            
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return false;
+        }
     }
 
     /**
@@ -218,10 +262,16 @@ class CustomTaskModel extends Model
             LEFT JOIN users u ON u.id = ct.creator_id
             WHERE {$whereStr}
             ORDER BY ct.is_featured DESC, ct.priority DESC, ct.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ");
 
-        $stmt->execute($params);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
@@ -276,10 +326,16 @@ class CustomTaskModel extends Model
             FROM custom_tasks ct
             WHERE {$whereStr}
             ORDER BY ct.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ");
 
-        $stmt->execute($params);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
@@ -322,10 +378,16 @@ class CustomTaskModel extends Model
             LEFT JOIN users u ON u.id = ct.creator_id
             WHERE {$whereStr}
             ORDER BY ct.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ");
 
-        $stmt->execute($params);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 

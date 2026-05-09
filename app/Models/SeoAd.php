@@ -108,6 +108,10 @@ class SeoAd extends Model
 
     public function create(array $d): ?self
     {
+        if (empty($d['site_url']) || !\filter_var($d['site_url'], \FILTER_VALIDATE_URL)) {
+            throw new \InvalidArgumentException("Invalid site URL format.");
+        }
+
         $stmt = $this->db->prepare(
             "INSERT INTO seo_ads
              (user_id, site_url, title, keyword, description,
@@ -149,21 +153,55 @@ class SeoAd extends Model
         return $stmt->execute([$status, $id, $userId]);
     }
 
-    /** کسر هزینه هر کلیک از بودجه */
+    /** کسر هزینه هر کلیک از بودجه تحت تراکنش انحصاری */
     public function deductClick(int $id, float $amount): bool
     {
-        $stmt = $this->db->prepare(
-            "UPDATE seo_ads
-             SET clicks_count      = clicks_count + 1,
-                 remaining_budget  = GREATEST(0, remaining_budget - ?),
-                 status            = CASE
-                                       WHEN remaining_budget - ? <= 0 THEN 'exhausted'
-                                       ELSE status
-                                     END,
-                 updated_at        = NOW()
-             WHERE id = ? AND status = 'active'"
-        );
-        return $stmt->execute([$amount, $amount, $id]);
+        try {
+            $this->db->beginTransaction();
+
+            $stmt = $this->db->prepare("SELECT * FROM seo_ads WHERE id = ? AND status = 'active' FOR UPDATE");
+            $stmt->execute([$id]);
+            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            $currentRemaining = (float)$row['remaining_budget'];
+            if ($currentRemaining <= 0) {
+                $stmt = $this->db->prepare("UPDATE seo_ads SET status = 'exhausted', updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$id]);
+                $this->db->commit();
+                return false;
+            }
+
+            $newRemaining = max(0.0, $currentRemaining - $amount);
+            $newStatus = $newRemaining <= 0.0 ? 'exhausted' : 'active';
+
+            $stmt = $this->db->prepare(
+                "UPDATE seo_ads
+                 SET clicks_count = clicks_count + 1,
+                     remaining_budget = ?,
+                     status = ?,
+                     updated_at = NOW()
+                 WHERE id = ?"
+            );
+            $success = $stmt->execute([$newRemaining, $newStatus, $id]);
+
+            if ($success) {
+                $this->db->commit();
+                return true;
+            }
+
+            $this->db->rollBack();
+            return false;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return false;
+        }
     }
 
     // --------------------------------------------------------

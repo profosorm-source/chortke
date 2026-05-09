@@ -100,10 +100,18 @@ class LotteryRound extends Model {
             $params[] = $filters['status'];
         }
 
-        $sql .= " ORDER BY lr.start_date DESC LIMIT {$limit} OFFSET {$offset}";
+        $sql .= " ORDER BY lr.start_date DESC LIMIT ? OFFSET ?";
 
-        $stmt = $this->db->query($sql, $params);
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        $stmt = $this->db->prepare($sql);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     public function countAll(array $filters = []): int
@@ -155,17 +163,19 @@ class LotteryRound extends Model {
     {
         $limit = \max(1, (int)$limit);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT lr.*, u.full_name as winner_name
              FROM lottery_rounds lr
              LEFT JOIN users u ON lr.winner_user_id = u.id
              WHERE lr.status = ? AND lr.is_deleted = 0
              ORDER BY lr.end_date DESC
-             LIMIT {$limit}",
-            [self::STATUS_COMPLETED]
+             LIMIT ?"
         );
+        $stmt->bindValue(1, self::STATUS_COMPLETED);
+        $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     public function getStats(): object

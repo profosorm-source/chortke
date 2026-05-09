@@ -164,6 +164,32 @@ class Score extends Model
         return (float)$stmt->fetchColumn();
     }
 
+    /**
+     * دریافت امتیاز کل تفکیک‌شده برای یک کاربر در یک دامنه خاص
+     */
+    public function getDomainScore(int $userId, string $domain): float
+    {
+        // ابتدا جدول یکپارچه جدید را چک می‌کنیم
+        $stmt = $this->db->prepare("
+            SELECT COALESCE(SUM(delta), 0.0) FROM score_events
+            WHERE entity_id = ? AND entity_type = 'user' AND domain = ?
+        ");
+        $stmt->execute([$userId, $domain]);
+        $score = (float)$stmt->fetchColumn();
+
+        // اگر امتیازی در جدول جدید نبود، جدول قدیمی را به عنوان بک‌آپ چک می‌کنیم
+        if ($score === 0.0) {
+            $stmtLegacy = $this->db->prepare("
+                SELECT COALESCE(SUM(delta), 0.0) FROM user_score_events
+                WHERE user_id = ? AND domain = ?
+            ");
+            $stmtLegacy->execute([$userId, $domain]);
+            $score = (float)$stmtLegacy->fetchColumn();
+        }
+
+        return $score;
+    }
+
     // ==========================================
     // Trust Score Management (from TrustScoreService)
     // ==========================================

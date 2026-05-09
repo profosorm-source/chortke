@@ -10,24 +10,28 @@ class PredictionGame extends Model
 {
     protected static string $table = 'prediction_games';
 
-    // ─── Stats subquery — یک‌بار تعریف، همه‌جا استفاده ─────────────────
-    private function statsSubquery(): string
-    {
-        return "
-            (SELECT COUNT(*)               FROM prediction_bets pb WHERE pb.game_id = pg.id AND pb.status != 'refunded') AS total_bets,
-            (SELECT COALESCE(SUM(pb.amount_usdt),0) FROM prediction_bets pb WHERE pb.game_id = pg.id AND pb.status != 'refunded') AS total_pool,
-            (SELECT COALESCE(SUM(pb.amount_usdt),0) FROM prediction_bets pb WHERE pb.game_id = pg.id AND pb.prediction = 'home' AND pb.status != 'refunded') AS pool_home,
-            (SELECT COALESCE(SUM(pb.amount_usdt),0) FROM prediction_bets pb WHERE pb.game_id = pg.id AND pb.prediction = 'away' AND pb.status != 'refunded') AS pool_away,
-            (SELECT COALESCE(SUM(pb.amount_usdt),0) FROM prediction_bets pb WHERE pb.game_id = pg.id AND pb.prediction = 'draw' AND pb.status != 'refunded') AS pool_draw
-        ";
-    }
-
-    // ─── Find با آمار کامل ────────────────────────────────────────────
+    // ─── Find با آمار کامل بهینه‌سازی شده ────────────────────────────
     public function find(int $id): ?object
     {
         return $this->db->fetch(
-            "SELECT pg.*, " . $this->statsSubquery() . "
+            "SELECT pg.*, 
+                    COALESCE(stats.total_bets, 0) AS total_bets,
+                    COALESCE(stats.total_pool, 0) AS total_pool,
+                    COALESCE(stats.pool_home, 0) AS pool_home,
+                    COALESCE(stats.pool_away, 0) AS pool_away,
+                    COALESCE(stats.pool_draw, 0) AS pool_draw
              FROM prediction_games pg
+             LEFT JOIN (
+                 SELECT game_id,
+                        COUNT(*) AS total_bets,
+                        COALESCE(SUM(amount_usdt), 0) AS total_pool,
+                        COALESCE(SUM(CASE WHEN prediction = 'home' THEN amount_usdt ELSE 0 END), 0) AS pool_home,
+                        COALESCE(SUM(CASE WHEN prediction = 'away' THEN amount_usdt ELSE 0 END), 0) AS pool_away,
+                        COALESCE(SUM(CASE WHEN prediction = 'draw' THEN amount_usdt ELSE 0 END), 0) AS pool_draw
+                 FROM prediction_bets
+                 WHERE status != 'refunded'
+                 GROUP BY game_id
+             ) stats ON stats.game_id = pg.id
              WHERE pg.id = ? AND pg.deleted_at IS NULL",
             [$id]
         );
@@ -60,12 +64,28 @@ class PredictionGame extends Model
         return $id ? $this->find((int)$id) : null;
     }
 
-    // ─── لیست بازی‌های باز برای کاربران ─────────────────────────────
+    // ─── لیست بازی‌های باز برای کاربران با آمار بهینه شده ─────────────
     public function getOpen(int $limit = 20, int $offset = 0): array
     {
         return $this->db->fetchAll(
-            "SELECT pg.*, " . $this->statsSubquery() . "
+            "SELECT pg.*, 
+                    COALESCE(stats.total_bets, 0) AS total_bets,
+                    COALESCE(stats.total_pool, 0) AS total_pool,
+                    COALESCE(stats.pool_home, 0) AS pool_home,
+                    COALESCE(stats.pool_away, 0) AS pool_away,
+                    COALESCE(stats.pool_draw, 0) AS pool_draw
              FROM prediction_games pg
+             LEFT JOIN (
+                 SELECT game_id,
+                        COUNT(*) AS total_bets,
+                        COALESCE(SUM(amount_usdt), 0) AS total_pool,
+                        COALESCE(SUM(CASE WHEN prediction = 'home' THEN amount_usdt ELSE 0 END), 0) AS pool_home,
+                        COALESCE(SUM(CASE WHEN prediction = 'away' THEN amount_usdt ELSE 0 END), 0) AS pool_away,
+                        COALESCE(SUM(CASE WHEN prediction = 'draw' THEN amount_usdt ELSE 0 END), 0) AS pool_draw
+                 FROM prediction_bets
+                 WHERE status != 'refunded'
+                 GROUP BY game_id
+             ) stats ON stats.game_id = pg.id
              WHERE pg.status = 'open'
                AND pg.bet_deadline > NOW()
                AND pg.deleted_at IS NULL
@@ -75,7 +95,7 @@ class PredictionGame extends Model
         );
     }
 
-    // ─── لیست ادمین با فیلتر ─────────────────────────────────────────
+    // ─── لیست ادمین با فیلتر با آمار بهینه شده ───────────────────────
     public function adminList(array $filters = [], int $limit = 30, int $offset = 0): array
     {
         $where  = ['pg.deleted_at IS NULL'];
@@ -101,8 +121,24 @@ class PredictionGame extends Model
         $params[] = $offset;
 
         return $this->db->fetchAll(
-            "SELECT pg.*, " . $this->statsSubquery() . "
+            "SELECT pg.*, 
+                    COALESCE(stats.total_bets, 0) AS total_bets,
+                    COALESCE(stats.total_pool, 0) AS total_pool,
+                    COALESCE(stats.pool_home, 0) AS pool_home,
+                    COALESCE(stats.pool_away, 0) AS pool_away,
+                    COALESCE(stats.pool_draw, 0) AS pool_draw
              FROM prediction_games pg
+             LEFT JOIN (
+                 SELECT game_id,
+                        COUNT(*) AS total_bets,
+                        COALESCE(SUM(amount_usdt), 0) AS total_pool,
+                        COALESCE(SUM(CASE WHEN prediction = 'home' THEN amount_usdt ELSE 0 END), 0) AS pool_home,
+                        COALESCE(SUM(CASE WHEN prediction = 'away' THEN amount_usdt ELSE 0 END), 0) AS pool_away,
+                        COALESCE(SUM(CASE WHEN prediction = 'draw' THEN amount_usdt ELSE 0 END), 0) AS pool_draw
+                 FROM prediction_bets
+                 WHERE status != 'refunded'
+                 GROUP BY game_id
+             ) stats ON stats.game_id = pg.id
              WHERE " . implode(' AND ', $where) . "
              ORDER BY pg.created_at DESC
              LIMIT ? OFFSET ?",
@@ -131,6 +167,10 @@ class PredictionGame extends Model
     // ─── ثبت نتیجه و بستن بازی برای شرط‌های جدید ────────────────────
     public function setResult(int $id, string $result): bool
     {
+        if (!\in_array($result, ['home', 'away', 'draw'], true)) {
+            throw new \InvalidArgumentException("Invalid prediction result: " . $result);
+        }
+
         $affected = $this->db->execute(
             "UPDATE prediction_games
              SET result = ?, status = 'finished', finished_at = NOW()

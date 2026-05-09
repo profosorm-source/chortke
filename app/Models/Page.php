@@ -3,10 +3,10 @@
 namespace App\Models;
 
 use Core\Model;
-use Core\Database;
 
-class Page extends Model {
-/**
+class Page extends Model
+{
+    /**
      * دریافت صفحه با Slug
      */
     public function findBySlug(string $slug): ?object
@@ -50,6 +50,15 @@ class Page extends Model {
      */
     public function create(array $data): ?int
     {
+        $data['slug'] = \strtolower(\preg_replace('/[^a-z0-9\-]/', '-', $data['slug']));
+
+        // Check uniqueness of the slug
+        $stmt = $this->db->prepare("SELECT id FROM pages WHERE slug = ? LIMIT 1");
+        $stmt->execute([$data['slug']]);
+        if ($stmt->fetch()) {
+            throw new \InvalidArgumentException("Duplicate page slug: " . $data['slug']);
+        }
+
         $sql = "INSERT INTO pages 
                 (slug, title, content, meta_description, meta_keywords, is_active, show_in_footer, display_order) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
@@ -65,7 +74,7 @@ class Page extends Model {
             $data['display_order'] ?? 0
         ]);
         
-        return (int) $this->db->lastInsertId();
+        return (int)$this->db->lastInsertId();
     }
     
     /**
@@ -73,14 +82,35 @@ class Page extends Model {
      */
     public function update(int $id, array $data): bool
     {
+        $allowed = [
+            'slug', 'title', 'content', 'meta_description', 'meta_keywords',
+            'is_active', 'show_in_footer', 'display_order'
+        ];
+
         $fields = [];
         $params = [];
         
-        foreach ($data as $key => $value) {
-            $fields[] = "$key = ?";
-            $params[] = $value;
+        foreach ($allowed as $key) {
+            if (\array_key_exists($key, $data)) {
+                if ($key === 'slug') {
+                    $data[$key] = \strtolower(\preg_replace('/[^a-z0-9\-]/', '-', $data[$key]));
+                    
+                    // Verify uniqueness of slug excluding the current ID
+                    $stmt = $this->db->prepare("SELECT id FROM pages WHERE slug = ? AND id != ? LIMIT 1");
+                    $stmt->execute([$data['slug'], $id]);
+                    if ($stmt->fetch()) {
+                        throw new \InvalidArgumentException("Duplicate page slug: " . $data['slug']);
+                    }
+                }
+                $fields[] = "`{$key}` = ?";
+                $params[] = $data[$key];
+            }
         }
         
+        if (empty($fields)) {
+            return false;
+        }
+
         $params[] = $id;
         
         $sql = "UPDATE pages SET " . implode(', ', $fields) . " WHERE id = ?";

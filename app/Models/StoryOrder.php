@@ -122,10 +122,16 @@ public function find(int $id): ?object
             LEFT JOIN influencer_profiles ip ON ip.id = so.influencer_id
             WHERE {$whereStr}
             ORDER BY so.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ");
 
-        $stmt->execute($params);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
@@ -153,10 +159,16 @@ public function find(int $id): ?object
             LEFT JOIN users customer ON customer.id = so.customer_id
             WHERE {$whereStr}
             ORDER BY so.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ");
 
-        $stmt->execute($params);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
@@ -199,10 +211,16 @@ public function find(int $id): ?object
             LEFT JOIN users inf_user ON inf_user.id = so.influencer_user_id
             WHERE {$whereStr}
             ORDER BY so.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ");
 
-        $stmt->execute($params);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 

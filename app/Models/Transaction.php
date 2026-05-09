@@ -21,35 +21,79 @@ class Transaction extends Model
      */
     public function create(array $data): ?object
     {
-        if (!isset($data['transaction_id']) || $data['transaction_id'] === '') {
-            $data['transaction_id'] = $this->generateUUID();
-        }
-
         $type = (string)($data['type'] ?? '');
-        if (!isset($data['idempotency_key']) && \in_array($type, ['deposit', 'withdraw'], true)) {
+
+        // 1. Check duplicate with idempotency_key
+        if (isset($data['idempotency_key']) && $data['idempotency_key'] !== '') {
+            $existing = $this->findByIdempotencyKey($data['idempotency_key']);
+            if ($existing) {
+                return $existing;
+            }
+        } elseif (\in_array($type, ['deposit', 'withdraw'], true)) {
             $data['idempotency_key'] = $this->generateIdempotencyKey($data);
         }
 
-        $data['ip_address'] = $data['ip_address'] ?? (function_exists('get_client_ip') ? get_client_ip() : null);
-        $data['device_fingerprint'] = $data['device_fingerprint'] ?? (
-            \function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : null
-        );
+        try {
+            $this->db->beginTransaction();
 
-        if (isset($data['metadata']) && \is_array($data['metadata'])) {
-            $data['metadata'] = \json_encode($data['metadata'], JSON_UNESCAPED_UNICODE);
-        }
+            $userId = (int)($data['user_id'] ?? 0);
+            $amount = (float)($data['amount'] ?? 0.0);
+            $currency = (string)($data['currency'] ?? 'irt');
 
-        $now = \date('Y-m-d H:i:s');
-        $data['created_at'] = $data['created_at'] ?? $now;
-        $data['updated_at'] = $data['updated_at'] ?? $now;
+            // 2. For debit transaction types, perform balance check with exclusive lock
+            if (\in_array($type, ['withdraw', 'purchase', 'transfer_out'], true)) {
+                $walletModel = new Wallet($this->db);
+                
+                // Exclusively lock the wallet row to prevent concurrent race condition modifications
+                $wallet = $walletModel->findByUserIdForUpdate($userId);
+                if (!$wallet) {
+                    $this->db->rollback();
+                    throw new \Exception('User wallet not found.');
+                }
 
-        $idOrBool = parent::create($data);
+                $balance = $walletModel->getBalance($userId, $currency);
+                if ($balance < $amount) {
+                    $this->db->rollback();
+                    throw new \Exception("Insufficient balance. Required: {$amount}, Available: {$balance}");
+                }
+            }
 
-        if (\is_int($idOrBool)) {
+            if (!isset($data['transaction_id']) || $data['transaction_id'] === '') {
+                $data['transaction_id'] = $this->generateUUID();
+            }
+
+            $data['ip_address'] = $data['ip_address'] ?? (function_exists('get_client_ip') ? get_client_ip() : null);
+            $data['device_fingerprint'] = $data['device_fingerprint'] ?? (
+                \function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : null
+            );
+
+            if (isset($data['metadata']) && \is_array($data['metadata'])) {
+                $data['metadata'] = \json_encode($data['metadata'], JSON_UNESCAPED_UNICODE);
+            }
+
+            $now = \date('Y-m-d H:i:s');
+            $data['created_at'] = $data['created_at'] ?? $now;
+            $data['updated_at'] = $data['updated_at'] ?? $now;
+
+            $idOrBool = parent::create($data);
+
+            if (!\is_int($idOrBool)) {
+                $this->db->rollback();
+                return null;
+            }
+
+            $this->db->commit();
             return $this->find($idOrBool);
-        }
 
-        return null;
+        } catch (\Exception $e) {
+            $this->db->rollback();
+            $this->logger->error('transaction.create.failed', [
+                'channel' => 'transaction',
+                'error' => $e->getMessage(),
+                'data' => $data
+            ]);
+            throw $e;
+        }
     }
 
     /**
@@ -303,10 +347,15 @@ class Transaction extends Model
             $params['currency'] = $currency;
         }
 
-        $sql .= " ORDER BY created_at DESC LIMIT {$limit} OFFSET {$offset}";
+        $sql .= " ORDER BY created_at DESC LIMIT :limit OFFSET :offset";
 
         $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
+        foreach ($params as $key => $val) {
+            $stmt->bindValue(':' . \ltrim($key, ':'), $val);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
@@ -397,10 +446,15 @@ class Transaction extends Model
             $params['currency'] = $currency;
         }
 
-        $sql .= " ORDER BY t.created_at DESC LIMIT {$limit} OFFSET {$offset}";
+        $sql .= " ORDER BY t.created_at DESC LIMIT :limit OFFSET :offset";
 
         $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
+        foreach ($params as $key => $val) {
+            $stmt->bindValue(':' . \ltrim($key, ':'), $val);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 

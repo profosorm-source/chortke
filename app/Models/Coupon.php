@@ -112,11 +112,16 @@ class Coupon extends Model
      */
     public function search(string $query, int $limit = 50): array
     {
+        $query = \trim($query);
+        $escapedQuery = $this->escapeLikeValue($query, 50);
+        $like = "%{$escapedQuery}%";
+
         return $this->db->table(static::$table)
             ->whereNull('deleted_at')
-            ->whereNested(function ($q) use ($query) {
-                $q->where('code', 'LIKE', "%{$query}%")
-                  ->orWhere('applicable_to', 'LIKE', "%{$query}%");
+            ->whereNested(function ($q) use ($like, $query) {
+                $q->where('code', 'LIKE', $like)
+                  ->orWhere('applicable_to', 'LIKE', $like)
+                  ->orWhere('id', '=', $query);
             })
             ->orderBy('created_at', 'DESC')
             ->limit($limit)

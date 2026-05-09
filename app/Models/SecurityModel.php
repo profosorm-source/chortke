@@ -43,16 +43,18 @@ class SecurityModel extends Model
 
     public function createPasswordResetToken(string $email, string $token): bool
     {
+        $hashedToken = \hash('sha256', $token);
         $this->db->query("DELETE FROM password_resets WHERE email = ?", [$email]);
         return (bool)$this->db->query(
             "INSERT INTO password_resets (email, token, created_at) VALUES (?, ?, NOW())",
-            [$email, $token]
+            [$email, $hashedToken]
         );
     }
 
     public function findPasswordResetByToken(string $token): ?object
     {
-        return $this->db->fetch("SELECT * FROM password_resets WHERE token = ? LIMIT 1", [$token]);
+        $hashedToken = \hash('sha256', $token);
+        return $this->db->fetch("SELECT * FROM password_resets WHERE token = ? LIMIT 1", [$hashedToken]);
     }
 
     public function deletePasswordResetByEmail(string $email): bool

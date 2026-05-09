@@ -159,10 +159,15 @@ class InfluencerModel extends Model
             LEFT JOIN users u ON u.id = ip.user_id
             WHERE {$whereStr}
             ORDER BY {$orderBy}
-            LIMIT ? OFFSET ?
+            LIMIT :limit OFFSET :offset
         ");
-        $params[] = $limit; $params[] = $offset;
-        $stmt->execute($params);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
@@ -295,14 +300,14 @@ class InfluencerModel extends Model
     {
         if (!$this->profileExists($profileId)) return 0;
         // Refactored to use `disputes` instead of `influencer_disputes` as per Phase 12
-        $result = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT COUNT(*) FROM disputes 
              WHERE ref_type = 'influencer' AND ref_id IN (
                  SELECT id FROM story_orders WHERE influencer_id = ?
-             ) AND status = 'open' AND read_at IS NULL",
-            [$profileId]
-        )->fetch();
-        return (int)($result->{0} ?? $result['COUNT(*)'] ?? 0);
+             ) AND status = 'open' AND read_at IS NULL"
+        );
+        $stmt->execute([$profileId]);
+        return (int)$stmt->fetchColumn();
     }
 
     // ==========================================
@@ -349,9 +354,25 @@ class InfluencerModel extends Model
 
     public function findVerificationByIdForUpdate(int $verificationId): ?object
     {
-        $stmt = $this->db->prepare("SELECT * FROM influencer_verifications WHERE id = ? FOR UPDATE");
-        $stmt->execute([$verificationId]);
-        return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
+        $startedTransaction = false;
+        if (!$this->db->inTransaction()) {
+            $this->db->beginTransaction();
+            $startedTransaction = true;
+        }
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM influencer_verifications WHERE id = ? FOR UPDATE");
+            $stmt->execute([$verificationId]);
+            $result = $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     public function findSubmittedVerificationByProfile(int $profileId): ?object

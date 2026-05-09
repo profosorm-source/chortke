@@ -23,19 +23,35 @@ class Advertisement extends Model
             ->get();
     }
 
-    public function expireOldAdvertisements(): int
+    public function expireOldAdvertisements(int $chunkSize = 1000): int
     {
+        $totalExpired = 0;
+        $maxIterations = 100; // جلوگیری از infinite loop
         $now = date('Y-m-d H:i:s');
-        $sql = "UPDATE `" . static::$table . "` 
-                SET `status` = 'completed', `updated_at` = ? 
-                WHERE `status` = 'active' 
-                  AND ((end_date IS NOT NULL AND end_date < ?) 
-                       OR remaining_count <= 0 
-                       OR remaining_budget <= 0)";
-
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute([$now, $now]);
-
-        return $stmt->rowCount();
+        
+        for ($i = 0; $i < $maxIterations; $i++) {
+            // به‌روزرسانی تکه‌تکه (Chunked)
+            $sql = "UPDATE `" . static::$table . "` 
+                    SET `status` = 'completed', `updated_at` = ? 
+                    WHERE `status` = 'active' 
+                      AND ((end_date IS NOT NULL AND end_date < ?) 
+                           OR remaining_count <= 0 
+                           OR remaining_budget <= 0)
+                    LIMIT ?";
+            
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute([$now, $now, $chunkSize]);
+            
+            $affected = $stmt->rowCount();
+            $totalExpired += $affected;
+            
+            if ($affected < $chunkSize) {
+                break;
+            }
+            
+            usleep(50000); // 50ms delay
+        }
+        
+        return $totalExpired;
     }
 }

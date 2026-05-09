@@ -6,9 +6,6 @@ namespace App\Models;
 
 use Core\Model;
 
-/**
- * Escrow Model - Escrow transaction queries only
- */
 class Escrow extends Model
 {
     protected static string $table = 'escrow_transactions';
@@ -78,6 +75,34 @@ class Escrow extends Model
         return $result && $stmt->rowCount() > 0;
     }
 
+    public function confirmHoldWithTransaction(int $orderId, string $orderType, int $sellerId): bool
+    {
+        try {
+            $this->db->beginTransaction();
+
+            $escrow = $this->findPendingForConfirm($orderId, $orderType, $sellerId);
+            if (!$escrow) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            $success = $this->confirmHold((int)$escrow->id);
+            if ($success) {
+                $this->logEscrowAction((int)$escrow->id, 'confirm_hold', (float)$escrow->amount, 'seller_' . $sellerId, 'Held funds confirmed');
+                $this->db->commit();
+                return true;
+            }
+
+            $this->db->rollBack();
+            return false;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return false;
+        }
+    }
+
     public function findReleasable(int $escrowId, int $sellerId): ?object
     {
         $stmt = $this->db->query(
@@ -101,6 +126,34 @@ class Escrow extends Model
 
         $result = $stmt->execute([date('Y-m-d H:i:s'), $releasedBy, $escrowId]);
         return $result && $stmt->rowCount() > 0;
+    }
+
+    public function releaseFundsWithTransaction(int $escrowId, int $sellerId, string $releasedBy): bool
+    {
+        try {
+            $this->db->beginTransaction();
+
+            $escrow = $this->findReleasable($escrowId, $sellerId);
+            if (!$escrow) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            $success = $this->releaseFunds($escrowId, $releasedBy);
+            if ($success) {
+                $this->logEscrowAction($escrowId, 'release_funds', (float)$escrow->amount, $releasedBy, 'Escrow funds released');
+                $this->db->commit();
+                return true;
+            }
+
+            $this->db->rollBack();
+            return false;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return false;
+        }
     }
 
     public function logEscrowAction(int $escrowId, string $action, float $amount, string $performedBy, ?string $note = null): bool
@@ -153,6 +206,34 @@ class Escrow extends Model
         ]);
 
         return $result && $stmt->rowCount() > 0;
+    }
+
+    public function refundFundsWithTransaction(int $escrowId, int $buyerId, string $reason, string $refundedBy): bool
+    {
+        try {
+            $this->db->beginTransaction();
+
+            $escrow = $this->findRefundable($escrowId, $buyerId);
+            if (!$escrow) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            $success = $this->refundFunds($escrowId, $reason, $refundedBy);
+            if ($success) {
+                $this->logEscrowAction($escrowId, 'refund_funds', (float)$escrow->amount, $refundedBy, 'Escrow funds refunded: ' . $reason);
+                $this->db->commit();
+                return true;
+            }
+
+            $this->db->rollBack();
+            return false;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return false;
+        }
     }
 
     public function markDisputed(int $escrowId, string $reason): bool

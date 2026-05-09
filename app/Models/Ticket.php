@@ -94,9 +94,17 @@ class Ticket extends Model {
             $params[] = $status;
         }
 
-        $sql .= " ORDER BY t.updated_at DESC LIMIT {$perPage} OFFSET {$offset}";
+        $sql .= " ORDER BY t.updated_at DESC LIMIT ? OFFSET ?";
 
-        return $this->fetchAllRows($sql, $params);
+        $stmt = $this->db->prepare($sql);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $perPage, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**
@@ -162,9 +170,17 @@ class Ticket extends Model {
                         ELSE 5
                     END,
                     t.updated_at DESC
-                  LIMIT {$perPage} OFFSET {$offset}";
+                  LIMIT ? OFFSET ?";
 
-        return $this->fetchAllRows($sql, $params);
+        $stmt = $this->db->prepare($sql);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $perPage, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**

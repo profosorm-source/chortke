@@ -43,42 +43,46 @@ class AuditEvent
         $params = [];
 
         if ($event) {
-            $where .= ' AND at.event = ?';
-            $params[] = $event;
+            $where .= ' AND at.event = :event';
+            $params['event'] = $event;
         }
 
         if ($userId) {
-            $where .= ' AND at.user_id = ?';
-            $params[] = $userId;
+            $where .= ' AND at.user_id = :user_id';
+            $params['user_id'] = $userId;
         }
 
         if ($search) {
-            $where .= ' AND (at.description LIKE ? OR u.email LIKE ?)';
-            $params[] = "%{$search}%";
-            $params[] = "%{$search}%";
+            $where .= ' AND (at.description LIKE :search OR u.email LIKE :search)';
+            $params['search'] = "%{$search}%";
         }
 
         if ($dateFrom) {
-            $where .= ' AND DATE(at.created_at) >= ?';
-            $params[] = $dateFrom;
+            $where .= ' AND DATE(at.created_at) >= :date_from';
+            $params['date_from'] = $dateFrom;
         }
 
         if ($dateTo) {
-            $where .= ' AND DATE(at.created_at) <= ?';
-            $params[] = $dateTo;
+            $where .= ' AND DATE(at.created_at) <= :date_to';
+            $params['date_to'] = $dateTo;
         }
 
-        $events = $this->db->query(
-            "SELECT at.*, u.full_name as user_name, u.email as user_email
-             FROM audit_trail at
-             LEFT JOIN users u ON at.user_id = u.id
-             {$where}
-             ORDER BY at.created_at DESC
-             LIMIT ? OFFSET ?",
-            array_merge($params, [$limit, $offset])
-        )->fetchAll();
+        $sql = "SELECT at.*, u.full_name as user_name, u.email as user_email
+                FROM audit_trail at
+                LEFT JOIN users u ON at.user_id = u.id
+                {$where}
+                ORDER BY at.created_at DESC
+                LIMIT :limit OFFSET :offset";
 
-        return $events;
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue(':' . $key, $value);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll() ?: [];
     }
 
     public function countAll(
@@ -92,37 +96,43 @@ class AuditEvent
         $params = [];
 
         if ($event) {
-            $where .= ' AND event = ?';
-            $params[] = $event;
+            $where .= ' AND at.event = :event';
+            $params['event'] = $event;
         }
 
         if ($userId) {
-            $where .= ' AND user_id = ?';
-            $params[] = $userId;
+            $where .= ' AND at.user_id = :user_id';
+            $params['user_id'] = $userId;
         }
 
         if ($search) {
-            $where .= ' AND (description LIKE ? OR user_id LIKE ?)';
-            $params[] = "%{$search}%";
-            $params[] = "%{$search}%";
+            $where .= ' AND (at.description LIKE :search OR u.email LIKE :search)';
+            $params['search'] = "%{$search}%";
         }
 
         if ($dateFrom) {
-            $where .= ' AND DATE(created_at) >= ?';
-            $params[] = $dateFrom;
+            $where .= ' AND DATE(at.created_at) >= :date_from';
+            $params['date_from'] = $dateFrom;
         }
 
         if ($dateTo) {
-            $where .= ' AND DATE(created_at) <= ?';
-            $params[] = $dateTo;
+            $where .= ' AND DATE(at.created_at) <= :date_to';
+            $params['date_to'] = $dateTo;
         }
 
-        $count = $this->db->query(
-            "SELECT COUNT(*) as count FROM audit_trail {$where}",
-            $params
-        )->fetch();
+        $sql = "SELECT COUNT(*) as count 
+                FROM audit_trail at
+                LEFT JOIN users u ON at.user_id = u.id
+                {$where}";
 
-        return (int) ($count['count'] ?? 0);
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue(':' . $key, $value);
+        }
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        return (int) ($row['count'] ?? 0);
     }
 
     public function getEventTypes(): array

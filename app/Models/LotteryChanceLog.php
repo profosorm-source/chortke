@@ -40,14 +40,16 @@ class LotteryChanceLog extends Model {
     {
         $limit = \max(1, (int)$limit);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT * FROM lottery_chance_logs
              WHERE participation_id = ?
              ORDER BY date DESC
-             LIMIT {$limit}",
-            [$participationId]
+             LIMIT ?"
         );
+        $stmt->bindValue(1, $participationId, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 }

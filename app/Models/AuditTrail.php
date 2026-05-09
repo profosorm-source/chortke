@@ -38,7 +38,8 @@ class AuditTrail extends Model
         $params = [];
         $where = $this->buildAuditFilters($event, $userId, $search, $dateFrom, $dateTo, $params);
 
-        $offset = ($page - 1) * $perPage;
+        $perPage = \max(1, $perPage);
+        $offset = \max(0, ($page - 1) * $perPage);
 
         $total = (int)$this->db->fetchColumn(
             "SELECT COUNT(*)
@@ -48,18 +49,24 @@ class AuditTrail extends Model
             $params
         );
 
-        $rows = $this->db->fetchAll(
-            "SELECT at.*,
-                    u.full_name AS user_name, u.email AS user_email,
-                    a.full_name AS actor_name, a.email AS actor_email
-             FROM " . static::$table . " at
-             LEFT JOIN users u ON u.id = at.user_id
-             LEFT JOIN users a ON a.id = at.actor_id
-             {$where}
-             ORDER BY at.created_at DESC
-             LIMIT ? OFFSET ?",
-            [...$params, $perPage, $offset]
-        ) ?: [];
+        $sql = "SELECT at.*,
+                       u.full_name AS user_name, u.email AS user_email,
+                       a.full_name AS actor_name, a.email AS actor_email
+                FROM " . static::$table . " at
+                LEFT JOIN users u ON u.id = at.user_id
+                LEFT JOIN users a ON a.id = at.actor_id
+                {$where}
+                ORDER BY at.created_at DESC
+                LIMIT :limit OFFSET :offset";
+
+        $stmt = $this->db->prepare($sql);
+        for ($i = 0; $i < \count($params); $i++) {
+            $stmt->bindValue($i + 1, $params[$i]);
+        }
+        $stmt->bindValue(':limit', $perPage, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
 
         return [
             'rows' => $rows,
@@ -138,25 +145,47 @@ class AuditTrail extends Model
 
     public function deleteOlderThan(string $cutoff, int $limit = 5000): int
     {
-        $stmt = $this->db->query(
-            "DELETE FROM " . static::$table . "
-             WHERE created_at < ?
-             LIMIT ?",
-            [$cutoff, $limit]
-        );
+        $totalDeleted = 0;
+        $chunkSize = 1000;
+        $remaining = $limit;
 
-        return $stmt ? $stmt->rowCount() : 0;
+        try {
+            while ($remaining > 0) {
+                $this->db->beginTransaction();
+
+                $currentLimit = \min($chunkSize, $remaining);
+                $stmt = $this->db->prepare(
+                    "DELETE FROM " . static::$table . "
+                     WHERE created_at < ?
+                     LIMIT :limit"
+                );
+                $stmt->bindValue(1, $cutoff);
+                $stmt->bindValue(':limit', $currentLimit, \PDO::PARAM_INT);
+                $stmt->execute();
+
+                $deleted = $stmt->rowCount();
+                $this->db->commit();
+
+                $totalDeleted += $deleted;
+                $remaining -= $currentLimit;
+
+                if ($deleted < $currentLimit) {
+                    break;
+                }
+            }
+            return $totalDeleted;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return $totalDeleted;
+        }
     }
 
     public function cleanupOlderThan(int $days = 365): int
     {
-        $stmt = $this->db->query(
-            "DELETE FROM " . static::$table . "
-             WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)",
-            [$days]
-        );
-
-        return $stmt ? $stmt->rowCount() : 0;
+        $cutoff = date('Y-m-d H:i:s', \strtotime("-{$days} days"));
+        return $this->deleteOlderThan($cutoff, 5000);
     }
 
     private function buildAuditFilters(
@@ -191,7 +220,9 @@ class AuditTrail extends Model
         }
 
         if ($search !== null && $search !== '') {
-            $like = '%' . $search . '%';
+            $searchTerm = \trim((string)$search);
+            $escaped = \addcslashes($searchTerm, '%_');
+            $like = "%{$escaped}%";
             $where .= ' AND (at.event LIKE ? OR at.context LIKE ? OR u.email LIKE ?)';
             $params[] = $like;
             $params[] = $like;

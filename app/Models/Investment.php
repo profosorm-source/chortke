@@ -13,7 +13,8 @@ class Investment extends Model {
 
     public const WITHDRAWAL_COOLDOWN_DAYS = 7;
     public const DEPOSIT_LOCK_DAYS = 7;
-/**
+
+    /**
      * ایجاد سرمایه‌گذاری جدید
      * خروجی: id یا null
      */
@@ -30,9 +31,22 @@ class Investment extends Model {
             $data['status'] = self::STATUS_ACTIVE;
         }
 
-        // ساخت INSERT داینامیک
-        $columns = \array_keys($data);
-        $values  = \array_values($data);
+        // ساخت INSERT داینامیک با لیست سفید مجاز
+        $allowed = [
+            'user_id', 'amount', 'current_balance', 'total_profit', 'total_loss',
+            'status', 'last_withdrawal_date', 'deposit_lock_until', 'start_date',
+            'created_at', 'updated_at', 'deleted_at'
+        ];
+
+        $filtered = [];
+        foreach ($allowed as $k) {
+            if (\array_key_exists($k, $data)) {
+                $filtered[$k] = $data[$k];
+            }
+        }
+
+        $columns = \array_keys($filtered);
+        $values  = \array_values($filtered);
 
         $placeholders = \array_fill(0, \count($columns), '?');
         $colsSql = '`' . \implode('`,`', $columns) . '`';
@@ -65,10 +79,10 @@ class Investment extends Model {
     {
         $stmt = $this->db->query(
             "SELECT i.*, u.full_name as user_name, u.email as user_email
-             FROM investments i
-             JOIN users u ON i.user_id = u.id
-             WHERE i.id = ? AND i.deleted_at = 0
-             LIMIT 1",
+              FROM investments i
+              JOIN users u ON i.user_id = u.id
+              WHERE i.id = ? AND i.deleted_at = 0
+              LIMIT 1",
             [$id]
         );
 
@@ -83,8 +97,8 @@ class Investment extends Model {
     {
         $stmt = $this->db->query(
             "SELECT * FROM investments
-             WHERE user_id = ? AND status = ? AND deleted_at = 0
-             ORDER BY created_at DESC LIMIT 1",
+              WHERE user_id = ? AND status = ? AND deleted_at = 0
+              ORDER BY created_at DESC LIMIT 1",
             [$userId, self::STATUS_ACTIVE]
         );
 
@@ -105,15 +119,18 @@ class Investment extends Model {
         $limit  = \max(1, (int)$limit);
         $offset = \max(0, (int)$offset);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT * FROM investments
-             WHERE user_id = ? AND deleted_at = 0
+             WHERE user_id = :user_id AND deleted_at = 0
              ORDER BY created_at DESC
-             LIMIT {$limit} OFFSET {$offset}",
-            [$userId]
+             LIMIT :limit OFFSET :offset"
         );
+        $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
     }
 
     public function countByUser(int $userId): int
@@ -143,26 +160,31 @@ class Investment extends Model {
         $params = [];
 
         if (!empty($filters['status'])) {
-            $sql .= " AND i.status = ?";
-            $params[] = $filters['status'];
+            $sql .= " AND i.status = :status";
+            $params['status'] = $filters['status'];
         }
 
         if (!empty($filters['user_id'])) {
-            $sql .= " AND i.user_id = ?";
-            $params[] = (int)$filters['user_id'];
+            $sql .= " AND i.user_id = :user_id";
+            $params['user_id'] = (int)$filters['user_id'];
         }
 
         if (!empty($filters['search'])) {
-            $sql .= " AND (u.full_name LIKE ? OR u.email LIKE ?)";
-            $s = '%' . $filters['search'] . '%';
-            $params[] = $s;
-            $params[] = $s;
+            $sql .= " AND (u.full_name LIKE :search OR u.email LIKE :search)";
+            $params['search'] = '%' . $filters['search'] . '%';
         }
 
-        $sql .= " ORDER BY i.created_at DESC LIMIT {$limit} OFFSET {$offset}";
+        $sql .= " ORDER BY i.created_at DESC LIMIT :limit OFFSET :offset";
 
-        $stmt = $this->db->query($sql, $params);
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue(':' . $key, $value);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
     }
 
     public function countAll(array $filters = []): int
@@ -211,9 +233,20 @@ class Investment extends Model {
         $fields = [];
         $values = [];
 
-        foreach ($data as $k => $v) {
-            $fields[] = "`{$k}` = ?";
-            $values[] = $v;
+        $allowed = [
+            'status', 'amount', 'current_balance', 'total_profit', 'total_loss',
+            'last_withdrawal_date', 'deposit_lock_until', 'start_date', 'updated_at', 'deleted_at'
+        ];
+
+        foreach ($allowed as $k) {
+            if (\array_key_exists($k, $data)) {
+                $fields[] = "`{$k}` = ?";
+                $values[] = $data[$k];
+            }
+        }
+
+        if (empty($fields)) {
+            return false;
         }
 
         $values[] = $id;

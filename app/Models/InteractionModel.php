@@ -44,9 +44,12 @@ class InteractionModel extends Model
             LEFT JOIN users u ON u.id = ct.creator_id
             WHERE tf.user_id = ? AND ct.deleted_at IS NULL
             ORDER BY tf.created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT :limit OFFSET :offset
         ");
-        $stmt->execute([$userId, $limit, $offset]);
+        $stmt->bindValue(1, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
@@ -268,8 +271,7 @@ class InteractionModel extends Model
             $params[] = $status;
         }
 
-        return $this->db->query(
-            "SELECT 
+        $sql = "SELECT 
                 mr.id, mr.message_id, mr.reason, mr.status, mr.created_at,
                 dm.message, dm.sender_id, dm.recipient_id,
                 u.name as reporter_name, u.email as reporter_email
@@ -278,9 +280,17 @@ class InteractionModel extends Model
              JOIN users u ON mr.reporter_id = u.id
              WHERE {$where}
              ORDER BY mr.created_at DESC
-             LIMIT ? OFFSET ?",
-            array_merge($params, [$limit, $offset])
-        )->fetchAll();
+             LIMIT :limit OFFSET :offset";
+
+        $stmt = $this->db->prepare($sql);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll() ?: [];
     }
 
     public function countMessageReports(?string $status = null): int

@@ -3,24 +3,18 @@
 namespace App\Models;
 
 use Core\Model;
-use Core\Database;
 
-class LotteryVote extends Model {
-/**
+class LotteryVote extends Model
+{
+    /**
      * ثبت رأی
      * خروجی: id یا null
      */
     public function create(array $data): ?int
     {
-        // این جدول طبق کوئری‌ها حداقل ستون is_deleted دارد
         if (!isset($data['is_deleted'])) {
             $data['is_deleted'] = 0;
         }
-
-        // اگر جدول created_at/updated_at دارد و default ندارد، می‌توانید این‌ها را هم ست کنید:
-        // $now = \date('Y-m-d H:i:s');
-        // $data['created_at'] = $data['created_at'] ?? $now;
-        // $data['updated_at'] = $data['updated_at'] ?? $now;
 
         $columns = \array_keys($data);
         $values  = \array_values($data);
@@ -39,6 +33,43 @@ class LotteryVote extends Model {
 
         $id = (int)$this->db->lastInsertId();
         return $id > 0 ? $id : null;
+    }
+
+    /**
+     * ثبت رأی تحت تراکنش برای حل همزمانی و جلوگیری از رأی تکراری در یک روز
+     */
+    public function createWithTransaction(array $data): ?int
+    {
+        try {
+            $this->db->beginTransaction();
+
+            $stmt = $this->db->prepare("
+                SELECT COUNT(*) FROM lottery_votes
+                WHERE user_id = ? AND daily_number_id = ? AND is_deleted = 0
+                FOR UPDATE
+            ");
+            $stmt->execute([$data['user_id'], $data['daily_number_id']]);
+            $voted = (int)$stmt->fetchColumn() > 0;
+
+            if ($voted) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            $id = $this->create($data);
+            if ($id) {
+                $this->db->commit();
+                return $id;
+            }
+
+            $this->db->rollBack();
+            return null;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return null;
+        }
     }
 
     public function hasVotedToday(int $userId, int $dailyNumberId): bool

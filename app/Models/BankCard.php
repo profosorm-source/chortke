@@ -79,24 +79,46 @@ class BankCard extends Model
      */
     public function setPrimary(int $cardId, int $userId): bool
     {
-        // 1) همه کارت‌های کاربر را غیر پیش‌فرض کن
-        $stmt = $this->db->prepare("
-            UPDATE " . static::$table . "
-            SET is_default = 0, updated_at = NOW()
-            WHERE user_id = :user_id AND deleted_at IS NULL
-        ");
-        $stmt->execute(['user_id' => $userId]);
-
-        // 2) کارت انتخابی را پیش‌فرض کن
-        $stmt = $this->db->prepare("
-            UPDATE " . static::$table . "
-            SET is_default = 1, updated_at = NOW()
-            WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL
-        ");
-
-        return $stmt->execute([
-            'id' => $cardId,
-            'user_id' => $userId
-        ]);
+        try {
+            $this->db->beginTransaction();
+            
+            // Check existence and ownership of the card
+            $card = $this->find($cardId);
+            if (!$card || (int)$card->user_id !== $userId || $card->deleted_at !== null) {
+                $this->db->rollback();
+                return false;
+            }
+            
+            // 1) Reset all cards
+            $stmt = $this->db->prepare("
+                UPDATE " . static::$table . "
+                SET is_default = 0, updated_at = NOW()
+                WHERE user_id = :user_id AND deleted_at IS NULL
+            ");
+            $stmt->execute(['user_id' => $userId]);
+            
+            // 2) Set new primary
+            $stmt = $this->db->prepare("
+                UPDATE " . static::$table . "
+                SET is_default = 1, updated_at = NOW()
+                WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL
+            ");
+            $success = $stmt->execute([
+                'id' => $cardId,
+                'user_id' => $userId
+            ]);
+            
+            if ($success && $stmt->rowCount() > 0) {
+                $this->db->commit();
+                return true;
+            }
+            
+            $this->db->rollback();
+            return false;
+            
+        } catch (\PDOException $e) {
+            $this->db->rollback();
+            throw $e;
+        }
     }
 }

@@ -144,7 +144,26 @@ class SocialTaskAnalyticsModel extends Model
     public function getUserTrust(int $userId, bool $forUpdate = false): ?object
     {
         $sql = "SELECT trust_score FROM social_user_trust WHERE user_id = ? LIMIT 1";
-        if ($forUpdate) $sql .= " FOR UPDATE";
+        if ($forUpdate) {
+            $sql .= " FOR UPDATE";
+            $startedTransaction = false;
+            if (!$this->db->inTransaction()) {
+                $this->db->beginTransaction();
+                $startedTransaction = true;
+            }
+            try {
+                $row = $this->db->fetch($sql, [$userId]);
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                return $row;
+            } catch (\Throwable $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                throw $e;
+            }
+        }
         return $this->db->fetch($sql, [$userId]);
     }
 

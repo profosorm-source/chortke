@@ -74,36 +74,32 @@ class DirectMessage extends Model
 
     public function getConversations(int $userId, int $limit = 20, int $offset = 0): array
     {
-        $sql = "SELECT DISTINCT
-                    CASE
-                        WHEN sender_id = ? THEN recipient_id
-                        ELSE sender_id
+        $sql = "SELECT 
+                    CASE 
+                        WHEN uc.user1_id = ? THEN uc.user2_id 
+                        ELSE uc.user1_id 
                     END as user_id,
                     u.full_name,
                     u.avatar,
-                    (SELECT message FROM direct_messages
-                     WHERE (sender_id = ? AND recipient_id = u.id) OR (sender_id = u.id AND recipient_id = ?)
-                     ORDER BY created_at DESC LIMIT 1) as last_message,
-                    (SELECT created_at FROM direct_messages
-                     WHERE (sender_id = ? AND recipient_id = u.id) OR (sender_id = u.id AND recipient_id = ?)
-                     ORDER BY created_at DESC LIMIT 1) as last_message_at,
-                    (SELECT COUNT(*) FROM direct_messages
+                    dm.message as last_message,
+                    uc.updated_at as last_message_at,
+                    (SELECT COUNT(*) FROM direct_messages 
                      WHERE sender_id = u.id AND recipient_id = ? AND read_at IS NULL) as unread_count
-                 FROM direct_messages dm
-                 JOIN users u ON (
-                    (dm.sender_id = ? AND dm.recipient_id = u.id) OR
-                    (dm.sender_id = u.id AND dm.recipient_id = ?)
-                 )
-                 WHERE dm.sender_id = ? OR dm.recipient_id = ?
-                 GROUP BY user_id
-                 ORDER BY last_message_at DESC
-                 LIMIT ? OFFSET ?";
+                FROM user_conversations uc
+                JOIN users u ON u.id = CASE WHEN uc.user1_id = ? THEN uc.user2_id ELSE uc.user1_id END
+                LEFT JOIN direct_messages dm ON dm.id = uc.last_message_id
+                WHERE uc.user1_id = ? OR uc.user2_id = ?
+                ORDER BY uc.updated_at DESC
+                LIMIT ? OFFSET ?";
 
         return $this->db->fetchAll($sql, [
-            $userId, $userId, $userId,
-            $userId, $userId, $userId,
-            $userId, $userId, $userId,
-            $userId, $limit, $offset
+            $userId, 
+            $userId, 
+            $userId, 
+            $userId, 
+            $userId, 
+            $limit, 
+            $offset
         ]);
     }
 

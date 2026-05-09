@@ -62,9 +62,12 @@ class SeoExecution extends Model
              LEFT JOIN seo_ads a ON a.id = e.ad_id
              WHERE e.user_id = ?
              ORDER BY e.created_at DESC
-             LIMIT ? OFFSET ?"
+             LIMIT :limit OFFSET :offset"
         );
-        $stmt->execute([$userId, $limit, $offset]);
+        $stmt->bindValue(1, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 

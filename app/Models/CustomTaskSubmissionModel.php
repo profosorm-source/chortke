@@ -30,27 +30,71 @@ class CustomTaskSubmissionModel extends Model
 
     public function submission_create(array $d): ?object
     {
-        $stmt = $this->db->prepare("
-            INSERT INTO custom_task_submissions
-            (task_id, worker_id, user_id, deadline_at, status, reward_amount, reward_currency,
-             idempotency_key, worker_ip, worker_fingerprint)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-        ");
-        $result = $stmt->execute([
-            $d['task_id'], 
-            $d['worker_id'], 
-            $d['worker_id'], // user_id is the same as worker_id
-            $d['deadline_at'],
-            $d['status'] ?? 'in_progress', 
-            $d['reward_amount'] ?? 0,
-            $d['reward_currency'] ?? 'irt', 
-            $d['idempotency_key'],
-            $d['worker_ip'] ?? get_client_ip(),
-            $d['worker_fingerprint'] ?? generate_device_fingerprint(),
-        ]);
-        
-        if (!$result) return null;
-        return $this->submission_find((int) $this->db->lastInsertId());
+        try {
+            $this->db->beginTransaction();
+
+            // 1. Lock custom task to prevent concurrent workers from exceeding limits
+            $stmt = $this->db->prepare("SELECT id FROM custom_tasks WHERE id = ? FOR UPDATE");
+            $stmt->execute([$d['task_id']]);
+            $task = $stmt->fetch(\PDO::FETCH_OBJ);
+
+            if (!$task) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            // 2. Lock duplicate check in transaction
+            $stmt = $this->db->prepare("
+                SELECT COUNT(*) FROM custom_task_submissions
+                WHERE task_id = ? AND worker_id = ? AND status NOT IN ('expired','rejected')
+                FOR UPDATE
+            ");
+            $stmt->execute([$d['task_id'], $d['worker_id']]);
+            $hasDone = (int)$stmt->fetchColumn() > 0;
+
+            if ($hasDone) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            $ip = $d['worker_ip'] ?? ($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
+            $fingerprint = $d['worker_fingerprint'] ?? \md5($_SERVER['HTTP_USER_AGENT'] ?? 'unknown');
+
+            $stmt = $this->db->prepare("
+                INSERT INTO custom_task_submissions
+                (task_id, worker_id, user_id, deadline_at, status, reward_amount, reward_currency,
+                 idempotency_key, worker_ip, worker_fingerprint)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            ");
+            $result = $stmt->execute([
+                $d['task_id'], 
+                $d['worker_id'], 
+                $d['worker_id'], 
+                $d['deadline_at'],
+                $d['status'] ?? 'in_progress', 
+                $d['reward_amount'] ?? 0,
+                $d['reward_currency'] ?? 'irt', 
+                $d['idempotency_key'] ?? \uniqid('idemp_', true),
+                $ip,
+                $fingerprint,
+            ]);
+            
+            if (!$result) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            $lastId = (int)$this->db->lastInsertId();
+            $this->db->commit();
+
+            return $this->submission_find($lastId);
+
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return null;
+        }
     }
 
     public function submission_update(int $id, array $data): bool

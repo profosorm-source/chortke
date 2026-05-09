@@ -94,10 +94,17 @@ class TradingRecord extends Model {
             $params[] = $filters['direction'];
         }
 
-        $sql .= " ORDER BY t.open_time DESC LIMIT {$limit} OFFSET {$offset}";
+        $sql .= " ORDER BY t.open_time DESC LIMIT ? OFFSET ?";
 
-        $stmt = $this->db->query($sql, $params);
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        $stmt = $this->db->prepare($sql);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     public function countAll(array $filters = []): int
@@ -143,15 +150,19 @@ class TradingRecord extends Model {
     {
         $limit = \max(1, (int)$limit);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT * FROM trading_records
              WHERE status IN (?, ?) AND is_deleted = 0
              ORDER BY close_time DESC
-             LIMIT {$limit}",
-            [self::STATUS_CLOSED, self::STATUS_STOPPED]
+             LIMIT ?"
         );
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        $stmt->bindValue(1, self::STATUS_CLOSED);
+        $stmt->bindValue(2, self::STATUS_STOPPED);
+        $stmt->bindValue(3, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**

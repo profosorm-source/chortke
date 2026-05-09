@@ -92,9 +92,12 @@ class BugReport extends Model {
 
         if (!empty($filters['search'])) {
             $where[] = "(br.description LIKE :search OR br.page_url LIKE :search2 OR u.full_name LIKE :search3)";
-            $params['search'] = '%' . $filters['search'] . '%';
-            $params['search2'] = '%' . $filters['search'] . '%';
-            $params['search3'] = '%' . $filters['search'] . '%';
+            $searchTerm = \trim((string)$filters['search']);
+            $escaped = \addcslashes($searchTerm, '%_');
+            $search = "%{$escaped}%";
+            $params['search'] = $search;
+            $params['search2'] = $search;
+            $params['search3'] = $search;
         }
 
         if (!empty($filters['date_from'])) {
@@ -111,9 +114,14 @@ class BugReport extends Model {
 
         $sql = "SELECT br.*, 
                        u.full_name as user_full_name, u.email as user_email,
-                       (SELECT COUNT(*) FROM bug_report_comments WHERE bug_report_id = br.id) as comment_count
+                       COALESCE(c.comment_count, 0) as comment_count
                 FROM " . static::$table . " br
                 LEFT JOIN users u ON br.user_id = u.id
+                LEFT JOIN (
+                    SELECT bug_report_id, COUNT(*) as comment_count
+                    FROM bug_report_comments
+                    GROUP BY bug_report_id
+                ) c ON c.bug_report_id = br.id
                 WHERE {$whereStr}
                 ORDER BY 
                     CASE br.priority 
@@ -216,18 +224,28 @@ class BugReport extends Model {
      */
     public function countConsecutiveDays(int $userId, int $days = 5): int
     {
-                $count = 0;
+        $rows = $this->db->fetchAll(
+            "SELECT DATE(created_at) as report_date
+             FROM " . static::$table . "
+             WHERE user_id = :uid
+               AND created_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
+             GROUP BY DATE(created_at)
+             ORDER BY report_date DESC",
+            ['uid' => $userId, 'days' => $days]
+        );
 
-        for ($i = 0; $i < $days; $i++) {
-            $date = \date('Y-m-d', \strtotime("-{$i} days"));
-            $hasReport = (int)$this->db->fetchColumn(
-                "SELECT COUNT(*) FROM " . static::$table . " 
-                 WHERE user_id = :uid AND DATE(created_at) = :d",
-                ['uid' => $userId, 'd' => $date]
-            );
+        if (empty($rows)) {
+            return 0;
+        }
 
-            if ($hasReport > 0) {
+        $count = 0;
+        $expectedDate = \date('Y-m-d');
+
+        foreach ($rows as $row) {
+            $rowDate = \is_array($row) ? ($row['report_date'] ?? '') : ($row->report_date ?? '');
+            if ($rowDate === $expectedDate) {
                 $count++;
+                $expectedDate = \date('Y-m-d', \strtotime($expectedDate . ' -1 day'));
             } else {
                 break;
             }

@@ -6,7 +6,7 @@ use Core\Model;
 use Core\Database;
 
 class InvestmentProfit extends Model {
-/**
+    /**
      * ایجاد رکورد سود/ضرر
      * خروجی: id یا null
      */
@@ -52,17 +52,19 @@ class InvestmentProfit extends Model {
     {
         $limit = \max(1, (int)$limit);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT ip.*, t.pair, t.direction, t.open_price, t.close_price
              FROM investment_profits ip
              LEFT JOIN trading_records t ON ip.trading_record_id = t.id
-             WHERE ip.investment_id = ? AND ip.is_deleted = 0
+             WHERE ip.investment_id = :investment_id AND ip.is_deleted = 0
              ORDER BY ip.created_at DESC
-             LIMIT {$limit}",
-            [$investmentId]
+             LIMIT :limit"
         );
+        $stmt->bindValue(':investment_id', $investmentId, \PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
     }
 
     public function getByUser(int $userId, int $limit = 20, int $offset = 0): array
@@ -70,17 +72,20 @@ class InvestmentProfit extends Model {
         $limit  = \max(1, (int)$limit);
         $offset = \max(0, (int)$offset);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT ip.*, i.amount as investment_amount
              FROM investment_profits ip
              JOIN investments i ON ip.investment_id = i.id
-             WHERE ip.user_id = ? AND ip.is_deleted = 0
+             WHERE ip.user_id = :user_id AND ip.is_deleted = 0
              ORDER BY ip.created_at DESC
-             LIMIT {$limit} OFFSET {$offset}",
-            [$userId]
+             LIMIT :limit OFFSET :offset"
         );
+        $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
     }
 
     public function countByUser(int $userId): int

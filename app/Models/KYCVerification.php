@@ -148,11 +148,18 @@ class KYCVerification extends Model {
                 CASE WHEN k.status NOT IN ('pending','under_review')
                     THEN IFNULL(k.reviewed_at, k.created_at) END DESC,
                 k.created_at DESC
-            LIMIT {$limit} OFFSET {$offset}
+            LIMIT ? OFFSET ?
         ";
 
-        $stmt = $this->db->query($sql, $params);
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        $stmt = $this->db->prepare($sql);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**

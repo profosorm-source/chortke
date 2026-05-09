@@ -41,6 +41,36 @@ class PredictionBet extends Model
         );
     }
 
+    /**
+     * ثبت شرط جدید تحت تراکنش برای حل همزمانی و جلوگیری از شرط تکراری
+     */
+    public function createWithTransaction(array $d): ?object
+    {
+        try {
+            $this->db->beginTransaction();
+
+            $hasBet = $this->userHasBetForUpdate((int)$d['user_id'], (int)$d['game_id']);
+            if ($hasBet) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            $bet = $this->create($d);
+            if ($bet) {
+                $this->db->commit();
+                return $bet;
+            }
+
+            $this->db->rollBack();
+            return null;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return null;
+        }
+    }
+
     // ─── شرط‌های یک کاربر با اطلاعات بازی ───────────────────────────
     public function getByUser(int $userId, int $limit = 30, int $offset = 0): array
     {
@@ -112,9 +142,9 @@ class PredictionBet extends Model
     {
         $row = $this->db->fetch(
             "SELECT id FROM prediction_bets
-             WHERE user_id = ? AND game_id = ?
-             LIMIT 1
-             FOR UPDATE",
+              WHERE user_id = ? AND game_id = ?
+              LIMIT 1
+              FOR UPDATE",
             [$userId, $gameId]
         );
 

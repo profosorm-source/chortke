@@ -19,20 +19,23 @@ class ActivityLog extends Model
     public function getRecent(int $limit = 50, ?int $userId = null, ?string $action = null): array
     {
         $limit = max(1, min(500, $limit));
-        
-        $query = $this->db->table('activity_logs as al')
-            ->select('al.*', 'u.full_name', 'u.email')
-            ->leftJoin('users as u', 'al.user_id', '=', 'u.id')
-            ->whereNull('al.deleted_at');
+        $cacheKey = "activity_logs:recent:{$limit}:" . ($userId ?? 'all') . ":" . ($action ?? 'all');
 
-        if ($userId !== null) {
-            $query->where('al.user_id', '=', $userId);
-        }
-        if ($action !== null) {
-            $query->where('al.action', '=', $action);
-        }
+        return cache()->remember($cacheKey, 5, function() use ($limit, $userId, $action) {
+            $query = $this->db->table('activity_logs as al')
+                ->select('al.*', 'u.full_name', 'u.email')
+                ->leftJoin('users as u', 'al.user_id', '=', 'u.id')
+                ->whereNull('al.deleted_at');
 
-        return $query->orderBy('al.created_at', 'DESC')->limit($limit)->get();
+            if ($userId !== null) {
+                $query->where('al.user_id', '=', $userId);
+            }
+            if ($action !== null) {
+                $query->where('al.action', '=', $action);
+            }
+
+            return $query->orderBy('al.created_at', 'DESC')->limit($limit)->get();
+        });
     }
 
     /**
@@ -62,7 +65,8 @@ class ActivityLog extends Model
             $query->where('al.action', '=', $action);
         }
         if ($search !== null) {
-            $like = "%{$search}%";
+            $searchClean = addcslashes($search, '%_');
+            $like = "%{$searchClean}%";
             $query->whereNested(function($q) use ($like) {
                 $q->where('al.description', 'LIKE', $like)
                   ->orWhere('al.action', 'LIKE', $like)
@@ -116,10 +120,24 @@ class ActivityLog extends Model
      */
     public function softDeleteOlderThan(int $days = 90): int
     {
-        return $this->db->table(static::$table)
-            ->whereNull('deleted_at')
-            ->where('created_at', '<', date('Y-m-d H:i:s', strtotime("-{$days} days")))
-            ->update(['deleted_at' => date('Y-m-d H:i:s')]);
+        $totalUpdated = 0;
+        $chunkSize = 1000;
+        $dateLimit = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+
+        do {
+            $affected = $this->db->table(static::$table)
+                ->whereNull('deleted_at')
+                ->where('created_at', '<', $dateLimit)
+                ->limit($chunkSize)
+                ->update(['deleted_at' => date('Y-m-d H:i:s')]);
+
+            $totalUpdated += $affected;
+            if ($affected > 0) {
+                usleep(100000); // 100ms delay between chunks
+            }
+        } while ($affected > 0);
+
+        return $totalUpdated;
     }
 
     /**

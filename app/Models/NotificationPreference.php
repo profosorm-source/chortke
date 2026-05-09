@@ -38,13 +38,17 @@ class NotificationPreference extends Model
         )->fetch(\PDO::FETCH_OBJ);
 
         if (!$prefs) {
-            $now = date('Y-m-d H:i:s');
-            $this->db->query(
-                "INSERT INTO " . static::$table . " (user_id, created_at, updated_at)
-                 VALUES (?, ?, ?)
-                 ON DUPLICATE KEY UPDATE updated_at = updated_at",
-                [$userId, $now, $now]
-            );
+            try {
+                $now = date('Y-m-d H:i:s');
+                $this->db->query(
+                    "INSERT INTO " . static::$table . " (user_id, created_at, updated_at)
+                     VALUES (?, ?, ?)
+                     ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)",
+                    [$userId, $now, $now]
+                );
+            } catch (\Throwable $e) {
+                // Mute duplicate key or concurrency database errors
+            }
 
             $prefs = $this->db->query(
                 "SELECT * FROM " . static::$table . " WHERE user_id = ? LIMIT 1",

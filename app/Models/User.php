@@ -47,7 +47,7 @@ class User extends Model
     public function incrementFraudScore(int $userId, int $amount = 1): bool
     {
         return (bool)$this->db->query(
-            "UPDATE users SET fraud_score = COALESCE(fraud_score, 0) + ? WHERE id = ?",
+            "UPDATE users SET fraud_score = COALESCE(fraud_score, 0) + ?, updated_at = NOW() WHERE id = ?",
             [$amount, $userId]
         );
     }
@@ -80,10 +80,17 @@ class User extends Model
         $query = $this->db->table('users')->whereNull('deleted_at');
 
         if (!empty($filters['search'])) {
-            $search = "%{$filters['search']}%";
-            $query->where('full_name', 'LIKE', $search)
+            $searchVal = trim((string)$filters['search']);
+            if (strlen($searchVal) > 100) {
+                throw new \InvalidArgumentException('Search term too long');
+            }
+            $searchClean = addcslashes($searchVal, '%_');
+            $search = "%{$searchClean}%";
+            $query->whereNested(function($q) use ($search) {
+                $q->where('full_name', 'LIKE', $search)
                   ->orWhere('email', 'LIKE', $search)
                   ->orWhere('mobile', 'LIKE', $search);
+            });
         }
 
         if (!empty($filters['role'])) {
@@ -106,10 +113,17 @@ class User extends Model
         $query = $this->db->table('users')->whereNull('deleted_at');
 
         if (!empty($filters['search'])) {
-            $search = "%{$filters['search']}%";
-            $query->where('full_name', 'LIKE', $search)
+            $searchVal = trim((string)$filters['search']);
+            if (strlen($searchVal) > 100) {
+                throw new \InvalidArgumentException('Search term too long');
+            }
+            $searchClean = addcslashes($searchVal, '%_');
+            $search = "%{$searchClean}%";
+            $query->whereNested(function($q) use ($search) {
+                $q->where('full_name', 'LIKE', $search)
                   ->orWhere('email', 'LIKE', $search)
                   ->orWhere('mobile', 'LIKE', $search);
+            });
         }
 
         return $query->count();
@@ -117,14 +131,16 @@ class User extends Model
 
     public function getAdminStats(): object
     {
-        return $this->db->fetch(
-            "SELECT
-                COUNT(*) AS total_count,
-                SUM(CASE WHEN deleted_at IS NULL AND status = 'active' THEN 1 ELSE 0 END) AS active_count,
-                SUM(CASE WHEN deleted_at IS NULL AND status = 'suspended' THEN 1 ELSE 0 END) AS suspended_count,
-                SUM(CASE WHEN status = 'banned' THEN 1 ELSE 0 END) AS banned_count
-             FROM users"
-        ) ?: (object)[];
+        return cache()->remember('user_admin_stats', 300, function() {
+            return $this->db->fetch(
+                "SELECT
+                    COUNT(*) AS total_count,
+                    SUM(CASE WHEN deleted_at IS NULL AND status = 'active' THEN 1 ELSE 0 END) AS active_count,
+                    SUM(CASE WHEN deleted_at IS NULL AND status = 'suspended' THEN 1 ELSE 0 END) AS suspended_count,
+                    SUM(CASE WHEN status = 'banned' THEN 1 ELSE 0 END) AS banned_count
+                 FROM users"
+            ) ?: (object)[];
+        });
     }
 
     public function getUserSettings(int $userId): array

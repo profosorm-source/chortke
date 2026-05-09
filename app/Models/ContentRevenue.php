@@ -10,7 +10,8 @@ class ContentRevenue extends Model {
     public const STATUS_APPROVED  = 'approved';
     public const STATUS_PAID      = 'paid';
     public const STATUS_CANCELLED = 'cancelled';
-/**
+
+    /**
      * ایجاد رکورد درآمد
      * خروجی: id یا null
      */
@@ -84,17 +85,20 @@ class ContentRevenue extends Model {
         $limit  = \max(1, (int)$limit);
         $offset = \max(0, (int)$offset);
 
-        $stmt = $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT cr.*, cs.title as video_title, cs.platform
              FROM content_revenues cr
              JOIN content_submissions cs ON cr.submission_id = cs.id
-             WHERE cr.user_id = ? AND cr.is_deleted = 0
+             WHERE cr.user_id = :user_id AND cr.is_deleted = 0
              ORDER BY cr.period DESC
-             LIMIT {$limit} OFFSET {$offset}",
-            [$userId]
+             LIMIT :limit OFFSET :offset"
         );
+        $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
     }
 
     public function countByUser(int $userId): int
@@ -139,25 +143,33 @@ class ContentRevenue extends Model {
                 JOIN content_submissions cs ON cr.submission_id = cs.id
                 JOIN users u ON cr.user_id = u.id
                 WHERE cr.is_deleted = 0";
+        
         $params = [];
 
         if (!empty($filters['status'])) {
-            $sql .= " AND cr.status = ?";
-            $params[] = $filters['status'];
+            $sql .= " AND cr.status = :status";
+            $params['status'] = $filters['status'];
         }
         if (!empty($filters['user_id'])) {
-            $sql .= " AND cr.user_id = ?";
-            $params[] = (int)$filters['user_id'];
+            $sql .= " AND cr.user_id = :user_id";
+            $params['user_id'] = (int)$filters['user_id'];
         }
         if (!empty($filters['period'])) {
-            $sql .= " AND cr.period = ?";
-            $params[] = $filters['period'];
+            $sql .= " AND cr.period = :period";
+            $params['period'] = $filters['period'];
         }
 
-        $sql .= " ORDER BY cr.created_at DESC LIMIT {$limit} OFFSET {$offset}";
+        $sql .= " ORDER BY cr.created_at DESC LIMIT :limit OFFSET :offset";
 
-        $stmt = $this->db->query($sql, $params);
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue(':' . $key, $value);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
     }
 
     public function countAll(array $filters = []): int
@@ -200,16 +212,28 @@ class ContentRevenue extends Model {
     {
         if (empty($data)) return false;
 
-        $data['updated_at'] = \date('Y-m-d H:i:s');
+        // Whitelist allowed fields
+        $allowedFields = [
+            'status', 'total_revenue', 'site_share_amount',
+            'net_user_amount', 'tax_amount', 'admin_notes',
+            'reviewed_by', 'reviewed_at', 'paid_at', 'is_deleted'
+        ];
 
         $fields = [];
         $values = [];
 
         foreach ($data as $k => $v) {
-            $fields[] = "`{$k}` = ?";
-            $values[] = $v;
+            if (\in_array($k, $allowedFields, true)) {
+                $fields[] = "`{$k}` = ?";
+                $values[] = $v;
+            }
         }
 
+        if (empty($fields)) {
+            return false;
+        }
+
+        $fields[] = "`updated_at` = NOW()";
         $values[] = $id;
 
         $sql = "UPDATE content_revenues

@@ -1,12 +1,15 @@
 <?php
 
 namespace App\Models;
+
 use Core\Model;
 
-use Core\Database;
+class Permission extends Model
+{
+    private static array $userPermissionsCache = [];
+    private static array $isSuperAdminCache = [];
 
-class Permission extends Model {
-/**
+    /**
      * یافتن دسترسی با ID
      */
     public function find(int $id): ?object
@@ -89,28 +92,30 @@ class Permission extends Model {
     }
 
     /**
-     * بررسی دسترسی کاربر
+     * بررسی دسترسی کاربر با ککش داینامیک درون‌حافظه‌ای
      */
     public function userHasPermission(int $userId, string $permSlug): bool
     {
-        $stmt = $this->db->prepare("
-            SELECT COUNT(*) 
-            FROM users u
-            INNER JOIN role_permissions rp ON rp.role_id = u.role_id
-            INNER JOIN permissions p ON p.id = rp.permission_id
-            WHERE u.id = ? AND p.slug = ? AND u.deleted_at IS NULL
-        ");
+        if ($this->isSuperAdmin($userId)) {
+            return true;
+        }
 
-        $stmt->execute([$userId, $permSlug]);
+        if (!isset(self::$userPermissionsCache[$userId])) {
+            self::$userPermissionsCache[$userId] = $this->getUserPermissions($userId);
+        }
 
-        return (int)$stmt->fetchColumn() > 0;
+        return \in_array($permSlug, self::$userPermissionsCache[$userId], true);
     }
 
     /**
-     * بررسی آیا کاربر super_admin است
+     * بررسی آیا کاربر super_admin است با ککش درون‌حافظه‌ای
      */
     public function isSuperAdmin(int $userId): bool
     {
+        if (isset(self::$isSuperAdminCache[$userId])) {
+            return self::$isSuperAdminCache[$userId];
+        }
+
         $stmt = $this->db->prepare("
             SELECT COUNT(*) 
             FROM users u
@@ -119,8 +124,10 @@ class Permission extends Model {
         ");
 
         $stmt->execute([$userId]);
+        $isSuper = (int)$stmt->fetchColumn() > 0;
 
-        return (int)$stmt->fetchColumn() > 0;
+        self::$isSuperAdminCache[$userId] = $isSuper;
+        return $isSuper;
     }
 
     /**

@@ -166,67 +166,84 @@ class Appeal
      */
     public function getUserAppeals(int $userId, int $limit = 20, int $offset = 0): array
     {
-        return $this->db->query(
+        $limit = \max(1, $limit);
+        $offset = \max(0, $offset);
+
+        $stmt = $this->db->prepare(
             "SELECT a.*,
-                    COUNT(DISTINCT at.id) as attachment_count,
-                    COUNT(DISTINCT ar.id) as response_count
+                    COALESCE(at.cnt, 0) as attachment_count,
+                    COALESCE(ar.cnt, 0) as response_count
              FROM appeals a
-             LEFT JOIN appeal_attachments at ON a.id = at.appeal_id
-             LEFT JOIN appeal_responses ar ON a.id = ar.appeal_id
-             WHERE a.user_id = ?
-             GROUP BY a.id
+             LEFT JOIN (
+                 SELECT appeal_id, COUNT(*) as cnt FROM appeal_attachments GROUP BY appeal_id
+             ) at ON a.id = at.appeal_id
+             LEFT JOIN (
+                 SELECT appeal_id, COUNT(*) as cnt FROM appeal_responses GROUP BY appeal_id
+             ) ar ON a.id = ar.appeal_id
+             WHERE a.user_id = :user_id
              ORDER BY a.created_at DESC
-             LIMIT ? OFFSET ?",
-            [$userId, $limit, $offset]
-        )->fetchAll() ?? [];
+             LIMIT :limit OFFSET :offset"
+        );
+
+        $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll() ?? [];
     }
 
-    /**
-     * دریافت اعتراضات برای ادمین
-     */
     public function getAppealsByStatus(
         ?string $status = null,
         ?string $priority = null,
         int $limit = 50,
         int $offset = 0
     ): array {
+        $limit = \max(1, $limit);
+        $offset = \max(0, $offset);
+
         $conditions = [];
         $params = [];
 
         if ($status) {
-            $conditions[] = "a.status = ?";
-            $params[] = $status;
+            $conditions[] = "a.status = :status";
+            $params['status'] = $status;
         }
 
         if ($priority) {
-            $conditions[] = "a.priority = ?";
-            $params[] = $priority;
+            $conditions[] = "a.priority = :priority";
+            $params['priority'] = $priority;
         }
 
-        $whereClause = !empty($conditions) ? "WHERE " . implode(" AND ", $conditions) : "";
+        $whereClause = !empty($conditions) ? "WHERE " . \implode(" AND ", $conditions) : "";
 
-        $params[] = $limit;
-        $params[] = $offset;
+        $sql = "SELECT a.*, u.username, u.email,
+                       COALESCE(at.cnt, 0) as attachment_count
+                FROM appeals a
+                LEFT JOIN users u ON a.user_id = u.id
+                LEFT JOIN (
+                    SELECT appeal_id, COUNT(*) as cnt FROM appeal_attachments GROUP BY appeal_id
+                ) at ON a.id = at.appeal_id
+                {$whereClause}
+                ORDER BY 
+                   CASE a.priority 
+                       WHEN 'urgent' THEN 1 
+                       WHEN 'high' THEN 2 
+                       WHEN 'medium' THEN 3 
+                       ELSE 4 
+                   END,
+                   a.created_at ASC
+                LIMIT :limit OFFSET :offset";
 
-        return $this->db->query(
-            "SELECT a.*, u.username, u.email,
-                    COUNT(DISTINCT at.id) as attachment_count
-             FROM appeals a
-             LEFT JOIN users u ON a.user_id = u.id
-             LEFT JOIN appeal_attachments at ON a.id = at.appeal_id
-             {$whereClause}
-             GROUP BY a.id
-             ORDER BY 
-                CASE a.priority 
-                    WHEN 'urgent' THEN 1 
-                    WHEN 'high' THEN 2 
-                    WHEN 'medium' THEN 3 
-                    ELSE 4 
-                END,
-                a.created_at ASC
-             LIMIT ? OFFSET ?",
-            $params
-        )->fetchAll() ?? [];
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $key => $val) {
+            $stmt->bindValue(':' . $key, $val);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll() ?? [];
     }
 
     /**

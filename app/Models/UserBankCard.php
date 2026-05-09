@@ -170,9 +170,11 @@ class UserBankCard extends Model
                 WHERE c.status = 'pending'
                   AND c.deleted_at IS NULL
                 ORDER BY c.created_at ASC
-                LIMIT {$limit} OFFSET {$offset}";
+                LIMIT ? OFFSET ?";
 
         $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(1, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $offset, \PDO::PARAM_INT);
         $stmt->execute();
 
         return $stmt->fetchAll(\PDO::FETCH_OBJ);

@@ -6,17 +6,30 @@ namespace App\Models;
 
 use Core\Model;
 
+/**
+ * AdvancedSearch Model - Secured against LIKE Injections
+ */
 class AdvancedSearch extends Model
 {
     protected static string $table = '';
 
+    /**
+     * Escape and validate search query
+     */
+    private function sanitizeSearchQuery(string $q, int $maxLength = 100): string
+    {
+        return $this->escapeLikeValue($q, $maxLength);
+    }
+
     public function searchUsers(string $q, int $limit): array
     {
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('users')
             ->select('id', 'full_name', 'email', 'mobile', 'kyc_status', 'tier_level', 'created_at')
-            ->where('deleted_at', 'IS', null)
-            ->where(function($query) use ($like) {
+            ->whereNull('deleted_at')
+            ->where(function($query) use ($like, $q) {
                 $query->where('full_name', 'LIKE', $like)
                       ->orWhere('email', 'LIKE', $like)
                       ->orWhere('mobile', 'LIKE', $like)
@@ -29,7 +42,9 @@ class AdvancedSearch extends Model
 
     public function searchTransactions(string $q, int $limit): array
     {
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('transactions as t')
             ->select('t.id', 't.type', 't.amount', 't.currency', 't.status', 't.description', 't.created_at', 'u.full_name', 'u.email')
             ->leftJoin('users as u', 'u.id', '=', 't.user_id')
@@ -46,7 +61,9 @@ class AdvancedSearch extends Model
 
     public function searchTickets(string $q, int $limit): array
     {
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('tickets as tk')
             ->select('tk.id', 'tk.subject', 'tk.status', 'tk.priority', 'tk.created_at', 'u.full_name', 'u.email')
             ->leftJoin('users as u', 'u.id', '=', 'tk.user_id')
@@ -62,7 +79,9 @@ class AdvancedSearch extends Model
 
     public function searchWithdrawals(string $q, int $limit): array
     {
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('withdrawals as w')
             ->select('w.id', 'w.amount', 'w.currency', 'w.status', 'w.created_at', 'u.full_name', 'u.email')
             ->leftJoin('users as u', 'u.id', '=', 'w.user_id')
@@ -78,7 +97,9 @@ class AdvancedSearch extends Model
 
     public function searchDeposits(string $q, int $limit): array
     {
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         $manual = $this->db->table('manual_deposits as md')
             ->selectRaw("md.id, md.amount, 'manual' as type, md.status, md.created_at, u.full_name, u.email")
             ->leftJoin('users as u', 'u.id', '=', 'md.user_id')
@@ -96,17 +117,19 @@ class AdvancedSearch extends Model
             });
 
         $results = array_merge($manual->get() ?? [], $crypto->get() ?? []);
-        usort($results, fn($a, $b) => strtotime($b['created_at']) <=> strtotime($a['created_at']));
+        usort($results, fn($a, $b) => strtotime((string)$b['created_at']) <=> strtotime((string)$a['created_at']));
         return array_slice($results, 0, $limit);
     }
 
     public function searchAds(string $q, int $limit): array
     {
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('advertisements as a')
             ->select('a.id', 'a.title', 'a.platform', 'a.task_type', 'a.status', 'a.created_at', 'u.full_name', 'u.email')
             ->leftJoin('users as u', 'u.id', '=', 'a.advertiser_id')
-            ->where('a.deleted_at', 'IS', null)
+            ->whereNull('a.deleted_at')
             ->where(function($query) use ($like) {
                 $query->where('a.title', 'LIKE', $like)
                       ->orWhere('u.email', 'LIKE', $like);
@@ -118,7 +141,10 @@ class AdvancedSearch extends Model
 
     public function searchUserTransactions(string $q, int $userId, int $limit): array
     {
+        $this->validateId($userId);
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('transactions')
             ->select('id', 'type', 'amount', 'currency', 'status', 'description', 'created_at')
             ->where('user_id', '=', $userId)
@@ -133,7 +159,10 @@ class AdvancedSearch extends Model
 
     public function searchUserTickets(string $q, int $userId, int $limit): array
     {
+        $this->validateId($userId);
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('tickets')
             ->select('id', 'subject', 'status', 'priority', 'created_at')
             ->where('user_id', '=', $userId)
@@ -145,11 +174,14 @@ class AdvancedSearch extends Model
 
     public function searchUserAds(string $q, int $userId, int $limit): array
     {
+        $this->validateId($userId);
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('advertisements')
             ->select('id', 'title', 'platform', 'task_type', 'status', 'created_at')
             ->where('advertiser_id', '=', $userId)
-            ->where('deleted_at', 'IS', null)
+            ->whereNull('deleted_at')
             ->where('title', 'LIKE', $like)
             ->orderBy('created_at', 'DESC')
             ->limit($limit)
@@ -158,7 +190,10 @@ class AdvancedSearch extends Model
 
     public function searchUserTasks(string $q, int $userId, int $limit): array
     {
+        $this->validateId($userId);
+        $q = $this->sanitizeSearchQuery($q);
         $like = "%{$q}%";
+        
         return $this->db->table('task_executions as te')
             ->select('te.id', 'te.status', 'te.reward_amount', 'te.created_at', 'a.title as ad_title')
             ->join('advertisements as a', 'a.id', '=', 'te.advertisement_id')
@@ -176,9 +211,10 @@ class AdvancedSearch extends Model
             ->where('status', '=', 'active');
 
         if (!empty($filters['q'])) {
-            $q = '%' . trim($filters['q']) . '%';
-            $query->where(function($sub) use ($q) {
-                $sub->where('title', 'LIKE', $q)->orWhere('description', 'LIKE', $q);
+            $qClean = $this->sanitizeSearchQuery($filters['q']);
+            $like = "%{$qClean}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('title', 'LIKE', $like)->orWhere('description', 'LIKE', $like);
             });
         }
 
@@ -214,9 +250,10 @@ class AdvancedSearch extends Model
             ->where('ip.status', '=', 'active');
 
         if (!empty($filters['q'])) {
-            $q = '%' . trim($filters['q']) . '%';
-            $query->where(function($sub) use ($q) {
-                $sub->where('ip.display_name', 'LIKE', $q)->orWhere('ip.bio', 'LIKE', $q);
+            $qClean = $this->sanitizeSearchQuery($filters['q']);
+            $like = "%{$qClean}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('ip.display_name', 'LIKE', $like)->orWhere('ip.bio', 'LIKE', $like);
             });
         }
 
@@ -248,9 +285,10 @@ class AdvancedSearch extends Model
             ->where('vl.listing_type', '=', 'sell');
 
         if (!empty($filters['q'])) {
-            $q = '%' . trim($filters['q']) . '%';
-            $query->where(function($sub) use ($q) {
-                $sub->where('vl.title', 'LIKE', $q)->orWhere('vl.description', 'LIKE', $q);
+            $qClean = $this->sanitizeSearchQuery($filters['q']);
+            $like = "%{$qClean}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('vl.title', 'LIKE', $like)->orWhere('vl.description', 'LIKE', $like);
             });
         }
 
@@ -283,9 +321,10 @@ class AdvancedSearch extends Model
         $query = $this->db->table('social_ads')->where('status', '=', 'active');
 
         if (!empty($filters['q'])) {
-            $q = '%' . trim($filters['q']) . '%';
-            $query->where(function($sub) use ($q) {
-                $sub->where('title', 'LIKE', $q)->orWhere('description', 'LIKE', $q);
+            $qClean = $this->sanitizeSearchQuery($filters['q']);
+            $like = "%{$qClean}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('title', 'LIKE', $like)->orWhere('description', 'LIKE', $like);
             });
         }
         if (!empty($filters['platform'])) $query->where('platform', '=', $filters['platform']);
@@ -303,9 +342,10 @@ class AdvancedSearch extends Model
             ->where('ip.status', '=', 'active');
 
         if (!empty($filters['q'])) {
-            $q = '%' . trim($filters['q']) . '%';
-            $query->where(function($sub) use ($q) {
-                $sub->where('ip.display_name', 'LIKE', $q)->orWhere('ip.bio', 'LIKE', $q);
+            $qClean = $this->sanitizeSearchQuery($filters['q']);
+            $like = "%{$qClean}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('ip.display_name', 'LIKE', $like)->orWhere('ip.bio', 'LIKE', $like);
             });
         }
         if (!empty($filters['platform'])) $query->where('ip.platform', '=', $filters['platform']);
@@ -322,9 +362,10 @@ class AdvancedSearch extends Model
             ->where('vl.listing_type', '=', 'sell');
 
         if (!empty($filters['q'])) {
-            $q = '%' . trim($filters['q']) . '%';
-            $query->where(function($sub) use ($q) {
-                $sub->where('vl.title', 'LIKE', $q)->orWhere('vl.description', 'LIKE', $q);
+            $qClean = $this->sanitizeSearchQuery($filters['q']);
+            $like = "%{$qClean}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('vl.title', 'LIKE', $like)->orWhere('vl.description', 'LIKE', $like);
             });
         }
         if (!empty($filters['category'])) $query->where('vl.category', '=', $filters['category']);

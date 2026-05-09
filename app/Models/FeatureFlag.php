@@ -19,7 +19,7 @@ class FeatureFlag extends Model
     private array $requestCache = [];
     
     private \Core\Cache $cache;
-    protected \Core\Logger $logger;
+    protected \App\Contracts\LoggerInterface $logger;
     private Request $request;
     private bool $useRedis = false;
     
@@ -30,10 +30,10 @@ class FeatureFlag extends Model
         'environments', 'priority', 'tags',
     ];
     
-    public function __construct(?Database $db = null, ?\Core\Logger $logger = null, ?\Core\Cache $cache = null, ?Request $request = null)
+    public function __construct(?Database $db = null, ?\App\Contracts\LoggerInterface $logger = null, ?\Core\Cache $cache = null, ?Request $request = null)
     {
         parent::__construct($db);
-        $this->logger  = $logger ?? logger();
+        $this->logger  = $logger ?? \Core\Container::getInstance()->make(\App\Contracts\LoggerInterface::class);
         $this->request = $request ?? new Request();
 
         // Initialize Cache (with Redis support if available)
@@ -93,7 +93,7 @@ class FeatureFlag extends Model
     /**
      * پاک کردن Cache
      */
-    private function clearCache(): void
+    public function clearCache(): void
     {
         // Clear memory cache
         self::$cachedFeatures = [];
@@ -106,8 +106,17 @@ class FeatureFlag extends Model
             $this->cache->delete('ff:all_features');
         }
         
-        // Clear Database cache
-        $this->db->query("TRUNCATE TABLE feature_flag_cache");
+        // Clear Database cache safely using DELETE
+        $this->db->query("DELETE FROM feature_flag_cache");
+    }
+
+    /**
+     * پاکسازی Metrics قدیمی
+     */
+    public function cleanupMetrics(int $days = 30): void
+    {
+        $sql = "CALL sp_cleanup_feature_metrics(?)";
+        $this->db->query($sql, [$days]);
     }
     
     public function getAll(): array
@@ -320,7 +329,7 @@ class FeatureFlag extends Model
             // Percentage check
             if ($result && $feature->enabled_percentage < 100) {
                 if ($userId) {
-                    $hash = crc32($userId . $name);
+                    $hash = \hexdec(\substr(\md5($userId . $name), 0, 8));
                     $userPercentage = ($hash % 100) + 1;
                     
                     if ($userPercentage > $feature->enabled_percentage) {
@@ -328,7 +337,11 @@ class FeatureFlag extends Model
                         $denyReason = 'percentage';
                     }
                 } else {
-                    if (rand(1, 100) > $feature->enabled_percentage) {
+                    $anonId = $this->request->ip();
+                    $hash = \hexdec(\substr(\md5($anonId . $name), 0, 8));
+                    $userPercentage = ($hash % 100) + 1;
+                    
+                    if ($userPercentage > $feature->enabled_percentage) {
                         $result = false;
                         $denyReason = 'percentage';
                     }

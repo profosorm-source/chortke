@@ -16,7 +16,26 @@ class SocialTaskExecutionModel extends Model
     public function getExecutionById(int $id, bool $forUpdate = false): ?object
     {
         $sql = "SELECT * FROM social_task_executions WHERE id = ?";
-        if ($forUpdate) $sql .= " FOR UPDATE";
+        if ($forUpdate) {
+            $sql .= " FOR UPDATE";
+            $startedTransaction = false;
+            if (!$this->db->inTransaction()) {
+                $this->db->beginTransaction();
+                $startedTransaction = true;
+            }
+            try {
+                $row = $this->db->fetch($sql, [$id]);
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                return $row;
+            } catch (\Throwable $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                throw $e;
+            }
+        }
         return $this->db->fetch($sql, [$id]);
     }
 
@@ -26,7 +45,26 @@ class SocialTaskExecutionModel extends Model
                 FROM social_task_executions e
                 INNER JOIN social_ads a ON a.id = e.ad_id
                 WHERE e.id = ? AND e.executor_id = ?";
-        if ($forUpdate) $sql .= " FOR UPDATE";
+        if ($forUpdate) {
+            $sql .= " FOR UPDATE";
+            $startedTransaction = false;
+            if (!$this->db->inTransaction()) {
+                $this->db->beginTransaction();
+                $startedTransaction = true;
+            }
+            try {
+                $row = $this->db->fetch($sql, [$executionId, $userId]);
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                return $row;
+            } catch (\Throwable $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                throw $e;
+            }
+        }
         return $this->db->fetch($sql, [$executionId, $userId]);
     }
 
@@ -36,7 +74,26 @@ class SocialTaskExecutionModel extends Model
                 FROM social_task_executions e
                 INNER JOIN social_ads a ON a.id = e.ad_id
                 WHERE e.id = ? AND a.advertiser_id = ?";
-        if ($forUpdate) $sql .= " FOR UPDATE";
+        if ($forUpdate) {
+            $sql .= " FOR UPDATE";
+            $startedTransaction = false;
+            if (!$this->db->inTransaction()) {
+                $this->db->beginTransaction();
+                $startedTransaction = true;
+            }
+            try {
+                $row = $this->db->fetch($sql, [$executionId, $advertiserId]);
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                return $row;
+            } catch (\Throwable $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                throw $e;
+            }
+        }
         return $this->db->fetch($sql, [$executionId, $advertiserId]);
     }
 
@@ -56,12 +113,19 @@ class SocialTaskExecutionModel extends Model
         );
     }
 
+    private const ALLOWED_UPDATE_FIELDS = [
+        'status', 'task_score', 'active_time', 'decision', 'rejection_reason', 'behavior_data', 'flag_review', 'flag_note'
+    ];
+
     public function updateExecutionStatus(int $id, string $status, array $data = []): bool
     {
         $updates = ["status = ?", "updated_at = NOW()"];
         $params = [$status];
 
         foreach ($data as $key => $value) {
+            if (!\in_array($key, self::ALLOWED_UPDATE_FIELDS, true)) {
+                throw new \InvalidArgumentException("Invalid or restricted update column: " . $key);
+            }
             $updates[] = "{$key} = ?";
             $params[] = $value;
         }

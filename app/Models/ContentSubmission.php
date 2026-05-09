@@ -300,8 +300,11 @@ class ContentSubmission extends Model
         }
 
         if (!empty($filters['search'])) {
+            $searchTerm = \trim((string)$filters['search']);
+            $escaped = $this->escapeLikeValue($searchTerm, 100);
+            $search = "%{$escaped}%";
+
             $sql .= " AND (cs.title LIKE ? OR cs.video_url LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)";
-            $search = '%' . $filters['search'] . '%';
             $params[] = $search;
             $params[] = $search;
             $params[] = $search;
@@ -348,8 +351,11 @@ class ContentSubmission extends Model
         }
 
         if (!empty($filters['search'])) {
+            $searchTerm = \trim((string)$filters['search']);
+            $escaped = $this->escapeLikeValue($searchTerm, 100);
+            $search = "%{$escaped}%";
+
             $sql .= " AND (cs.title LIKE ? OR cs.video_url LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)";
-            $search = '%' . $filters['search'] . '%';
             $params[] = $search;
             $params[] = $search;
             $params[] = $search;
@@ -375,20 +381,33 @@ class ContentSubmission extends Model
             return false;
         }
 
-        $data['updated_at'] = date('Y-m-d H:i:s');
+        // Whitelist of allowed fields
+        $allowedFields = [
+            'title', 'description', 'category', 'video_url',
+            'status', 'reviewed_by', 'reviewed_at', 'approved_at',
+            'rejection_reason', 'admin_notes', 'agreement_accepted', 
+            'agreement_accepted_at', 'agreement_ip', 'agreement_fingerprint', 'is_deleted'
+        ];
 
         $fields = [];
         $values = [];
 
         foreach ($data as $k => $v) {
-            $fields[] = "`{$k}` = ?";
-            $values[] = $v;
+            if (\in_array($k, $allowedFields, true)) {
+                $fields[] = "`{$k}` = ?";
+                $values[] = $v;
+            }
         }
 
+        if (empty($fields)) {
+            return false;
+        }
+
+        $fields[] = "`updated_at` = NOW()";
         $values[] = $id;
 
-        $sql = "UPDATE {$this->table}
-                SET " . implode(', ', $fields) . "
+        $sql = "UPDATE `{$this->table}`
+                SET " . \implode(', ', $fields) . "
                 WHERE id = ? AND is_deleted = 0";
 
         $stmt = $this->db->query($sql, $values);

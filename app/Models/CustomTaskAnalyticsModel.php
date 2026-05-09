@@ -36,7 +36,7 @@ class CustomTaskAnalyticsModel extends Model
 
     public function analytics_recordRejection(int $taskId): void
     {
-        $this->analytics_recordRejection($taskId);
+        $this->analytics_incrementDailyMetric($taskId, 'rejections');
     }
 
     private function analytics_incrementDailyMetric(int $taskId, string $metric): void

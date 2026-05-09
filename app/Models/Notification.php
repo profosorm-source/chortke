@@ -81,16 +81,19 @@ class Notification extends Model
     {
         $limit = max(1, min(200, $limit));
 
-        return $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT *
              FROM notifications
              WHERE user_id     = ?
                AND is_archived = 0
                AND (expires_at  IS NULL OR expires_at  >  NOW())
              ORDER BY id DESC
-             LIMIT {$limit}",
-            [$userId]
-        )->fetchAll(\PDO::FETCH_OBJ);
+             LIMIT ?"
+        );
+        $stmt->bindValue(1, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**
@@ -125,25 +128,37 @@ class Notification extends Model
                       ELSE 0
                     END DESC,
                     created_at DESC
-                  LIMIT {$limit} OFFSET {$offset}";
+                  LIMIT ? OFFSET ?";
 
-        return $this->db->query($sql, $params)->fetchAll(\PDO::FETCH_OBJ);
+        $stmt = $this->db->prepare($sql);
+        $index = 1;
+        foreach ($params as $val) {
+            $stmt->bindValue($index++, $val);
+        }
+        $stmt->bindValue($index++, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue($index++, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     public function getNewNotificationsAfterId(int $userId, int $lastId, int $limit = 20): array
     {
         $limit = max(1, min(200, $limit));
 
-        return $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT *
              FROM notifications
              WHERE user_id     = ?
                AND id          > ?
                AND (expires_at  IS NULL OR expires_at  >  NOW())
              ORDER BY id ASC
-             LIMIT {$limit}",
-            [$userId, $lastId]
-        )->fetchAll(\PDO::FETCH_OBJ);
+             LIMIT ?"
+        );
+        $stmt->bindValue(1, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $lastId, \PDO::PARAM_INT);
+        $stmt->bindValue(3, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**
@@ -310,7 +325,7 @@ class Notification extends Model
     public function getPendingScheduled(int $limit = 100): array
     {
         $limit = max(1, min(500, $limit));
-        return $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT *
              FROM notifications
              WHERE scheduled_at IS NOT NULL
@@ -320,8 +335,11 @@ class Notification extends Model
              ORDER BY
                CASE priority WHEN 'urgent' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC,
                scheduled_at ASC
-             LIMIT {$limit}"
-        )->fetchAll(\PDO::FETCH_OBJ);
+             LIMIT ?"
+        );
+        $stmt->bindValue(1, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**
@@ -343,7 +361,7 @@ class Notification extends Model
     public function getByType(int $userId, string $type, int $limit = 10): array
     {
         $limit = max(1, min(100, $limit));
-        return $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT *
              FROM notifications
              WHERE user_id     = ?
@@ -352,9 +370,13 @@ class Notification extends Model
                AND is_deleted  = 0
                AND (expires_at IS NULL OR expires_at > NOW())
              ORDER BY created_at DESC
-             LIMIT {$limit}",
-            [$userId, $type]
-        )->fetchAll(\PDO::FETCH_OBJ);
+             LIMIT ?"
+        );
+        $stmt->bindValue(1, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $type);
+        $stmt->bindValue(3, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**
@@ -435,7 +457,7 @@ class Notification extends Model
      */
     public function getHighUnreadUsers(int $threshold = 20, int $limit = 50): array
     {
-        return $this->db->query(
+        $stmt = $this->db->prepare(
             "SELECT user_id, COUNT(*) AS unread_count
              FROM notifications
              WHERE is_read    = 0
@@ -445,9 +467,12 @@ class Notification extends Model
              GROUP BY user_id
              HAVING unread_count >= ?
              ORDER BY unread_count DESC
-             LIMIT {$limit}",
-            [$threshold]
-        )->fetchAll(\PDO::FETCH_OBJ);
+             LIMIT ?"
+        );
+        $stmt->bindValue(1, $threshold, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     /**
@@ -607,7 +632,11 @@ class Notification extends Model
                  ORDER BY read_rate DESC, total_clicked DESC
                  LIMIT ?";
         
-        return $this->db->fetchAll($sql, [$days, $limit]);
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(1, $days, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
     }
 
     public function getLeastEngagedUsers(int $days, int $limit): array
@@ -629,7 +658,11 @@ class Notification extends Model
                  ORDER BY read_rate ASC, total_received DESC
                  LIMIT ?";
         
-        return $this->db->fetchAll($sql, [$days, $limit]);
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(1, $days, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
     }
 
     public function getDailyAggregationData(string $date): array
