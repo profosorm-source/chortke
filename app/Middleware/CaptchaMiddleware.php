@@ -40,7 +40,10 @@ class CaptchaMiddleware
             session()->setFlash('error', 'کد امنیتی اشتباه است.');
             session()->setFlash('old', $request->all());
 
-            return $response->redirect($_SERVER['HTTP_REFERER'] ?? url('/'));
+            $referer = $_SERVER['HTTP_REFERER'] ?? url('/');
+            $redirectUrl = (function_exists('is_safe_redirect') && is_safe_redirect($referer)) ? $referer : url('/');
+
+            return $response->redirect($redirectUrl);
         }
 
         return $this->toResponse($next($request));

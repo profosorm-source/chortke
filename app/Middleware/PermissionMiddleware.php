@@ -96,39 +96,10 @@ class PermissionMiddleware extends BaseMiddleware
     | جلوگیری شود. در آینده پیشنهاد می‌شود دسترسی‌ها از طریق تزریق کلاسی کنترل شوند.
     */
 
-    /**
-     * بررسی دسترسی کاربر به صورت استاتیک (برای پشتیبانی از کنترلرهای قدیمی)
-     * @deprecated به جای استفاده از این متد استاتیک، از متد غیر استاتیک hasPermission() با تزریق وابستگی استفاده کنید.
-     */
     public static function check(string $permission): bool
     {
-        if (function_exists('is_admin') && is_admin()) {
-            return true;
-        }
-
-        $session = Session::getInstance();
-        $userId = $session->get('user_id');
-        
-        if (!$userId) {
-            return false;
-        }
-        
-        $cachedPermissions = $session->get('user_permissions');
-        $cacheTime = $session->get('permissions_cache_time');
-        
-        if ($cachedPermissions === null || $cacheTime === null || (time() - (int)$cacheTime) > 300) {
-            $permModel = new Permission();
-            $cachedPermissions = $permModel->getUserPermissions((int)$userId);
-            $session->set('user_permissions', $cachedPermissions);
-            $session->set('permissions_cache_time', time());
-        }
-        
-        $userRole = $session->get('user_role');
-        if ($userRole === 'super_admin') {
-            return true;
-        }
-        
-        return in_array($permission, (array)$cachedPermissions, true);
+        // هدایت فراخوانی قدیمی به سیستم داینامیک جدید جهت یکپارچه‌سازی و ممیزی راحت کدهای برنامه
+        return app(self::class)->hasPermission($permission);
     }
     
     /**

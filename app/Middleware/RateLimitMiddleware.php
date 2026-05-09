@@ -62,14 +62,15 @@ class RateLimitMiddleware
                 ]);
 
                 $response = new Response();
-                return $response->json([
+                $response->setHeader('Retry-After', (string)$retryAfter);
+                $response->setHeader('X-RateLimit-Limit', (string)$maxAttempts);
+                $response->setHeader('X-RateLimit-Remaining', '0');
+                $response->json([
                     'success'     => false,
                     'message'     => 'تعداد درخواست‌های شما بیش از حد مجاز است. لطفاً ' . $retryAfter . ' ثانیه دیگر صبر کنید.',
                     'retry_after' => $retryAfter,
-                ], 429)
-                ->header('Retry-After', (string)$retryAfter)
-                ->header('X-RateLimit-Limit', (string)$maxAttempts)
-                ->header('X-RateLimit-Remaining', '0');
+                ], 429);
+                return $response;
             }
 
             $calledNext = true;
@@ -99,8 +100,13 @@ class RateLimitMiddleware
                 throw $e;
             }
             
-            // در صورت خطای سیستمی، اجازه می‌دهیم درخواست ادامه یابد
-            return $next($request);
+            // Fail-Closed: در صورت بروز هرگونه خطای داخلی در سیستم محدودسازی نرخ، درخواست را به طور ایمن رد می‌کنیم
+            $response = new Response();
+            $response->json([
+                'success' => false,
+                'message' => 'خطای امنیتی سیستمی در اعتبارسنجی درخواست.'
+            ], 500);
+            return $response;
         }
     }
 

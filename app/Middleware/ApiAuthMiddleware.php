@@ -92,15 +92,16 @@ class ApiAuthMiddleware
     private function rateLimitResponse(array $result): Response
     {
         $response = new Response();
-        return $response->json([
+        $response->setHeader('Retry-After', (string)($result['retry_after'] ?? 60));
+        $response->setHeader('X-RateLimit-Limit', (string)($result['limit'] ?? 200));
+        $response->setHeader('X-RateLimit-Remaining', '0');
+        $response->json([
             'success' => false,
             'message' => 'تعداد درخواست‌های شما بیش از حد مجاز است.',
             'error'   => 'RATE_LIMIT_EXCEEDED',
             'retry_after' => $result['retry_after'] ?? 60,
-        ], 429)
-        ->header('Retry-After', (string)($result['retry_after'] ?? 60))
-        ->header('X-RateLimit-Limit', (string)($result['limit'] ?? 200))
-        ->header('X-RateLimit-Remaining', '0');
+        ], 429);
+        return $response;
     }
 
     private function extractToken(Request $request): ?string

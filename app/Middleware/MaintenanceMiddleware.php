@@ -23,10 +23,34 @@ class MaintenanceMiddleware
 
     public function handle(Request $request, Closure $next): Response
     {
-        $maintenanceMode = (bool)$this->setting->get('maintenance_mode', false);
+        $maintenanceMode = false;
+        $allowedIPs = [];
+        $message = 'سایت در حال بروزرسانی است...';
+
+        try {
+            $maintenanceMode = (bool)$this->setting->get('maintenance_mode', config('maintenance.enabled', false));
+            $allowedIPs = (array)$this->setting->get('maintenance_allowed_ips', config('maintenance.allowed_ips', []));
+            $message = (string)$this->setting->get('maintenance_message', config('maintenance.message', 'سایت در حال بروزرسانی است...'));
+        } catch (\Throwable $e) {
+            $maintenanceMode = (bool)config('maintenance.enabled', false);
+            $allowedIPs = (array)config('maintenance.allowed_ips', []);
+            $message = (string)config('maintenance.message', 'سایت در حال بروزرسانی است...');
+        }
         
         if (!$maintenanceMode) {
             return $this->toResponse($next($request));
+        }
+
+        // بررسی مسیرهای استثنا شده (Except paths)
+        $uri = $request->uri();
+        $excepts = (array)config('maintenance.except', []);
+        foreach ($excepts as $except) {
+            if ($except === '/' && $uri === '/') {
+                return $this->toResponse($next($request));
+            }
+            if ($except !== '/' && str_starts_with($uri, $except)) {
+                return $this->toResponse($next($request));
+            }
         }
         
         // استثناء برای ادمین‌ها
@@ -35,15 +59,11 @@ class MaintenanceMiddleware
         }
         
         // استثناء برای IPهای مجاز (Strict check)
-        $allowedIPs = (array)$this->setting->get('maintenance_allowed_ips', []);
         $clientIP = get_client_ip();
         
         if (in_array($clientIP, $allowedIPs, true)) {
             return $this->toResponse($next($request));
         }
-        
-        // نمایش صفحه تعمیرات
-        $message = (string)$this->setting->get('maintenance_message', 'سایت در حال بروزرسانی است...');
         
         $response = new Response();
         $response->setStatusCode(503);

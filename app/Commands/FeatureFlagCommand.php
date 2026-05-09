@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * Feature Flag CLI Management
  * 
@@ -17,18 +19,15 @@
 namespace App\Commands;
 
 use App\Models\FeatureFlag;
-use Core\Database;
 use App\Contracts\LoggerInterface;
 
 class FeatureFlagCommand
 {
     private FeatureFlag $model;
-    private Database $db;
     private LoggerInterface $logger;
     
-    public function __construct(Database $db, LoggerInterface $logger, FeatureFlag $model)
+    public function __construct(LoggerInterface $logger, FeatureFlag $model)
     {
-        $this->db = $db;
         $this->logger = $logger;
         $this->model = $model;
     }
@@ -56,7 +55,7 @@ class FeatureFlagCommand
             $enabled = $feature->enabled ? '✓ Yes' : '✗ No ';
             $enabled = str_pad($enabled, 8);
             $rollout = str_pad($feature->enabled_percentage . '%', 8);
-            $priority = str_pad($feature->priority ?? 0, 17);
+            $priority = str_pad((string)($feature->priority ?? 0), 17);
             
             echo "│ {$name} │ {$enabled} │ {$rollout} │ {$priority} │\n";
         }
@@ -173,7 +172,9 @@ class FeatureFlagCommand
                 echo "   - Total checks: {$metric->total_checks}\n";
                 echo "   - Allowed: {$metric->allowed_count}\n";
                 echo "   - Denied: {$metric->denied_count}\n";
-                echo "   - Avg response: " . round($metric->avg_response_time, 2) . "ms\n";
+                if (isset($metric->avg_response_time)) {
+                    echo "   - Avg response: " . round((float)$metric->avg_response_time, 2) . "ms\n";
+                }
             }
             echo "\n";
         }
@@ -203,8 +204,13 @@ class FeatureFlagCommand
      */
     public function delete(string $name): void
     {
-        echo "⚠️  آیا از حذف فیچر '{$name}' مطمئن هستید؟ (yes/no): ";
-        $confirm = trim(fgets(STDIN));
+        if (!defined('STDIN') || !stream_isatty(STDIN)) {
+            echo "⚠️ محیط غیرتعاملی تشخیص داده شد. فرآیند حذف مستقیماً در حال انجام است...\n";
+            $confirm = 'yes';
+        } else {
+            echo "⚠️  آیا از حذف فیچر '{$name}' مطمئن هستید؟ (yes/no): ";
+            $confirm = trim(fgets(STDIN) ?: '');
+        }
         
         if (strtolower($confirm) !== 'yes') {
             echo "❌ عملیات لغو شد.\n";
@@ -242,15 +248,29 @@ class FeatureFlagCommand
      */
     public function schedule(string $name, string $from, string $until): void
     {
+        // بررسی اعتبار تاریخ‌ها
+        $fromTime = strtotime($from);
+        $untilTime = strtotime($until);
+        
+        if ($fromTime === false || $untilTime === false) {
+            echo "❌ خطا: فرمت زمان ارسال شده نامعتبر است.\n";
+            exit(1);
+        }
+        
+        if ($untilTime <= $fromTime) {
+            echo "❌ خطا: زمان پایان زمان‌بندی باید بعد از زمان شروع باشد.\n";
+            exit(1);
+        }
+        
         try {
             $this->model->update($name, [
-                'enabled_from' => $from,
-                'enabled_until' => $until,
+                'enabled_from' => date('Y-m-d H:i:s', $fromTime),
+                'enabled_until' => date('Y-m-d H:i:s', $untilTime),
             ]);
             
             echo "✅ فیچر '{$name}' برای بازه زمانی زیر زمان‌بندی شد:\n";
-            echo "   از: {$from}\n";
-            echo "   تا: {$until}\n";
+            echo "   از: " . date('Y-m-d H:i:s', $fromTime) . "\n";
+            echo "   تا: " . date('Y-m-d H:i:s', $untilTime) . "\n";
         } catch (\Exception $e) {
             echo "❌ خطا: {$e->getMessage()}\n";
             exit(1);
@@ -286,7 +306,7 @@ class FeatureFlagCommand
      */
     public function clearCache(): void
     {
-        $this->db->query("TRUNCATE TABLE feature_flag_cache");
+        $this->model->clearCache();
         echo "✅ Cache فیچرها پاک شد.\n";
     }
     
@@ -295,9 +315,7 @@ class FeatureFlagCommand
      */
     public function cleanupMetrics(int $days = 30): void
     {
-        $sql = "CALL sp_cleanup_feature_metrics(?)";
-        $this->db->query($sql, [$days]);
-        
+        $this->model->cleanupMetrics($days);
         echo "✅ Metrics قدیمی‌تر از {$days} روز پاک شدند.\n";
     }
 }

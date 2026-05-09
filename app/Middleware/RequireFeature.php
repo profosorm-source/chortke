@@ -65,7 +65,7 @@ class RequireFeature
             'feature' => $feature,
             'user_id' => user_id(),
             'ip' => $request->ip(),
-            'path' => $request->path(),
+            'path' => $request->uri(),
         ]);
         
         // حالت‌های مختلف پاسخ

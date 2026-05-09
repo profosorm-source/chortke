@@ -89,6 +89,17 @@ class RateLimitPolicy
         return $this->limiter->availableIn($key) ?? 0;
     }
 
+    public function remaining(string $action, string|int $identifier, ?string $limitKey = null): int
+    {
+        $featureName = self::ACTIONS[$action] ?? 'rate_limiting';
+        $config = $this->getFeatureConfig($featureName, $limitKey ?? 'standard');
+        
+        $key = "rl_{$action}_{$identifier}";
+        $attempts = $this->limiter->getAttempts($key);
+        
+        return max(0, $config['max_attempts'] - $attempts);
+    }
+
     public function tooManyResponse(string $action, string|int $identifier, bool $isAjax = false): never
     {
         $retryAfter = $this->retryAfter($action, $identifier);

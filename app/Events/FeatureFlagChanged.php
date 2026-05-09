@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Events;
 
 /**
@@ -7,6 +9,8 @@ namespace App\Events;
  */
 class FeatureFlagChanged
 {
+    private const VALID_ACTIONS = ['toggled', 'updated', 'created', 'deleted'];
+
     public string $featureName;
     public string $action;  // 'toggled', 'updated', 'created', 'deleted'
     public array $oldValues;
@@ -21,6 +25,10 @@ class FeatureFlagChanged
         array $newValues = [],
         ?int $changedBy = null
     ) {
+        if (!in_array($action, self::VALID_ACTIONS, true)) {
+            throw new \InvalidArgumentException("Invalid action: {$action}");
+        }
+
         $this->featureName = $featureName;
         $this->action = $action;
         $this->oldValues = $oldValues;

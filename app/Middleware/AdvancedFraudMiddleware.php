@@ -61,12 +61,23 @@ class AdvancedFraudMiddleware extends BaseMiddleware
         $ip = get_client_ip();
         $userAgent = get_user_agent();
         $sessionId = $session->getId();
+        $acceptLanguage = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '';
+        $acceptEncoding = $_SERVER['HTTP_ACCEPT_ENCODING'] ?? '';
 
         $geoData = $this->ipQualityService->getGeolocation($ip);
         $this->sessionService->updateActivity($sessionId);
 
         if (!$session->get('fraud_check_done')) {
-            $this->sessionService->recordSession($userId, $sessionId, $geoData);
+            // ✅ Pass all HTTP data explicitly
+            $this->sessionService->recordSession(
+                userId: $userId,
+                sessionId: $sessionId,
+                userAgent: $userAgent,
+                ipAddress: $ip,
+                acceptLanguage: $acceptLanguage,
+                acceptEncoding: $acceptEncoding,
+                geoData: $geoData
+            );
             $session->set('fraud_check_done', true);
         }
 
@@ -115,15 +126,32 @@ class AdvancedFraudMiddleware extends BaseMiddleware
         $decision = $this->decisionService->decide($userId, ['action' => 'general']);
         $decisionResult = (string)($decision['result'] ?? $decision['decision'] ?? 'allow');
 
-        if ($decisionResult === 'block') {
-            notify($userId, 'danger', config('messages.security.high_risk'));
-            $session->destroy();
-            return (new Response())->redirect(url('/login?error=high_risk'));
-        }
+        switch ($decisionResult) {
+            case 'block':
+                notify($userId, 'danger', config('messages.security.high_risk'));
+                $session->destroy();
+                return (new Response())->redirect(url('/login?error=high_risk'));
 
-        if ($decisionResult === 'challenge' && !$session->get('2fa_verified')) {
-            $session->setFlash('warning', config('messages.security.challenge_2fa'));
-            return (new Response())->redirect(url('/verify-2fa'));
+            case 'challenge':
+                if (!$session->get('2fa_verified')) {
+                    $session->setFlash('warning', config('messages.security.challenge_2fa'));
+                    return (new Response())->redirect(url('/verify-2fa'));
+                }
+                break;
+
+            case 'review':
+                // وضعیت بررسی دستی (Review) — فلگ بررسی دستی را فعال کرده و لاگ ثبت می‌کنیم
+                $session->set('under_manual_review', true);
+                $this->logger->info('fraud.manual_review_triggered', [
+                    'user_id' => $userId,
+                    'ip' => $ip,
+                ]);
+                break;
+
+            case 'allow':
+            default:
+                $session->remove('under_manual_review');
+                break;
         }
 
         return $this->toResponse($next($request));

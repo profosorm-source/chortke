@@ -91,10 +91,9 @@ class SecurityHeadersMiddleware
     
     private function generateNonce(): string
     {
-        if (!$this->session->has('csp_nonce')) {
-            $this->session->set('csp_nonce', base64_encode(random_bytes(16)));
-        }
-
-        return (string)$this->session->get('csp_nonce');
+        $nonce = base64_encode(random_bytes(16));
+        $this->session->set('csp_nonce', $nonce);
+        $_SESSION['csp_nonce'] = $nonce;
+        return $nonce;
     }
 }
