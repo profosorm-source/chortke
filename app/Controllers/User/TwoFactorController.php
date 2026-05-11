@@ -24,9 +24,6 @@ class TwoFactorController extends BaseUserController
         $this->twoFactorService = $twoFactorService;
     }
 
-    /**
-     * نمایش صفحه تنظیمات 2FA (پروفایل)
-     */
     public function index(): void
     {
         $userId = $this->userId();
@@ -63,10 +60,6 @@ class TwoFactorController extends BaseUserController
         $this->view('user/security/two-factor', $data);
     }
 
-    /**
-     * نمایش صفحه تأیید کد در هنگام ورود
-     * Session key: 'pending_2fa_user' (همان کلیدی که AuthController ست می‌کند)
-     */
     public function showVerify(): void
     {
         $userId = $this->session->get('pending_2fa_user');
@@ -80,9 +73,6 @@ class TwoFactorController extends BaseUserController
         ]);
     }
 
-    /**
-     * پردازش کد 2FA در هنگام ورود
-     */
     public function verify(): void
     {
         $userId = $this->session->get('pending_2fa_user');
@@ -108,20 +98,22 @@ class TwoFactorController extends BaseUserController
         }
 
         if ($this->twoFactorService->verifyCode($user->two_factor_secret, $code)) {
-            // حذف pending session و ایجاد session کامل
             $this->session->remove('pending_2fa_user');
-$this->session->set('user_id',   $user->id);
-$this->session->set('username',  $user->username  ?? '');
-$this->session->set('email',     $user->email);
-$this->session->set('role',      $user->role);
-$this->session->set('user_role', $user->role); // این خط را اضافه کن
-$this->session->set('is_admin',  in_array($user->role, ['admin', 'super_admin'], true));
-$this->session->set('logged_in', true);
-$this->session->regenerate();
+            
+            // اصلاح لاجیک سشن برای مدیریت دسترسی و جلوگیری از خطای میدلویر
+            $this->session->set('user_id',   $user->id);
+            $this->session->set('username',  $user->username  ?? '');
+            $this->session->set('email',     $user->email);
+            $this->session->set('role',      $user->role);
+            $this->session->set('user_role', $user->role); // متغیر کلیدی اضافه شد
+            $this->session->set('is_admin',  in_array($user->role, ['admin', 'super_admin'], true));
+            $this->session->set('logged_in', true);
+            $this->session->regenerate();
 
             $this->logger->activity('2fa.verified', 'تأیید موفق احراز هویت دو مرحله‌ای', $user->id, [
-    'channel' => 'auth',
-]);
+                'channel' => 'auth',
+            ]);
+            
             $this->response->json([
                 'success'  => true,
                 'message'  => 'ورود موفقیت‌آمیز بود.',
@@ -130,13 +122,10 @@ $this->session->regenerate();
             return;
         }
 
-        $this->userService->incrementFraudScore($userId, 5);
+        $this->userService->incrementFraudScore((int)$userId, 5);
         $this->response->json(['success' => false, 'message' => 'کد وارد شده نامعتبر است.']);
     }
 
-    /**
-     * فعال‌سازی 2FA
-     */
     public function enable(): void
     {
         $userId = $this->userId();
@@ -154,17 +143,14 @@ $this->session->regenerate();
         $result = $this->twoFactorService->enable($userId, $code);
 
         if ($result['success']) {
-           $this->logger->activity('2fa.enabled', 'فعال‌سازی احراز هویت دو مرحله‌ای', $userId, [
-    'channel' => 'auth',
-]);
-            }
+            $this->logger->activity('2fa.enabled', 'فعال‌سازی احراز هویت دو مرحله‌ای', $userId, [
+                'channel' => 'auth',
+            ]);
+        }
 
         $this->response->json($result);
     }
 
-    /**
-     * غیرفعال‌سازی 2FA
-     */
     public function disable(): void
     {
         $userId = $this->userId();
@@ -183,9 +169,9 @@ $this->session->regenerate();
 
         if ($result['success']) {
             $this->logger->activity('2fa.disabled', 'غیرفعال‌سازی احراز هویت دو مرحله‌ای', $userId, [
-    'channel' => 'auth',
-]);
-            }
+                'channel' => 'auth',
+            ]);
+        }
 
         $this->response->json($result);
     }
