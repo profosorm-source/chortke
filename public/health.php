@@ -3,6 +3,23 @@
 header('Content-Type: application/json');
 
 require_once __DIR__ . '/../helpers/config_helper.php';
+
+// Access protection logic
+$allowedIps = array_filter(array_map('trim', explode(',', env('HEALTH_ALLOWED_IPS', '127.0.0.1,::1'))));
+$token = env('HEALTH_CHECK_TOKEN', '');
+
+$clientIp = $_SERVER['REMOTE_ADDR'] ?? '';
+$requestToken = $_GET['token'] ?? $_SERVER['HTTP_X_HEALTH_TOKEN'] ?? '';
+
+$isIpAllowed = in_array($clientIp, $allowedIps, true);
+$isTokenValid = !empty($token) && hash_equals($token, $requestToken);
+
+if (!$isIpAllowed && !$isTokenValid) {
+    http_response_code(403);
+    echo json_encode(['status' => 'error', 'message' => 'Unauthorized Access'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 require_once __DIR__ . '/../core/Database.php';
 require_once __DIR__ . '/../core/Cache.php';
 

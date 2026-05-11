@@ -51,6 +51,8 @@ if (file_exists($envPath)) {
     ini_set('log_errors', '1');
 }
 
+$GLOBALS['env'] = $envData;
+global $env;
 $env = $envData;
 
 // ── ۳. Security Headers & HTTPS Enforcement ──────────────────────
@@ -58,12 +60,13 @@ $env = $envData;
 $isProduction = ($env['APP_ENV'] ?? 'production') === 'production';
 $trustedProxies = array_filter(explode(',', $env['TRUSTED_PROXIES'] ?? ''));
 $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || 
-           (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') ||
            (!empty($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
 
 // اگر trusted proxy تنظیم شده، X-Forwarded-Proto معتبر است
-if (!empty($trustedProxies) && in_array($_SERVER['REMOTE_ADDR'] ?? '', $trustedProxies)) {
-    $isHttps = $isHttps || (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+    if (!empty($trustedProxies) && in_array($_SERVER['REMOTE_ADDR'] ?? '', $trustedProxies, true)) {
+        $isHttps = true;
+    }
 }
 
 if ($isProduction && !$isHttps && $_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -84,10 +87,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
 header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
 
 // ✅ Cache Control for dynamic content (HTML)
-if (!headers_sent()) {
-    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-    header('Pragma: no-cache');
-}
+// Cache Control is now handled via specific page Middlewares as per SEO best practice.
 
 // ✅ HSTS - HTTP Strict Transport Security (production only)
 if ($isProduction && $isHttps) {
@@ -122,12 +122,25 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(204);
     exit;
 }
+// Generate a secure CSP Nonce
+$cspNonce = '';
+if (function_exists('random_bytes')) {
+    try {
+        $cspNonce = base64_encode(random_bytes(16));
+    } catch (\Throwable $e) {
+        $cspNonce = md5(uniqid((string)rand(), true));
+    }
+} else {
+    $cspNonce = md5(uniqid((string)rand(), true));
+}
+define('CSP_NONCE', $cspNonce);
+
 // ✅ Content-Security-Policy
 header(
     "Content-Security-Policy: " .
     "default-src 'self'; " .
-    "script-src 'self' https://cdn.jsdelivr.net https://code.jquery.com https://www.google.com https://www.gstatic.com; " .
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; " .
+    "script-src 'self' 'nonce-" . CSP_NONCE . "' https://cdn.jsdelivr.net https://code.jquery.com https://www.google.com https://www.gstatic.com; " .
+    "style-src 'self' 'unsafe-inline' 'nonce-" . CSP_NONCE . "' https://fonts.googleapis.com https://cdn.jsdelivr.net; " .
     "font-src 'self' https://fonts.gstatic.com; " .
     "img-src 'self' data: https:; " .
     "frame-src https://www.google.com; " .
@@ -163,23 +176,7 @@ require_once BASE_PATH . '/bootstrap/app.php';
 $app = \Core\Application::getInstance();
 
 // ── ۷. اطمینان از وجود storage directories ──────────────────────
-//    (فقط mkdir — هیچ DB call نیست)
-$storageDirs = [
-    BASE_PATH . '/storage/uploads/kyc',
-    BASE_PATH . '/storage/cache',
-    BASE_PATH . '/storage/logs',
-];
-// ✅ درست
-foreach ($storageDirs as $dir) {
-    if (!is_dir($dir)) {
-        if (!mkdir($dir, 0755, true)) {
-            throw new \RuntimeException("Failed to create directory: {$dir}");
-        }
-    }
-    if (!is_writable($dir)) {
-        throw new \RuntimeException("Directory not writable: {$dir}");
-    }
-}
+// (حذف شده از runtime - به اسکریپت راه‌اندازی منتقل شد جهت جلوگیری از IO Blocking)
 
 // ── ۸. Routes ────────────────────────────────────────────────────
 require_once BASE_PATH . '/routes/routes.php';
