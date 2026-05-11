@@ -12,6 +12,34 @@ use Core\Model;
 class User extends Model
 {
     protected static string $table = 'users';
+    protected static array $searchable = ['full_name', 'email', 'mobile'];
+
+    /**
+     * شخصی‌سازی جستجو برای مدل کاربر (افزودن تطبیق دقیق برای کد معرف)
+     */
+    public function applySearch(\Core\QueryBuilder $query, ?string $term): \Core\QueryBuilder
+    {
+        $term = trim((string)$term);
+        if (empty($term)) {
+            return $query;
+        }
+
+        $escaped = $this->escapeLikeValue($term);
+        $like = "%{$escaped}%";
+
+        return $query->where(function(\Core\QueryBuilder $q) use ($like, $term) {
+            // ۱. جستجوی مشابهت (LIKE) روی فیلدهای استاندارد
+            foreach (static::$searchable as $index => $column) {
+                if ($index === 0) {
+                    $q->where($column, 'LIKE', $like);
+                } else {
+                    $q->orWhere($column, 'LIKE', $like);
+                }
+            }
+            // ۲. جستجوی دقیق (EXACT) روی فیلدهای خاص دامنه
+            $q->orWhere('referral_code', '=', $term);
+        });
+    }
 
     public function findByEmail(string $email): ?object
     {
@@ -38,10 +66,10 @@ class User extends Model
 
     public function findById(int $userId): ?object
     {
-        return $this->db->fetch(
-            "SELECT id, username, email, status, kyc_status, fraud_score FROM users WHERE id = ? AND deleted_at IS NULL LIMIT 1",
-            [$userId]
-        );
+        return $this->db->table('users')
+            ->where('id', '=', $userId)
+            ->where('deleted_at', 'IS NULL')
+            ->first();  // ✓ Returns all columns
     }
 
     public function incrementFraudScore(int $userId, int $amount = 1): bool
@@ -76,21 +104,10 @@ class User extends Model
 
     public function searchWithFilters(array $filters = [], int $limit = 20, int $offset = 0): array
     {
-        // ✅ امنیت: استفاده از QueryBuilder به جای string concatenation
         $query = $this->db->table('users')->whereNull('deleted_at');
 
         if (!empty($filters['search'])) {
-            $searchVal = trim((string)$filters['search']);
-            if (strlen($searchVal) > 100) {
-                throw new \InvalidArgumentException('Search term too long');
-            }
-            $searchClean = addcslashes($searchVal, '%_');
-            $search = "%{$searchClean}%";
-            $query->whereNested(function($q) use ($search) {
-                $q->where('full_name', 'LIKE', $search)
-                  ->orWhere('email', 'LIKE', $search)
-                  ->orWhere('mobile', 'LIKE', $search);
-            });
+            $this->applySearch($query, $filters['search']);
         }
 
         if (!empty($filters['role'])) {
@@ -109,21 +126,10 @@ class User extends Model
 
     public function countWithFilters(array $filters = []): int
     {
-        // ✅ امنیت: استفاده از QueryBuilder
         $query = $this->db->table('users')->whereNull('deleted_at');
 
         if (!empty($filters['search'])) {
-            $searchVal = trim((string)$filters['search']);
-            if (strlen($searchVal) > 100) {
-                throw new \InvalidArgumentException('Search term too long');
-            }
-            $searchClean = addcslashes($searchVal, '%_');
-            $search = "%{$searchClean}%";
-            $query->whereNested(function($q) use ($search) {
-                $q->where('full_name', 'LIKE', $search)
-                  ->orWhere('email', 'LIKE', $search)
-                  ->orWhere('mobile', 'LIKE', $search);
-            });
+            $this->applySearch($query, $filters['search']);
         }
 
         return $query->count();

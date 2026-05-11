@@ -26,21 +26,33 @@ class SocialTaskModel extends Model
 
     // --- Ads & Tasks (Core) ---
 
-    public function getActiveAds(array $where, array $params, string $orderBy, int $limit): array
+    /**
+     * ✅ FIXED: Use QueryBuilder instead of string concatenation
+     * @param array $filters Column => Value filters
+     * @param string $orderBy Column name only (validated)
+     * @param int $limit
+     * @return array
+     */
+    public function getActiveAds(array $filters, string $orderBy, int $limit): array
     {
-        $whereStr = implode(' AND ', $where);
-        return $this->db->fetchAll(
-            "SELECT sa.*,
-                    u.full_name AS advertiser_name,
-                    COALESCE(ut.trust_score, 50) AS advertiser_trust
-             FROM ads sa
-             JOIN users u ON u.id = sa.user_id
-             LEFT JOIN social_user_trust ut ON ut.user_id = sa.user_id
-             WHERE {$whereStr}
-             ORDER BY {$orderBy}
-             LIMIT ?",
-            [...$params, $limit]
-        );
+        $query = $this->db->table('ads as sa')
+            ->select('sa.*', 'u.full_name AS advertiser_name')
+            ->selectRaw('COALESCE(ut.trust_score, 50) AS advertiser_trust')
+            ->leftJoin('users as u', 'u.id', '=', 'sa.user_id')
+            ->leftJoin('social_user_trust as ut', 'ut.user_id', '=', 'sa.user_id');
+        
+        // Safely build WHERE clause
+        foreach ($filters as $column => $value) {
+            $query->where('sa.' . $column, '=', $value);
+        }
+        
+        // Validate order column (prevent injection)
+        $allowedOrderColumns = ['created_at', 'updated_at', 'status', 'trust_score', 'id'];
+        $orderBy = in_array($orderBy, $allowedOrderColumns, true) ? $orderBy : 'created_at';
+        
+        return $query->orderBy('sa.' . $orderBy, 'DESC')
+            ->limit($limit)
+            ->get() ?? [];
     }
 
     public function getAdById(int $adId, bool $forUpdate = false): ?object

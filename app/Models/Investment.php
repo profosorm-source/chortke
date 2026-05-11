@@ -25,7 +25,7 @@ class Investment extends Model {
         // مقدارهای پیش‌فرض
         $data['created_at'] = $data['created_at'] ?? $now;
         $data['updated_at'] = $data['updated_at'] ?? $now;
-        $data['deleted_at'] = $data['deleted_at'] ?? 0;
+        $data['deleted_at'] = null;  // ❌ SECURITY: Never from user input
 
         if (!isset($data['status'])) {
             $data['status'] = self::STATUS_ACTIVE;

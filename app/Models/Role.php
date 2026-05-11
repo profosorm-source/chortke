@@ -6,7 +6,9 @@ use Core\Model;
 use Core\Database;
 
 class Role extends Model {
-/**
+    protected static string $table = 'roles';
+
+    /**
      * یافتن نقش با ID
      */
     public function find(int $id): ?object

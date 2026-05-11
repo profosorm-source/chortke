@@ -7,6 +7,7 @@ use Core\Model;
 class ManualDeposit extends Model
 {
     protected static string $table = 'manual_deposits';
+    protected static array $searchable = ['manual_deposits.tracking_code'];
 
     /**
      * ایجاد درخواست واریز دستی
@@ -36,7 +37,7 @@ class ManualDeposit extends Model
 
         $sql = "SELECT d.*, c.card_number, c.bank_name
                 FROM " . static::$table . " d
-                LEFT JOIN user_bank_cards c ON d.card_id = c.id
+                LEFT JOIN bank_cards c ON d.card_id = c.id
                 WHERE d.user_id = :user_id";
 
         $params = ['user_id' => $userId];
@@ -170,7 +171,7 @@ class ManualDeposit extends Model
         $sql = "SELECT d.*, u.full_name, u.email, c.card_number, c.bank_name
                 FROM " . static::$table . " d
                 LEFT JOIN users u ON d.user_id = u.id
-                LEFT JOIN user_bank_cards c ON d.card_id = c.id
+                LEFT JOIN bank_cards c ON d.card_id = c.id
                 WHERE d.status IN ('pending', 'under_review')
                 ORDER BY d.created_at ASC
                 LIMIT :limit OFFSET :offset";
@@ -210,7 +211,7 @@ class ManualDeposit extends Model
         $sql = "SELECT d.*, u.full_name, u.email, c.card_number, c.bank_name
                 FROM " . static::$table . " d
                 LEFT JOIN users u ON d.user_id = u.id
-                LEFT JOIN user_bank_cards c ON d.card_id = c.id
+                LEFT JOIN bank_cards c ON d.card_id = c.id
                 WHERE 1=1";
 
         $params = [];

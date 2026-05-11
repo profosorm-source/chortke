@@ -7,6 +7,7 @@ use Core\Model;
 class Transaction extends Model
 {
     protected static string $table = 'transactions';
+    protected static array $searchable = ['transactions.reference_id', 'transactions.description'];
 
     protected \App\Contracts\LoggerInterface $logger;
 

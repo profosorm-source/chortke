@@ -7,6 +7,7 @@ use Core\Model;
 class CryptoDeposit extends Model
 {
     protected static string $table = 'crypto_deposits';
+    protected static array $searchable = ['crypto_deposits.tx_hash'];
 
     public function findByHash(string $txHash): ?object
     {

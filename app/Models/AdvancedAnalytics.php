@@ -11,7 +11,7 @@ use Core\Model;
  */
 class AdvancedAnalytics extends Model
 {
-    protected static string $table = '';
+    protected static string $table = 'analytics';
 
     private array $allowedTables = [
         'users', 'transactions', 'withdrawals', 'deposits', 
@@ -230,18 +230,13 @@ class AdvancedAnalytics extends Model
         $this->validateColumnName($userIdColumn);
         $this->validateColumnName($dateColumn);
 
-        $sql = "SELECT
-                    DATE_FORMAT(`{$dateColumn}`, '%Y-%m') as cohort_month,
-                    COUNT(DISTINCT `{$userIdColumn}`) as users_count
-                FROM `{$table}`
-                WHERE `{$dateColumn}` >= DATE_SUB(NOW(), INTERVAL ? MONTH)
-                GROUP BY cohort_month
-                ORDER BY cohort_month ASC";
-
-        $stmt = $this->db->prepare($sql);
-        $stmt->bindValue(1, $months, \PDO::PARAM_INT);
-        $stmt->execute();
-        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        return $this->db->table($table)
+            ->selectRaw("DATE_FORMAT(`{$dateColumn}`, '%Y-%m') as cohort_month")
+            ->selectRaw("COUNT(DISTINCT `{$userIdColumn}`) as users_count")
+            ->whereRaw("`{$dateColumn}` >= DATE_SUB(NOW(), INTERVAL ? MONTH)", [$months])
+            ->groupBy('cohort_month')
+            ->orderBy('cohort_month', 'ASC')
+            ->get() ?? [];
     }
 
     public function getRetentionRateData(
@@ -253,23 +248,20 @@ class AdvancedAnalytics extends Model
         $this->validateColumnName($userIdColumn);
         $this->validateColumnName($dateColumn);
 
-        $sql = "SELECT
-                    COUNT(DISTINCT CASE
-                        WHEN activity_count > 1 THEN `{$userIdColumn}`
-                    END) * 100.0 / COUNT(DISTINCT `{$userIdColumn}`) as retention_rate
-                FROM (
-                    SELECT
-                        `{$userIdColumn}`,
-                        COUNT(*) as activity_count
-                    FROM `{$table}`
-                    GROUP BY `{$userIdColumn}`
-                ) as user_activities";
+        $result = $this->db->selectRaw("
+            COUNT(DISTINCT CASE
+                WHEN activity_count > 1 THEN `{$userIdColumn}`
+            END) * 100.0 / COUNT(DISTINCT `{$userIdColumn}`) as retention_rate
+            FROM (
+                SELECT
+                    `{$userIdColumn}`,
+                    COUNT(*) as activity_count
+                FROM `{$table}`
+                GROUP BY `{$userIdColumn}`
+            ) as user_activities
+        ")->first();
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute();
-        $result = $stmt->fetch(\PDO::FETCH_ASSOC);
-
-        return round((float)($result['retention_rate'] ?? 0), 2);
+        return round((float)($result->retention_rate ?? 0), 2);
     }
 
     public function getPeakHoursData(
@@ -280,23 +272,17 @@ class AdvancedAnalytics extends Model
         $this->validateTableName($table);
         $this->validateColumnName($dateColumn);
 
-        $sql = "SELECT
-                    HOUR(`{$dateColumn}`) as hour,
-                    COUNT(*) as count,
-                    ROUND(COUNT(*) * 100.0 / (
-                        SELECT COUNT(*) FROM `{$table}`
-                        WHERE `{$dateColumn}` >= DATE_SUB(NOW(), INTERVAL ? DAY)
-                    ), 2) as percentage
-                FROM `{$table}`
+        return $this->db->table($table)
+            ->selectRaw("HOUR(`{$dateColumn}`) as hour")
+            ->selectRaw('COUNT(*) as count')
+            ->selectRaw("ROUND(COUNT(*) * 100.0 / (
+                SELECT COUNT(*) FROM `{$table}`
                 WHERE `{$dateColumn}` >= DATE_SUB(NOW(), INTERVAL ? DAY)
-                GROUP BY HOUR(`{$dateColumn}`)
-                ORDER BY count DESC";
-
-        $stmt = $this->db->prepare($sql);
-        $stmt->bindValue(1, $days, \PDO::PARAM_INT);
-        $stmt->bindValue(2, $days, \PDO::PARAM_INT);
-        $stmt->execute();
-        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            ), 2) as percentage", [$days])
+            ->whereRaw("`{$dateColumn}` >= DATE_SUB(NOW(), INTERVAL ? DAY)", [$days])
+            ->groupByRaw("HOUR(`{$dateColumn}`)")
+            ->orderBy('count', 'DESC')
+            ->get() ?? [];
     }
 
     public function getPeriodStatsData(
@@ -309,27 +295,20 @@ class AdvancedAnalytics extends Model
         $this->validateTableName($table);
         $this->validateColumnName($dateColumn);
 
-        $where = [
-            "`{$dateColumn}` >= DATE_SUB(NOW(), INTERVAL ? DAY)",
-            "`{$dateColumn}` < DATE_SUB(NOW(), INTERVAL ? DAY)",
-        ];
-
-        $params = [$offsetDays + $periodDays, $offsetDays];
+        $query = $this->db->table($table)
+            ->selectRaw('COUNT(*) as total')
+            ->whereRaw("`{$dateColumn}` >= DATE_SUB(NOW(), INTERVAL ? DAY)", [$offsetDays + $periodDays])
+            ->whereRaw("`{$dateColumn}` < DATE_SUB(NOW(), INTERVAL ? DAY)", [$offsetDays]);
 
         foreach ($conditions as $column => $value) {
             $this->validateColumnName($column);
-            $where[] = "`{$column}` = ?";
-            $params[] = $value;
+            $query->where($column, '=', $value);
         }
 
-        $sql = "SELECT COUNT(*) as total FROM `{$table}` WHERE " . \implode(' AND ', $where);
-
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
-        $result = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $result = $query->first();
 
         return [
-            'total' => (int)($result['total'] ?? 0),
+            'total' => (int)($result->total ?? 0),
             'period_days' => $periodDays,
         ];
     }

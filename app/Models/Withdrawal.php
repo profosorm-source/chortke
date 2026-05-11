@@ -7,6 +7,7 @@ use Core\Model;
 class Withdrawal extends Model
 {
     protected static string $table = 'withdrawals';
+    protected static array $searchable = ['withdrawals.tracking_code'];
 
     /**
      * ایجاد درخواست برداشت
@@ -59,7 +60,7 @@ class Withdrawal extends Model
 
         $sql = "SELECT w.*, c.card_number, c.bank_name
                 FROM " . static::$table . " w
-                LEFT JOIN user_bank_cards c ON w.card_id = c.id
+                LEFT JOIN bank_cards c ON w.card_id = c.id
                 WHERE w.user_id = :user_id";
 
         $params = ['user_id' => $userId];
@@ -218,7 +219,7 @@ class Withdrawal extends Model
         $sql = "SELECT w.*, u.full_name, u.email, c.card_number, c.bank_name, c.sheba
                 FROM " . static::$table . " w
                 LEFT JOIN users u ON w.user_id = u.id
-                LEFT JOIN user_bank_cards c ON w.card_id = c.id
+                LEFT JOIN bank_cards c ON w.card_id = c.id
                 WHERE w.status = 'pending'
                 ORDER BY w.created_at ASC
                 LIMIT :limit OFFSET :offset";
@@ -255,7 +256,7 @@ class Withdrawal extends Model
         $sql = "SELECT w.*, u.full_name, u.email, c.card_number, c.bank_name
                 FROM " . static::$table . " w
                 LEFT JOIN users u ON w.user_id = u.id
-                LEFT JOIN user_bank_cards c ON w.card_id = c.id
+                LEFT JOIN bank_cards c ON w.card_id = c.id
                 WHERE 1=1";
 
         $params = [];

@@ -6,6 +6,7 @@ use Core\Model;
 use Core\Database;
 
 class Ticket extends Model {
+    protected static array $searchable = ['tickets.subject'];
 /* -------------------------
      * Helpers (DB fetch wrappers)
      * ------------------------- */

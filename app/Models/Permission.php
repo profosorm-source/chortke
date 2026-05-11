@@ -6,6 +6,8 @@ use Core\Model;
 
 class Permission extends Model
 {
+    protected static string $table = 'permissions';
+    
     private static array $userPermissionsCache = [];
     private static array $isSuperAdminCache = [];
 

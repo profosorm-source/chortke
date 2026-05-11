@@ -12,6 +12,7 @@ use Core\Model;
 class Ads extends Model
 {
     protected static string $table = 'ads';
+    protected static array $searchable = ['ads.title', 'ads.description'];
 
     /**
      * دریافت بر اساس شناسه مالک تبلیغ (یکدست‌سازی به user_id)

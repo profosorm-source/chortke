@@ -56,16 +56,15 @@ class FraudAnalyticsModel extends Model
 
     public function getHourlyTrend(string $since): array
     {
-        $sql = "SELECT 
-                    DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') as hour,
-                    COUNT(*) as count,
-                    AVG(risk_score) as avg_risk
-                FROM fraud_logs 
-                WHERE created_at >= ?
-                GROUP BY hour
-                ORDER BY hour ASC";
-        
-        return $this->db->fetchAll($sql, [$since]);
+        return $this->db->table('fraud_logs as fl')
+            ->select('fl.*')
+            ->selectRaw("DATE_FORMAT(fl.created_at, '%Y-%m-%d %H:00:00') as hour")
+            ->selectRaw('COUNT(*) as count')
+            ->selectRaw('AVG(fl.risk_score) as avg_risk')
+            ->where('fl.created_at', '>=', $since)
+            ->groupBy('hour')
+            ->orderBy('hour', 'ASC')
+            ->get() ?? [];
     }
 
     public function getGeographicThreats(string $since): array

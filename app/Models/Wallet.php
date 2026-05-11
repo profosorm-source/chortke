@@ -76,6 +76,23 @@ class Wallet extends Model
     }
 
     /**
+     * ✅ دریافت موجودی با قفل - برای عملیات مالی
+     * استفاده این متد الزامی است برای: Withdraw, Transfer, Purchase
+     */
+    public function getBalanceForUpdate(int $userId, string $currency = 'irt'): float
+    {
+        $wallet = $this->db->table(static::$table)
+            ->where('user_id', '=', $userId)
+            ->lockForUpdate()
+            ->first();
+        
+        if (!$wallet) return 0.0;
+
+        $field = $this->currencyField($currency);
+        return (float)($wallet->{$field} ?? 0);
+    }
+
+    /**
      * دریافت موجودی قفل‌شده
      */
     public function getLockedBalance(int $userId, string $currency = 'irt'): float
