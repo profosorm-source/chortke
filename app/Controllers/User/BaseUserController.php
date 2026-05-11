@@ -29,7 +29,10 @@ abstract class BaseUserController extends BaseController
     protected CaptchaService $captchaService;
 
     /**
-     * وابستگی‌ها از طریق constructor تزریق می‌شوند
+     * وابستگی‌ها از طریق Constructor Dependency Injection
+     * Container خودکار این dependencies را resolve می‌کند (Auto-wiring)
+     * 
+     * توجه: اگر parameters نادیده گرفته شوند، Container خودش resolve می‌کند
      */
     public function __construct(
         ?\Core\Session $session = null,
@@ -41,17 +44,26 @@ abstract class BaseUserController extends BaseController
         ?UserService $userService = null,
         ?CaptchaService $captchaService = null
     ) {
-        $container = \Core\Container::getInstance();
+        // اگر parent parameters null باشند، Container آنها را resolve می‌کند
+        parent::__construct(
+            $session ?? $this->resolveFromContainer(\Core\Session::class),
+            $request ?? $this->resolveFromContainer(\Core\Request::class),
+            $response ?? $this->resolveFromContainer(\Core\Response::class),
+            $policyService ?? $this->resolveFromContainer(\App\Services\Shared\PolicyService::class),
+            $logger ?? $this->resolveFromContainer(\App\Contracts\LoggerInterface::class)
+        );
         
-        $this->session = $session ?? $container->make(\Core\Session::class);
-        $this->request = $request ?? $container->make(\Core\Request::class);
-        $this->response = $response ?? $container->make(\Core\Response::class);
-        $this->policyService = $policyService ?? $container->make(\App\Services\Shared\PolicyService::class);
-        $this->logger = $logger ?? $container->make(\App\Contracts\LoggerInterface::class);
-        
-        $this->authService = $authService ?? $container->make(AuthService::class);
-        $this->userService = $userService ?? $container->make(UserService::class);
-        $this->captchaService = $captchaService ?? $container->make(CaptchaService::class);
+        $this->authService = $authService ?? $this->resolveFromContainer(AuthService::class);
+        $this->userService = $userService ?? $this->resolveFromContainer(UserService::class);
+        $this->captchaService = $captchaService ?? $this->resolveFromContainer(CaptchaService::class);
+    }
+    
+    /**
+     * Helper method برای resolve کردن dependencies از Container
+     */
+    protected function resolveFromContainer(string $class): object
+    {
+        return \Core\Container::getInstance()->make($class);
     }
 
     /** user_id کاربر لاگین‌شده یا null */
