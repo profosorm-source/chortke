@@ -77,7 +77,7 @@ EOT;
      * این متد یک transaction واحد دارد و walletService را بدون transaction فراخوانی می‌کند.
      * برای تفکیک مسئولیت، باید walletService::_depositUnsafe استفاده شود.
      */
-    public function createInvestment(int $userId, array $data): array
+        public function createInvestment(int $userId, array $data): array
     {
         $amount = (float)($data['amount'] ?? 0);
 
@@ -117,50 +117,52 @@ EOT;
                 ]
             );
 
-            if (!$payResult['success']) {
+            if (empty($payResult['success'])) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => $payResult['message'] ?? 'موجودی کافی نیست یا خطا در کسر موجودی'];
+                return ['success' => false, 'message' => 'خطا در کسر موجودی: ' . ($payResult['message'] ?? '')];
             }
 
             // ۲. ثبت سرمایه‌گذاری
             $investmentId = $this->investmentModel->create([
-                'user_id'                    => $userId,
-                'amount'                     => $amount,
-                'current_balance'            => $amount,
-                'status'                     => Investment::STATUS_ACTIVE,
-                'risk_accepted_ip'           => get_client_ip(),
-                'risk_accepted_fingerprint'  => generate_device_fingerprint(),
-                'risk_accepted_at'           => date('Y-m-d H:i:s'),
+                'user_id' => $userId,
+                'amount' => $amount,
+                'current_balance' => $amount,
+                'status' => \App\Models\Investment::STATUS_ACTIVE,
+                'transaction_id' => $payResult['transaction_id'] ?? null,
             ]);
-
-            if (!$investmentId) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در ثبت سرمایه‌گذاری'];
+            
+            // ۳. پورسانت شبکه ارجاع (Referral) صندوق سرمایه گذاری
+            $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById($userId);
+            if ($userRecord && !empty($userRecord->referred_by)) {
+                $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
+                if ($referralService) {
+                    $referralService->processCommission((int)$userRecord->referred_by, $amount, 'usdt', [
+                        'action' => 'investment_creation',
+                        'investor_id' => $userId,
+                        'investment_id' => $investmentId
+                    ]);
+                }
             }
 
             $this->db->commit();
 
             $this->auditTrail->record('investment.created', $userId, [
                 'investment_id' => $investmentId,
-                'amount'        => $amount,
-                'currency'      => 'usdt',
+                'amount' => $amount,
             ]);
 
-            $this->notify($userId, 'سرمایه‌گذاری ثبت شد',
-                "سرمایه‌گذاری شما به مبلغ {$amount} تتر با موفقیت ثبت شد", 'investment_created');
+            $this->notify($userId, 'سرمایه‌گذاری جدید', "سرمایه‌گذاری {$amount} تتر با موفقیت ثبت شد.", 'investment_created');
+            $this->logger->info('investment_created', ['message' => "User {$userId} invested {$amount} USDT", 'id' => $investmentId]);
 
-            $this->logger->info('investment_created', ['message' => "User {$userId} invested {$amount} USDT, ID: {$investmentId}"]);
+            return ['success' => true, 'message' => 'سرمایه‌گذاری با موفقیت انجام شد'];
 
-            return [
-                'success'       => true,
-                'message'       => "سرمایه‌گذاری {$amount} تتر با موفقیت ثبت شد",
-                'investment_id' => $investmentId,
-            ];
-
-        } catch (\Throwable $e) {
+        } catch (\Exception $e) {
             $this->db->rollBack();
-            $this->logger->error('investment_error', ['message' => "Error: " . $e->getMessage()]);
-            return ['success' => false, 'message' => 'خطای سیستمی در فرآیند سرمایه‌گذاری'];
+            $this->logger->error('investment_create_failed', [
+                'user_id' => $userId,
+                'error' => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سیستمی در ثبت سرمایه‌گذاری'];
         }
     }
 
@@ -388,29 +390,35 @@ EOT;
     /**
      * درخواست برداشت سود
      */
-    public function requestWithdrawal(int $userId, array $data): array
+       public function requestWithdrawal(int $userId, array $data): array
     {
-        $investment = $this->investmentModel->getActiveByUser($userId);
+        $this->db->beginTransaction();
+        
+        $investment = $this->db->query("SELECT * FROM investments WHERE user_id = ? AND status = ? FOR UPDATE", [$userId, \App\Models\Investment::STATUS_ACTIVE])->fetch(\PDO::FETCH_OBJ);
         if (!$investment) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'سرمایه‌گذاری فعالی ندارید.'];
         }
 
         $canWithdraw = $this->investmentModel->canWithdraw($userId);
         if (!$canWithdraw['allowed']) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => $canWithdraw['reason']];
         }
 
         if ($this->withdrawalModel->hasPending($userId)) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'شما یک درخواست برداشت در حال بررسی دارید.'];
         }
 
-        $withdrawType   = $data['withdrawal_type'] ?? InvestmentWithdrawal::TYPE_PROFIT_ONLY;
+        $withdrawType   = $data['withdrawal_type'] ?? \App\Models\InvestmentWithdrawal::TYPE_PROFIT_ONLY;
         $currentBalance = (float)$investment->current_balance;
         $originalAmount = (float)$investment->amount;
 
-        if ($withdrawType === InvestmentWithdrawal::TYPE_PROFIT_ONLY) {
+        if ($withdrawType === \App\Models\InvestmentWithdrawal::TYPE_PROFIT_ONLY) {
             $profit = $currentBalance - $originalAmount;
             if ($profit <= 0) {
+                $this->db->rollBack();
                 return ['success' => false, 'message' => 'سودی برای برداشت وجود ندارد. موجودی فعلی کمتر یا برابر سرمایه اولیه است.'];
             }
             $amount = $profit;
@@ -429,52 +437,48 @@ EOT;
             'investment_id'   => $investment->id,
             'user_id'         => $userId,
             'amount'          => $amount,
-            'currency'        => 'usdt',
-            'status'          => 'pending',
-            'transaction_id'  => 'tx_' . bin2hex(random_bytes(16)),
+            'withdrawal_type' => $withdrawType,
+            'status'          => \App\Models\InvestmentWithdrawal::STATUS_PENDING,
         ]);
 
-        if (!$withdrawalId) {
-            return ['success' => false, 'message' => 'خطا در ثبت درخواست برداشت.'];
-        }
+        $this->db->commit();
 
-        $this->notify(0, 'درخواست برداشت سرمایه‌گذاری',
-            "کاربر #{$userId} درخواست برداشت " . number_format($amount, 2) . " تتر از سرمایه‌گذاری داده است.",
-            'investment_withdrawal_request');
-
-        $this->logger->info('investment_withdrawal_request', ['message' => "User {$userId} requested withdrawal {$amount} USDT from investment #{$investment->id}"]);
-
-        return [
-            'success'       => true,
-            'message'       => 'درخواست برداشت ثبت شد و پس از بررسی مدیریت پرداخت خواهد شد.',
+        $this->auditTrail->record('investment.withdrawal_requested', $userId, [
             'withdrawal_id' => $withdrawalId,
-        ];
-    }
+            'amount'        => $amount,
+            'type'          => $withdrawType,
+        ]);
 
+        return ['success' => true, 'message' => 'درخواست برداشت سود شما با موفقیت ثبت شد و در انتظار تأیید است.'];
+    }
     /**
      * تأیید و پرداخت برداشت (ادمین)
      */
-    public function approveWithdrawal(int $withdrawalId, int $adminId): array
+        public function approveWithdrawal(int $withdrawalId, int $adminId): array
     {
-        $withdrawal = $this->withdrawalModel->findWithDetails($withdrawalId);
+        $this->db->beginTransaction();
+
+        $withdrawal = $this->db->query("SELECT * FROM investment_withdrawals WHERE id = ? FOR UPDATE", [$withdrawalId])->fetch(\PDO::FETCH_OBJ);
 
         if (!$withdrawal) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'درخواست یافت نشد'];
         }
 
-        if ($withdrawal->status !== InvestmentWithdrawal::STATUS_PENDING) {
+        if ($withdrawal->status !== \App\Models\InvestmentWithdrawal::STATUS_PENDING) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'فقط درخواست‌های در انتظار قابل تأیید هستند'];
         }
 
-        $investment = $this->investmentModel->find($withdrawal->investment_id);
+        $investment = $this->db->query("SELECT * FROM investments WHERE id = ? FOR UPDATE", [$withdrawal->investment_id])->fetch(\PDO::FETCH_OBJ);
 
         if (!$investment) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'سرمایه‌گذاری یافت نشد'];
         }
 
-        $this->db->beginTransaction();
-
         try {
+            $idempotencyKey = "inv_withdrawal_{$withdrawalId}_" . time();
             $depositResult = $this->walletService->deposit(
                 (int)$withdrawal->user_id,
                 (float)$withdrawal->amount,
@@ -484,16 +488,17 @@ EOT;
                     'investment_id' => $investment->id,
                     'withdrawal_id' => $withdrawalId,
                     'description'   => 'برداشت سود سرمایه‌گذاری',
+                    'idempotency_key' => $idempotencyKey,
                 ]
             );
 
-            if (!$depositResult['success']) {
+            if (empty($depositResult['success'])) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'خطا در واریز: ' . ($depositResult['message'] ?? '')];
             }
 
             $this->withdrawalModel->update($withdrawalId, [
-                'status'         => InvestmentWithdrawal::STATUS_COMPLETED,
+                'status'         => \App\Models\InvestmentWithdrawal::STATUS_COMPLETED,
                 'processed_at'   => date('Y-m-d H:i:s'),
                 'transaction_id' => $depositResult['transaction_id'] ?? null,
             ]);
@@ -504,7 +509,7 @@ EOT;
             ];
 
             if ($withdrawal->amount >= $investment->amount) {
-                $investUpdate['status']          = Investment::STATUS_CLOSED;
+                $investUpdate['status']          = \App\Models\Investment::STATUS_CLOSED;
                 $investUpdate['current_balance'] = 0;
             }
 
@@ -528,10 +533,14 @@ EOT;
 
             return ['success' => true, 'message' => 'برداشت تأیید و واریز شد'];
 
-        } catch (\Throwable $e) {
+        } catch (\Exception $e) {
             $this->db->rollBack();
-            $this->logger->error('investment_withdrawal_error', ['message' => "Error: " . $e->getMessage()]);
-            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+            $this->logger->error('investment_withdrawal_approve_failed', [
+                'withdrawal_id' => $withdrawalId,
+                'admin_id'      => $adminId,
+                'error'         => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سیستمی در تأیید برداشت'];
         }
     }
 
