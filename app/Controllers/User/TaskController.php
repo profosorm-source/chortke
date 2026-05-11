@@ -101,7 +101,7 @@ class TaskController extends BaseUserController
             exit;
         }
 
-        $task = $this->adTaskService->find($execution->advertisement_id);
+        $task = $this->adTaskService->find($execution->ads_id);
 
         if ($task && $task->task_type === 'view' && $task->platform === 'youtube') {
             return view('user.tasks.execute-video', ['execution' => $execution, 'task' => $task]);

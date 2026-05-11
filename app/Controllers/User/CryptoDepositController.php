@@ -33,8 +33,8 @@ class CryptoDepositController extends BaseUserController
             }
 
             // دریافت آدرس کیف پول‌های سایت
-            $bnb20Address = config('site_usdt_bnb20_address');
-            $trc20Address = config('site_usdt_trc20_address');
+            $bnb20Address = setting('site_usdt_bnb20_address');
+            $trc20Address = setting('site_usdt_trc20_address');
 
             if (!$bnb20Address && !$trc20Address) {
                 $this->session->setFlash('error', 'آدرس کیف پول سایت تنظیم نشده است');
@@ -42,7 +42,7 @@ class CryptoDepositController extends BaseUserController
                 return;
             }
 
-            $minDeposit = (float)config('min_withdrawal_usdt', 10);
+            $minDeposit = (float)setting('min_withdrawal_usdt', 10);
 
             view('user.crypto-deposit.create', [
                 'bnb20Address' => $bnb20Address,
@@ -63,6 +63,7 @@ class CryptoDepositController extends BaseUserController
 
             $this->session->setFlash('error', 'خطا در بارگذاری صفحه');
             redirect('/wallet');
+            return;
         }
     }
 
@@ -123,8 +124,8 @@ class CryptoDepositController extends BaseUserController
 
             // دریافت آدرس کیف پول مقصد
             $walletAddress = $data['network'] === 'bnb20' 
-                ? config('site_usdt_bnb20_address')
-                : config('site_usdt_trc20_address');
+                ? setting('site_usdt_bnb20_address')
+                : setting('site_usdt_trc20_address');
 
             if (!$walletAddress) {
                 throw new \RuntimeException('آدرس کیف پول این شبکه تنظیم نشده است');
@@ -145,7 +146,7 @@ class CryptoDepositController extends BaseUserController
 
             $this->session->setFlash('success', 'درخواست واریز شما ثبت شد و در حال بررسی خودکار است');
             redirect('/wallet');
-
+            return;
         } catch (\Exception $e) {
     $this->logger->error('crypto_deposit.store.failed', [
         'channel' => 'crypto',
@@ -159,6 +160,7 @@ class CryptoDepositController extends BaseUserController
             $this->session->setFlash('error', $e->getMessage());
             $this->session->setFlash('old', $data);
             redirect('/wallet/deposit/crypto');
+            return;
         }
     }
 
@@ -189,6 +191,7 @@ class CryptoDepositController extends BaseUserController
 
             $this->session->setFlash('error', 'خطا در دریافت لیست');
             redirect('/wallet');
+            return;
         }
     }
 }

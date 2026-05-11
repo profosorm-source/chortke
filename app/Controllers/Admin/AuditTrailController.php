@@ -5,6 +5,7 @@ namespace App\Controllers\Admin;
 use Core\Logger;
 use App\Services\AuditTrail;
 use App\Services\ExportService;
+use App\Services\AdvancedSearchService;
 use App\Models\AuditEvent;
 use App\Controllers\Admin\BaseAdminController;
 
@@ -17,18 +18,21 @@ class AuditTrailController extends BaseAdminController
     private ExportService $exportService;
     private AuditTrail $auditTrail;
     private AuditEvent $auditEventModel;
+    private AdvancedSearchService $searchService;
 
     public function __construct(
         ExportService $exportService,
         Logger $logger,
         AuditTrail $auditTrail,
-        AuditEvent $auditEventModel
+        AuditEvent $auditEventModel,
+        AdvancedSearchService $searchService
     ) {
         parent::__construct();
         $this->exportService = $exportService;
         $this->logger = $logger;
         $this->auditTrail = $auditTrail;
         $this->auditEventModel = $auditEventModel;
+        $this->searchService = $searchService;
     }
 
     /**
@@ -40,24 +44,54 @@ class AuditTrailController extends BaseAdminController
             $page = max(1, (int)($this->request->get('page') ?? 1));
             $event = $this->request->get('event');
             $userId = $this->request->get('user_id') ? (int)$this->request->get('user_id') : null;
-            $search = $this->request->get('search');
+            $search = trim($this->request->get('search') ?? '');
             $dateFrom = $this->request->get('date_from');
             $dateTo = $this->request->get('date_to');
+            $perPage = 50;
+            $offset = ($page - 1) * $perPage;
 
-            $result = $this->auditTrail->getAll(
-                page: $page,
-                perPage: 50,
-                event: $event ?: null,
-                userId: $userId,
-                search: $search ?: null,
-                dateFrom: $dateFrom ?: null,
-                dateTo: $dateTo ?: null
-            );
+            $filters = [];
+            if (!empty($event)) {
+                $filters['action'] = $event;
+            }
+            if (!empty($dateFrom)) {
+                $filters['date_from'] = $dateFrom;
+            }
+            if (!empty($dateTo)) {
+                $filters['date_to'] = $dateTo;
+            }
+
+            // استفاده از AdvancedSearchService برای جستجو
+            if (!empty($search)) {
+                $result = $this->searchService->searchAuditTrail($search, $filters, $perPage, $offset);
+                $events = $result['items'] ?? [];
+                $total = $result['total'] ?? 0;
+            } else {
+                $result = $this->auditTrail->getAll(
+                    page: $page,
+                    perPage: $perPage,
+                    event: $event ?: null,
+                    userId: $userId,
+                    search: null,
+                    dateFrom: $dateFrom ?: null,
+                    dateTo: $dateTo ?: null
+                );
+                $events = $result['items'] ?? $result;
+                $total = $result['total'] ?? count($events);
+            }
 
             $eventTypes = $this->auditTrail->getEventTypes();
 
             return view('admin.audit-trail.index', [
                 'user' => auth()->user(),
+                'events' => $events,
+                'total' => $total,
+                'page' => $page,
+                'perPage' => $perPage,
+                'totalPages' => ceil($total / $perPage),
+                'eventTypes' => $eventTypes,
+                'search' => $search,
+            ]);
                 'title' => 'Audit Trail',
                 'result' => $result,
                 'eventTypes' => $eventTypes,

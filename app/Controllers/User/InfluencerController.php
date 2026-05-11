@@ -6,7 +6,7 @@ use App\Models\InfluencerModel;
 use App\Models\StoryOrder;
 use App\Models\Dispute;
 
-use App\Services\StoryPromotionService;
+use App\Services\InfluencerService;
 use App\Services\Shared\DisputeService;
 use App\Services\Shared\ScoreService;
 use App\Services\UploadService;
@@ -20,7 +20,7 @@ class InfluencerController extends BaseUserController
     private StoryOrder                  $orderModel;
     private Dispute           $disputeModel;
     private InfluencerModel             $reputationModel;
-    private StoryPromotionService       $promotionService;
+    private InfluencerService       $promotionService;
     private DisputeService              $disputeService;
     private ScoreService $scoreService;
     private VerificationService         $verificationService;
@@ -32,7 +32,7 @@ class InfluencerController extends BaseUserController
         StoryOrder                  $orderModel,
         Dispute           $disputeModel,
         InfluencerModel             $reputationModel,
-        StoryPromotionService       $promotionService,
+        InfluencerService       $promotionService,
         DisputeService              $disputeService,
         ScoreService $scoreService,
         VerificationService         $verificationService,
@@ -467,7 +467,7 @@ class InfluencerController extends BaseUserController
             $statsMap[(int)$p->id] = $this->scoreService->getInfluencerStats((int)$p->id);
         }
 
-        view('user.influencer.advertise', [
+        view('user.influencer.ads', [
             'title'      => 'انتخاب اینفلوئنسر',
             'profiles'   => $profiles,
             'statsMap'   => $statsMap,
@@ -509,13 +509,13 @@ class InfluencerController extends BaseUserController
             $result = $this->promotionService->createOrder($userId, $influencerId, $data);
             $this->session->setFlash($result['success'] ? 'success' : 'error', $result['message']);
             redirect($result['success']
-                ? url('/influencer/advertise/my-orders')
-                : url('/influencer/advertise/create?influencer_id=' . $influencerId)
+                ? url('/influencer/ads/my-orders')
+                : url('/influencer/ads/create?influencer_id=' . $influencerId)
             );
         } catch (\Exception $e) {
             $this->logger->error('influencer.storeOrder', ['err' => $e->getMessage()]);
             $this->session->setFlash('error', 'خطای سیستمی در ثبت سفارش.');
-            redirect(url('/influencer/advertise'));
+            redirect(url('/influencer/ads'));
         }
     }
 
@@ -550,7 +550,7 @@ class InfluencerController extends BaseUserController
             if (is_ajax()) { $this->response->json(['success' => false, 'message' => 'خطای سیستمی.']); return; }
             $this->session->setFlash('error', 'خطای سیستمی.');
         }
-        redirect(url('/influencer/advertise/my-orders'));
+        redirect(url('/influencer/ads/my-orders'));
     }
 
     /**

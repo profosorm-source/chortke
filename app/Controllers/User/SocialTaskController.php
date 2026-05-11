@@ -37,22 +37,14 @@ use App\Contracts\LoggerInterface;
  */
 class SocialTaskController extends BaseUserController
 {
-    private SocialTaskService $service;
-    private ScoreService $scoreService;
-    private RatingService $ratingService;
-    protected \App\Contracts\LoggerInterface $logger;
-
     public function __construct(
-        SocialTaskService $service,
-        ScoreService $scoreService,
-        RatingService $ratingService,
-        LoggerInterface $logger
+        private SocialTaskService $service,
+        private ScoreService $scoreService,
+        private RatingService $ratingService,
+        private \App\Services\AdSystemManager $adManager,
+        protected LoggerInterface $logger
     ) {
         parent::__construct();
-        $this->service      = $service;
-        $this->scoreService = $scoreService;
-        $this->ratingService = $ratingService;
-        $this->logger       = $logger;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -409,10 +401,25 @@ class SocialTaskController extends BaseUserController
         $userId = (int)user_id();
 
         try {
-            $result = $this->service->createAd($userId, $this->request->body());
+            $body = $this->request->body();
+            
+            // نگاشت فیلدها به ساختار استاندارد سیستم آداپتور
+            $preparedData = [
+                'platform' => $body['platform'] ?? '',
+                'task_type' => $body['task_type'] ?? '',
+                'title' => trim((string)($body['title'] ?? '')),
+                'link' => trim((string)($body['target_url'] ?? $body['link'] ?? '')),
+                'price_per_task' => (float)($body['price_per_task'] ?? $body['reward'] ?? 0),
+                'total_count' => (int)($body['total_count'] ?? $body['max_slots'] ?? 1),
+                'description' => trim((string)($body['description'] ?? ''))
+            ];
+
+            // ایجاد امن آگهی از طریق سیستم متمرکز و آداپتور جدید AdSocialAdapter
+            $result = $this->adManager->create('social_task', $userId, $preparedData);
+            
             $this->session->setFlash(
                 $result['success'] ? 'success' : 'error',
-                $result['success'] ? 'آگهی با موفقیت ثبت شد.' : ($result['message'] ?? 'خطا در ثبت آگهی')
+                $result['success'] ? ($result['message'] ?? 'آگهی با موفقیت ثبت شد.') : ($result['message'] ?? 'خطا در ثبت آگهی')
             );
             redirect($result['success'] ? url('/social-ads') : url('/social-ads/create'));
         } catch (\Exception $e) {

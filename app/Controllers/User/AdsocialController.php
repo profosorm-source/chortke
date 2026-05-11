@@ -1,180 +1,252 @@
 <?php
+
+declare(strict_types=1);
+
 namespace App\Controllers\User;
 
-use App\Services\AdTaskService;
-use App\Services\TaskExecutionService;
-use App\Models\Advertisement;
+use App\Services\SocialTask\SocialTaskService;
 use App\Services\AdSystemManager;
+use App\Models\Ads;
 
+/**
+ * AdsocialController - مدیریت کمپین‌های شبکه‌های اجتماعی (Advertiser) و انجام تسک‌ها (Worker)
+ */
 class AdsocialController extends BaseUserController
 {
-    private AdTaskService $adTaskService;
-    private TaskExecutionService $execService;
-    private Advertisement $adModel;
-    private AdSystemManager $adManager;
-
-    public function __construct(AdTaskService $adTaskService, TaskExecutionService $execService, Advertisement $adModel, AdSystemManager $adManager)
-    {
+    public function __construct(
+        private SocialTaskService $socialTaskService,
+        private AdSystemManager $adManager,
+        private Ads $adModel
+    ) {
         parent::__construct();
-        $this->adTaskService = $adTaskService;
-        $this->execService   = $execService;
-        $this->adModel       = $adModel;
-        $this->adManager     = $adManager;
     }
 
-    // کسب درآمد
+    /**
+     * صفحه اصلی لیست تسک‌ها برای کسب درآمد توسط کاربر (Worker)
+     */
     public function income(): void
     {
         $userId = (int)user_id();
-        $tasks  = $this->adTaskService->getActiveForExecutor($userId, 30);
-        $stats  = $this->execService->getUserStats($userId);
-        view('user.adsocial.index', ['title'=>'Adsocial — تسک شبکه اجتماعی','tasks'=>$tasks,'stats'=>$stats]);
+        
+        // بازیابی لیست تسک‌های سوشیال فعال با اعمال سیستم ضدتقلب
+        $result = $this->socialTaskService->getTasksForExecutor($userId, [
+            'sort' => $this->request->get('sort') ?? 'random'
+        ], 20);
+        
+        // بازیابی آمار کلی فعالیت کاربر
+        $stats = $this->socialTaskService->getExecutorStats($userId);
+
+        view('user.adsocial.index', [
+            'title' => 'Adsocial — تسک شبکه‌های اجتماعی',
+            'tasks' => $result['tasks'] ?? [],
+            'stats' => $stats,
+            'restriction_level' => $result['restriction_level'] ?? 'clean'
+        ]);
     }
 
+    /**
+     * آغاز اجرای یک تسک شبکه اجتماعی (Reserve Slot)
+     */
     public function start(): void
     {
         try {
             $adId = (int)($this->request->body()['ad_id'] ?? 0);
-            $this->response->json($this->execService->start($adId, (int)user_id()));
-        } catch (\Exception $e) {
+            $userId = (int)user_id();
+
+            $result = $this->socialTaskService->startExecution($userId, $adId, [
+                'ip' => $_SERVER['REMOTE_ADDR'] ?? '',
+                'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? ''
+            ]);
+
+            $this->response->json($result);
+        } catch (\Throwable $e) {
             $this->logger->error('adsocial.start.failed', ['err' => $e->getMessage()]);
-            $this->response->json(['success' => false, 'message' => 'خطای سیستمی. لطفاً دوباره تلاش کنید.']);
+            $this->response->json(['success' => false, 'message' => 'خطای غیرمنتظره رخ داد.']);
         }
     }
 
-    public function showExecute(): void
-    {
-        $userId = (int)user_id();
-        $id = (int)$this->request->param('id');
-        $execution = $this->execService->findForUser($id, $userId);
-        if (!$execution) { redirect(url('/adsocial')); return; }
-        $task = $this->adModel->find((int)$execution->ad_id);
-        view('user.adsocial.execute', ['title'=>'انجام تسک','execution'=>$execution,'task'=>$task]);
-    }
-
+    /**
+     * ثبت نهایی تسک و ارسال برای بررسی اتوماتیک
+     */
     public function submit(): void
     {
         try {
-            $result = $this->execService->submit((int)$this->request->param('id'), (int)user_id(), $this->request->body());
-            if (is_ajax()) { $this->response->json($result); return; }
+            $userId = (int)user_id();
+            $executionId = (int)$this->request->param('id');
+            $payload = $this->request->body();
+
+            $result = $this->socialTaskService->submitExecution($userId, $executionId, $payload);
+
+            if ($this->request->isAjax()) {
+                $this->response->json($result);
+                return;
+            }
+
             $this->session->setFlash($result['success'] ? 'success' : 'error', $result['message']);
-        } catch (\Exception $e) {
+            redirect(url('/adsocial/income'));
+
+        } catch (\Throwable $e) {
             $this->logger->error('adsocial.submit.failed', ['err' => $e->getMessage()]);
-            if (is_ajax()) { $this->response->json(['success' => false, 'message' => 'خطای سیستمی.']); return; }
-            $this->session->setFlash('error', 'خطای سیستمی. لطفاً دوباره تلاش کنید.');
+            
+            if ($this->request->isAjax()) {
+                $this->response->json(['success' => false, 'message' => 'خطای غیرمنتظره در سرور']);
+                return;
+            }
+            $this->session->setFlash('error', 'خطای غیرمنتظره رخ داد. لطفاً بعداً تلاش کنید.');
+            redirect(url('/adsocial/income'));
         }
-        redirect(url('/adsocial'));
     }
 
+    /**
+     * تاریخچه کارهای انجام شده توسط کاربر
+     */
     public function history(): void
     {
         $userId = (int)user_id();
-        $page = max(1,(int)($this->request->get('page')??1));
-        $history = $this->execService->getUserHistory($userId, 20, ($page-1)*20);
-        view('user.adsocial.history', ['title'=>'تاریخچه Adsocial','history'=>$history,'page'=>$page]);
+        $page = max(1, (int)($this->request->get('page') ?? 1));
+        $limit = 20;
+        $offset = ($page - 1) * $limit;
+
+        $history = $this->socialTaskService->getExecutorHistory($userId, $limit, $offset);
+
+        view('user.adsocial.history', [
+            'title' => 'تاریخچه Adsocial',
+            'history' => $history,
+            'page' => $page
+        ]);
     }
 
-    // تبلیغات
+    /**
+     * لیست آگهی‌های ثبت شده توسط خود کاربر (Advertiser View)
+     */
     public function myAds(): void
     {
         $userId = (int)user_id();
-        $page = max(1,(int)($this->request->get('page')??1));
-        $ads = $this->adModel->getByAdvertiser($userId, 20, ($page-1)*20);
-        view('user.adsocial.my-ads', ['title'=>'آگهی‌های Adsocial من','ads'=>$ads,'page'=>$page]);
+        $page = max(1, (int)($this->request->get('page') ?? 1));
+        $limit = 20;
+        $offset = ($page - 1) * $limit;
+
+        // واکشی مستقیم از جدول Ads متمرکز
+        $ads = $this->adModel->getByAdvertiser($userId, $limit, $offset);
+
+        view('user.adsocial.my-ads', [
+            'title' => 'آگهی‌های Adsocial من',
+            'ads' => $ads,
+            'page' => $page
+        ]);
     }
 
+    /**
+     * فرم ایجاد آگهی جدید
+     */
     public function create(): void
     {
-        view('user.adsocial.create', ['title'=>'ثبت تبلیغ Adsocial','platforms'=>$this->platforms(),'taskTypes'=>$this->taskTypes()]);
+        view('user.adsocial.create', [
+            'title' => 'ثبت تبلیغ Adsocial',
+            'platforms' => $this->platforms(),
+            'taskTypes' => $this->taskTypes()
+        ]);
     }
 
+    /**
+     * ذخیره تبلیغ جدید (Advertiser) با استفاده از سیستم یکپارچه آداپتور
+     */
     public function store(): void
     {
         $body = $this->request->body();
-
-        // اعتبارسنجی
-        $allowed_platforms = ['instagram','telegram','youtube','twitter','tiktok'];
-        $allowed_types     = ['follow','like','comment','view','share','subscribe','join_channel','join_group','story_view'];
-
-        if (empty($body['platform']) || !in_array($body['platform'], $allowed_platforms)) {
-            $this->session->setFlash('error', 'پلتفرم انتخابی معتبر نیست.');
-            redirect(url('/adsocial/advertise/create')); return;
-        }
-        if (empty($body['task_type']) || !in_array($body['task_type'], $allowed_types)) {
-            $this->session->setFlash('error', 'نوع تسک معتبر نیست.');
-            redirect(url('/adsocial/advertise/create')); return;
-        }
-        if (empty($body['target_url'])) {
-            $this->session->setFlash('error', 'لینک هدف الزامی است.');
-            redirect(url('/adsocial/advertise/create')); return;
-        }
-        if (empty($body['title']) || mb_strlen($body['title']) < 3) {
-            $this->session->setFlash('error', 'عنوان حداقل ۳ کاراکتر باید باشد.');
-            redirect(url('/adsocial/advertise/create')); return;
-        }
-        if (empty($body['reward']) || (float)$body['reward'] < 0.01) {
-            $this->session->setFlash('error', 'پاداش معتبر نیست.');
-            redirect(url('/adsocial/advertise/create')); return;
-        }
-        if (empty($body['max_slots']) || (int)$body['max_slots'] < 1) {
-            $this->session->setFlash('error', 'تعداد کاربر مورد نیاز معتبر نیست.');
-            redirect(url('/adsocial/advertise/create')); return;
-        }
-
-        $data = array_merge($body, ['platform_type' => 'social']);
-        try {
-            $result = $this->adTaskService->create((int)user_id(), $data);
-            $this->session->setFlash($result['success'] ? 'success' : 'error', $result['success'] ? 'تبلیغ ثبت شد.' : ($result['message'] ?? 'خطا'));
-        } catch (\Exception $e) {
-            $this->logger->error('adsocial.store.failed', ['err' => $e->getMessage()]);
-            $this->session->setFlash('error', 'خطای سیستمی در ثبت تبلیغ.');
-            redirect(url('/adsocial/advertise/create')); return;
-        }
-        redirect($result['success'] ? url('/adsocial/advertise') : url('/adsocial/advertise/create'));
-    }
-
-    public function show(): void
-    {
         $userId = (int)user_id();
-        $id = (int)$this->request->param('id');
-        $ad = $this->adModel->find($id);
-        if (!$ad||(int)$ad->advertiser_id!==$userId) { redirect(url('/adsocial/advertise')); return; }
-        $executions = $this->execService->getByAd($id, 20, 0);
-        view('user.adsocial.show', ['title'=>'مدیریت آگهی','ad'=>$ad,'executions'=>$executions,'platforms'=>$this->platforms()]);
+
+        // ۱. اعتبارسنجی مقدماتی کنترلر
+        $allowedPlatforms = array_keys($this->platforms());
+        $allowedTypes = array_keys($this->taskTypes());
+
+        if (empty($body['platform']) || !in_array($body['platform'], $allowedPlatforms)) {
+            $this->session->setFlash('error', 'پلتفرم انتخابی نامعتبر است.');
+            redirect(url('/adsocial/advertise/create'));
+            return;
+        }
+
+        if (empty($body['task_type']) || !in_array($body['task_type'], $allowedTypes)) {
+            $this->session->setFlash('error', 'نوع تسک انتخابی نامعتبر است.');
+            redirect(url('/adsocial/advertise/create'));
+            return;
+        }
+
+        // ۲. آماده‌سازی اطلاعات و ارسال به مدیریت سیستم متمرکز
+        $preparedData = [
+            'platform' => $body['platform'],
+            'task_type' => $body['task_type'],
+            'title' => trim((string)($body['title'] ?? '')),
+            'link' => trim((string)($body['target_url'] ?? '')), // نگاشت لینک
+            'price_per_task' => (float)($body['price_per_task'] ?? $body['reward'] ?? 0),
+            'total_count' => (int)($body['total_count'] ?? $body['max_slots'] ?? 1),
+            'description' => trim((string)($body['description'] ?? ''))
+        ];
+
+        try {
+            // فراخوانی آداپتور تخصصی AdSocialAdapter که پیشتر ایجاد کردیم
+            $result = $this->adManager->create('social_task', $userId, $preparedData);
+
+            if ($result['success']) {
+                $this->session->setFlash('success', $result['message'] ?? 'تبلیغ با موفقیت ثبت شد.');
+                redirect(url('/adsocial/advertise'));
+            } else {
+                $message = is_array($result['message']) ? implode(' | ', $result['message']) : $result['message'];
+                $this->session->setFlash('error', $message);
+                redirect(url('/adsocial/advertise/create'));
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('adsocial.store.exception', ['err' => $e->getMessage()]);
+            $this->session->setFlash('error', 'خطا در ثبت تراکنش تبلیغ.');
+            redirect(url('/adsocial/advertise/create'));
+        }
     }
 
-    public function pause(): void  { $this->toggleStatus('paused'); }
-    public function resume(): void { $this->toggleStatus('active'); }
-    public function cancel(): void { $this->toggleStatus('cancelled'); }
-    private function toggleStatus(string $s): void {
-        $r = $this->adTaskService->changeStatus((int)$this->request->param('id'), (int)user_id(), $s);
-        if (is_ajax()) { $this->response->json($r); return; }
-        $this->session->setFlash($r['success']?'success':'error', $r['message']);
-        redirect(url('/adsocial/advertise'));
+    /**
+     * لغو کمپین و بازگشت باقیمانده بودجه
+     */
+    public function cancel(): void
+    {
+        try {
+            $adId = (int)$this->request->param('id');
+            $userId = (int)user_id();
+
+            // برای لغو امن و متمرکز از سرویس اصلی استفاده می‌کنیم
+            $result = $this->socialTaskService->adminCancelAd($userId, $adId);
+
+            if ($this->request->isAjax()) {
+                $this->response->json($result);
+                return;
+            }
+
+            $this->session->setFlash($result['success'] ? 'success' : 'error', $result['message']);
+            redirect(url('/adsocial/advertise'));
+
+        } catch (\Throwable $e) {
+            $this->response->json(['success' => false, 'message' => 'خطا در لغو تبلیغ']);
+        }
     }
 
-    public function showReview(): void {
-        $exec = $this->execService->findWithAd((int)$this->request->param('id'));
-        if (!$exec||(int)$exec->advertiser_id!==(int)user_id()) { redirect(url('/adsocial/advertise')); return; }
-        view('user.adsocial.review', ['title'=>'بررسی مدرک','exec'=>$exec]);
+    private function platforms(): array 
+    { 
+        return [
+            'instagram' => 'اینستاگرام',
+            'telegram' => 'تلگرام',
+            'twitter' => 'توییتر / X',
+            'tiktok' => 'تیک‌تاک'
+        ]; 
     }
 
-    public function approveExecution(): void {
-        $r = $this->execService->approveByAdvertiser((int)$this->request->param('id'), (int)user_id());
-        if (is_ajax()) { $this->response->json($r); return; }
-        $this->session->setFlash($r['success']?'success':'error', $r['message']);
-        redirect(url('/adsocial/advertise'));
+    private function taskTypes(): array 
+    { 
+        return [
+            'follow' => 'فالو / سابسکرایب',
+            'like' => 'لایک',
+            'comment' => 'کامنت',
+            'view' => 'بازدید',
+            'share' => 'اشتراک‌گذاری',
+            'join_channel' => 'عضویت در کانال',
+            'join_group' => 'عضویت در گروه'
+        ]; 
     }
-
-    public function rejectExecution(): void {
-        $reason = trim($this->request->post('reason')??'');
-        if (!$reason) { $this->response->json(['success'=>false,'message'=>'دلیل رد الزامی است']); return; }
-        $r = $this->execService->rejectByAdvertiser((int)$this->request->param('id'), (int)user_id(), $reason);
-        if (is_ajax()) { $this->response->json($r); return; }
-        $this->session->setFlash($r['success']?'success':'error', $r['message']);
-        redirect(url('/adsocial/advertise'));
-    }
-
-    private function platforms(): array { return ['instagram'=>'اینستاگرام','telegram'=>'تلگرام','youtube'=>'یوتیوب','twitter'=>'توییتر/X','tiktok'=>'تیک‌تاک']; }
-    private function taskTypes(): array { return ['follow'=>'فالو','like'=>'لایک','comment'=>'کامنت','view'=>'بازدید','share'=>'اشتراک']; }
 }

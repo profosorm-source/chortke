@@ -1,110 +1,304 @@
 <?php
+
+declare(strict_types=1);
+
 namespace App\Controllers\User;
-use App\Services\AdTaskService;
-use App\Services\TaskExecutionService;
-use App\Models\Advertisement;
+
+use App\Services\SocialTask\SocialTaskService;
+use App\Models\SocialTaskModel;
+use App\Models\Ads;
 use App\Services\AdSystemManager;
 
 class AdtubeController extends BaseUserController
 {
-    private AdTaskService $adTaskService;
-    private TaskExecutionService $execService;
-    private Advertisement $adModel;
-    private AdSystemManager $adManager;
-
-    public function __construct(AdTaskService $ads, TaskExecutionService $exec, Advertisement $ad, AdSystemManager $adManager)
-    {
+    public function __construct(
+        private SocialTaskService $socialTaskService,
+        private SocialTaskModel $socialTaskModel,
+        private Ads $adModel,
+        private AdSystemManager $adManager
+    ) {
         parent::__construct();
-        $this->adTaskService = $ads;
-        $this->execService   = $exec;
-        $this->adModel       = $ad;
-        $this->adManager     = $adManager;
     }
 
-    public function index(): void {
+    /**
+     * داشبورد انجام‌دهنده تبلیغات ویدیویی یوتیوب (Executor/Worker)
+     */
+    public function index(): void
+    {
         $userId = (int)user_id();
-        $tasks = $this->adTaskService->getActiveForExecutor($userId, 20);
-        $stats = $this->execService->getUserStats($userId);
-        view('user.adtube.index', ['title'=>'Adtube — کسب درآمد از یوتیوب','tasks'=>$tasks,'stats'=>$stats]);
+        
+        // فراخوانی سرویس متمرکز سوشیال با فیلتر انحصاری یوتیوب
+        $result = $this->socialTaskService->getTasksForExecutor($userId, [
+            'platform' => 'youtube'
+        ], 20);
+
+        $tasks = $result['tasks'] ?? [];
+        $stats = $this->socialTaskService->getExecutorStats($userId);
+
+        view('user.adtube.index', [
+            'title' => 'AdTube — کسب درآمد از یوتیوب',
+            'tasks' => $tasks,
+            'stats' => $stats,
+            'trust_score' => $result['trust_score'] ?? 50
+        ]);
     }
 
-    public function income(): void { $this->index(); }
+    public function income(): void
+    {
+        $this->index();
+    }
 
-    public function start(): void {
+    /**
+     * شروع فرآیند اجرای یک تسک ویدیویی
+     */
+    public function start(): void
+    {
         try {
-            $this->response->json($this->execService->start((int)($this->request->body()['ad_id'] ?? 0), (int)user_id()));
+            $body = $this->request->body();
+            $adId = (int)($body['ad_id'] ?? $this->request->param('id'));
+            $userId = (int)user_id();
+
+            if (!$adId) {
+                 $this->response->json(['success' => false, 'message' => 'شناسه ویدیو نامعتبر است.']);
+                 return;
+            }
+
+            $context = [
+                'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+                'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'unknown'
+            ];
+
+            // استفاده از خط لوله اجرایی ایمن SocialTaskService
+            $result = $this->socialTaskService->startExecution($userId, $adId, $context);
+            $this->response->json($result);
+
         } catch (\Exception $e) {
             $this->logger->error('adtube.start.failed', ['err' => $e->getMessage()]);
-            $this->response->json(['success' => false, 'message' => 'خطای سیستمی.']);
+            $this->response->json(['success' => false, 'message' => 'خطا در شروع تماشای ویدیو.']);
         }
     }
 
-    public function showExecute(): void {
+    /**
+     * صفحه پخش ویدیو و ثبت اثبات نهایی توسط کاربر
+     */
+    public function showExecute(): void
+    {
         $userId = (int)user_id();
-        $id = (int)$this->request->param('id');
-        $execution = $this->execService->findForUser($id, $userId);
-        if (!$execution) { redirect(url('/adtube')); return; }
-        $task = $this->adModel->find((int)$execution->ad_id);
-        view('user.adtube.execute', ['title'=>'تماشای ویدیو','execution'=>$execution,'task'=>$task]);
+        $execId = (int)$this->request->param('id');
+
+        // دریافت اطلاعات اجرای تسک به همراه جزئیات آگهی (از طریق مدل پیوندی)
+        $execution = $this->socialTaskModel->getExecutionWithAd($execId, $userId);
+
+        if (!$execution) {
+            $this->session->setFlash('error', 'اجرای مورد نظر یافت نشد.');
+            redirect(url('/adtube'));
+            return;
+        }
+
+        // این آبجکت مستقیماً حاوی ad_title و reward است
+        view('user.adtube.execute', [
+            'title' => 'تماشای ویدیو و کسب درآمد',
+            'execution' => $execution,
+            'task' => $execution // پاس دادن آبجکت جهت سازگاری با View
+        ]);
     }
 
-    public function submit(): void {
+    /**
+     * ثبت و ارسال نهایی نتایج اجرا (Submission)
+     */
+    public function submit(): void
+    {
         try {
-            $r = $this->execService->submit((int)$this->request->param('id'), (int)user_id(), $this->request->body());
-            if (is_ajax()) { $this->response->json($r); return; }
-            $this->session->setFlash($r['success'] ? 'success' : 'error', $r['message']);
+            $execId = (int)$this->request->param('id');
+            $userId = (int)user_id();
+            $body = $this->request->body();
+
+            // هدایت مستقیم اطلاعات به لایه ضدتقلب و پردازش SocialTask
+            $result = $this->socialTaskService->submitExecution($execId, $userId, $body);
+
+            if (is_ajax()) {
+                $this->response->json($result);
+                return;
+            }
+
+            $this->session->setFlash($result['success'] ? 'success' : 'error', $result['message']);
+            redirect(url('/adtube'));
+
         } catch (\Exception $e) {
             $this->logger->error('adtube.submit.failed', ['err' => $e->getMessage()]);
-            if (is_ajax()) { $this->response->json(['success' => false, 'message' => 'خطای سیستمی.']); return; }
-            $this->session->setFlash('error', 'خطای سیستمی.');
+            if (is_ajax()) {
+                $this->response->json(['success' => false, 'message' => 'خطای سیستمی در ثبت نهایی.']);
+                return;
+            }
+            $this->session->setFlash('error', 'خطای غیرمنتظره رخ داد.');
+            redirect(url('/adtube'));
         }
-        redirect(url('/adtube'));
     }
 
-    public function history(): void {
-        $page = max(1,(int)($this->request->get('page')??1));
-        $history = $this->execService->getUserHistory((int)user_id(), 20, ($page-1)*20);
-        view('user.adtube.history', ['title'=>'تاریخچه Adtube','history'=>$history,'page'=>$page]);
+    /**
+     * تاریخچه فعالیت کاربر در شبکه ویدیویی
+     */
+    public function history(): void
+    {
+        $userId = (int)user_id();
+        $page = max(1, (int)($this->request->get('page') ?? 1));
+        $limit = 20;
+        $offset = ($page - 1) * $limit;
+
+        $history = $this->socialTaskService->getExecutorHistory($userId, $limit, $offset);
+
+        view('user.adtube.history', [
+            'title' => 'تاریخچه کسب درآمد AdTube',
+            'history' => $history,
+            'page' => $page
+        ]);
     }
 
-    public function advertise(): void {
-        $page = max(1,(int)($this->request->get('page')??1));
-        $ads = $this->adModel->getByAdvertiser((int)user_id(), 20, ($page-1)*20);
-        view('user.adtube.my-ads', ['title'=>'تبلیغات Adtube من','ads'=>$ads,'page'=>$page]);
+    /**
+     * پنل سفارش‌دهنده تبلیغات (Advertiser panel)
+     */
+    public function advertise(): void
+    {
+        $userId = (int)user_id();
+        $page = max(1, (int)($this->request->get('page') ?? 1));
+        $limit = 20;
+        $offset = ($page - 1) * $limit;
+
+        // بازخوانی آگهی‌های ثبت شده توسط کاربر از نوع 'adtube'
+        $ads = $this->adModel->getByAdvertiser($userId, $limit, $offset, 'adtube');
+
+        view('user.adtube.my-ads', [
+            'title' => 'تبلیغات ویدیویی ثبت شده',
+            'ads' => $ads,
+            'page' => $page
+        ]);
     }
 
-    public function myAds(): void { $this->advertise(); }
-
-    public function create(): void {
-        view('user.adtube.create', ['title'=>'ثبت تبلیغ ویدیوی یوتیوب']);
+    public function myAds(): void
+    {
+        $this->advertise();
     }
 
-    public function store(): void {
+    /**
+     * ایجاد آگهی ویدیویی جدید
+     */
+    public function create(): void
+    {
+        view('user.adtube.create', [
+            'title' => 'ثبت آگهی جدید یوتیوب'
+        ]);
+    }
+
+    /**
+     * ذخیره و فعالسازی تراکنش مالی آگهی
+     */
+    public function store(): void
+    {
         try {
-            $data = array_merge($this->request->body(), ['platform' => 'youtube', 'task_type' => 'view']);
-            $r = $this->adTaskService->create((int)user_id(), $data);
-            $this->session->setFlash($r['success'] ? 'success' : 'error', $r['success'] ? 'تبلیغ یوتیوب ثبت شد.' : ($r['message'] ?? 'خطا'));
-            redirect($r['success'] ? url('/adtube/advertise') : url('/adtube/advertise/create'));
+            $userId = (int)user_id();
+            $data = $this->request->body();
+
+            // تعیین هویت نوع تبلیغ برای مسیریابی در AdSystemManager
+            $data['platform'] = 'youtube';
+            $data['task_type'] = 'view';
+
+            // ایجاد از طریق درگاه امن و متمرکز
+            $result = $this->adManager->create('adtube', $userId, $data);
+
+            if ($result['success']) {
+                $this->session->setFlash('success', 'آگهی ویدیویی با موفقیت در سیستم ثبت و بودجه آن تخصیص یافت.');
+                redirect(url('/adtube/ads'));
+            } else {
+                $msg = $result['message'] ?? 'خطا در پردازش اطلاعات.';
+                if (!empty($result['errors']) && is_array($result['errors'])) {
+                     $msg .= " (" . implode("، ", $result['errors']) . ")";
+                }
+                $this->session->setFlash('error', $msg);
+                redirect(url('/adtube/ads/create'));
+            }
+
         } catch (\Exception $e) {
             $this->logger->error('adtube.store.failed', ['err' => $e->getMessage()]);
-            $this->session->setFlash('error', 'خطای سیستمی در ثبت تبلیغ.');
-            redirect(url('/adtube/advertise/create'));
+            $this->session->setFlash('error', 'متاسفانه در تراکنش بانکی سامانه خطایی رخ داد.');
+            redirect(url('/adtube/ads/create'));
         }
     }
 
-    public function showAd(): void {
+    /**
+     * نمایش آمار و جزئیات آگهی برای سفارش‌دهنده
+     */
+    public function showAd(): void
+    {
         $userId = (int)user_id();
-        $id = (int)$this->request->param('id');
-        $ad = $this->adModel->find($id);
-        if (!$ad||(int)$ad->advertiser_id!==$userId) { redirect(url('/adtube/advertise')); return; }
-        view('user.adtube.show-ad', ['title'=>'جزئیات آگهی یوتیوب','ad'=>$ad,'stats'=>$this->execService->getAdStats($id)]);
+        $adId = (int)$this->request->param('id');
+
+        $ad = $this->adModel->find($adId);
+
+        if (!$ad || (int)$ad->user_id !== $userId) {
+            $this->session->setFlash('error', 'دسترسی غیرمجاز یا آگهی نامعتبر.');
+            redirect(url('/adtube/ads'));
+            return;
+        }
+
+        // بازیابی تحلیل‌های حرفه‌ای از SocialTask Engine
+        $stats = $this->socialTaskService->getAdvertiserAdStats($userId, $adId);
+
+        view('user.adtube.show-ad', [
+            'title' => 'آمار نهایی تبلیغ یوتیوب',
+            'ad' => $ad,
+            'stats' => $stats
+        ]);
     }
 
-    public function pause(): void  { $this->changeStatus('paused'); }
-    public function resume(): void { $this->changeStatus('active'); }
-    private function changeStatus(string $s): void {
-        $r = $this->adTaskService->changeStatus((int)$this->request->param('id'), (int)user_id(), $s);
-        if (is_ajax()) { $this->response->json($r); return; }
-        redirect(url('/adtube/advertise'));
+    /**
+     * تغییر وضعیت سریع آگهی (توقف موقت / فعال‌سازی)
+     */
+    public function pause(): void
+    {
+        $this->changeAdStatus('paused');
+    }
+
+    public function resume(): void
+    {
+        $this->changeAdStatus('active');
+    }
+
+    private function changeAdStatus(string $status): void
+    {
+        try {
+            $adId = (int)$this->request->param('id');
+            $userId = (int)user_id();
+
+            $ad = $this->adModel->find($adId);
+            if (!$ad || (int)$ad->user_id !== $userId) {
+                 throw new \Exception('دسترسی غیرمجاز');
+            }
+
+            $success = $this->adModel->update($adId, [
+                'status' => $status,
+                'updated_at' => date('Y-m-d H:i:s')
+            ]);
+
+            $resp = [
+                'success' => $success,
+                'message' => $success ? 'تغییر وضعیت با موفقیت انجام شد.' : 'خطا در بروزرسانی آگهی.'
+            ];
+
+            if (is_ajax()) {
+                $this->response->json($resp);
+                return;
+            }
+
+            $this->session->setFlash($success ? 'success' : 'error', $resp['message']);
+            redirect(url('/adtube/ads'));
+
+        } catch (\Exception $e) {
+            if (is_ajax()) {
+                $this->response->json(['success' => false, 'message' => $e->getMessage()]);
+                return;
+            }
+            $this->session->setFlash('error', 'درخواست ناموفق بود.');
+            redirect(url('/adtube/ads'));
+        }
     }
 }

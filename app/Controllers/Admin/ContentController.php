@@ -9,6 +9,7 @@ use App\Models\ContentRevenue;
 use App\Models\ContentAgreement;
 use App\Services\ContentService;
 use App\Services\BulkOperationsService;
+use App\Services\AdvancedSearchService;
 use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 
@@ -19,13 +20,15 @@ class ContentController extends BaseAdminController
     private ContentAgreement $contentAgreementModel;
     private ContentService $contentService;
     private BulkOperationsService $bulkService;
+    private AdvancedSearchService $searchService;
 
     public function __construct(
         ContentAgreement $contentAgreementModel,
         ContentRevenue $contentRevenueModel,
         ContentSubmission $contentSubmissionModel,
         ContentService $contentService,
-        BulkOperationsService $bulkService
+        BulkOperationsService $bulkService,
+        AdvancedSearchService $searchService
     ) {
         parent::__construct();
         $this->contentService = $contentService;
@@ -33,6 +36,7 @@ class ContentController extends BaseAdminController
         $this->contentRevenueModel = $contentRevenueModel;
         $this->contentSubmissionModel = $contentSubmissionModel;
         $this->bulkService = $bulkService;
+        $this->searchService = $searchService;
     }
 
     /**
@@ -43,15 +47,24 @@ class ContentController extends BaseAdminController
         $filters = [
             'status' => $_GET['status'] ?? null,
             'platform' => $_GET['platform'] ?? null,
-            'search' => $_GET['search'] ?? null,
+            'category' => $_GET['category'] ?? null,
         ];
 
+        $search = trim($_GET['search'] ?? '');
         $page = max(1, (int)($_GET['page'] ?? 1));
         $perPage = 15;
         $offset = ($page - 1) * $perPage;
 
-        $submissions = $this->contentSubmissionModel->getAll($filters, $perPage, $offset);
-        $total = $this->contentSubmissionModel->countAll($filters);
+        // استفاده از AdvancedSearchService برای جستجو
+        if (!empty($search)) {
+            $result = $this->searchService->searchContent($search, $filters, $perPage, $offset);
+            $submissions = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+        } else {
+            $submissions = $this->contentSubmissionModel->getAll($filters, $perPage, $offset);
+            $total = $this->contentSubmissionModel->countAll($filters);
+        }
+
         $totalPages = (int)ceil($total / $perPage);
         $stats = $this->contentSubmissionModel->getStats();
 
@@ -63,6 +76,7 @@ class ContentController extends BaseAdminController
             'totalPages' => $totalPages,
             'currentPage' => $page,
             'filters' => $filters,
+            'search' => $search,
         ]);
     }
 

@@ -153,9 +153,8 @@ public function update(int $id): void
         return;
     }
 
-    // دریافت داده‌ها از JSON
-    $input = file_get_contents('php://input');
-    $data = json_decode($input, true) ?? [];
+    // دریافت داده‌ها از بدنه درخواست
+    $data = $this->request->body() ?? [];
 
     // قوانین اعتبارسنجی
     $rules = [

@@ -6,6 +6,7 @@ use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\TicketCategory;
 use App\Services\TicketService;
+use App\Services\AdvancedSearchService;
 use App\Controllers\Admin\BaseAdminController;
 
 class TicketController extends BaseAdminController
@@ -14,18 +15,21 @@ class TicketController extends BaseAdminController
     private TicketMessage $messageModel;
     private TicketCategory $categoryModel;
     private TicketService $ticketService;
+    private AdvancedSearchService $searchService;
     
     public function __construct(
         \App\Models\Ticket $ticketModel,
         \App\Models\TicketMessage $messageModel,
         \App\Models\TicketCategory $categoryModel,
-        \App\Services\TicketService $ticketService)
+        \App\Services\TicketService $ticketService,
+        AdvancedSearchService $searchService)
     {
         parent::__construct();
         $this->ticketModel = $ticketModel;
         $this->messageModel = $messageModel;
         $this->categoryModel = $categoryModel;
         $this->ticketService = $ticketService;
+        $this->searchService = $searchService;
     }
     
     /**
@@ -33,7 +37,6 @@ class TicketController extends BaseAdminController
      */
     public function index()
     {
-                
         $filters = [
             'status' => $this->request->get('status', ''),
             'priority' => $this->request->get('priority', ''),
@@ -41,11 +44,21 @@ class TicketController extends BaseAdminController
             'assigned_to' => $this->request->get('assigned_to', '')
         ];
         
+        $search = trim($this->request->get('search') ?? '');
         $page = (int) $this->request->get('page', 1);
         $perPage = 20;
+        $offset = ($page - 1) * $perPage;
         
-        $tickets = $this->ticketModel->getForAdmin($filters, $page, $perPage);
-        $total = $this->ticketModel->countForAdmin($filters);
+        // استفاده از AdvancedSearchService برای جستجو
+        if (!empty($search)) {
+            $result = $this->searchService->searchTickets($search, $filters, $perPage, $offset);
+            $tickets = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+        } else {
+            $tickets = $this->ticketModel->getForAdmin($filters, $page, $perPage);
+            $total = $this->ticketModel->countForAdmin($filters);
+        }
+
         $totalPages = ceil($total / $perPage);
         
         // آمار
@@ -59,6 +72,7 @@ class TicketController extends BaseAdminController
             'stats' => $stats,
             'categories' => $categories,
             'filters' => $filters,
+            'search' => $search,
             'page' => $page,
             'totalPages' => $totalPages,
             'total' => $total

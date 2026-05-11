@@ -3,7 +3,7 @@
 namespace App\Controllers\User;
 
 use App\Controllers\User\BaseUserController;
-use App\Models\CustomTaskModel;
+use App\Models\Ads;
 use App\Services\CustomTaskService;
 use App\Validators\CustomTaskValidator;
 use App\Services\AntiFraud\GeoIPService;
@@ -16,21 +16,21 @@ class CustomTaskAdController extends BaseUserController
     private GeoIPService $ipQualityService;
     private BrowserFingerprintService $fingerprintService;
     private AdSystemManager $adManager;
-    private CustomTaskModel $taskModel;
+    private Ads $adsModel;
 
     public function __construct(
         CustomTaskService $service,
         GeoIPService $ipQualityService,
         BrowserFingerprintService $fingerprintService,
         AdSystemManager $adManager,
-        CustomTaskModel $taskModel
+        Ads $adsModel
     ) {
         parent::__construct();
         $this->service = $service;
         $this->ipQualityService = $ipQualityService;
         $this->fingerprintService = $fingerprintService;
         $this->adManager = $adManager;
-        $this->taskModel = $taskModel;
+        $this->adsModel = $adsModel;
     }
 
     /**
@@ -104,14 +104,14 @@ class CustomTaskAdController extends BaseUserController
         
         $task = $this->service->find($taskId);
 
-        if (!$task || $task->creator_id !== $userId) {
+        if (!$task || $task->user_id !== $userId) {
             http_response_code(404);
             include __DIR__ . '/../../../views/errors/404.php';
             exit;
         }
 
-        // گرفتن submission ها
-        $submissions = $this->taskModel->submission_getByTask($taskId, null, 50, 0);
+        // گرفتن submission ها از طریق سرویس یکپارچه
+        $submissions = $this->service->getSubmissionsByTask($taskId, null, 50, 0);
 
         return view('user.custom-tasks.ad.show', [
             'task' => $task,
@@ -163,12 +163,12 @@ class CustomTaskAdController extends BaseUserController
         $taskId = (int) $this->request->post('task_id');
 
         $task = $this->service->find($taskId);
-        if (!$task || $task->creator_id !== $userId) {
+        if (!$task || $task->user_id !== $userId) {
             $this->session->setFlash('error', 'دسترسی غیرمجاز.');
             return redirect('/custom-tasks/ad');
         }
 
-        $this->taskModel->update($taskId, ['status' => 'paused']);
+        $this->adsModel->update($taskId, ['status' => 'paused']);
 
         $this->session->setFlash('success', 'تسک متوقف شد.');
         return redirect('/custom-tasks/ad/' . $taskId);
@@ -183,12 +183,12 @@ class CustomTaskAdController extends BaseUserController
         $taskId = (int) $this->request->post('task_id');
 
         $task = $this->service->find($taskId);
-        if (!$task || $task->creator_id !== $userId) {
+        if (!$task || $task->user_id !== $userId) {
             $this->session->setFlash('error', 'دسترسی غیرمجاز.');
             return redirect('/custom-tasks/ad');
         }
 
-        $this->taskModel->update($taskId, ['status' => 'active']);
+        $this->adsModel->update($taskId, ['status' => 'active']);
 
         $this->session->setFlash('success', 'تسک فعال شد.');
         return redirect('/custom-tasks/ad/' . $taskId);

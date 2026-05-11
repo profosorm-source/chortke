@@ -2,7 +2,7 @@
 
 namespace App\Controllers\User;
 
-use App\Models\SeoAd;
+use App\Models\Ads;
 use App\Models\SeoExecution;
 use App\Services\WalletService;
 use App\Services\Shared\AnalyticsService;
@@ -14,7 +14,7 @@ use App\Services\AdSystemManager;
  */
 class SeoAdController extends BaseUserController
 {
-    private SeoAd $model;
+    private Ads $model;
     private SeoExecution $executionModel;
     private WalletService $wallet;
     private AnalyticsService $analytics;
@@ -22,7 +22,7 @@ class SeoAdController extends BaseUserController
     private AdSystemManager $adManager;
 
     public function __construct(
-        SeoAd $m,
+        Ads $m,
         SeoExecution $e,
         WalletService $w,
         AnalyticsService $a,
@@ -42,7 +42,7 @@ class SeoAdController extends BaseUserController
     public function index(): void
     {
         $userId = (int)user_id();
-        $ads = $this->model->getByUser($userId);
+        $ads = $this->model->getByAdvertiser($userId, 30, 0, 'seo');
         
         // استفاده از Shared Analytics برای آمار
         $statsData = $this->analytics->getAggregates('seo_executions', [
@@ -137,17 +137,20 @@ class SeoAdController extends BaseUserController
 
         $ad = $this->model->create([
             'user_id' => $uid,
+            'type' => 'seo', // مشخص کردن نوع تبلیغ به صورت متمرکز
             'site_url' => $data['site_url'],
             'title' => $data['title'] ?? $data['keyword'],
             'keyword' => $data['keyword'],
             'description' => $data['description'] ?? null,
             'budget' => $budget,
+            'remaining_budget' => $budget, // فیلد الزامی
             'min_payout' => $minPayout,
             'max_payout' => $maxPayout,
             'target_duration' => (int)($data['target_duration'] ?? feature_config('seo_ad_limits', 'target_duration_default', 60)),
             'min_score' => (int)($data['min_score'] ?? feature_config('seo_ad_limits', 'min_score_default', 40)),
             'max_per_day' => (int)($data['max_per_day'] ?? feature_config('seo_ad_limits', 'max_per_day', 10)),
             'deadline' => !empty($data['deadline']) ? $data['deadline'] : null,
+            'status' => 'pending',
         ]);
 
         if ($ad) {
@@ -167,7 +170,11 @@ class SeoAdController extends BaseUserController
         $adId = (int)$this->request->param('id');
         $userId = (int)user_id();
         
-        $ad = $this->model->findByUser($adId, $userId);
+        $ad = $this->model->db->table('ads')
+            ->where('id', '=', $adId)
+            ->where('user_id', '=', $userId)
+            ->first();
+            
         if (!$ad) { redirect(url('/seo-ad')); return; }
 
         // آمار اجراها
@@ -216,11 +223,10 @@ class SeoAdController extends BaseUserController
     /** توقف موقت */
     public function pause(): void
     {
-        $this->model->setStatusByUser(
-            (int)$this->request->param('id'),
-            (int)user_id(),
-            'paused'
-        );
+        $this->model->db->table('ads')
+            ->where('id', '=', (int)$this->request->param('id'))
+            ->where('user_id', '=', (int)user_id())
+            ->update(['status' => 'paused', 'updated_at' => date('Y-m-d H:i:s')]);
         
         if (is_ajax()) {
             $this->response->json(['success' => true]);
@@ -233,11 +239,10 @@ class SeoAdController extends BaseUserController
     /** ادامه */
     public function resume(): void
     {
-        $this->model->setStatusByUser(
-            (int)$this->request->param('id'),
-            (int)user_id(),
-            'active'
-        );
+        $this->model->db->table('ads')
+            ->where('id', '=', (int)$this->request->param('id'))
+            ->where('user_id', '=', (int)user_id())
+            ->update(['status' => 'active', 'updated_at' => date('Y-m-d H:i:s')]);
         
         if (is_ajax()) {
             $this->response->json(['success' => true]);

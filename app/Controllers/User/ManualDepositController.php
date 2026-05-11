@@ -83,6 +83,7 @@ class ManualDepositController extends BaseUserController
 
             $this->session->setFlash('error', 'خطا در بارگذاری صفحه');
             redirect('/wallet');
+            return;
         }
     }
 
@@ -191,7 +192,7 @@ class ManualDepositController extends BaseUserController
 
             $this->session->setFlash('success', 'درخواست واریز شما ثبت شد و در انتظار بررسی است');
             redirect('/wallet');
-
+            return;
         } catch (\Exception $e) {
     $this->logger->error('manual_deposit.store.failed', [
         'channel' => 'manual_deposit',
@@ -209,6 +210,7 @@ class ManualDepositController extends BaseUserController
             $this->session->setFlash('error', $e->getMessage());
             $this->session->setFlash('old', $data);
             redirect('/wallet/deposit/manual');
+            return;
         }
     }
 
@@ -239,6 +241,7 @@ class ManualDepositController extends BaseUserController
 
             $this->session->setFlash('error', 'خطا در دریافت لیست');
             redirect('/wallet');
+            return;
         }
     }
 }

@@ -2,7 +2,8 @@
 
 namespace App\Controllers\Admin;
 
-use App\Models\CustomTaskModel;
+use App\Models\Ads;
+use App\Models\CustomTaskSubmissionModel;
 use App\Models\InteractionModel;
 use App\Services\CustomTaskService;
 use App\Services\Analytics\AnalyticsService;
@@ -15,7 +16,8 @@ class CustomTaskController extends BaseAdminController
     private CustomTaskService $customTaskService;
     private AnalyticsService $analyticsService;
     private WalletService $walletService;
-    private CustomTaskModel $customTaskModel;
+    private Ads $adsModel;
+    private CustomTaskSubmissionModel $submissionModel;
     private DisputeService $disputeService;
     private InteractionModel $interactionModel;
 
@@ -23,7 +25,8 @@ class CustomTaskController extends BaseAdminController
         CustomTaskService $customTaskService,
         AnalyticsService $analyticsService,
         WalletService $walletService,
-        CustomTaskModel $customTaskModel,
+        Ads $adsModel,
+        CustomTaskSubmissionModel $submissionModel,
         DisputeService $disputeService,
         InteractionModel $interactionModel
     ) {
@@ -31,7 +34,8 @@ class CustomTaskController extends BaseAdminController
         $this->customTaskService = $customTaskService;
         $this->analyticsService = $analyticsService;
         $this->walletService = $walletService;
-        $this->customTaskModel = $customTaskModel;
+        $this->adsModel = $adsModel;
+        $this->submissionModel = $submissionModel;
         $this->disputeService = $disputeService;
         $this->interactionModel = $interactionModel;
     }
@@ -52,8 +56,8 @@ class CustomTaskController extends BaseAdminController
         $limit = 30;
         $offset = ($page - 1) * $limit;
 
-        $tasks = $this->customTaskModel->adminList($filters, $limit, $offset);
-        $total = $this->customTaskModel->adminCount($filters);
+        $tasks = $this->adsModel->adminList('custom_task', $filters['status'] ?? '', $limit, $offset);
+        $total = $this->adsModel->adminCount('custom_task', $filters['status'] ?? '');
 
         return view('admin.custom-tasks.index', [
             'tasks' => $tasks,
@@ -61,9 +65,9 @@ class CustomTaskController extends BaseAdminController
             'page' => $page,
             'pages' => \ceil($total / $limit),
             'filters' => $filters,
-            'statusLabels' => $this->customTaskModel->statusLabels(),
-            'statusClasses' => $this->customTaskModel->statusClasses(),
-            'taskTypes' => $this->customTaskModel->taskTypes(),
+            'statusLabels' => $this->adsModel->statusLabels(),
+            'statusClasses' => $this->adsModel->statusClasses(),
+            'taskTypes' => $this->adsModel->taskTypes(),
         ]);
     }
 
@@ -85,8 +89,8 @@ class CustomTaskController extends BaseAdminController
         return view('admin.custom-tasks.show', [
             'task' => $details['task'],
             'submissions' => $details['submissions'],
-            'statusLabels' => $this->customTaskModel->statusLabels(),
-            'submissionStatusLabels' => $this->customTaskModel->submissionStatusLabels(),
+            'statusLabels' => $this->adsModel->statusLabels(),
+            'submissionStatusLabels' => $this->adsModel->submissionStatusLabels(),
         ]);
     }
 
@@ -127,7 +131,7 @@ class CustomTaskController extends BaseAdminController
         $body = \json_decode(\file_get_contents('php://input'), true) ?? [];
         $submissionId = (int) ($body['submission_id'] ?? 0);
 
-        $submission = $this->customTaskModel->submission_find($submissionId);
+        $submission = $this->submissionModel->submission_find($submissionId);
         if (!$submission) {
             $this->response->json(['ok' => false, 'message' => 'یافت نشد.'], 404);
             return;
@@ -157,7 +161,7 @@ class CustomTaskController extends BaseAdminController
         $submissionId = (int) ($body['submission_id'] ?? 0);
         $reason = $body['reason'] ?? 'رد توسط ادمین';
 
-        $submission = $this->customTaskModel->submission_find($submissionId);
+        $submission = $this->submissionModel->submission_find($submissionId);
         if (!$submission) {
             $this->response->json(['ok' => false, 'message' => 'یافت نشد.'], 404);
             return;
@@ -304,10 +308,7 @@ class CustomTaskController extends BaseAdminController
         if ($updated) {
             // اگر resolved شد، ممکنه تسک رو غیرفعال کنیم
             if ($status === 'resolved' && $report->reason === 'fraud') {
-                $this->customTaskModel->update($report->task_id, [
-                    'status' => 'rejected',
-                    'rejection_reason' => 'گزارش شده به دلیل تقلب',
-                ]);
+                $this->customTaskService->rejectTask($report->task_id, $this->userId(), 'گزارش شده به دلیل تقلب');
             }
 
             $this->logger->activity('custom_task.review_report', 'بررسی گزارش', user_id(), [

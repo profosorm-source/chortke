@@ -2,25 +2,29 @@
 
 namespace App\Controllers\Admin;
 
-use App\Services\EmailQueueService;
+use App\Services\RedisEmailQueueService;
 use App\Services\EmailService;
 use App\Models\EmailQueue;
+use App\Services\AdvancedSearchService;
 
 class EmailQueueController extends BaseAdminController
 {
     private EmailQueue $model;
     private EmailService $emailService;
-    private EmailQueueService $emailQueueService;
+    private RedisEmailQueueService $emailQueueService;
+    private AdvancedSearchService $searchService;
 
     public function __construct(
         EmailQueue       $model,
         EmailService     $emailService,
-        EmailQueueService $emailQueueService
+        RedisEmailQueueService $emailQueueService,
+        AdvancedSearchService $searchService
     ) {
         parent::__construct();
         $this->model = $model;
         $this->emailService = $emailService;
         $this->emailQueueService = $emailQueueService;
+        $this->searchService = $searchService;
     }
 
     public function index(): void
@@ -28,14 +32,34 @@ class EmailQueueController extends BaseAdminController
         $page    = max(1, (int)($this->request->get('page') ?? 1));
         $perPage = 30;
         $status  = $this->request->get('status');
-        $search  = $this->request->get('search');
+        $search  = trim($this->request->get('search') ?? '');
+        $offset  = ($page - 1) * $perPage;
 
-        $data = $this->emailQueueService->getEmailsForAdmin(
-            $page,
-            $perPage,
-            $status,
-            $search
-        );
+        $filters = [];
+        if (!empty($status)) {
+            $filters['status'] = $status;
+        }
+
+        // استفاده از AdvancedSearchService برای جستجو
+        if (!empty($search)) {
+            $result = $this->searchService->searchEmails($search, $filters, $perPage, $offset);
+            $emails = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+            $data = [
+                'emails' => $emails,
+                'stats' => [],
+                'total' => $total,
+                'page' => $page,
+                'totalPages' => ceil($total / $perPage),
+            ];
+        } else {
+            $data = $this->emailQueueService->getEmailsForAdmin(
+                $page,
+                $perPage,
+                $status,
+                $search
+            );
+        }
 
         view('admin/email-queue/index', [
             'title'      => 'صف ایمیل',
@@ -44,6 +68,7 @@ class EmailQueueController extends BaseAdminController
             'total'      => $data['total'],
             'page'       => $data['page'],
             'totalPages' => $data['totalPages'],
+            'search'     => $search,
         ]);
     }
 

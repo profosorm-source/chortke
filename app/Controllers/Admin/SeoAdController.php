@@ -1,6 +1,6 @@
 <?php
 namespace App\Controllers\Admin;
-use App\Models\SeoAd;
+use App\Models\Ads;
 use App\Models\SeoExecution;
 use App\Services\Shared\AnalyticsService;
 
@@ -9,12 +9,12 @@ use App\Services\Shared\AnalyticsService;
  */
 class SeoAdController extends BaseAdminController
 {
-    private SeoAd $model;
+    private Ads $model;
     private SeoExecution $executionModel;
     private AnalyticsService $analytics;
 
     public function __construct(
-        SeoAd $m, 
+        Ads $m, 
         SeoExecution $e,
         AnalyticsService $a
     ) {
@@ -27,12 +27,13 @@ class SeoAdController extends BaseAdminController
     public function index(): void
     {
         $status = $this->request->get('status') ?? '';
-        $items = $this->model->adminList($status, 30, 0);
+        // استفاده از فیلتر نوع seo در متد جدید adminList
+        $items = $this->model->adminList('seo', $status, 30, 0);
         
-        // آمار کلی با Shared Analytics
+        // آمار کلی با Shared Analytics از جدول یکپارچه ads
         $overview = $this->analytics->getTrend('seo_executions', 'created_at', 30);
-        $totalAds = $this->analytics->getCount('seo_ads');
-        $activeAds = $this->analytics->getCount('seo_ads', ['status' => 'active']);
+        $totalAds = $this->analytics->getCount('ads', ['type' => 'seo']);
+        $activeAds = $this->analytics->getCount('ads', ['type' => 'seo', 'status' => 'active']);
         
         view('admin.seo-ad.index', [
             'title' => 'مدیریت آگهی‌های SEO',
@@ -48,7 +49,10 @@ class SeoAdController extends BaseAdminController
 
     public function approve(): void
     {
-        $ok = $this->model->setStatus((int)$this->request->param('id'), 'active');
+        $ok = $this->model->db->table('ads')->where('id', '=', (int)$this->request->param('id'))->update([
+            'status' => 'active', 
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }
@@ -56,17 +60,21 @@ class SeoAdController extends BaseAdminController
     public function reject(): void
     {
         $reason = trim($this->request->post('reason') ?? '');
-        $ok = $this->model->setStatus(
-            (int)$this->request->param('id'), 'rejected',
-            $reason ?: 'مدیر رد کرد'
-        );
+        $ok = $this->model->db->table('ads')->where('id', '=', (int)$this->request->param('id'))->update([
+            'status' => 'rejected', 
+            'rejection_reason' => $reason ?: 'مدیر رد کرد',
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }
 
     public function pause(): void
     {
-        $ok = $this->model->setStatus((int)$this->request->param('id'), 'paused');
+        $ok = $this->model->db->table('ads')->where('id', '=', (int)$this->request->param('id'))->update([
+            'status' => 'paused', 
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }

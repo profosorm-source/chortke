@@ -5,9 +5,10 @@ namespace App\Controllers\Admin;
 use App\Models\InfluencerModel;
 use App\Models\StoryOrder;
 use App\Models\Dispute;
-use App\Services\StoryPromotionService;
+use App\Services\InfluencerService;
 use App\Services\Shared\DisputeService;
 use App\Services\VerificationService;
+use App\Services\AdvancedSearchService;
 use Core\Logger;
 use App\Services\AuditTrail;
 
@@ -16,19 +17,21 @@ class InfluencerController extends BaseAdminController
     private InfluencerModel        $profileModel;
     private StoryOrder               $orderModel;
     private Dispute        $disputeModel;
-    private StoryPromotionService    $promotionService;
+    private InfluencerService    $promotionService;
     private DisputeService           $disputeService;
     private VerificationService      $verificationService;
     private AuditTrail               $auditTrail;
+    private AdvancedSearchService $searchService;
 
     public function __construct(
         InfluencerModel        $profileModel,
         StoryOrder               $orderModel,
         Dispute        $disputeModel,
-        StoryPromotionService    $promotionService,
+        InfluencerService    $promotionService,
         DisputeService           $disputeService,
         VerificationService      $verificationService,
-        AuditTrail               $auditTrail
+        AuditTrail               $auditTrail,
+        AdvancedSearchService $searchService
     ) {
         parent::__construct();
         $this->profileModel       = $profileModel;
@@ -38,6 +41,7 @@ class InfluencerController extends BaseAdminController
         $this->disputeService     = $disputeService;
         $this->verificationService = $verificationService;
         $this->auditTrail         = $auditTrail;
+        $this->searchService      = $searchService;
     }
 
     // ──────────────────────────────────────────────────────
@@ -50,14 +54,22 @@ class InfluencerController extends BaseAdminController
         $filters = [
             'status'     => $this->request->get('status'),
             'order_type' => $this->request->get('order_type'),
-            'search'     => $this->request->get('search'),
         ];
+        $search = trim($this->request->get('search') ?? '');
         $page   = \max(1, (int) $this->request->get('page', 1));
         $limit  = 30;
         $offset = ($page - 1) * $limit;
 
-        $orders = $this->orderModel->adminList($filters, $limit, $offset);
-        $total  = $this->orderModel->adminCount($filters);
+        // استفاده از AdvancedSearchService برای جستجو
+        if (!empty($search)) {
+            $result = $this->searchService->searchInfluencers($search, $filters, $limit, $offset);
+            $orders = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+        } else {
+            $orders = $this->orderModel->adminList($filters, $limit, $offset);
+            $total  = $this->orderModel->adminCount($filters);
+        }
+
         $stats  = $this->orderModel->globalStats();
 
         view('admin.influencer.orders', [
@@ -66,6 +78,7 @@ class InfluencerController extends BaseAdminController
             'page'          => $page,
             'pages'         => \ceil($total / $limit),
             'filters'       => $filters,
+            'search'        => $search,
             'stats'         => $stats,
             'statusLabels'  => $this->orderModel->statusLabels(),
             'statusClasses' => $this->orderModel->statusClasses(),
@@ -81,14 +94,21 @@ class InfluencerController extends BaseAdminController
 
         $filters = [
             'status' => $this->request->get('status'),
-            'search' => $this->request->get('search'),
         ];
+        $search = trim($this->request->get('search') ?? '');
         $page   = \max(1, (int) $this->request->get('page', 1));
         $limit  = 30;
         $offset = ($page - 1) * $limit;
 
-        $profiles = $this->profileModel->adminList($filters, $limit, $offset);
-        $total    = $this->profileModel->adminCount($filters);
+        // استفاده از AdvancedSearchService برای جستجو
+        if (!empty($search)) {
+            $result = $this->searchService->searchInfluencers($search, $filters, $limit, $offset);
+            $profiles = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+        } else {
+            $profiles = $this->profileModel->adminList($filters, $limit, $offset);
+            $total    = $this->profileModel->adminCount($filters);
+        }
 
         view('admin.influencer.profiles', [
             'profiles'     => $profiles,
@@ -96,6 +116,7 @@ class InfluencerController extends BaseAdminController
             'page'         => $page,
             'pages'        => \ceil($total / $limit),
             'filters'      => $filters,
+            'search'       => $search,
             'statusLabels' => $this->profileModel->statusLabels(),
         ]);
     }

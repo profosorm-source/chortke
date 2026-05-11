@@ -2,10 +2,11 @@
 
 namespace App\Controllers\Admin;
 
-use App\Models\CustomTaskModel;
+use App\Models\Ads;
 use App\Services\CustomTaskService;
 use App\Services\Analytics\AnalyticsService;
 use App\Services\WalletService;
+use App\Services\AdvancedSearchService;
 use App\Controllers\Admin\BaseAdminController;
 
 class AdTaskController extends BaseAdminController
@@ -13,19 +14,22 @@ class AdTaskController extends BaseAdminController
     private CustomTaskService $customTaskService;
     private AnalyticsService $analyticsService;
     private WalletService $walletService;
-    private CustomTaskModel $customTaskModel;
+    private Ads $adsModel;
+    private AdvancedSearchService $searchService;
 
     public function __construct(
         CustomTaskService $customTaskService,
         AnalyticsService $analyticsService,
         WalletService $walletService,
-        CustomTaskModel $customTaskModel
+        Ads $adsModel,
+        AdvancedSearchService $searchService
     ) {
         parent::__construct();
         $this->customTaskService = $customTaskService;
         $this->analyticsService = $analyticsService;
         $this->walletService = $walletService;
-        $this->customTaskModel = $customTaskModel;
+        $this->adsModel = $adsModel;
+        $this->searchService = $searchService;
     }
 
     /**
@@ -36,15 +40,22 @@ class AdTaskController extends BaseAdminController
         $filters = [
             'status' => $this->request->get('status'),
             'task_type' => $this->request->get('task_type'),
-            'search' => $this->request->get('search'),
         ];
 
+        $search = trim($this->request->get('search') ?? '');
         $page = \max(1, (int) $this->request->get('page', 1));
         $limit = 30;
         $offset = ($page - 1) * $limit;
 
-        $tasks = $this->customTaskModel->adminList($filters, $limit, $offset);
-        $total = $this->customTaskModel->adminCount($filters);
+        // استفاده از AdvancedSearchService برای جستجو
+        if (!empty($search)) {
+            $result = $this->searchService->searchAdTasks($search, $filters, $limit, $offset);
+            $tasks = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+        } else {
+            $tasks = $this->adsModel->adminList('custom_task', $filters['status'] ?? '', $limit, $offset);
+            $total = $this->adsModel->adminCount('custom_task', $filters['status'] ?? '');
+        }
 
         return view('admin.custom-tasks.index', [
             'tasks' => $tasks,
@@ -52,9 +63,10 @@ class AdTaskController extends BaseAdminController
             'page' => $page,
             'pages' => \ceil($total / $limit),
             'filters' => $filters,
-            'statusLabels' => $this->customTaskModel->statusLabels(),
-            'statusClasses' => $this->customTaskModel->statusClasses(),
-            'taskTypes' => $this->customTaskModel->taskTypes(),
+            'search' => $search,
+            'statusLabels' => $this->adsModel->statusLabels(),
+            'statusClasses' => $this->adsModel->statusClasses(),
+            'taskTypes' => $this->adsModel->taskTypes(),
         ]);
     }
 
@@ -75,8 +87,8 @@ class AdTaskController extends BaseAdminController
         return view('admin.custom-tasks.show', [
             'task' => $details['task'],
             'submissions' => $details['submissions'],
-            'statusLabels' => $this->customTaskModel->statusLabels(),
-            'submissionStatusLabels' => $this->customTaskModel->submissionStatusLabels(),
+            'statusLabels' => $this->adsModel->statusLabels(),
+            'submissionStatusLabels' => $this->adsModel->submissionStatusLabels(),
         ]);
     }
 

@@ -65,6 +65,14 @@ class AuthController extends BaseController
                 return view('admin/login');
             }
 
+            // مهار صریح حملات حدس رمز عبور (Brute-Force) در سطح کنترلر
+            $rateLimiter = new \Core\RateLimiter();
+            $throttle = $rateLimiter->checkLoginAttempt('admin:' . $email);
+            if (!$throttle['allowed']) {
+                $this->session->setFlash('error', $throttle['message']);
+                return view('admin/login');
+            }
+
             $result = $this->authService->login($email, $password, $remember);
 
             if (!($result['success'] ?? false)) {
@@ -77,6 +85,9 @@ class AuthController extends BaseController
                 $this->session->setFlash('error', (string)($result['message'] ?? 'اطلاعات ورود نامعتبر است.'));
                 return view('admin/login');
             }
+
+            // پاک کردن تلاش‌های ناموفق در صورت ورود موفق
+            $rateLimiter->clearLoginAttempts('admin:' . $email);
 
             $user = $result['user'] ?? null;
             if (!is_object($user)) {

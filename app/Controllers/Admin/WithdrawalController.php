@@ -6,6 +6,7 @@ use App\Models\Withdrawal;
 use App\Services\WalletService;
 use App\Services\User\UserService;
 use App\Services\BankCardService;
+use App\Services\ReconciliationService;
 use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 
@@ -18,6 +19,7 @@ class WithdrawalController extends BaseAdminController
     private BankCardService $cardService;
 	private \App\Services\WithdrawalService $withdrawalService;
 	protected \App\Contracts\LoggerInterface $logger;
+	private ReconciliationService $reconciliationService;
 
 public function __construct(
     \App\Models\Withdrawal $withdrawalModel,
@@ -25,7 +27,8 @@ public function __construct(
     \App\Services\WalletService $walletService,
     \App\Services\User\UserService $userService,
     \App\Services\WithdrawalService $withdrawalService,
-	\Core\Logger $logger
+	\Core\Logger $logger,
+	ReconciliationService $reconciliationService
 ) {
     parent::__construct();
     $this->withdrawalModel = $withdrawalModel;
@@ -34,6 +37,7 @@ public function __construct(
     $this->cardService = $bankCardService;
     $this->withdrawalService = $withdrawalService;
 	$this->logger = $logger;
+	$this->reconciliationService = $reconciliationService;
 }
 
 
@@ -223,6 +227,29 @@ public function __construct(
                         'request_id' => $requestId
                     ]
                 );
+
+                // ✅ **تطبیق withdrawal با ledger**
+                // تأیید: آیا withdrawal واقعاً از wallet نزول پیدا کرد؟
+                $reconciliation = $this->reconciliationService->reconcilePayment([
+                    'transaction_id' => (string)$withdrawal->transaction_id, // ارسال کد تراکنش واقعی و سیستمی
+                    'reference_id' => 'withdrawal_settlement_' . $withdrawalId,
+                    'user_id' => (int)$withdrawal->user_id,
+                    'amount' => (float)$withdrawal->amount,
+                    'currency' => $withdrawal->currency,
+                    'status' => 'success',
+                    'gateway' => 'withdrawal_bank',
+                    'description' => "تطبیق withdrawal - Reference: {$data['payment_reference']}",
+                    'timestamp' => time(),
+                ]);
+
+                if (!$reconciliation['success']) {
+                    $this->logger->warning('withdrawal.reconciliation_failed', [
+                        'withdrawal_id' => $withdrawalId,
+                        'user_id' => $withdrawal->user_id,
+                        'amount' => $withdrawal->amount,
+                        'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
+                    ]);
+                }
 
                 // ✅ ثبت لاگ
 $this->logger->activity(

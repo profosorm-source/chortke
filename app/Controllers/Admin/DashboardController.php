@@ -8,11 +8,13 @@ use App\Controllers\Admin\BaseAdminController;
 class DashboardController extends BaseAdminController
 {
     private AdminDashboardService $dashboardService;
+    private \App\Services\Auth\AuthService $authService;
 
-    public function __construct(AdminDashboardService $dashboardService)
+    public function __construct(AdminDashboardService $dashboardService, \App\Services\Auth\AuthService $authService)
     {
         parent::__construct();
         $this->dashboardService = $dashboardService;
+        $this->authService = $authService;
     }
 
     // ══════════════════════════════════════════════════════════
@@ -155,21 +157,27 @@ class DashboardController extends BaseAdminController
         }
 
         try {
-    $credentials = $this->dashboardService->attemptLogin($email, $password);
+            // استفاده از سرویس متمرکز احراز هویت و لاگین اتمیک
+            $result = $this->authService->login($email, $password);
 
-    if (!$credentials) {
-        echo json_encode(['status' => 'error', 'message' => 'ایمیل یا رمز عبور اشتباه است.']);
-        return;
-    }
+            if (!$result['success']) {
+                echo json_encode(['status' => 'error', 'message' => $result['message'] ?? 'ایمیل یا رمز عبور اشتباه است.']);
+                return;
+            }
 
-    $this->session->set('user_id', $credentials['id']);
-    $this->session->set('role', $credentials['role']);
+            $user = $result['user'];
+            // بررسی نهایی که حتماً دسترسی مدیریت داشته باشد
+            if (!in_array($user->role, ['admin', 'super_admin'], true)) {
+                 $this->authService->logout(); // لاگ‌اوت اجباری چون کاربر عادی حق ورود به پنل ادمین ندارد
+                 echo json_encode(['status' => 'error', 'message' => 'شما دسترسی لازم برای ورود به این بخش را ندارید.']);
+                 return;
+            }
 
-    echo json_encode([
-        'status' => 'success',
-        'message' => 'ورود موفقیت‌آمیز بود.',
-        'redirect' => '/admin/dashboard',
-    ]);
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'ورود موفقیت‌آمیز بود.',
+                'redirect' => '/admin/dashboard',
+            ]);
 
 } catch (\Throwable $e) {
     $this->logger->error('admin.auth.login.failed', [

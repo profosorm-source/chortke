@@ -104,6 +104,7 @@ class WithdrawalController extends BaseUserController
 
             $this->session->setFlash('error', 'خطا در بارگذاری صفحه');
             $this->response->redirect(url('wallet'));
+            return;
         }
     }
 
@@ -176,6 +177,7 @@ class WithdrawalController extends BaseUserController
 
             $this->session->setFlash('error', 'خطا در دریافت لیست');
             $this->response->redirect(url('wallet'));
+            return;
         }
     }
 
@@ -210,6 +212,9 @@ public function requestWithdrawalChallenge(): void
 
     $code = (string)random_int(100000, 999999);
 
+    $ipHash = md5($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+    $uaHash = md5($_SERVER['HTTP_USER_AGENT'] ?? 'unknown');
+
     $_SESSION['withdraw_challenge'] = [
         'user_id'      => $userId,
         'code_hash'    => password_hash($code, PASSWORD_DEFAULT),
@@ -217,9 +222,11 @@ public function requestWithdrawalChallenge(): void
         'attempts'     => 0,
         'max_attempts' => feature_config('security_limits', 'withdrawal_challenge_max_attempts', 5),
         'created_at'   => time(),
+        'ip_hash'      => $ipHash,
+        'ua_hash'      => $uaHash,
     ];
 
-    unset($_SESSION['withdraw_challenge_passed'], $_SESSION['withdraw_challenge_passed_until']);
+    unset($_SESSION['withdraw_challenge_passed'], $_SESSION['withdraw_challenge_passed_until'], $_SESSION['withdraw_challenge_passed_ip'], $_SESSION['withdraw_challenge_passed_ua']);
 
     // کد خام OTP را هرگز لاگ نکن
     $this->logger->info('Withdrawal challenge generated', [
@@ -261,10 +268,22 @@ public function verifyWithdrawalChallenge(): void
     }
 
     if ((int)($challenge['user_id'] ?? 0) !== $userId) {
-        unset($_SESSION['withdraw_challenge'], $_SESSION['withdraw_challenge_passed'], $_SESSION['withdraw_challenge_passed_until']);
+        unset($_SESSION['withdraw_challenge'], $_SESSION['withdraw_challenge_passed'], $_SESSION['withdraw_challenge_passed_until'], $_SESSION['withdraw_challenge_passed_ip'], $_SESSION['withdraw_challenge_passed_ua']);
         $this->response->json([
             'success' => false,
             'message' => 'چالش نامعتبر است',
+        ], 403);
+        return;
+    }
+
+    $ipHash = md5($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+    $uaHash = md5($_SERVER['HTTP_USER_AGENT'] ?? 'unknown');
+
+    if (($challenge['ip_hash'] ?? '') !== $ipHash || ($challenge['ua_hash'] ?? '') !== $uaHash) {
+        unset($_SESSION['withdraw_challenge'], $_SESSION['withdraw_challenge_passed'], $_SESSION['withdraw_challenge_passed_until'], $_SESSION['withdraw_challenge_passed_ip'], $_SESSION['withdraw_challenge_passed_ua']);
+        $this->response->json([
+            'success' => false,
+            'message' => 'محیط درخواست تغییر کرده است. چالش نامعتبر شد.',
         ], 403);
         return;
     }
@@ -305,6 +324,8 @@ public function verifyWithdrawalChallenge(): void
 
     $_SESSION['withdraw_challenge_passed'] = true;
     $_SESSION['withdraw_challenge_passed_until'] = time() + 300;
+    $_SESSION['withdraw_challenge_passed_ip'] = $ipHash;
+    $_SESSION['withdraw_challenge_passed_ua'] = $uaHash;
     unset($_SESSION['withdraw_challenge']);
 
     $this->response->json([

@@ -8,6 +8,7 @@ use App\Models\TradingRecord;
 use App\Models\InvestmentProfit;
 use App\Models\InvestmentWithdrawal;
 use App\Services\InvestmentService;
+use App\Services\AdvancedSearchService;
 use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 
@@ -18,13 +19,15 @@ class InvestmentController extends BaseAdminController
     private \App\Models\InvestmentProfit $investmentProfitModel;
     private \App\Models\Investment $investmentModel;
     private InvestmentService $investmentService;
+    private AdvancedSearchService $searchService;
 
     public function __construct(
         \App\Models\Investment $investmentModel,
         \App\Models\InvestmentProfit $investmentProfitModel,
         \App\Models\InvestmentWithdrawal $investmentWithdrawalModel,
         \App\Models\TradingRecord $tradingRecordModel,
-        \App\Services\InvestmentService $investmentService)
+        \App\Services\InvestmentService $investmentService,
+        AdvancedSearchService $searchService)
     {
         parent::__construct();
         $this->investmentService = $investmentService;
@@ -32,6 +35,7 @@ class InvestmentController extends BaseAdminController
         $this->investmentProfitModel = $investmentProfitModel;
         $this->investmentWithdrawalModel = $investmentWithdrawalModel;
         $this->tradingRecordModel = $tradingRecordModel;
+        $this->searchService = $searchService;
     }
 
     /**
@@ -44,15 +48,23 @@ class InvestmentController extends BaseAdminController
 
         $filters = [
             'status' => $_GET['status'] ?? null,
-            'search' => $_GET['search'] ?? null,
         ];
 
+        $search = trim($_GET['search'] ?? '');
         $page = max(1, (int)($_GET['page'] ?? 1));
         $perPage = 15;
         $offset = ($page - 1) * $perPage;
 
-        $investments = $investModel->getAll($filters, $perPage, $offset);
-        $total = $investModel->countAll($filters);
+        // استفاده از AdvancedSearchService برای جستجو
+        if (!empty($search)) {
+            $result = $this->searchService->searchInvestments($search, $filters, $perPage, $offset);
+            $investments = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+        } else {
+            $investments = $investModel->getAll($filters, $perPage, $offset);
+            $total = $investModel->countAll($filters);
+        }
+
         $totalPages = ceil($total / $perPage);
         $stats = $investModel->getStats();
         $tradeStats = $tradingModel->getStats();
@@ -65,6 +77,7 @@ class InvestmentController extends BaseAdminController
             'totalPages' => $totalPages,
             'currentPage' => $page,
             'filters' => $filters,
+            'search' => $search,
         ]);
     }
 

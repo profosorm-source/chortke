@@ -2,7 +2,7 @@
 
 namespace App\Controllers\User;
 
-use App\Models\SeoAd;
+use App\Models\Ads;
 use App\Models\SeoExecution;
 use App\Services\SeoService;
 use App\Services\Shared\AnalyticsService;
@@ -12,13 +12,13 @@ use App\Services\Shared\AnalyticsService;
  */
 class SeoController extends BaseUserController
 {
-    private SeoAd $adModel;
+    private Ads $adModel;
     private SeoExecution $executionModel;
     private SeoService $seoService;
     private AnalyticsService $analytics;
 
     public function __construct(
-        SeoAd $adModel,
+        Ads $adModel,
         SeoExecution $executionModel,
         SeoService $seoService,
         AnalyticsService $analytics
@@ -37,9 +37,10 @@ class SeoController extends BaseUserController
         $search = trim($this->request->get('search') ?? '');
         
         if ($search) {
-            $ads = $this->adModel->searchActive($search, 20);
+            // استفاده از متد متمرکز و بهینه‌شده در کلاس جدید Ads
+            $ads = $this->adModel->getActiveForSearch($search, 20);
         } else {
-            $ads = $this->adModel->getActiveForWorker(20);
+            $ads = $this->adModel->getActiveForSearch('', 20);
         }
 
         // آمار کاربر

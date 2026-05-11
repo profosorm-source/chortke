@@ -48,6 +48,16 @@ class ContentController extends BaseUserController
     public function index(): string
     {
         try {
+            $this->requireAuth();
+            $user = $this->userService->find($this->userId());
+
+            // 🛡️ MUST HAVE KYC VERIFIED
+            if (($user->kyc_status ?? '') !== 'verified') {
+                $this->session->setFlash('error', 'جهت فعالیت در سیستم تولید محتوا، احراز هویت حساب شما باید تکمیل و تایید شده باشد.');
+                redirect(url('/profile/kyc'));
+                return '';
+            }
+
             $userId = user_id();
             
             $status = $this->sanitizeStatus($this->request->get('status'));
@@ -90,7 +100,15 @@ class ContentController extends BaseUserController
     public function create(): string
     {
         try {
+            $this->requireAuth();
             $user = $this->userService->find($this->userId());
+
+            // 🛡️ MUST HAVE KYC VERIFIED
+            if (($user->kyc_status ?? '') !== 'verified') {
+                $this->session->setFlash('error', 'جهت ثبت محتوای جدید ابتدا باید احراز هویت خود را تکمیل کنید.');
+                redirect(url('/profile/kyc'));
+                return '';
+            }
 
             return view('user.content.create', [
                 'user' => $user,
@@ -258,7 +276,7 @@ class ContentController extends BaseUserController
     private function validateStoreInput(array $input): Validator
     {
         return new Validator($input, [
-            'platform' => 'required|in:aparat,youtube',
+            'platform' => 'required|in:aparat,youtube,upload_center',
             'video_url' => 'required|url|max:500',
             'title' => 'required|min:5|max:255',
             'description' => 'max:2000',

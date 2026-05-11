@@ -2,7 +2,7 @@
 
 namespace App\Controllers\Admin;
 
-use App\Models\CustomTaskModel;
+use App\Models\CustomTaskSubmissionModel;
 use App\Models\InteractionModel;
 use App\Services\CustomTaskService;
 use App\Services\Shared\DisputeService;
@@ -11,19 +11,19 @@ use App\Controllers\Admin\BaseAdminController;
 class ExecutorTaskController extends BaseAdminController
 {
     private CustomTaskService $customTaskService;
-    private CustomTaskModel $customTaskModel;
+    private CustomTaskSubmissionModel $submissionModel;
     private DisputeService $disputeService;
     private InteractionModel $interactionModel;
 
     public function __construct(
         CustomTaskService $customTaskService,
-        CustomTaskModel $customTaskModel,
+        CustomTaskSubmissionModel $submissionModel,
         DisputeService $disputeService,
         InteractionModel $interactionModel
     ) {
         parent::__construct();
         $this->customTaskService = $customTaskService;
-        $this->customTaskModel = $customTaskModel;
+        $this->submissionModel = $submissionModel;
         $this->disputeService = $disputeService;
         $this->interactionModel = $interactionModel;
     }
@@ -36,7 +36,7 @@ class ExecutorTaskController extends BaseAdminController
         $body = \json_decode(\file_get_contents('php://input'), true) ?? [];
         $submissionId = (int) ($body['submission_id'] ?? 0);
 
-        $submission = $this->customTaskModel->submission_find($submissionId);
+        $submission = $this->submissionModel->submission_find($submissionId);
         if (!$submission) {
             $this->response->json(['ok' => false, 'message' => 'یافت نشد.'], 404);
             return;
@@ -64,7 +64,7 @@ class ExecutorTaskController extends BaseAdminController
         $submissionId = (int) ($body['submission_id'] ?? 0);
         $reason = $body['reason'] ?? 'رد توسط ادمین';
 
-        $submission = $this->customTaskModel->submission_find($submissionId);
+        $submission = $this->submissionModel->submission_find($submissionId);
         if (!$submission) {
             $this->response->json(['ok' => false, 'message' => 'یافت نشد.'], 404);
             return;
@@ -200,10 +200,7 @@ class ExecutorTaskController extends BaseAdminController
 
         if ($updated) {
             if ($status === 'resolved' && $report->reason === 'fraud') {
-                $this->customTaskModel->update($report->task_id, [
-                    'status' => 'rejected',
-                    'rejection_reason' => 'گزارش شده به دلیل تقلب',
-                ]);
+                $this->customTaskService->rejectTask($report->task_id, $this->userId(), 'گزارش شده به دلیل تقلب');
             }
 
             $this->logger->activity('custom_task.review_report', 'بررسی گزارش', user_id(), [
