@@ -593,25 +593,8 @@ EOT;
 
     public function searchInvestments(string $q, array $filters, int $limit, int $offset): array
     {
-        $query = $this->db->table('investments as inv')
-            ->select('inv.*', 'u.full_name', 'u.email')
-            ->leftJoin('users as u', 'u.id', '=', 'inv.user_id');
-
-        if (!empty($q)) {
-            $like = "%{$q}%";
-            $query->where(function($sub) use ($like) {
-                $sub->where('inv.reference_id', 'LIKE', $like)->orWhere('u.email', 'LIKE', $like);
-            });
-        }
-
-        if (!empty($filters['status'])) {
-            $query->where('inv.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
-        }
-
-        return [
-            'total' => $query->count(),
-            'items' => (clone $query)->orderBy('inv.created_at', 'DESC')->limit($limit)->offset($offset)->get() ?? []
-        ];
+        // Centralized Delegation to Model leveraging the optimized Filterable Trait system
+        return $this->investmentModel->searchNative($q, $filters, $limit, $offset);
     }
 }
 

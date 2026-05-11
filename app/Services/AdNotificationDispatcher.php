@@ -39,62 +39,74 @@ class AdNotificationDispatcher extends \App\Services\BaseService
                 return $stats;
             }
 
-            // ✅ OPTIMIZATION: Single, super-lean query to get all tokens needed at once
-            $maxOffset = 0;
-            foreach ($activeAds as $ad) {
-                $offset = (int)($ad->impressions ?? 0);
-                if ($offset > $maxOffset) {
-                    $maxOffset = $offset;
-                }
-            }
-
-            // Fetch linear list of active FCM tokens with safety limit
-            $tokenRows = $this->db->fetchAll(
-                "SELECT fcm_token FROM user_devices WHERE fcm_token IS NOT NULL AND LENGTH(fcm_token) > 10 LIMIT ?",
-                [$maxOffset + 1000]
-            );
-
-            if (empty($tokenRows)) {
-                return $stats; // No targetable devices exist in system
-            }
-
-            $allTokens = array_column($tokenRows, 'fcm_token');
-
-            // ✅ Prepare batch updates for ads
             $adsUpdates = [];
 
             foreach ($activeAds as $ad) {
-                $payload = json_decode($ad->restrictions ?? '', true) ?: [];
+                $restrictions = json_decode($ad->restrictions ?? '', true) ?: [];
                 
-                // 2. Get continuous transmission window for this ad
+                // MED-03: بسازید query برای دریافت tokens با توجه به targeting restrictions
+                $where = ["ud.fcm_token IS NOT NULL", "LENGTH(ud.fcm_token) > 10", "u.status = 'active'"];
+                $params = [];
+                
+                // اعمال محدودیت‌های تبلیغ
+                if (!empty($restrictions['age_min'])) {
+                    $where[] = "YEAR(CURDATE()) - YEAR(u.birth_date) >= ?";
+                    $params[] = $restrictions['age_min'];
+                }
+                if (!empty($restrictions['age_max'])) {
+                    $where[] = "YEAR(CURDATE()) - YEAR(u.birth_date) <= ?";
+                    $params[] = $restrictions['age_max'];
+                }
+                if (!empty($restrictions['regions'])) {
+                    $regionPlaceholders = array_fill(0, count($restrictions['regions']), '?');
+                    $where[] = "u.region IN (" . implode(',', $regionPlaceholders) . ")";
+                    $params = array_merge($params, $restrictions['regions']);
+                }
+                if (!empty($restrictions['gender'])) {
+                    $where[] = "u.gender = ?";
+                    $params[] = $restrictions['gender'];
+                }
+                
+                $whereClause = implode(' AND ', $where);
+                
+                // دریافت tokens با offset (برای pagination تبلیغ)
                 $offset = (int) ($ad->impressions ?? 0);
                 $limit = 100;
                 
-                // Slice tokens directly from linear mapping
-                $tokensSlice = array_slice($allTokens, $offset, $limit);
+                $tokenQuery = "SELECT ud.fcm_token FROM user_devices ud
+                             JOIN users u ON u.id = ud.user_id
+                             WHERE {$whereClause}
+                             ORDER BY ud.created_at DESC
+                             LIMIT ? OFFSET ?";
+                
+                $params[] = $limit;
+                $params[] = $offset;
+                
+                $tokenRows = $this->db->fetchAll($tokenQuery, $params);
 
-                if (empty($tokensSlice)) {
-                    // Exhausted all active system devices, mark completed.
+                if (empty($tokenRows)) {
+                    // هیچ دستگاه مطابق شرایط پیدا نشد یا تمام tokenها ارسال شد
                     $adsUpdates[$ad->id] = ['status' => 'completed', 'impressions' => $ad->impressions];
                     continue;
                 }
 
-                // 3. Physically transmit via existing bridge
+                $tokensSlice = array_column($tokenRows, 'fcm_token');
+
+                // 3. ارسال از طریق FCM
                 $this->fcmService->sendToTokens(
                     $tokensSlice,
                     $ad->title,
-                    $payload['push_body'] ?? 'برای مشاهده کلیک کنید',
+                    $restrictions['push_body'] ?? 'برای مشاهده کلیک کنید',
                     ['ad_id' => $ad->id],
-                    $payload['image_path'] ?? null,
+                    $restrictions['image_path'] ?? null,
                     $ad->link ?? '#'
                 );
 
                 $sentSuccessfully = count($tokensSlice);
                 
-                // 4. Queue impression and budget update
+                // 4. بروزرسانی impression و budget
                 $adsUpdates[$ad->id] = [
                     'impressions' => (int)$ad->impressions + $sentSuccessfully,
-                    // If site takes cost per push, implement mathematical deduction logic here
                 ];
 
                 $stats['ads_processed']++;
@@ -103,7 +115,7 @@ class AdNotificationDispatcher extends \App\Services\BaseService
                 $this->logInfo('ad_push_delivered', ['ad_id' => $ad->id, 'count' => $sentSuccessfully]);
             }
 
-            // ✅ EFFICIENT STATE SAVING: Fire one single multi-record CASE statement
+            // ✅ EFFICIENT STATE SAVING
             if (!empty($adsUpdates)) {
                 $this->performanceService->bulkUpdateWithCase(
                     'ads',

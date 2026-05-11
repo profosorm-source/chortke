@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\LoggerInterface;
+use App\Traits\ClientInfoTrait;
 use Core\Exceptions\ValidationException;
 
 abstract class BaseService
 {
+    use ClientInfoTrait;
+
     protected LoggerInterface $logger;
 
     public function __construct(LoggerInterface $logger)
@@ -26,8 +29,15 @@ abstract class BaseService
         $this->logger->warning($event, $context);
     }
 
-    protected function logError(string $event, array $context = []): void
+    /**
+     * MED-02: logError - قبول string یا array برای context
+     */
+    protected function logError(string $event, string|array $context = []): void
     {
+        // اگر string باشد، به array تبدیل کن
+        if (is_string($context)) {
+            $context = ['error' => $context];
+        }
         $this->logger->error($event, $context);
     }
 

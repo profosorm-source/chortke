@@ -785,43 +785,22 @@ public function adminRefundListing(int $listingId, int $adminId): array
 
     public function searchVitrine(array $filters, int $limit, int $offset): array
     {
-        $query = $this->db->table('vitrine_listings as vl')
-            ->select('vl.id', 'vl.title', 'vl.description', 'vl.category', 'vl.platform', 'vl.price_usdt', 'vl.listing_type', 'vl.status', 'vl.created_at')
-            ->where('vl.status', '=', 'active')
-            ->where('vl.listing_type', '=', 'sell');
+        // Enforce public access safety defaults
+        $filters['status'] = 'active';
+        $filters['listing_type'] = 'sell';
 
-        if (!empty($filters['q'])) {
-            $like = "%{$filters['q']}%";
-            $query->where(function($sub) use ($like) {
-                $sub->where('vl.title', 'LIKE', $like)->orWhere('vl.description', 'LIKE', $like);
-            });
-        }
-
-        if (!empty($filters['category'])) {
-            $query->where('vl.category', '=', e($filters['category'], ENT_QUOTES, 'UTF-8'));
-        }
-        if (!empty($filters['platform'])) {
-            $query->where('vl.platform', '=', e($filters['platform'], ENT_QUOTES, 'UTF-8'));
-        }
-        if (!empty($filters['min_price'])) {
-            $query->where('vl.price_usdt', '>=', (float)$filters['min_price']);
-        }
-        if (!empty($filters['max_price'])) {
-            $query->where('vl.price_usdt', '<=', (float)$filters['max_price']);
-        }
+        $q = $filters['q'] ?? '';
 
         $sort = $filters['sort'] ?? 'newest';
         [$sortCol, $sortDir] = match ($sort) {
-            'oldest'     => ['vl.created_at', 'ASC'],
-            'price_asc'  => ['vl.price_usdt', 'ASC'],
-            'price_desc' => ['vl.price_usdt', 'DESC'],
-            default      => ['vl.created_at', 'DESC'],
+            'oldest'     => ['created_at', 'ASC'],
+            'price_asc'  => ['price_usdt', 'ASC'],
+            'price_desc' => ['price_usdt', 'DESC'],
+            default      => ['created_at', 'DESC'],
         };
 
-        return [
-            'total' => $query->count(),
-            'items' => (clone $query)->orderBy($sortCol, $sortDir)->limit($limit)->offset($offset)->get() ?? []
-        ];
+        // Optimized centralized model delegation
+        return $this->listing->searchNative($q, $filters, $limit, $offset, $sortCol, $sortDir);
     }
 }
 

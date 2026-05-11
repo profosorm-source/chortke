@@ -43,7 +43,8 @@ class AdvancedSearchService extends \App\Services\BaseService
     private VitrineService $vitrineService;
     private InvestmentService $investmentService;
     private Cache $cache;
-    private const CACHE_TTL = 300; // 5 minutes
+    private const CACHE_TTL_SECONDS = 300; // 5 minutes in seconds
+    private const CACHE_TTL_MINUTES = 5; // TaggedCache expects minutes
     private const MODULES = ['social_task', 'influencer', 'vitrine'];
     private const DEFAULT_LIMIT = 20;
     private const MAX_LIMIT = 100;
@@ -151,7 +152,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $total = array_sum(array_map('count', $results));
         $results['total'] = $total;
 
-        $this->cache->set($cacheKey, $results, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $results, self::CACHE_TTL_SECONDS);
 
         return $results;
     }
@@ -193,8 +194,8 @@ class AdvancedSearchService extends \App\Services\BaseService
                 default => []
             };
 
-            // CACHE_TTL is 300 seconds (5 minutes). TaggedCache expects minutes.
-            $this->cache->tags([$module])->put($cacheKey, $searchResult, (int)(self::CACHE_TTL / 60));
+            // HIGH-03: استفاده از CACHE_TTL_MINUTES برای تناسق واحد
+            $this->cache->tags([$module])->put($cacheKey, $searchResult, self::CACHE_TTL_MINUTES);
             $results[$module] = $searchResult;
         }
 
@@ -243,7 +244,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $q = $this->sanitize($q);
         $result = $this->bannerService->searchBanners($q, $filters, $limit, $offset);
 
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
     }
 
@@ -266,7 +267,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $q = $this->sanitize($q);
         $result = $this->contentService->searchContent($q, $filters, $limit, $offset);
 
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
     }
 
@@ -289,7 +290,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $q = $this->sanitize($q);
         $result = $this->apiTokenService->searchTokens($q, $filters, $limit, $offset);
 
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
     }
 
@@ -312,7 +313,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $q = $this->sanitize($q);
         $result = $this->emailService->searchEmails($q, $filters, $limit, $offset);
 
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
     }
 
@@ -336,7 +337,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $q = $this->sanitize($q);
         $result = $this->customTaskService->searchAdTasks($q, $filters, $limit, $offset);
 
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
     }
 
@@ -359,7 +360,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $q = $this->sanitize($q);
         $result = $this->investmentService->searchInvestments($q, $filters, $limit, $offset);
 
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
     }
 
@@ -383,7 +384,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $q = $this->sanitize($q);
         $result = $this->ticketService->searchTicketsAdmin($q, $filters, $limit, $offset);
 
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
     }
 
@@ -406,7 +407,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $q = $this->sanitize($q);
         $result = $this->influencerService->searchInfluencersAdmin($q, $filters, $limit, $offset);
 
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
     }
 

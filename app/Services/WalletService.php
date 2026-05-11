@@ -1096,44 +1096,14 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
      */
     public function quickSearchTransactions(string $term, ?int $userId = null, int $limit = 5): array
     {
-        $query = $this->transactionModel->query();
-
-        // ۱. تنظیم دسترسی و فیلتر سطح سطر (Row Level Filter)
+        $filters = [];
         if ($userId !== null) {
-            // 🔒 حالت امن داشبورد کاربر: فقط انتخاب فیلدهای ضروری و اعمال شرط User ID بدون JOIN سنگین
-            $query->select('id', 'type', 'amount', 'currency', 'status', 'description', 'created_at')
-                  ->where('user_id', '=', $userId);
-        } else {
-            // 🌍 حالت مدیریت/سیستمی: الحاق به جدول کاربران برای نمایش نام صاحب تراکنش
-            $query->select('transactions.id', 'transactions.type', 'transactions.amount', 'transactions.currency', 'transactions.status', 'transactions.description', 'transactions.created_at', 'u.full_name', 'u.email')
-                  ->leftJoin('users as u', 'u.id', '=', 'transactions.user_id');
+            $filters['user_id'] = $userId;
         }
 
-        // ۲. اعمال هوشمند فیلترهای ثبت شده در مدل تراکنش (مثل reference_id و غیره)
-        $this->transactionModel->applySearch($query, $term);
-
-        // ۳. اعمال شرط‌های اضافی خاص سرچ متنی
-        if (!empty($term)) {
-            $term = trim($term);
-            $escaped = addcslashes($term, '%_');
-            $like = "%{$escaped}%";
-
-            $query->where(function($sub) use ($like, $term, $userId) {
-                $sub->orWhere('transactions.description', 'LIKE', $like);
-                
-                // در صورت نیاز به فیلترهای ادمین (ایمیل یا آیدی تراکنش عددی)
-                if ($userId === null) {
-                    $sub->orWhere('u.email', 'LIKE', $like);
-                    if (\is_numeric($term)) {
-                        $sub->orWhere('transactions.id', '=', (int)$term);
-                    }
-                }
-            });
-        }
-
-        return $query->orderBy('transactions.created_at', 'DESC')
-                     ->limit($limit)
-                     ->get() ?? [];
+        $res = $this->transactionModel->searchNative($term, $filters, $limit, 0);
+        
+        return $res['items'] ?? [];
     }
 
     // ─────────────────────────────────────────────────────────────

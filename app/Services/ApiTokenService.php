@@ -7,17 +7,20 @@ namespace App\Services;
 use App\Models\ApiToken;
 use App\Models\User;
 use App\Contracts\LoggerInterface;
+use Core\RateLimiter;
 
 class ApiTokenService extends \App\Services\BaseService
 {
     private ApiToken $apiTokenModel;
     private User $userModel;
+    private RateLimiter $rateLimiter;
 
-    public function __construct(LoggerInterface $logger, ApiToken $apiTokenModel, User $userModel)
+    public function __construct(LoggerInterface $logger, ApiToken $apiTokenModel, User $userModel, RateLimiter $rateLimiter)
     {
         parent::__construct($logger);
         $this->apiTokenModel = $apiTokenModel;
         $this->userModel = $userModel;
+        $this->rateLimiter = $rateLimiter;
     }
 
     public function getTokensForAdmin(
@@ -147,6 +150,17 @@ class ApiTokenService extends \App\Services\BaseService
 
     public function issueToken(string $email, string $password, string $name, string $scopes): array
     {
+        // MED-11: Rate limiting check (10 attempts per 60 seconds per IP)
+        $ipKey = 'token_issue:' . ($this->clientIp() ?? 'unknown');
+        if ($this->rateLimiter->tooMany($ipKey, maxAttempts: 10, decaySeconds: 60)) {
+            return [
+                'success' => false,
+                'message' => 'تعداد تلاش‌های زیادی برای صدور توکن. لطفاً بعداً تلاش کنید',
+                'status' => 429,
+                'code' => 'RATE_LIMITED',
+            ];
+        }
+
         if ($email === '' || $password === '') {
             return [
                 'success' => false,
@@ -228,8 +242,10 @@ class ApiTokenService extends \App\Services\BaseService
             });
         }
 
-        if (!empty($filters['status'])) {
-            $query->where('api_tokens.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
+        // HIGH-01 & HIGH-02: اعتبارسنجی status و escape امن
+        $allowedStatuses = ['active', 'revoked', 'expired'];
+        if (!empty($filters['status']) && in_array($filters['status'], $allowedStatuses, true)) {
+            $query->where('api_tokens.status', '=', $filters['status']);
         }
 
         return [

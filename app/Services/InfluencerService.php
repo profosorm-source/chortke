@@ -821,72 +821,29 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
 
     public function searchInfluencers(array $filters, int $limit, int $offset): array
     {
-        $query = $this->db->table('influencer_profiles as ip')
-            ->select('ip.id', 'ip.display_name', 'ip.bio', 'ip.platform', 'ip.followers', 'ip.avg_engagement', 'ip.status', 'ip.created_at')
-            ->join('users as u', 'u.id', '=', 'ip.user_id')
-            ->where('ip.status', '=', 'active');
+        // Ensure only verified/active influencers are presented publicly
+        $filters['status'] = 'verified';
 
-        if (!empty($filters['q'])) {
-            $like = "%{$filters['q']}%";
-            $query->where(function($sub) use ($like) {
-                $sub->where('ip.display_name', 'LIKE', $like)->orWhere('ip.bio', 'LIKE', $like);
-            });
-        }
+        // Extract query string
+        $q = $filters['q'] ?? '';
 
-        if (!empty($filters['platform'])) {
-            $query->where('ip.platform', '=', e($filters['platform'], ENT_QUOTES, 'UTF-8'));
-        }
-        if (!empty($filters['min_followers'])) {
-            $query->where('ip.followers', '>=', (int)$filters['min_followers']);
-        }
-        if (!empty($filters['max_followers'])) {
-            $query->where('ip.followers', '<=', (int)$filters['max_followers']);
-        }
-
+        // Sort strategy mapping to valid model columns
         $sort = $filters['sort'] ?? 'newest';
         [$sortCol, $sortDir] = match ($sort) {
-            'oldest'     => ['ip.created_at', 'ASC'],
-            'followers'  => ['ip.followers', 'DESC'],
-            'engagement' => ['ip.avg_engagement', 'DESC'],
-            default      => ['ip.created_at', 'DESC'],
+            'oldest'     => ['created_at', 'ASC'],
+            'followers'  => ['follower_count', 'DESC'],
+            'rating'     => ['average_rating', 'DESC'],
+            default      => ['created_at', 'DESC'],
         };
 
-        return [
-            'total' => $query->count(),
-            'items' => (clone $query)->orderBy($sortCol, $sortDir)->limit($limit)->offset($offset)->get() ?? []
-        ];
+        // High performance delegation to Model leveraging Filterable Trait
+        return $this->model->searchNative($q, $filters, $limit, $offset, $sortCol, $sortDir);
     }
 
     public function searchInfluencersAdmin(string $q, array $filters, int $limit, int $offset): array
     {
-        $query = $this->db->table('influencer_profiles as ip')
-            ->select('ip.*', 'u.full_name', 'u.email')
-            ->leftJoin('users as u', 'u.id', '=', 'ip.user_id');
-
-        if (!empty($q)) {
-            $like = "%{$q}%";
-            $query->where(function($sub) use ($like) {
-                $sub->where('ip.social_username', 'LIKE', $like)->orWhere('u.email', 'LIKE', $like);
-            });
-        }
-
-        if (!empty($filters['status'])) {
-            $query->where('ip.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
-        }
-        if (!empty($filters['platform'])) {
-            $query->where('ip.platform', '=', e($filters['platform'], ENT_QUOTES, 'UTF-8'));
-        }
-        if (!empty($filters['min_followers'])) {
-            $query->where('ip.followers', '>=', (int)$filters['min_followers']);
-        }
-        if (!empty($filters['max_followers'])) {
-            $query->where('ip.followers', '<=', (int)$filters['max_followers']);
-        }
-
-        return [
-            'total' => $query->count(),
-            'items' => (clone $query)->orderBy('ip.created_at', 'DESC')->limit($limit)->offset($offset)->get() ?? []
-        ];
+        // Full access unfiltered structural delegation leveraging Filterable Trait
+        return $this->model->searchNative($q, $filters, $limit, $offset);
     }
 }
 
