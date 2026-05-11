@@ -19,12 +19,19 @@ class EventDispatcher
 
     /**
      * دریافت Instance (Singleton)
+     * Queue را از Container تزریق شده دریافت می‌کند
      */
     public static function getInstance()
     {
         if (self::$instance === null) {
-            // دریافت خودکار وابستگی Queue
-            $queue = \Core\Container::getInstance()->get(Queue::class);
+            // Container Dependency Injection: Queue خودکار resolve می‌شود
+            $container = Container::getInstance();
+            if (!$container->has(Queue::class)) {
+                $container->singleton(Queue::class, function($c) {
+                    return new Queue();
+                });
+            }
+            $queue = $container->get(Queue::class);
             self::$instance = new self($queue);
         }
         

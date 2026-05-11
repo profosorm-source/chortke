@@ -533,7 +533,7 @@ public function lastInsertId(): int
     private function logSlowQuery(string $sql, array $params, float $duration): void
     {
         try {
-            $container = \Core\Container::getInstance();
+            $container = Container::getInstance();
             if ($container && $container->has(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class)) {
                 $sentry = $container->make(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class);
                 if ($sentry) {
@@ -560,7 +560,7 @@ public function lastInsertId(): int
     private function logQueryErrorToSentry(string $sql, array $params, \Throwable $e): void
     {
         try {
-            $container = \Core\Container::getInstance();
+            $container = Container::getInstance();
             if ($container && $container->has(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class)) {
                 $sentry = $container->make(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class);
                 if ($sentry) {
