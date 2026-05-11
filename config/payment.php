@@ -12,6 +12,12 @@ return [
     'zarinpal' => [
         'merchant_id' => env('ZARINPAL_MERCHANT_ID', ''),   // الزامی — UUID فارسی
         'sandbox'     => env('ZARINPAL_SANDBOX', false),
+        
+        // Endpoints
+        'api_url'         => env('ZARINPAL_API_URL', 'https://api.zarinpal.com/pg/v4/payment'),
+        'sandbox_url'     => env('ZARINPAL_SANDBOX_URL', 'https://sandbox.zarinpal.com/pg/rest/WebGate'),
+        'payment_url'     => env('ZARINPAL_PAYMENT_URL', 'https://www.zarinpal.com/pg/StartPay'),
+        'sandbox_pay_url' => env('ZARINPAL_SANDBOX_PAY_URL', 'https://sandbox.zarinpal.com/pg/StartPay'),
     ],
 
     // NextPay

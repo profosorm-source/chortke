@@ -41,7 +41,7 @@ use App\Controllers\Admin\PageController          as AdminPageController;
 use App\Controllers\Admin\TicketController        as AdminTicketController;
 use App\Controllers\Admin\CouponController        as AdminCouponController;
 use App\Controllers\Admin\FraudController;
-use App\Controllers\Admin\AppealAdminController;
+
 use App\Controllers\Admin\AuditTrailController;
 use App\Controllers\Admin\AdminExportController;
 use App\Controllers\Admin\FeatureFlagController;
@@ -62,7 +62,7 @@ $r     = app()->router;
 // ── ورود/خروج ──────────────────────────────────────────────────────────────
 $r->get('/admin/login',   [AdminAuthController::class, 'showLogin']);
 $r->post('/admin/login',  [AdminAuthController::class, 'login'], [CSRFMiddleware::class]);
-$r->post('/admin/logout', [AdminAuthController::class, 'logout'], [AuthMiddleware::class, AdminMiddleware::class]);
+$r->post('/admin/logout', [AdminAuthController::class, 'logout'], [AuthMiddleware::class, AdminMiddleware::class, CSRFMiddleware::class]);
 
 // ── داشبورد ────────────────────────────────────────────────────────────────
 $r->get('/admin/dashboard',                   [AdminDashboardController::class, 'index'],          $admin);
@@ -481,16 +481,6 @@ $r->post('/admin/fraud/clear-flags',        [FraudController::class, 'clearFlags
 $r->post('/admin/fraud/suspend-user',       [FraudController::class, 'suspendUser'],       $admin);
 $r->post('/admin/fraud/unsuspend-user',     [FraudController::class, 'unsuspendUser'],     $admin);
 
-// ── Appeal Management ──────────────────────────────────────────────────────────
-$r->get('/admin/appeals',                          [AppealAdminController::class, 'index'],              $admin);
-$r->get('/admin/appeals/{id}',                     [AppealAdminController::class, 'show'],               $admin);
-$r->post('/admin/appeals/{id}/respond',            [AppealAdminController::class, 'respond'],            $admin);
-$r->post('/admin/appeals/{id}/status',             [AppealAdminController::class, 'updateStatus'],       $admin);
-$r->post('/admin/appeals/ban-user',                [AppealAdminController::class, 'banUser'],            $admin);
-$r->get('/admin/appeals/stats',                    [AppealAdminController::class, 'stats'],              $admin);
-$r->get('/admin/appeals/urgent',                   [AppealAdminController::class, 'urgentAppeals'],      $admin);
-$r->get('/admin/appeals/search',                   [AppealAdminController::class, 'search'],             $admin);
-$r->get('/admin/appeals/attachments/{id}/download',[AppealAdminController::class, 'downloadAttachment'], $admin);
 
 // ── Message Moderation ────────────────────────────────────────────────────────
 $r->get('/admin/messages/reports',              [MessageModerationController::class, 'reports'],       $admin);

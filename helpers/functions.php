@@ -53,9 +53,23 @@ if (!function_exists('env')) {
         if (isset($env[$key])) {
             $value = $env[$key];
 
-            if ($value === 'true') return true;
-            if ($value === 'false') return false;
-            if ($value === 'null') return null;
+            if (is_string($value)) {
+                $value = trim($value);
+                // Unquote values
+                if ((str_starts_with($value, '"') && str_ends_with($value, '"')) ||
+                    (str_starts_with($value, "'") && str_ends_with($value, "'"))) {
+                    $value = substr($value, 1, -1);
+                }
+                $value = trim($value);
+
+                $lower = strtolower($value);
+                if ($lower === 'true') return true;
+                if ($lower === 'false') return false;
+                if ($lower === 'null') return null;
+                if (is_numeric($value)) {
+                    return str_contains($value, '.') ? (float)$value : (int)$value;
+                }
+            }
 
             return $value;
         }

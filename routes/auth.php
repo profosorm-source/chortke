@@ -52,8 +52,8 @@ app()->router->group(['middleware' => [GuestMiddleware::class]], function ($rout
 });
 
 // OAuth callbacks (بغیر middleware — external providers سے) ─────────────────
-$router->get('/auth/callback/google',   [OAuthController::class, 'callbackGoogle']);
-$router->get('/auth/callback/facebook', [OAuthController::class, 'callbackFacebook']);
+$router->get('/auth/callback/google',   [OAuthController::class, 'callbackGoogle'], [\App\Middleware\RateLimitMiddleware::class]);
+$router->get('/auth/callback/facebook', [OAuthController::class, 'callbackFacebook'], [\App\Middleware\RateLimitMiddleware::class]);
 
 // ── Social Accounts Management (authenticated users only) ────────────────
 app()->router->group(['middleware' => [AuthMiddleware::class]], function ($router) {

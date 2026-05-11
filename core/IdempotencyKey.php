@@ -47,6 +47,32 @@ class IdempotencyKey
     }
 
     /**
+     * ساخت یک کلید امن و قطعی بر اساس اطلاعات دقیق عملیات
+     * جلوگیری قطعی از استفاده از time() و خطر Race Condition
+     *
+     * @param string $action نام بیزینسی عملیات (مثلاً 'referral_commission')
+     * @param array $context دیتاهایی که این تراکنش را منحصربه‌فرد می‌کنند (userId, transactionId, ...)
+     */
+    public static function generateFromPayload(string $action, array $context): string
+    {
+        // پاک کردن نویزهای احتمالی مثل توکن‌های لحظه‌ای یا مقادیر تصادفی
+        $safeContext = array_filter($context, function($v) {
+             return is_scalar($v) || is_null($v);
+        });
+        
+        // مرتب‌سازی کلیدها برای تضمین تطابق هش حتی با جابجایی پارامترها
+        ksort($safeContext);
+        
+        $payloadStr = serialize($safeContext);
+        $appKey = config('app.key', 'fallback');
+        
+        // ترکیب امن: اکشن + داده‌های فیلتر شده + اپ‌کی
+        $finalSeed = $action . '|' . $payloadStr . '|' . $appKey;
+        
+        return hash('sha256', $finalSeed);
+    }
+
+    /**
      * بررسی و ذخیره کلید با قابلیت‌های پیشرفته
      *
      * FIX C-1: Race Condition — از INSERT IGNORE + SELECT FOR UPDATE استفاده می‌کنیم

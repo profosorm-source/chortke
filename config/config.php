@@ -9,7 +9,7 @@ return [
     'app' => [
         'name' => env('APP_NAME', 'Chortke'),
         'env' => env('APP_ENV', 'local'),
-        'debug' => env('APP_DEBUG', true),
+        'debug' => env('APP_DEBUG', false),
         'url' => env('APP_URL', 'http://localhost'),
         'timezone' => env('APP_TIMEZONE', 'Asia/Tehran'),
         'key' => env('APP_KEY', ''),
@@ -40,21 +40,7 @@ return [
         'token_name' => env('CSRF_TOKEN_NAME', '_csrf_token'),
         'token_length' => 64,
     ],
-    
-    'rate_limits' => [
-        'login' => [
-            'max_attempts' => env('RATE_LIMIT_LOGIN_MAX_ATTEMPTS', 5),
-            'decay_minutes' => env('RATE_LIMIT_LOGIN_DECAY_MINUTES', 15),
-        ],
-        'api' => [
-            'max_attempts' => env('RATE_LIMIT_API_MAX_ATTEMPTS', 100),
-            'decay_minutes' => env('RATE_LIMIT_API_DECAY_MINUTES', 1),
-        ],
-        'upload' => [
-            'max_attempts' => env('RATE_LIMIT_UPLOAD_MAX_ATTEMPTS', 10),
-            'decay_minutes' => env('RATE_LIMIT_UPLOAD_DECAY_MINUTES', 60),
-        ],
-    ],
+
 
     'retry_policy' => [
         'max_attempts' => env('RETRY_MAX_ATTEMPTS', 3),
@@ -94,21 +80,7 @@ return [
             'name' => env('MAIL_FROM_NAME'),
         ],
     ],
-    
-    'payment' => [
-        'zarinpal' => [
-            'merchant_id' => env('ZARINPAL_MERCHANT_ID'),
-        ],
-        'nextpay' => [
-            'api_key' => env('NEXTPAY_API_KEY'),
-        ],
-        'idpay' => [
-            'api_key' => env('IDPAY_API_KEY'),
-        ],
-        'dgpay' => [
-            'api_key' => env('DGPAY_API_KEY'),
-        ],
-    ],
+
     
     'crypto' => [
         'usdt' => [

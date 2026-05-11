@@ -257,6 +257,18 @@ private function safeUnserialize($raw)
         return $this->increment($key, -$step);
     }
 
+    public function incrementFloat(string $key, float $step = 1.0): float|false
+    {
+        if ($this->driver === 'redis') {
+            return (float) $this->redis->incrByFloat($this->redisKey($key), $step);
+        }
+
+        $current = (float) $this->get($key, 0.0);
+        $new     = $current + $step;
+        $this->forever($key, $new);
+        return $new;
+    }
+
     // ─────────────────────────────────────────────────
     //  TTL باقی‌مانده (ثانیه)
     // ─────────────────────────────────────────────────

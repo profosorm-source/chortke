@@ -39,7 +39,7 @@ $router->get('/sitemap.xml',  [SitemapController::class, 'index']);
 $router->get('/robots.txt',   [RobotsController::class, 'index']);
 $router->get('/favicon.ico',  [FaviconController::class, 'index']);
 $router->get('/favicon.png',  [FaviconController::class, 'index']);
-$router->get('/file/view/{folder}/{filename}', [FileController::class, 'serve']);
+$router->get('/file/view/{folder}/{filename}', [FileController::class, 'serve'], [\App\Middleware\RateLimitMiddleware::class]);
 
 // بنر (کلیک)
 $router->get('/banner/click/{id}', [BannerController::class, 'click']);

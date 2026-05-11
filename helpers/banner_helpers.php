@@ -11,8 +11,8 @@ if (!function_exists('get_banners_for_placement')) {
         }
 
         try {
-            $banner = app(\App\Models\Banner::class);
-            $banners = $banner->getActiveByPlacement($placementSlug, $limit);
+            $banner = app(\App\Models\Ads::class);
+            $banners = $banner->getActiveBannersByPlacement($placementSlug, $limit);
             $cache[$key] = $banners;
             return $banners;
         } catch (\Exception $e) {
@@ -73,7 +73,7 @@ if (!function_exists('increment_banner_impression')) {
         }
 
         try {
-            app(\App\Models\Banner::class)->incrementImpression($bannerId);
+            app(\App\Models\Ads::class)->incrementImpression($bannerId);
             $session->set($key, true);
         } catch (\Exception $e) {
             // Log error
@@ -90,7 +90,7 @@ if (!function_exists('register_banner_click')) {
             // استفاده از get_client_ip به جای REMOTE_ADDR
             $ip = get_client_ip();
             
-            return app(\App\Models\Banner::class)->registerClick($bannerId, $userId, $ip);
+            return app(\App\Models\Ads::class)->registerInteractionClick($bannerId, $userId, $ip);
         } catch (\Exception $e) {
             return false;
         }

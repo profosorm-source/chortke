@@ -19,13 +19,13 @@ return [
 
     // نرخ نمونه‌گیری (sampling) برای لاگ دیتابیس (1-100)
     // مثال: 25 = فقط 25٪ از لاگ‌ها در DB ثبت می‌شوند
-    'database_sample_rate' => env('LOG_DB_SAMPLE_RATE', 100),
+    'database_sample_rate' => max(1, min(100, (int)env('LOG_DB_SAMPLE_RATE', 100))),
 
     // آیا لاگ async (queue) باشد؟ (کاهش تأثیر روی request latency)
     'async_logging' => env('LOG_ASYNC', false),
 
     // حداقل سطح لاگ
-    'min_level' => env('LOG_LEVEL', 'debug'),
+    'min_level' => env('LOG_LEVEL', 'info'),
 
     // سطوح لاگ که باید در دیتابیس ذخیره شوند
     'database_levels' => ['emergency', 'alert', 'critical', 'error'],

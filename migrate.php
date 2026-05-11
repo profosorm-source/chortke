@@ -1,124 +1,55 @@
 <?php
 /**
- * Migration Runner - Execute SQL migrations
+ * Professional Database Migration Runner
+ * Uses the App\Services\MigrationManager to track and execute SQL patches.
  */
 
+declare(strict_types=1);
+
+// Bootstrap the application environment
+require_once __DIR__ . '/bootstrap/app.php';
+
+use Core\Container;
+use App\Services\MigrationManager;
+
+echo "\n=== Chortke Migration Runner ===\n\n";
+
 try {
-    // Database configuration
-    $dbConfig = [
-        'host' => 'localhost',
-        'database' => 'chortke',
-        'username' => 'root',
-        'password' => '',
-    ];
+    $container = Container::getInstance();
     
-    // Connect to database
-    $pdo = new PDO(
-        "mysql:host={$dbConfig['host']};charset=utf8mb4",
-        $dbConfig['username'],
-        $dbConfig['password']
-    );
+    // Dynamically build/get MigrationManager using current Database connection
+    $manager = new MigrationManager($container->make(\Core\Database::class));
     
-    // Select database
-    $pdo->exec("USE `{$dbConfig['database']}`");
+    echo "Scanning for pending migrations...\n";
     
-    // Statements to execute
-    $statements = [
-        // System Logs Table
-        "CREATE TABLE IF NOT EXISTS `system_logs` (
-            `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            `level` varchar(20) NOT NULL COMMENT 'ERROR, WARNING, INFO, DEBUG',
-            `type` varchar(20) NOT NULL DEFAULT 'system',
-            `message` text NOT NULL,
-            `context` longtext DEFAULT NULL COMMENT 'JSON context data',
-            `user_id` bigint(20) unsigned DEFAULT NULL,
-            `ip_address` varchar(45) DEFAULT NULL,
-            `user_agent` text DEFAULT NULL,
-            `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (`id`),
-            KEY `system_logs_level_index` (`level`),
-            KEY `system_logs_type_index` (`type`),
-            KEY `system_logs_user_id_index` (`user_id`),
-            KEY `system_logs_created_at_index` (`created_at`),
-            KEY `system_logs_ip_address_index` (`ip_address`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        
-        // Security Logs Table
-        "CREATE TABLE IF NOT EXISTS `security_logs` (
-            `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            `level` varchar(20) NOT NULL COMMENT 'EMERGENCY, ALERT, CRITICAL, ERROR, WARNING',
-            `type` varchar(20) NOT NULL DEFAULT 'security',
-            `message` text NOT NULL,
-            `context` longtext DEFAULT NULL COMMENT 'JSON context data',
-            `user_id` bigint(20) unsigned DEFAULT NULL,
-            `ip_address` varchar(45) DEFAULT NULL,
-            `user_agent` text DEFAULT NULL,
-            `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (`id`),
-            KEY `security_logs_level_index` (`level`),
-            KEY `security_logs_type_index` (`type`),
-            KEY `security_logs_user_id_index` (`user_id`),
-            KEY `security_logs_created_at_index` (`created_at`),
-            KEY `security_logs_ip_address_index` (`ip_address`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        
-        // Performance Logs Table
-        "CREATE TABLE IF NOT EXISTS `performance_logs` (
-            `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            `metric` varchar(100) NOT NULL COMMENT 'response_time, memory_usage, db_query_time, etc',
-            `value` decimal(10,4) NOT NULL COMMENT 'metric value',
-            `context` longtext DEFAULT NULL COMMENT 'JSON context data',
-            `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (`id`),
-            KEY `performance_logs_metric_index` (`metric`),
-            KEY `performance_logs_created_at_index` (`created_at`),
-            KEY `performance_logs_value_index` (`value`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        
-        // Activity Logs Table
-        "CREATE TABLE IF NOT EXISTS `activity_logs` (
-            `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            `user_id` bigint(20) unsigned DEFAULT NULL,
-            `action` varchar(100) NOT NULL,
-            `description` text DEFAULT NULL,
-            `model` varchar(100) DEFAULT NULL,
-            `model_id` bigint(20) unsigned DEFAULT NULL,
-            `ip_address` varchar(45) DEFAULT NULL,
-            `user_agent` text DEFAULT NULL,
-            `metadata` longtext DEFAULT NULL COMMENT 'JSON metadata',
-            `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            `deleted_at` datetime DEFAULT NULL,
-            PRIMARY KEY (`id`),
-            KEY `activity_logs_user_id_index` (`user_id`),
-            KEY `activity_logs_action_index` (`action`),
-            KEY `activity_logs_model_index` (`model`),
-            KEY `activity_logs_created_at_index` (`created_at`),
-            KEY `activity_logs_deleted_at_index` (`deleted_at`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-    ];
-    
-    $executed = 0;
-    foreach ($statements as $statement) {
-        if (!empty(trim($statement))) {
-            $desc = substr(str_replace(["\n", "\r", "\t"], " ", $statement), 0, 60);
-            echo "Executing: {$desc}...\n";
-            $pdo->exec($statement);
-            $executed++;
-        }
+    // Check if we should show report or run migrations
+    if (in_array('--report', $argv)) {
+        echo $manager->report();
+        exit(0);
     }
+
+    // Execute the runner
+    $result = $manager->run();
     
-    echo "\n✅ Migration completed successfully!\n";
-    echo "Total tables created: {$executed}\n";
-    
-} catch (PDOException $e) {
-    echo "❌ Database Error: " . $e->getMessage() . "\n";
-    exit(1);
-} catch (Exception $e) {
-    echo "❌ Error: " . $e->getMessage() . "\n";
+    if ($result['executed'] > 0) {
+        echo "✅ Success: {$result['message']}\n";
+    } else {
+        echo "ℹ️ Notice: {$result['message']}\n";
+    }
+
+    if (!empty($result['errors'])) {
+        echo "\n❌ ERRORS ENCOUNTERED:\n";
+        foreach ($result['errors'] as $err) {
+            echo "  - {$err}\n";
+        }
+        exit(1);
+    }
+
+    echo "\nDone.\n";
+
+} catch (\Throwable $e) {
+    echo "\n❌ FATAL SYSTEM CRASH:\n";
+    echo $e->getMessage() . "\n";
+    echo $e->getFile() . " line " . $e->getLine() . "\n";
     exit(1);
 }
-?>

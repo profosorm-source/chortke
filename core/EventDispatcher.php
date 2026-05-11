@@ -23,7 +23,9 @@ class EventDispatcher
     public static function getInstance()
     {
         if (self::$instance === null) {
-            self::$instance = new self();
+            // دریافت خودکار وابستگی Queue
+            $queue = \Core\Container::getInstance()->get(Queue::class);
+            self::$instance = new self($queue);
         }
         
         return self::$instance;

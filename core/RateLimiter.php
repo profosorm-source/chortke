@@ -80,7 +80,23 @@ class RateLimiter
         $maxAttempts = $maxAttempts ?? (int) config('rate_limits.default.max_attempts', 60);
         $decayMinutes = $decayMinutes ?? (int) config('rate_limits.default.decay_minutes', 1);
 
-        return $this->strategy->attempt($key, $maxAttempts, $decayMinutes);
+        $allowed = $this->strategy->attempt($key, $maxAttempts, $decayMinutes);
+
+        if (!$allowed) {
+            // Dispatch Event without interfering with primary app flow
+            try {
+                $dispatcher = \Core\EventDispatcher::getInstance();
+                $dispatcher->dispatch('rate_limit.exceeded', new \App\Events\RateLimitExceededEvent(
+                    $key,
+                    $this->strategy->getName(),
+                    function_exists('get_client_ip') ? get_client_ip() : '127.0.0.1'
+                ));
+            } catch (\Throwable $ignore) {
+                // Fail safe if EventDispatcher fails
+            }
+        }
+
+        return $allowed;
     }
 
     /**

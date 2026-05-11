@@ -119,7 +119,7 @@ if (!function_exists('unless_feature')) {
 
 if (!function_exists('feature_value')) {
     /**
-     * دریافت مقدار از Config یا متادیتای فیچر
+     * دریافت مقدار از متادیتای دیتابیس با بازگشت به Config به عنوان Fallback
      * 
      * @param string $name نام فیچر
      * @param string $key کلید مقدار
@@ -128,28 +128,31 @@ if (!function_exists('feature_value')) {
      */
     function feature_value(string $name, string $key, $default = null)
     {
-        // اول از Config بخون
-        $configValue = config("feature_flags.{$name}.{$key}");
+        // ۱. ابتدا تلاش برای لود از پایگاه داده (منبع پویای ادمین پنل)
+        try {
+            static $model;
+            if (!$model) {
+                $model = app(\App\Models\FeatureFlag::class);
+            }
+            
+            $feature = $model->findByName($name);
+            if ($feature && !empty($feature->metadata)) {
+                $metadata = json_decode($feature->metadata, true);
+                if (is_array($metadata) && isset($metadata[$key])) {
+                    return $metadata[$key];
+                }
+            }
+        } catch (\Throwable $e) {
+            // پایگاه داده در دسترس نیست یا خطایی رخ داده است - بی‌صدا رد می‌شویم تا از Fallback استفاده شود
+        }
         
+        // ۲. بازگشت به فایل کانفیگ به عنوان زاپاس زیرساخت (Fallback)
+        $configValue = config("feature_flags.{$name}.{$key}");
         if ($configValue !== null) {
             return $configValue;
         }
         
-        // اگر نبود، از متادیتای دیتابیس بخون
-        static $model;
-        if (!$model) {
-            $model = app(\App\Models\FeatureFlag::class);
-        }
-        
-        $feature = $model->findByName($name);
-        
-        if (!$feature || !$feature->metadata) {
-            return $default;
-        }
-        
-        $metadata = json_decode($feature->metadata, true);
-        
-        return $metadata[$key] ?? $default;
+        return $default;
     }
 }
 

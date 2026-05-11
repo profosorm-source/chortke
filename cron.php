@@ -12,8 +12,12 @@
  *   php cron.php --dry-run            (فقط نمایش بدون اجرا)
  */
 
-define('CRON_MODE', true);
-define('BASE_PATH', __DIR__);
+if (!defined('CRON_MODE')) {
+    define('CRON_MODE', true);
+}
+if (!defined('BASE_PATH')) {
+    define('BASE_PATH', __DIR__);
+}
 
 // بارگذاری bootstrap
 require_once __DIR__ . '/bootstrap/app.php';
@@ -26,13 +30,16 @@ use App\Services\UserLevelService;
 use App\Services\LotteryService;
 use App\Services\BannerService;
 use App\Services\WithdrawalService;
-use App\Services\StoryPromotionService;
+use App\Services\InfluencerService;
 use App\Services\Shared\DisputeService;
 use App\Services\Notification\NotificationService;
+use App\Services\AdNotificationDispatcher;
 use App\Models\Notification as NotificationModel;
 use App\Models\Advertisement;
 use Core\Cache;
 use Core\Database;
+
+$container = Container::getInstance();
 
 // ==========================================
 //  File Lock — جلوگیری از اجرای همزمان cron (مشکل #9)
@@ -41,7 +48,9 @@ $lockFile = sys_get_temp_dir() . '/chortke_cron.lock';
 $lockHandle = fopen($lockFile, 'c');
 if ($lockHandle === false || !flock($lockHandle, LOCK_EX | LOCK_NB)) {
     // نمونه دیگری در حال اجراست
-    fclose($lockHandle ?: STDOUT);
+    if (is_resource($lockHandle)) {
+        fclose($lockHandle);
+    }
     echo '[' . date('Y-m-d H:i:s') . "] [SKIP] cron.php already running — exiting.\n";
     exit(0);
 }
@@ -124,11 +133,16 @@ $scheduler->everyMinute(function () {
                 logger()->error('queue_job_not_found', ['job' => $jobClass]);
             }
         } catch (\Throwable $e) {
-            logger()->error('queue_job_failed', [
-                'job' => $jobClass,
+            $logData = [
+                'job'   => $jobClass,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+                'file'  => $e->getFile(),
+                'line'  => $e->getLine(),
+            ];
+            if (config('app.debug')) {
+                $logData['trace'] = substr($e->getTraceAsString(), 0, 2048);
+            }
+            logger()->error('queue_job_failed', $logData);
         }
     }
     
@@ -173,6 +187,14 @@ $scheduler->everyMinutes(feature_config('cron_scheduler_interval', 'rollout_perc
     return ['cleaned_files' => $cleaned];
 }, 'cache_cleanup');
 
+// 📢 ارسال اعلان‌های پس‌زمینه کمپین‌های فعال (Ad Notifications)
+// اجرا در فواصل کوتاه برای ارسال موازی و کم‌بار بدون سنگین کردن سرور
+$scheduler->everyMinutes(feature_config('cron_ad_push_interval', 'rollout_percentage', 3), function () {
+    $dispatcher = Container::getInstance()->make(AdNotificationDispatcher::class);
+    $stats = $dispatcher->processAdNotifications();
+    return $stats;
+}, 'ad_notification_push');
+
 /**
  * ─────────────────────────────────────────
  * هر ساعت (دقیقه ۰)
@@ -203,6 +225,52 @@ $scheduler->hourly(function () {
     $count   = $service->deactivateExpiredBanners();
     return ['deactivated_banners' => $count];
 }, 'expire_banners');
+
+// ✅ **ممیزی ساعتی تراکنش‌ها و دفاتر کل** 🔄
+// بررسی و مانیتورینگ سلامت سیستم مالی (فقط گزارش مغایرت)
+$scheduler->hourly(function () {
+    try {
+        $db = Database::getInstance();
+        
+        // ⚠️ حذف منطق ناامن تایید خودکار تراکنش‌های یتیم که پیش‌تر اینجا بود و یک حفره مالی محسوب می‌شد.
+        // ممیزی از این پس فقط به صورت پسیو (تحلیلی) ناسازگاری‌ها را به لاگر اطلاع می‌دهد.
+        
+        // بررسی ناسازگاری‌های ledger (debit vs credit)
+        $mismatches = $db->fetchAll(
+            "SELECT user_id, SUM(amount) as balance
+             FROM ledger_entries
+             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 2 HOUR)
+             GROUP BY user_id
+             HAVING balance IS NOT NULL"
+        );
+        
+        $warnings = 0;
+        foreach ($mismatches as $mismatch) {
+            // اگر balance صفر نیست مشکل است
+            if ((float)$mismatch->balance !== 0.0) {
+                $warnings++;
+                logger()->warning('reconciliation.ledger_mismatch', [
+                    'user_id' => $mismatch->user_id,
+                    'balance_mismatch' => $mismatch->balance,
+                    'timestamp' => date('Y-m-d H:i:s')
+                ]);
+            }
+        }
+        
+        return [
+            'ledger_mismatches_detected' => $warnings,
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+    } catch (\Throwable $e) {
+        logger()->error('reconciliation.hourly_audit.failed', [
+            'error' => $e->getMessage(),
+            'exception' => get_class($e),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+        ]);
+        return ['error' => $e->getMessage()];
+    }
+}, 'hourly_reconciliation_audit');
 
 // انقضای نشست‌های قدیمی کاربران (بیش از ۳۰ روز)
 $scheduler->hourly(function () {
@@ -546,7 +614,7 @@ echo '[' . date('Y-m-d H:i:s') . '] شروع اجرای cron jobs' . PHP_EOL;
  */
 // مشکل #12: نام job برای مانیتورینگ/دیباگ اضافه شد
 $scheduler->hourly(function () use ($container) {
-    $service = $container->make(StoryPromotionService::class);
+    $service = $container->make(InfluencerService::class);
     $count   = $service->processExpiredBuyerChecks();
     if ($count > 0) {
         echo "[Influencer] Auto-approved {$count} buyer-check timeout orders\n";
@@ -558,7 +626,7 @@ $scheduler->hourly(function () use ($container) {
  * هر ساعت: رد خودکار سفارش‌هایی که اینفلوئنسر در مهلت پاسخ نداده
  */
 $scheduler->hourly(function () use ($container) {
-    $service = $container->make(StoryPromotionService::class);
+    $service = $container->make(InfluencerService::class);
     $count   = $service->processExpiredPendingAcceptance();
     if ($count > 0) {
         echo "[Influencer] Auto-rejected {$count} orders with no influencer response\n";
@@ -582,7 +650,7 @@ $scheduler->hourly(function () use ($container) {
  * روزانه: پاکسازی فایل‌های مدرک قدیمی
  */
 $scheduler->daily('05:00', function () use ($container) {
-    $service = $container->make(StoryPromotionService::class);
+    $service = $container->make(InfluencerService::class);
     $count   = $service->cleanupOldFiles(3);
     if ($count > 0) {
         echo "[Influencer] Cleaned up proof files for {$count} orders\n";
@@ -650,6 +718,19 @@ $scheduler->everyMinute(function () use ($container) {
 
     return ['processed' => $processed];
 }, 'notification_scheduled');
+
+/**
+ * هر دقیقه: توزیع آگهی‌های نوتیفیکیشن انبوه‌ (Push Ads)
+ */
+$scheduler->everyMinute(function () use ($container) {
+    $dispatcher = $container->make(\App\Services\AdNotificationDispatcher::class);
+    $result = $dispatcher->processAdNotifications();
+    
+    if ($result['total_sent'] > 0) {
+        echo "[AdPush] Processed {$result['ads_processed']} ads, sent {$result['total_sent']} push packets\n";
+    }
+    return $result;
+}, 'ad_notification_blast');
 
 /**
  * هر ساعت: آرشیو نوتیفیکیشن‌های منقضی‌شده
