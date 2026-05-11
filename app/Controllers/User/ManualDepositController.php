@@ -3,7 +3,7 @@
 namespace App\Controllers\User;
 
 use App\Models\ManualDeposit;
-use App\Models\UserBankCard;
+use App\Models\BankCard;
 use App\Services\UploadService;
 use Core\Validator;
 use App\Services\ApiRateLimiter;
@@ -12,12 +12,12 @@ use App\Controllers\User\BaseUserController;
 class ManualDepositController extends BaseUserController
 {
     private ManualDeposit $depositModel;
-    private UserBankCard $cardModel;
+    private BankCard $cardModel;
     private UploadService $uploadService;
 
     public function __construct(
         \App\Models\ManualDeposit $depositModel,
-        \App\Models\UserBankCard $cardModel,
+        \App\Models\BankCard $cardModel,
         \App\Services\UploadService $uploadService)
     {
         parent::__construct();

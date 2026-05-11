@@ -1,22 +1,17 @@
 <?php
 
 namespace App\Controllers\User;
-use App\Models\Transaction;
 
 use App\Services\WalletService;
 use App\Controllers\User\BaseUserController;
 
 class WalletController extends BaseUserController
 {
-    private Transaction $transactionModel;
     private WalletService $walletService;
 
-    public function __construct(
-        Transaction $transactionModel,
-        \App\Services\WalletService $walletService)
+    public function __construct(\App\Services\WalletService $walletService)
     {
         parent::__construct();
-        $this->transactionModel = $transactionModel;
         $this->walletService = $walletService;
     }
 
@@ -79,17 +74,16 @@ class WalletController extends BaseUserController
         $offset = ($page - 1) * $limit;
 
         try {
-            $transactionModel = $this->transactionModel;
+            $filters = ['type' => $type, 'currency' => $currency];
             
-            $transactions = $transactionModel->getUserTransactions(
+            $transactions = $this->walletService->getUserTransactions(
                 $userId,
-                $type,
-                $currency,
                 $limit,
-                $offset
+                $offset,
+                $filters
             );
             
-            $total = $transactionModel->countUserTransactions($userId, $type, $currency);
+            $total = $this->walletService->countUserTransactions($userId, $filters);
             $totalPages = (int)\ceil($total / $limit);
 
             view('user.wallet.history', [

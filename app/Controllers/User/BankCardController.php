@@ -2,20 +2,19 @@
 
 namespace App\Controllers\User;
 
-use App\Models\UserBankCard;
+use App\Services\BankCardService;
 use App\Services\User\UserService;
 use Core\Validator;
 use App\Controllers\User\BaseUserController;
 
 class BankCardController extends BaseUserController
 {
-    private UserBankCard $cardModel;
+    private BankCardService $bankCardService;
 
-    public function __construct(
-        \App\Models\UserBankCard $cardModel)
+    public function __construct(BankCardService $bankCardService)
     {
         parent::__construct();
-        $this->cardModel = $cardModel;
+        $this->bankCardService = $bankCardService;
     }
 
     /**
@@ -26,8 +25,8 @@ class BankCardController extends BaseUserController
         $userId = $this->userId();
         
         try {
-            $cards = $this->cardModel->getUserCards($userId);
-            $cardCount = $this->cardModel->countUserCards($userId);
+            $cards = $this->bankCardService->getUserCards($userId);
+            $cardCount = count($cards); // Helper or proxy
             
             view('user.bank-cards.index', [
                 'cards' => $cards,
@@ -37,14 +36,11 @@ class BankCardController extends BaseUserController
             ]);
 
         } catch (\Exception $e) {
-    $this->logger->error('bank_card.index.failed', [
-        'channel' => 'banking',
-        'user_id' => $userId,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
+            $this->logger->error('bank_card.index.failed', [
+                'channel' => 'banking',
+                'user_id' => $userId,
+                'error' => $e->getMessage()
+            ]);
             
             $this->session->setFlash('error', 'خطا در دریافت لیست کارت‌ها');
             $this->response->redirect(url('wallet'));
@@ -57,9 +53,9 @@ class BankCardController extends BaseUserController
     public function create(): void
     {
         $userId = $this->userId();
-        $cardCount = $this->cardModel->countUserCards($userId);
+        $cards = $this->bankCardService->getUserCards($userId);
         
-        if ($cardCount >= 4) {
+        if (count($cards) >= 4) {
             $this->session->setFlash('error', 'حداکثر 4 کارت بانکی می‌توانید ثبت کنید');
             $this->response->redirect(url('bank-cards'));
             return;
@@ -75,94 +71,24 @@ class BankCardController extends BaseUserController
      */
     public function store(): void
     {
-                        $userId = $this->userId();
-
-        // بررسی تعداد کارت‌ها
-        $cardCount = $this->cardModel->countUserCards($userId);
-        if ($cardCount >= 4) {
-            $this->session->setFlash('error', 'حداکثر 4 کارت بانکی می‌توانید ثبت کنید');
-            $this->response->redirect(url('bank-cards'));
-            return;
-        }
-
-        // دریافت داده‌ها
-        $data = [
-            'card_number' => preg_replace('/[\s\-]/', '', $this->request->input('card_number') ?? ''),
-            'account_number' => $this->request->input('account_number'),
-            'sheba' => $this->request->input('sheba'),
-            'bank_name' => $this->request->input('bank_name'),
-            'cardholder_name' => $this->request->input('cardholder_name'),
+        $userId = $this->userId();
+        $input = $this->request->all();
+        
+        // Convert request format to service expected payload
+        $payload = [
+            'card_number' => $input['card_number'] ?? '',
+            'card_holder' => $input['cardholder_name'] ?? '',
+            'iban' => $input['sheba'] ?? ''
         ];
 
-        // اعتبارسنجی
-        $validator = new Validator($data, [
-            'card_number' => 'required|numeric|min:16|max:16',
-            'bank_name' => 'required|min:2|max:50',
-            'cardholder_name' => 'required|min:3|max:100',
-        ], [
-            'card_number.required' => 'شماره کارت الزامی است',
-            'card_number.numeric' => 'شماره کارت باید عددی باشد',
-            'card_number.min' => 'شماره کارت باید 16 رقم باشد',
-            'card_number.max' => 'شماره کارت باید 16 رقم باشد',
-            'bank_name.required' => 'نام بانک الزامی است',
-            'cardholder_name.required' => 'نام صاحب کارت الزامی است',
-        ]);
+        $result = $this->bankCardService->create($userId, $payload);
 
-        if ($validator->fails()) {
-            $errors = $validator->errors();
-            $firstError = array_values($errors)[0][0] ?? 'اطلاعات نامعتبر است';
-            $this->session->setFlash('error', $firstError);
-            $this->session->setFlash('old', $data);
-            $this->response->redirect(url('bank-cards/create'));
-            return;
-        }
-
-        try {
-            // دریافت نام کاربر برای بررسی
-            $user = $this->userService->find($userId);
-
-            if (!$user) {
-                throw new \RuntimeException('کاربر یافت نشد');
-            }
-
-            // بررسی تطابق نام (هشدار)
-            $nameMatch = \mb_stripos($data['cardholder_name'], $user->full_name) !== false;
-            if (!$nameMatch) {
-                $this->session->setFlash('warning', 'توجه: نام صاحب کارت با نام شما مطابقت ندارد. این کارت ممکن است رد شود.');
-            }
-
-            $data['user_id'] = $userId;
-            $data['status'] = 'pending';
-
-            $card = $this->cardModel->create($data);
-
-            if (!$card) {
-                throw new \RuntimeException('این کارت قبلاً ثبت شده است');
-            }
-
-            // ثبت لاگ
-            $this->logger->activity(
-    'bank_card_created',
-    'ثبت کارت بانکی جدید: ' . \substr($data['card_number'], 0, 6) . '******' . \substr($data['card_number'], -4),
-    $userId,
-    ['card_id' => $card->id]
-);
-
-            $this->session->setFlash('success', 'کارت بانکی با موفقیت ثبت شد و در انتظار تأیید است');
+        if (!empty($result['success'])) {
+            $this->session->setFlash('success', $result['message'] ?? 'عملیات موفق');
             $this->response->redirect(url('bank-cards'));
-
-        } catch (\Exception $e) {
-    $this->logger->error('bank_card.store.failed', [
-        'channel' => 'banking',
-        'user_id' => $userId,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-            
-            $this->session->setFlash('error', $e->getMessage());
-            $this->session->setFlash('old', $data);
+        } else {
+            $this->session->setFlash('error', $result['message'] ?? 'خطا در ثبت');
+            $this->session->setFlash('old', $input);
             $this->response->redirect(url('bank-cards/create'));
         }
     }
@@ -173,56 +99,8 @@ class BankCardController extends BaseUserController
     public function setDefault(string $id): void
     {
         $userId = $this->userId();
-        $cardId = (int)$id;
-
-        try {
-            $card = $this->cardModel->find($cardId);
-
-            if (!$card || $card->user_id !== $userId) {
-                $this->response->json([
-                    'success' => false,
-                    'message' => 'کارت یافت نشد'
-                ]);
-                return;
-            }
-
-            if ($card->status !== 'verified') {
-                $this->response->json([
-                    'success' => false,
-                    'message' => 'فقط کارت‌های تأییدشده را می‌توانید پیش‌فرض کنید'
-                ]);
-                return;
-            }
-
-            $updated = $this->cardModel->setDefault($cardId, $userId);
-
-            if ($updated) {
-                $this->logger->activity('bank_card_set_default', 'تنظیم کارت پیش‌فرض', $userId, ['card_id' => $cardId] ?? []);
-
-                $this->response->json([
-                    'success' => true,
-                    'message' => 'کارت پیش‌فرض با موفقیت تنظیم شد'
-                ]);
-            } else {
-                throw new \RuntimeException('خطا در تنظیم کارت پیش‌فرض');
-            }
-
-        } catch (\Exception $e) {
-    $this->logger->error('bank_card.set_default.failed', [
-        'channel' => 'banking',
-        'user_id' => $userId,
-        'card_id' => $cardId ?? null,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-
-            $this->response->json([
-                'success' => false,
-                'message' => 'خطا در تنظیم کارت پیش‌فرض'
-            ]);
-        }
+        $result = $this->bankCardService->setPrimary($userId, (int)$id);
+        $this->response->json($result);
     }
 
     /**
@@ -231,51 +109,7 @@ class BankCardController extends BaseUserController
     public function delete(string $id): void
     {
         $userId = $this->userId();
-        $cardId = (int)$id;
-
-        try {
-            $card = $this->cardModel->find($cardId);
-
-            if (!$card || $card->user_id !== $userId) {
-                $this->response->json([
-                    'success' => false,
-                    'message' => 'کارت یافت نشد'
-                ]);
-                return;
-            }
-
-            $deleted = $this->cardModel->deleteForUser($cardId, $userId);
-if ($deleted) {
-    $this->logger->activity(
-        'bank_card_deleted',
-        'حذف کارت بانکی',
-        $userId,
-        ['card_id' => $cardId]
-    );
-
-    $this->response->json([
-        'success' => true,
-        'message' => 'کارت بانکی با موفقیت حذف شد'
-    ]);
-} else {
-                throw new \RuntimeException('این کارت قابل حذف نیست (احتمالاً در تراکنش‌ها استفاده شده)');
-            }
-
-        } catch (\Exception $e) {
-    $this->logger->error('bank_card.delete.failed', [
-        'channel' => 'banking',
-        'user_id' => $userId,
-        'card_id' => $cardId ?? null,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-
-            $this->response->json([
-                'success' => false,
-                'message' => $e->getMessage()
-            ]);
-        }
+        $result = $this->bankCardService->softDeleteByUser($userId, (int)$id);
+        $this->response->json($result);
     }
 }

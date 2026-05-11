@@ -205,10 +205,12 @@ abstract class BaseController
         $request = new $formRequestClass($data);
 
         if (!$request->validate()) {
-            if ($this instanceof \App\Controllers\Api\BaseApiController) {
-                $this->validationError($request->errors());
+            $errors = $request->errors();
+
+            if ($this instanceof \App\Controllers\Api\BaseApiController || is_ajax()) {
+                // ارسال پاسخ استاندارد JSON در صورت درخواست AJAX
+                $this->json(false, 'داده‌های ورودی نامعتبر است', ['errors' => $errors], 422);
             } else {
-                $errors = $request->errors();
                 $firstError = is_array($errors) ? (reset($errors)[0] ?? reset($errors)) : 'داده‌های ورودی نامعتبر است';
                 $this->session->setFlash('error', $firstError);
                 $this->session->setFlash('errors', $errors);

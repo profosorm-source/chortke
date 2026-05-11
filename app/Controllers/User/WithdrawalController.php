@@ -2,33 +2,29 @@
 
 namespace App\Controllers\User;
 
-use App\Models\Withdrawal;
-use App\Models\UserBankCard;
 use App\Services\WalletService;
 use Core\Validator;
 use App\Services\ApiRateLimiter;
 use App\Controllers\User\BaseUserController;
+use App\Services\BankCardService;
 
 class WithdrawalController extends BaseUserController
 {
     private \App\Services\AntiFraud\RiskDecisionService $riskDecisionService;
-    private Withdrawal $withdrawalModel;
-    private UserBankCard $cardModel;
+    private BankCardService $bankCardService;
     private WalletService $walletService;
     private \App\Services\WithdrawalService $withdrawalService;
     private \Core\Logger $logger;
 
     public function __construct(
-        \App\Models\Withdrawal $withdrawalModel,
-        \App\Models\UserBankCard $cardModel,
+        \App\Services\BankCardService $bankCardService,
         \App\Services\WalletService $walletService,
         \App\Services\AntiFraud\RiskDecisionService $riskDecisionService,
         \App\Services\WithdrawalService $withdrawalService,
         \Core\Logger $logger
     ) {
         parent::__construct();
-        $this->withdrawalModel = $withdrawalModel;
-        $this->cardModel = $cardModel;
+        $this->bankCardService = $bankCardService;
         $this->walletService = $walletService;
         $this->riskDecisionService = $riskDecisionService;
         $this->withdrawalService = $withdrawalService;
@@ -53,7 +49,7 @@ class WithdrawalController extends BaseUserController
             }
 
             // بررسی درخواست در انتظار
-            if ($this->withdrawalModel->hasPendingWithdrawal($userId)) {
+            if ($this->withdrawalService->hasPendingWithdrawal($userId)) {
                 $this->session->setFlash('error', 'شما یک درخواست برداشت در انتظار دارید');
                 $this->response->redirect(url('wallet'));
                 return;
@@ -72,7 +68,7 @@ class WithdrawalController extends BaseUserController
             // دریافت کارت‌ها برای IRT
             $cards = [];
             if ($siteCurrency === 'irt') {
-                $cards = $this->cardModel->getUserCards($userId, 'verified');
+                $cards = $this->bankCardService->getUserCards($userId, 'verified');
                 if (empty($cards)) {
                     $this->session->setFlash('error', 'ابتدا باید کارت بانکی خود را ثبت و تأیید کنید');
                     $this->response->redirect(url('bank-cards/create'));
@@ -158,7 +154,7 @@ class WithdrawalController extends BaseUserController
         $userId = $this->userId();
 
         try {
-            $withdrawals = $this->withdrawalModel->getUserWithdrawals($userId);
+            $withdrawals = $this->withdrawalService->getUserWithdrawals($userId);
 
             view('user.withdrawal.index', [
                 'withdrawals' => $withdrawals,
@@ -215,7 +211,7 @@ public function requestWithdrawalChallenge(): void
     $ipHash = md5($_SERVER['REMOTE_ADDR'] ?? 'unknown');
     $uaHash = md5($_SERVER['HTTP_USER_AGENT'] ?? 'unknown');
 
-    $_SESSION['withdraw_challenge'] = [
+    $this->session->set('withdraw_challenge', [
         'user_id'      => $userId,
         'code_hash'    => password_hash($code, PASSWORD_DEFAULT),
         'expires_at'   => time() + 300,
@@ -224,9 +220,12 @@ public function requestWithdrawalChallenge(): void
         'created_at'   => time(),
         'ip_hash'      => $ipHash,
         'ua_hash'      => $uaHash,
-    ];
+    ]);
 
-    unset($_SESSION['withdraw_challenge_passed'], $_SESSION['withdraw_challenge_passed_until'], $_SESSION['withdraw_challenge_passed_ip'], $_SESSION['withdraw_challenge_passed_ua']);
+    $this->session->remove('withdraw_challenge_passed');
+    $this->session->remove('withdraw_challenge_passed_until');
+    $this->session->remove('withdraw_challenge_passed_ip');
+    $this->session->remove('withdraw_challenge_passed_ua');
 
     // کد خام OTP را هرگز لاگ نکن
     $this->logger->info('Withdrawal challenge generated', [
@@ -258,7 +257,7 @@ public function verifyWithdrawalChallenge(): void
         return;
     }
 
-    $challenge = $_SESSION['withdraw_challenge'] ?? null;
+    $challenge = $this->session->get('withdraw_challenge');
     if (!is_array($challenge)) {
         $this->response->json([
             'success' => false,
@@ -268,7 +267,11 @@ public function verifyWithdrawalChallenge(): void
     }
 
     if ((int)($challenge['user_id'] ?? 0) !== $userId) {
-        unset($_SESSION['withdraw_challenge'], $_SESSION['withdraw_challenge_passed'], $_SESSION['withdraw_challenge_passed_until'], $_SESSION['withdraw_challenge_passed_ip'], $_SESSION['withdraw_challenge_passed_ua']);
+        $this->session->remove('withdraw_challenge');
+        $this->session->remove('withdraw_challenge_passed');
+        $this->session->remove('withdraw_challenge_passed_until');
+        $this->session->remove('withdraw_challenge_passed_ip');
+        $this->session->remove('withdraw_challenge_passed_ua');
         $this->response->json([
             'success' => false,
             'message' => 'چالش نامعتبر است',
@@ -280,7 +283,11 @@ public function verifyWithdrawalChallenge(): void
     $uaHash = md5($_SERVER['HTTP_USER_AGENT'] ?? 'unknown');
 
     if (($challenge['ip_hash'] ?? '') !== $ipHash || ($challenge['ua_hash'] ?? '') !== $uaHash) {
-        unset($_SESSION['withdraw_challenge'], $_SESSION['withdraw_challenge_passed'], $_SESSION['withdraw_challenge_passed_until'], $_SESSION['withdraw_challenge_passed_ip'], $_SESSION['withdraw_challenge_passed_ua']);
+        $this->session->remove('withdraw_challenge');
+        $this->session->remove('withdraw_challenge_passed');
+        $this->session->remove('withdraw_challenge_passed_until');
+        $this->session->remove('withdraw_challenge_passed_ip');
+        $this->session->remove('withdraw_challenge_passed_ua');
         $this->response->json([
             'success' => false,
             'message' => 'محیط درخواست تغییر کرده است. چالش نامعتبر شد.',
@@ -289,7 +296,7 @@ public function verifyWithdrawalChallenge(): void
     }
 
     if ((int)($challenge['expires_at'] ?? 0) < time()) {
-        unset($_SESSION['withdraw_challenge']);
+        $this->session->remove('withdraw_challenge');
         $this->response->json([
             'success' => false,
             'message' => 'کد منقضی شده است',
@@ -301,7 +308,7 @@ public function verifyWithdrawalChallenge(): void
     $maxAttempts = (int)($challenge['max_attempts'] ?? feature_config('security_limits', 'withdrawal_challenge_max_attempts', 5));
 
     if ($attempts >= $maxAttempts) {
-        unset($_SESSION['withdraw_challenge']);
+        $this->session->remove('withdraw_challenge');
         $this->response->json([
             'success' => false,
             'message' => 'تعداد تلاش بیش از حد مجاز است',
@@ -310,7 +317,7 @@ public function verifyWithdrawalChallenge(): void
     }
 
     $challenge['attempts'] = $attempts + 1;
-    $_SESSION['withdraw_challenge'] = $challenge;
+    $this->session->set('withdraw_challenge', $challenge);
 
     if (!password_verify($code, (string)($challenge['code_hash'] ?? ''))) {
         $remaining = max(0, $maxAttempts - $challenge['attempts']);
@@ -322,11 +329,11 @@ public function verifyWithdrawalChallenge(): void
         return;
     }
 
-    $_SESSION['withdraw_challenge_passed'] = true;
-    $_SESSION['withdraw_challenge_passed_until'] = time() + 300;
-    $_SESSION['withdraw_challenge_passed_ip'] = $ipHash;
-    $_SESSION['withdraw_challenge_passed_ua'] = $uaHash;
-    unset($_SESSION['withdraw_challenge']);
+    $this->session->set('withdraw_challenge_passed', true);
+    $this->session->set('withdraw_challenge_passed_until', time() + 300);
+    $this->session->set('withdraw_challenge_passed_ip', $ipHash);
+    $this->session->set('withdraw_challenge_passed_ua', $uaHash);
+    $this->session->remove('withdraw_challenge');
 
     $this->response->json([
         'success' => true,
