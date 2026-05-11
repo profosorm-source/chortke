@@ -24,7 +24,10 @@ class UserService extends \App\Services\BaseService
     {
         $this->logger->info('user.registration.attempt', ['email' => $data['email'] ?? 'unknown']);
 
+        // لاجیک ساخت نام کاربری تصادفی برای جلوگیری از خطای دیتابیس (NOT NULL)
+        $data['username'] = $data['username'] ?? explode('@', $data['email'] ?? 'user')[0] . '_' . rand(1000, 9999);
         $data['password'] = hash_password($data['password'] ?? bin2hex(random_bytes(8)));
+        
         $data['referral_code'] = $this->generateUniqueReferralCode();
         $data['email_verification_token'] = bin2hex(random_bytes(32));
         $data['status'] = $data['status'] ?? 'active';
@@ -145,13 +148,8 @@ class UserService extends \App\Services\BaseService
         return $user && isset($user->kyc_status) && $user->kyc_status === 'verified';
     }
 
-    /**
-     * بروزرسانی مشخصات کاربر با اعمال منطق تجاری
-     * (هندل ایمیل تکراری و رمزنگاری پسورد)
-     */
     public function updateUser(int $id, array $data): array
     {
-        // 1. بررسی ایمیل تکراری (اگر فرستاده شده باشد)
         if (isset($data['email'])) {
             $existing = $this->findByEmail($data['email']);
             if ($existing && (int)$existing->id !== $id) {
@@ -162,7 +160,6 @@ class UserService extends \App\Services\BaseService
             }
         }
 
-        // 2. آماده‌سازی دیتا و هش پسورد
         $updateData = [];
         $updatableFields = ['full_name', 'email', 'role', 'status'];
         
@@ -178,7 +175,6 @@ class UserService extends \App\Services\BaseService
 
         $updateData['updated_at'] = date('Y-m-d H:i:s');
 
-        // 3. بروزرسانی نهایی
         $ok = $this->model->update($id, $updateData);
         
         if ($ok) {
@@ -188,16 +184,12 @@ class UserService extends \App\Services\BaseService
         return ['success' => false, 'message' => 'خطا در ذخیره مشخصات کاربر'];
     }
 
-    /**
-     * جستجوی سریع و سبک برای سیستم سرچ مرکزی (برای AdvancedSearchService)
-     */
     public function quickSearch(string $term, int $limit = 5): array
     {
         $query = $this->model->query()
             ->select('id', 'full_name', 'email', 'mobile', 'kyc_status', 'created_at')
             ->whereNull('deleted_at');
 
-        // استفاده از جادوی جدید مدل (اعمال هوشمند فیلتر)
         $this->model->applySearch($query, $term);
 
         return $query->orderBy('created_at', 'DESC')
@@ -205,12 +197,8 @@ class UserService extends \App\Services\BaseService
                      ->get() ?? [];
     }
 
-    /**
-     * پروکسی پایه برای بروزرسانی مستقیم در مدل
-     */
     public function update(int $id, array $data): bool
     {
         return (bool)$this->model->update($id, $data);
     }
 }
-
