@@ -265,6 +265,20 @@ class IpAndDeviceModel extends Model
 
         return (bool) $stmt;
     }
+	
+	    public function logFraudEvent(array $data): bool
+    {
+        return (bool)$this->db->query(
+            "INSERT INTO fraud_logs (user_id, fraud_type, risk_score, details, created_at) 
+             VALUES (?, ?, ?, ?, NOW())",
+            [
+                $data['user_id'], 
+                $data['type'], 
+                $data['score'], 
+                json_encode($data['details'], JSON_UNESCAPED_UNICODE)
+            ]
+        );
+    }
 
     public function getDeviceHistory(string $fingerprint): ?object
     {
