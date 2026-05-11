@@ -606,5 +606,50 @@ class SocialTaskService extends \App\Services\BaseService
             'avg_rating' => 4.5 // Placeholder/Simulated for this summary level
         ];
     }
+
+    public function searchSocialTasks(array $filters, int $limit, int $offset): array
+    {
+        // Using the native DB builder via the model, adhering to query standards.
+        $query = $this->model->getDb()->table('social_ads')
+            ->select('id', 'title', 'description', 'platform', 'task_type', 'reward', 'status', 'created_at')
+            ->where('status', '=', 'active');
+
+        if (!empty($filters['q'])) {
+            $like = '%' . $this->sanitizeSearch((string)$filters['q']) . '%';
+            $query->where(function($sub) use ($like) {
+                $sub->where('title', 'LIKE', $like)->orWhere('description', 'LIKE', $like);
+            });
+        }
+
+        if (!empty($filters['platform'])) {
+            $query->where('platform', '=', e($filters['platform'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (!empty($filters['task_type'])) {
+            $query->where('task_type', '=', e($filters['task_type'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (!empty($filters['min_reward'])) {
+            $query->where('reward', '>=', (float)$filters['min_reward']);
+        }
+        if (!empty($filters['max_reward'])) {
+            $query->where('reward', '<=', (float)$filters['max_reward']);
+        }
+
+        // Calculate Order By sequence
+        $sort = $filters['sort'] ?? 'newest';
+        [$sortCol, $sortDir] = match ($sort) {
+            'oldest' => ['created_at', 'ASC'],
+            'reward_high' => ['reward', 'DESC'],
+            'reward_low' => ['reward', 'ASC'],
+            default => ['created_at', 'DESC'],
+        };
+
+        return [
+            'total' => $query->count(), // Atomic query counting
+            'items' => (clone $query)->orderBy($sortCol, $sortDir)
+                                     ->limit($limit)
+                                     ->offset($offset)
+                                     ->get() ?? []
+        ];
+    }
 }
 

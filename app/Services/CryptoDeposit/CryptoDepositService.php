@@ -426,4 +426,28 @@ class CryptoDepositService extends \App\Services\BaseService
 
         return $count;
     }
+
+    /**
+     * جستجوی سریع واریزهای کریپتو برای سیستم سرچ مرکزی
+     */
+    public function quickSearchCryptoDeposits(string $term, int $limit = 5): array
+    {
+        $query = $this->depositModel->query()
+            ->selectRaw("crypto_deposits.id, crypto_deposits.amount, 'crypto' as type, crypto_deposits.verification_status as status, crypto_deposits.created_at, u.full_name, u.email")
+            ->leftJoin('users as u', 'u.id', '=', 'crypto_deposits.user_id');
+
+        $this->depositModel->applySearch($query, $term);
+
+        if (!empty($term)) {
+            $escaped = addcslashes(trim($term), '%_');
+            $like = "%{$escaped}%";
+            $query->where(function($sub) use ($like) {
+                $sub->orWhere('u.email', 'LIKE', $like);
+            });
+        }
+
+        return $query->orderBy('crypto_deposits.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
 }

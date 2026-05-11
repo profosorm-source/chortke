@@ -448,11 +448,23 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
     public function sendToAdmins(string $type, string $title, string $message, ?array $data = null, string $priority = 'normal'): int
     {
-        // سازگاری با NotificationServiceInterface
+        $type = trim($type);
+        $type = preg_replace('/[^A-Za-z0-9_]/', '', $type);
+        if ($type === '') {
+            $type = 'system';
+        }
+
+        $title = mb_substr(trim(strip_tags($title)), 0, 255);
+        $message = mb_substr(trim(strip_tags($message)), 0, 1200);
+
         $adminIds = $this->model->getAdminUsersIds();
         $sentCount = 0;
+        
+        $actionUrl = $data['action_url'] ?? null;
+        $actionText = $data['action_text'] ?? null;
+
         foreach ($adminIds as $adminId) {
-            $result = $this->send((int)$adminId, $type, $title, $message, $data, null, null, $priority);
+            $result = $this->send((int)$adminId, $type, $title, $message, $data, $actionUrl, $actionText, $priority);
             if ($result) $sentCount++;
         }
         return $sentCount;
