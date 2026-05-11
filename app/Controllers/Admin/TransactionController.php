@@ -3,20 +3,20 @@
 namespace App\Controllers\Admin;
 use App\Services\User\UserService;
 
-use App\Models\Transaction;
+use App\Services\WalletService;
 use App\Controllers\Admin\BaseAdminController;
 
 class TransactionController extends BaseAdminController
 {
     private UserService $userService;
-    private Transaction $transactionModel;
+    private WalletService $walletService;
 
     public function __construct(UserService $userService,
-        \App\Models\Transaction $transactionModel)
+        WalletService $walletService)
     {
         parent::__construct();
         $this->userService = $userService;
-        $this->transactionModel = $transactionModel;
+        $this->walletService = $walletService;
     }
 
     /**
@@ -36,8 +36,8 @@ class TransactionController extends BaseAdminController
     $offset = ($page - 1) * $limit;
 
     try {
-        $transactions = $this->transactionModel->getAll($status, $type, $currency, $limit, $offset);
-        $total = $this->transactionModel->countAll($status, $type, $currency);
+        $transactions = $this->walletService->getAllTransactions($status, $type, $currency, $limit, $offset);
+        $total = $this->walletService->countAllTransactions($status, $type, $currency);
         $totalPages = (int) \ceil($total / $limit);
 
         echo view('admin.transactions.index', [
@@ -88,7 +88,7 @@ class TransactionController extends BaseAdminController
                 $transactionId = (int)$this->request->get('id');
 
         try {
-            $transaction = $this->transactionModel->find($transactionId);
+            $transaction = $this->walletService->findTransactionById($transactionId);
 
             if (!$transaction) {
                 $this->session->setFlash('error', 'تراکنش یافت نشد');

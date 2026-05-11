@@ -2,7 +2,6 @@
 
 namespace App\Controllers\Admin;
 
-use App\Models\Withdrawal;
 use App\Services\WalletService;
 use App\Services\User\UserService;
 use App\Services\BankCardService;
@@ -12,8 +11,6 @@ use App\Controllers\Admin\BaseAdminController;
 
 class WithdrawalController extends BaseAdminController
 {
-    
-    private Withdrawal $withdrawalModel;
     private WalletService  $walletService;
     private UserService    $userService;
     private BankCardService $cardService;
@@ -22,7 +19,6 @@ class WithdrawalController extends BaseAdminController
 	private ReconciliationService $reconciliationService;
 
 public function __construct(
-    \App\Models\Withdrawal $withdrawalModel,
     \App\Services\BankCardService $bankCardService,
     \App\Services\WalletService $walletService,
     \App\Services\User\UserService $userService,
@@ -31,7 +27,6 @@ public function __construct(
 	ReconciliationService $reconciliationService
 ) {
     parent::__construct();
-    $this->withdrawalModel = $withdrawalModel;
     $this->walletService = $walletService;
     $this->userService = $userService;
     $this->cardService = $bankCardService;
@@ -55,17 +50,17 @@ public function __construct(
 
         try {
             if ($status || $currency) {
-                $withdrawals = $this->withdrawalModel->getAll($status, $currency, $limit, $offset);
-                $total = $this->withdrawalModel->countAll($status, $currency);
+                $withdrawals = $this->withdrawalService->getAll($status, $currency, $limit, $offset);
+                $total = $this->withdrawalService->countAll($status, $currency);
             } else {
-                $withdrawals = $this->withdrawalModel->getPendingWithdrawals($limit, $offset);
-                $total = $this->withdrawalModel->countPendingWithdrawals();
+                $withdrawals = $this->withdrawalService->getPendingWithdrawals($limit, $offset);
+                $total = $this->withdrawalService->countPendingWithdrawals();
             }
 
             $totalPages = (int)\ceil($total / $limit);
 
             // آمار خلاصه
-            $summary = $this->withdrawalModel->getSummaryStats();
+            $summary = $this->withdrawalService->getSummaryStats();
 
             view('admin.withdrawals.index', [
                 'withdrawals' => $withdrawals,
@@ -100,7 +95,7 @@ public function __construct(
                 $withdrawalId = (int)$this->request->get('id');
 
         try {
-            $withdrawal = $this->withdrawalModel->find($withdrawalId);
+            $withdrawal = $this->withdrawalService->findById($withdrawalId);
 
             if (!$withdrawal) {
                 $this->session->setFlash('error', 'درخواست یافت نشد');
@@ -176,140 +171,48 @@ public function __construct(
 
         try {
             $withdrawalId = (int)$data['withdrawal_id'];
-            $withdrawal = $this->withdrawalModel->find($withdrawalId);
+            $paymentRef = (string)$data['payment_reference'];
 
-            if (!$withdrawal) {
-                $this->response->json([
-                    'success' => false,
-                    'message' => 'درخواست یافت نشد'
-                ]);
-                return;
-            }
+            $result = $this->withdrawalService->approveWithdrawal($withdrawalId, $paymentRef, $adminId);
 
-            if ($withdrawal->status !== 'pending') {
-                $this->response->json([
-                    'success' => false,
-                    'message' => 'این درخواست قبلاً پردازش شده است'
-                ]);
-                return;
-            }
-
-            // ✅ CRITICAL: تکمیل برداشت (به‌روزرسانی status تراکنش)
-            $completed = $this->walletService->completeWithdrawal(
-                $withdrawal->user_id,
-                (float)$withdrawal->amount,
-                $withdrawal->currency,
-                $withdrawal->transaction_id
-            );
-
-            if (!$completed) {
-                throw new \RuntimeException('خطا در تکمیل برداشت');
-            }
-
-            // ✅ به‌روزرسانی وضعیت withdrawal
-            $updated = $this->withdrawalModel->updateStatus(
-                $withdrawalId,
-                'completed',
-                $data['payment_reference'],
-                $adminId
-            );
-
-            if ($updated) {
-                // ✅ ثبت تغییر وضعیت در transaction_events
-                $this->withdrawalService->recordTransactionStatusChange(
-                    $withdrawal->transaction_id,
-                    'completed',
-                    "تایید و پرداخت توسط ادمین | مرجع: {$data['payment_reference']}",
+            if (!empty($result['success'])) {
+                // ✅ ثبت لاگ فعالیت در سطح کنترلر (لاگ مانیتورینگ)
+                $this->logger->activity(
+                    'withdrawal_approved',
+                    "تأیید برداشت به شناسه {$withdrawalId} توسط ادمین {$adminId}",
                     $adminId,
                     [
-                        'payment_reference' => $data['payment_reference'],
+                        'channel' => 'admin',
+                        'request_id' => $requestId,
+                        'admin_ip' => $ipAddress,
                         'withdrawal_id' => $withdrawalId,
-                        'request_id' => $requestId
                     ]
                 );
 
-                // ✅ **تطبیق withdrawal با ledger**
-                // تأیید: آیا withdrawal واقعاً از wallet نزول پیدا کرد؟
-                $reconciliation = $this->reconciliationService->reconcilePayment([
-                    'transaction_id' => (string)$withdrawal->transaction_id, // ارسال کد تراکنش واقعی و سیستمی
-                    'reference_id' => 'withdrawal_settlement_' . $withdrawalId,
-                    'user_id' => (int)$withdrawal->user_id,
-                    'amount' => (float)$withdrawal->amount,
-                    'currency' => $withdrawal->currency,
-                    'status' => 'success',
-                    'gateway' => 'withdrawal_bank',
-                    'description' => "تطبیق withdrawal - Reference: {$data['payment_reference']}",
-                    'timestamp' => time(),
-                ]);
-
-                if (!$reconciliation['success']) {
-                    $this->logger->warning('withdrawal.reconciliation_failed', [
-                        'withdrawal_id' => $withdrawalId,
-                        'user_id' => $withdrawal->user_id,
-                        'amount' => $withdrawal->amount,
-                        'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
-                    ]);
-                }
-
-                // ✅ ثبت لاگ
-$this->logger->activity(
-    'withdrawal_approved',
-    "تأیید برداشت {$withdrawal->amount} " . ($withdrawal->currency === 'usdt' ? 'USDT' : 'تومان') . " برای کاربر {$withdrawal->user_id}",
-    $adminId,
-    [
-        'channel' => 'withdrawal',
-        'withdrawal_id' => $withdrawalId,
-        'transaction_id' => $withdrawal->transaction_id,
-        'payment_reference' => $data['payment_reference'] ?? null,
-        'request_id' => $requestId,
-        'admin_ip' => $ipAddress,
-    ]
-);
-
-$this->logger->info('withdrawal.approve.completed', [
-    'channel' => 'withdrawal',
-    'request_id' => $requestId,
-    'withdrawal_id' => $withdrawalId,
-    'user_id' => $withdrawal->user_id,
-    'admin_id' => $adminId,
-]);
-
                 $this->response->json([
                     'success' => true,
-                    'message' => 'برداشت با موفقیت تأیید و پرداخت شد'
+                    'message' => $result['message'] ?? 'عملیات با موفقیت انجام شد'
                 ]);
             } else {
-                throw new \RuntimeException('خطا در تایید برداشت');
+                $this->response->json([
+                    'success' => false,
+                    'message' => $result['message'] ?? 'عملیات تأیید ناموفق بود'
+                ]);
             }
 
         } catch (\Exception $e) {
-    $this->logger->error('withdrawal.admin.approve.failed', [
-        'channel' => 'withdrawal',
-        'request_id' => $requestId,
-        'admin_id' => $adminId,
-        'withdrawal_id' => $withdrawalId ?? 0,
-        'ip' => $ipAddress,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
+            $this->logger->error('admin.withdrawal.approve.exception', [
+                'channel' => 'admin',
+                'withdrawal_id' => $withdrawalId ?? null,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
 
-            $this->logger->error('withdrawal.approve.failed', [
-    'channel' => 'withdrawal',
-    'request_id' => $requestId,
-    'withdrawal_id' => $withdrawalId ?? null,
-    'admin_id' => $adminId ?? null,
-    'error' => $e->getMessage(),
-    'exception' => get_class($e),
-    'file' => $e->getFile(),
-    'line' => $e->getLine(),
-]);
-
-$this->response->json([
-    'success' => false,
-    'message' => 'خطا در تایید برداشت'
-]);
+            $this->response->json([
+                'success' => false,
+                'message' => 'بروز خطای سیستمی در پردازش درخواست'
+            ], 500);
         }
     }
 
@@ -348,7 +251,7 @@ $this->response->json([
 
         try {
             $withdrawalId = (int)$data['withdrawal_id'];
-            $withdrawal = $this->withdrawalModel->find($withdrawalId);
+            $withdrawal = $this->withdrawalService->findById($withdrawalId);
 
             if (!$withdrawal) {
                 $this->response->json([
@@ -379,7 +282,7 @@ $this->response->json([
             }
 
             // ✅ بروزرسانی وضعیت
-            $updated = $this->withdrawalModel->updateStatus(
+            $updated = $this->withdrawalService->updateStatus(
                 $withdrawalId,
                 'rejected',
                 $data['rejection_reason'],

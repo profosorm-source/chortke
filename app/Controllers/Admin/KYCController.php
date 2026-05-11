@@ -3,7 +3,6 @@
 namespace App\Controllers\Admin;
 use App\Services\User\UserService;
 
-use App\Models\KYCVerification;
 use App\Services\KYCService;
 use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
@@ -11,25 +10,22 @@ use App\Controllers\Admin\BaseAdminController;
 class KYCController extends BaseAdminController
 {
     private UserService $userService;
-    private KYCVerification $kycModel;
     private KYCService $kycService;
 
     public function __construct(
         UserService $userService,
-        KYCVerification $kycModel,
         KYCService $kycService)
     {
         parent::__construct();
         $this->userService = $userService;
-        $this->kycModel  = $kycModel;
         $this->kycService = $kycService;
     }
 
     public function index(): void
     {
-        $status = $_GET['status'] ?? '';
-        $search = $_GET['search'] ?? '';
-        $page = (int)($_GET['page'] ?? 1);
+        $status = $this->request->get('status', '');
+        $search = $this->request->get('search', '');
+        $page = (int)$this->request->get('page', 1);
         $perPage = 20;
         $offset = ($page - 1) * $perPage;
 
@@ -37,8 +33,8 @@ class KYCController extends BaseAdminController
         if ($status !== '') $filters['status'] = $status;
         if ($search !== '') $filters['search'] = $search;
 
-        $kycs = $this->kycModel->getAll($filters, $perPage, $offset);
-        $total = $this->kycModel->count($filters);
+        $kycs = $this->kycService->getAll($filters, $perPage, $offset);
+        $total = $this->kycService->count($filters);
         $totalPages = (int)\ceil($total / $perPage);
 
         view('admin.kyc.index', [
@@ -49,10 +45,10 @@ class KYCController extends BaseAdminController
             'statusFilter' => $status,
             'search' => $search,
             'stats' => [
-                'pending' => $this->kycModel->count(['status' => 'pending']),
-                'under_review' => $this->kycModel->count(['status' => 'under_review']),
-                'verified' => $this->kycModel->count(['status' => 'verified']),
-                'rejected' => $this->kycModel->count(['status' => 'rejected']),
+                'pending' => $this->kycService->count(['status' => 'pending']),
+                'under_review' => $this->kycService->count(['status' => 'under_review']),
+                'verified' => $this->kycService->count(['status' => 'verified']),
+                'rejected' => $this->kycService->count(['status' => 'rejected']),
             ],
         ]);
     }
@@ -60,7 +56,7 @@ class KYCController extends BaseAdminController
     public function review(int $id): void
     {
         
-        $kyc = $this->kycModel->find($id);
+        $kyc = $this->kycService->find($id);
         if (!$kyc) {
             $this->session->setFlash('error', 'درخواست KYC یافت نشد');
             redirect('/admin/kyc');
@@ -97,13 +93,11 @@ public function verify(int $id): void
 
     $result = $this->kycService->verifyKYC($id, user_id());
 
-    if (($result['success'] ?? false) === true) {
-        $this->session->setFlash('success', $result['message'] ?? 'احراز هویت تأیید شد');
-    } else {
-        $this->session->setFlash('error', $result['message'] ?? 'خطا در تأیید احراز هویت');
-    }
-
-    $this->response->redirect(url('/admin/kyc/review/' . $id));
+    $this->response->json([
+        'success' => (bool)($result['success'] ?? false),
+        'message' => $result['message'] ?? 'نتیجه بررسی',
+        'redirect' => url('/admin/kyc')
+    ], ($result['success'] ?? false) ? 200 : 400);
 }
 
     // ✅ Reject: Ajax JSON

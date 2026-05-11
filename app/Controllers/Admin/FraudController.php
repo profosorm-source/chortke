@@ -11,12 +11,13 @@ use App\Services\FraudDetectionService;
 /**
  * FraudController - مدیریت سیستم تشخیص تقلب
  */
-class FraudController
+class FraudController extends BaseAdminController
 {
     private FraudDetectionService $fraudService;
 
     public function __construct(FraudDetectionService $fraudService)
     {
+        parent::__construct();
         $this->fraudService = $fraudService;
     }
 

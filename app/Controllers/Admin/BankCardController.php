@@ -5,7 +5,6 @@ namespace App\Controllers\Admin;
 use App\Controllers\Admin\BaseAdminController;
 use App\Services\AuditTrail;
 use App\Services\BankCardService;
-use App\Models\BankCard;
 use Core\Logger;
 
 class BankCardController extends BaseAdminController
@@ -13,28 +12,23 @@ class BankCardController extends BaseAdminController
     private Logger $logger;
     private AuditTrail $auditTrail;
     private BankCardService $bankCardService;
-    private BankCard $bankCardModel;
 
     public function __construct(
         Logger $logger,
         AuditTrail $auditTrail,
-        BankCardService $bankCardService,
-        BankCard $bankCardModel
+        BankCardService $bankCardService
     ) {
         parent::__construct();
         $this->logger = $logger;
         $this->auditTrail = $auditTrail;
         $this->bankCardService = $bankCardService;
-        $this->bankCardModel = $bankCardModel;
     }
 
     public function index()
     {
         try {
             // اگر متد خاص در مدل شما فرق دارد همینجا اسمش را عوض کن
-            $cards = method_exists($this->bankCardModel, 'getPendingCards')
-                ? $this->bankCardModel->getPendingCards(100, 0)
-                : [];
+            $cards = $this->bankCardService->getPendingCards(100, 0);
 
             return view('admin.bank-cards.index', [
                 'cards' => $cards
@@ -65,8 +59,8 @@ class BankCardController extends BaseAdminController
             $result = $this->bankCardService->adminVerify($adminId, $id, true, null);
 
             if (!empty($result['success'])) {
-                $card = $this->bankCardModel->find($id);
-
+                $card = $this->bankCardService->findById($id);
+                
                 $this->auditTrail->record(
                     'bank_card.verified',
                     $card->user_id ?? null,
@@ -85,24 +79,28 @@ class BankCardController extends BaseAdminController
                     ['channel' => 'admin']
                 );
 
-                $this->session->setFlash('success', $result['message'] ?? 'کارت تایید شد');
+                $this->response->json([
+                    'success' => true,
+                    'message' => $result['message'] ?? 'کارت با موفقیت تایید شد',
+                    'redirect' => url('/admin/bank-cards')
+                ]);
             } else {
-                $this->session->setFlash('error', $result['message'] ?? 'خطا در تایید کارت');
+                $this->response->json([
+                    'success' => false,
+                    'message' => $result['message'] ?? 'خطا در تایید کارت'
+                ], 400);
             }
-
-            return redirect('/admin/bank-cards');
         } catch (\Throwable $e) {
             $this->logger->error('admin.bank_card.verify.failed', [
                 'channel' => 'admin',
                 'card_id' => $id,
                 'error' => $e->getMessage(),
-                'exception' => get_class($e),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
             ]);
 
-            $this->session->setFlash('error', 'خطا در تایید کارت');
-            return redirect('/admin/bank-cards');
+            $this->response->json([
+                'success' => false,
+                'message' => 'بروز خطای سیستمی در تایید کارت'
+            ], 500);
         }
     }
 
@@ -126,7 +124,7 @@ class BankCardController extends BaseAdminController
             $result = $this->bankCardService->adminVerify($adminId, $id, false, $reason);
 
             if (!empty($result['success'])) {
-                $card = $this->bankCardModel->find($id);
+                $card = $this->bankCardService->findById($id);
 
                 $this->auditTrail->record(
                     'bank_card.rejected',
@@ -147,24 +145,28 @@ class BankCardController extends BaseAdminController
                     ['channel' => 'admin', 'reason' => $reason]
                 );
 
-                $this->session->setFlash('success', $result['message'] ?? 'کارت رد شد');
+                $this->response->json([
+                    'success' => true,
+                    'message' => $result['message'] ?? 'کارت با موفقیت رد شد',
+                    'redirect' => url('/admin/bank-cards')
+                ]);
             } else {
-                $this->session->setFlash('error', $result['message'] ?? 'خطا در رد کارت');
+                $this->response->json([
+                    'success' => false,
+                    'message' => $result['message'] ?? 'خطا در رد کردن کارت'
+                ], 400);
             }
-
-            return redirect('/admin/bank-cards');
         } catch (\Throwable $e) {
             $this->logger->error('admin.bank_card.reject.failed', [
                 'channel' => 'admin',
                 'card_id' => $id,
                 'error' => $e->getMessage(),
-                'exception' => get_class($e),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
             ]);
 
-            $this->session->setFlash('error', 'خطا در رد کارت');
-            return redirect('/admin/bank-cards');
+            $this->response->json([
+                'success' => false,
+                'message' => 'بروز خطای سیستمی در پردازش کارت'
+            ], 500);
         }
     }
 }

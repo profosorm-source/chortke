@@ -1,7 +1,7 @@
 <?php
 
 namespace App\Controllers\Admin;
-use App\Models\UserBankCard;
+use App\Models\BankCard;
 use App\Services\User\UserService;
 
 use App\Models\ManualDeposit;
@@ -13,7 +13,7 @@ use Core\Logger;
 
 class ManualDepositController extends BaseAdminController
 {
-    private UserBankCard $userBankCardModel;
+    private BankCard $BankCardModel;
     private UserService $userService;
     private ManualDeposit $depositModel;
     private WalletService $walletService;
@@ -21,7 +21,7 @@ class ManualDepositController extends BaseAdminController
 	protected \App\Contracts\LoggerInterface $logger;
 
     public function __construct(
-    UserBankCard $userBankCardModel,
+    BankCard $BankCardModel,
     UserService $userService,
     \App\Models\ManualDeposit $depositModel,
     \App\Services\WalletService $walletService,
@@ -29,7 +29,7 @@ class ManualDepositController extends BaseAdminController
 	Logger $logger,
 ) {
     parent::__construct();
-    $this->userBankCardModel = $userBankCardModel;
+    $this->BankCardModel = $BankCardModel;
     $this->userService = $userService;
     $this->depositModel = $depositModel;
     $this->walletService = $walletService;
@@ -102,7 +102,7 @@ class ManualDepositController extends BaseAdminController
             $user = $this->userService->find($deposit->user_id);
 
             // دریافت اطلاعات کارت
-            $cardModel = $this->userBankCardModel;
+            $cardModel = $this->BankCardModel;
             $card = $cardModel->find($deposit->card_id);
 
             view('admin.manual-deposits.review', [

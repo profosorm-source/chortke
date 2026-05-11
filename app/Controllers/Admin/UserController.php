@@ -156,68 +156,27 @@ public function update(int $id): void
     // دریافت داده‌ها از بدنه درخواست
     $data = $this->request->body() ?? [];
 
-    // قوانین اعتبارسنجی
-    $rules = [
-        'full_name' => 'required|min:3|max:100',
-        'email' => 'required|email',
-        'role' => 'required|in:user,admin,support',
-        'status' => 'required|in:active,inactive,suspended,banned'
-    ];
+    // ✅ اعتبارسنجی متمرکز با استفاده از FormRequest
+    $validated = $this->validateRequest(\App\Validators\Requests\UserUpdateRequest::class, $data);
 
-    if (!empty($data['password'])) {
-        $rules['password'] = 'min:8';
-    }
+    // استفاده از متد جامع سرویس برای مدیریت ایمیل تکراری و هش کردن پسورد
+    $result = $this->userService->updateUser($id, $validated);
 
-    $validator = new \Core\Validator($data, $rules);
-    $validator->validate();
-
-    if ($validator->fails()) {
-        $this->response->json([
-            'success' => false,
-            'errors' => $validator->errors()
-        ], 422);
-        return;
-    }
-
-    // بررسی ایمیل تکراری
-    $existingEmail = $this->userService->findByEmail($data['email']);
-    $existingUser = ($existingEmail && $existingEmail->id != $id) ? $existingEmail : null;
-
-    if ($existingUser) {
-        $this->response->json([
-            'success' => false,
-            'errors' => ['email' => ['این ایمیل قبلاً ثبت شده است']]
-        ], 422);
-        return;
-    }
-
-    // آماده‌سازی داده‌ها برای بروزرسانی
-    $updateData = [
-        'full_name' => $data['full_name'],
-        'email' => $data['email'],
-        'role' => $data['role'],
-        'status' => $data['status'],
-        'updated_at' => date('Y-m-d H:i:s')
-    ];
-
-    if (!empty($data['password'])) {
-        $updateData['password'] = hash_password($data['password']);
-    }
-
-$result = $this->userService->update($id, $updateData);
-
-    if ($result) {
+    if (!empty($result['success'])) {
         \App\Middleware\PermissionMiddleware::clearCache();
         $this->response->json([
             'success' => true,
-            'message' => 'کاربر با موفقیت به‌روزرسانی شد',
+            'message' => $result['message'] ?? 'کاربر با موفقیت به‌روزرسانی شد',
             'redirect' => url('/admin/users')
         ]);
     } else {
+        // اگر ارور مربوط به ولیدیشن تکراری بودن باشد
+        $statusCode = !empty($result['errors']) ? 422 : 500;
         $this->response->json([
             'success' => false,
-            'message' => 'خطا در به‌روزرسانی کاربر'
-        ], 500);
+            'message' => $result['message'] ?? 'خطا در به‌روزرسانی کاربر',
+            'errors' => $result['errors'] ?? []
+        ], $statusCode);
     }
 }
 

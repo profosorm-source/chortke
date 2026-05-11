@@ -61,29 +61,26 @@ class AuditTrailController extends BaseAdminController
                 $filters['date_to'] = $dateTo;
             }
 
-            // استفاده از AdvancedSearchService برای جستجو
-            if (!empty($search)) {
-                $result = $this->searchService->searchAuditTrail($search, $filters, $perPage, $offset);
-                $events = $result['items'] ?? [];
-                $total = $result['total'] ?? 0;
-            } else {
-                $result = $this->auditTrail->getAll(
-                    page: $page,
-                    perPage: $perPage,
-                    event: $event ?: null,
-                    userId: $userId,
-                    search: null,
-                    dateFrom: $dateFrom ?: null,
-                    dateTo: $dateTo ?: null
-                );
-                $events = $result['items'] ?? $result;
-                $total = $result['total'] ?? count($events);
-            }
+            // استفاده یکپارچه از سرویس AuditTrail برای بارگذاری و جستجوی دقیق
+            $result = $this->auditTrail->getAll(
+                page: $page,
+                perPage: $perPage,
+                event: $event ?: null,
+                userId: $userId,
+                search: !empty($search) ? $search : null,
+                dateFrom: $dateFrom ?: null,
+                dateTo: $dateTo ?: null
+            );
+            
+            // Unify response compatibility from Model result wrapper
+            $events = $result['rows'] ?? [];
+            $total = $result['total'] ?? 0;
 
             $eventTypes = $this->auditTrail->getEventTypes();
 
             return view('admin.audit-trail.index', [
                 'user' => auth()->user(),
+                'title' => 'Audit Trail',
                 'events' => $events,
                 'total' => $total,
                 'page' => $page,
@@ -91,10 +88,6 @@ class AuditTrailController extends BaseAdminController
                 'totalPages' => ceil($total / $perPage),
                 'eventTypes' => $eventTypes,
                 'search' => $search,
-            ]);
-                'title' => 'Audit Trail',
-                'result' => $result,
-                'eventTypes' => $eventTypes,
                 'filters' => [
                     'event' => $event,
                     'user_id' => $userId,
