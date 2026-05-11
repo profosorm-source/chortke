@@ -5,7 +5,7 @@
     <i class="material-icons text-warning">gavel</i>
     پنل اختلاف — سفارش #<?= e($order->id ?? '') ?>
   </h4>
-  <a href="<?= url($role==='influencer' ? '/influencer/orders' : '/influencer/advertise/my-orders') ?>"
+  <a href="<?= url($role==='influencer' ? '/influencer/orders' : '/influencer/ads/my-orders') ?>"
      class="btn btn-outline-secondary btn-sm">بازگشت</a>
 </div>
 

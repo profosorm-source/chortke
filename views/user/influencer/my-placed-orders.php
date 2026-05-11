@@ -5,7 +5,7 @@
     <h4 class="page-title mb-1"><i class="material-icons text-primary">list_alt</i> سفارش‌های تبلیغ من</h4>
     <p class="text-muted mb-0 small">سفارش‌هایی که برای تبلیغ ثبت کرده‌اید</p>
   </div>
-  <a href="<?= url('/influencer/advertise') ?>" class="btn btn-primary btn-sm">
+  <a href="<?= url('/influencer/ads') ?>" class="btn btn-primary btn-sm">
     <i class="material-icons" style="font-size:15px;vertical-align:middle;">add</i> سفارش جدید
   </a>
 </div>
@@ -15,7 +15,7 @@
   <div class="card-body text-center py-5">
     <i class="material-icons text-muted" style="font-size:64px;">list_alt</i>
     <h5 class="mt-3 text-muted">سفارشی ثبت نکرده‌اید</h5>
-    <a href="<?= url('/influencer/advertise') ?>" class="btn btn-primary mt-2">انتخاب اینفلوئنسر</a>
+    <a href="<?= url('/influencer/ads') ?>" class="btn btn-primary mt-2">انتخاب اینفلوئنسر</a>
   </div>
 </div>
 <?php else: ?>
@@ -165,7 +165,7 @@ let disputeOrderId = null;
 
 function confirmOrder(id) {
   if (!confirm('آیا از انجام صحیح سفارش اطمینان دارید؟ مبلغ به اینفلوئنسر پرداخت می‌شود.')) return;
-  fetch('/influencer/advertise/orders/' + id + '/confirm', {
+  fetch('/influencer/ads/orders/' + id + '/confirm', {
     method: 'POST',
     headers: {'Content-Type':'application/json','X-CSRF-TOKEN':csrf},
     body: JSON.stringify({})
@@ -186,7 +186,7 @@ document.getElementById('disputeSubmitBtn').onclick = function() {
   if (!reason) { alert('دلیل اعتراض الزامی است.'); return; }
   const btn = this;
   btn.disabled = true; btn.textContent = 'در حال ارسال...';
-  fetch('/influencer/advertise/orders/' + disputeOrderId + '/dispute', {
+  fetch('/influencer/ads/orders/' + disputeOrderId + '/dispute', {
     method: 'POST',
     headers: {'Content-Type':'application/json','X-CSRF-TOKEN':csrf},
     body: JSON.stringify({reason})

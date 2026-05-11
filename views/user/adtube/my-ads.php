@@ -4,7 +4,7 @@
     <h4 class="page-title mb-1"><span class="material-icons text-primary">smart_display</span> تبلیغات Adtube من</h4>
     <p class="text-muted mb-0" style="font-size:12px;">ویدیوهای یوتیوبی که برای تبلیغ ثبت کرده‌اید</p>
   </div>
-  <a href="<?= url('/adtube/advertise/create') ?>" class="btn btn-danger btn-sm">
+  <a href="<?= url('/adtube/ads/create') ?>" class="btn btn-danger btn-sm">
     <span class="material-icons" style="font-size:16px;vertical-align:middle;">add</span> تبلیغ جدید
   </a>
 </div>
@@ -15,7 +15,7 @@
     <span class="material-icons text-muted" style="font-size:64px;">smart_display</span>
     <h5 class="mt-3 text-muted">تبلیغ ویدیویی ندارید</h5>
     <p class="text-muted small">ویدیوی یوتیوب خود را ثبت کنید تا کاربران تماشا کنند.</p>
-    <a href="<?= url('/adtube/advertise/create') ?>" class="btn btn-danger mt-2">ثبت اولین تبلیغ</a>
+    <a href="<?= url('/adtube/ads/create') ?>" class="btn btn-danger mt-2">ثبت اولین تبلیغ</a>
   </div>
 </div>
 <?php else: ?>
@@ -56,7 +56,7 @@
         </div>
       </div>
       <div class="d-flex gap-2 mt-3">
-        <a href="<?= url("/adtube/advertise/{$ad->id}") ?>" class="btn btn-outline-secondary btn-sm flex-fill">جزئیات</a>
+        <a href="<?= url("/adtube/ads/{$ad->id}") ?>" class="btn btn-outline-secondary btn-sm flex-fill">جزئیات</a>
         <?php if($st === 'active'): ?>
         <button class="btn btn-outline-warning btn-sm flex-fill btn-toggle-adtube" data-id="<?= e($ad->id) ?>" data-action="pause">توقف</button>
         <?php elseif($st === 'paused'): ?>
@@ -83,7 +83,7 @@
 document.querySelectorAll('.btn-toggle-adtube').forEach(btn => {
   btn.addEventListener('click', function() {
     const action = this.dataset.action;
-    fetch(`/adtube/advertise/${this.dataset.id}/${action}`, {
+    fetch(`/adtube/ads/${this.dataset.id}/${action}`, {
       method:'POST', headers:{'X-CSRF-Token':document.querySelector('meta[name=csrf-token]')?.content||''}
     }).then(r=>r.json()).then(d=>{ if(d.success) location.reload(); else alert(d.message||'خطا'); });
   });

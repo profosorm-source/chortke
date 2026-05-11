@@ -4,7 +4,7 @@
     <h4 class="page-title mb-1"><span class="material-icons text-danger">smart_display</span> ثبت تبلیغ ویدیوی یوتیوب</h4>
     <p class="text-muted mb-0" style="font-size:12px;">ویدیوی یوتیوب خود را تبلیغ کنید — کاربران تماشا می‌کنند و درآمد کسب می‌کنند</p>
   </div>
-  <a href="<?= url('/adtube/advertise') ?>" class="btn btn-outline-secondary btn-sm">
+  <a href="<?= url('/adtube/ads') ?>" class="btn btn-outline-secondary btn-sm">
     <span class="material-icons" style="font-size:16px;vertical-align:middle;">arrow_back</span> بازگشت
   </a>
 </div>
@@ -17,7 +17,7 @@
     </div>
     <div class="card">
       <div class="card-body">
-        <form method="POST" action="<?= url('/adtube/advertise/store') ?>">
+        <form method="POST" action="<?= url('/adtube/ads/store') ?>">
           <?= csrf_field() ?>
 
           <div class="mb-3">
@@ -68,7 +68,7 @@
           </div>
 
           <div class="d-flex justify-content-end gap-2 mt-4">
-            <a href="<?= url('/adtube/advertise') ?>" class="btn btn-outline-secondary">انصراف</a>
+            <a href="<?= url('/adtube/ads') ?>" class="btn btn-outline-secondary">انصراف</a>
             <button type="submit" class="btn btn-danger">
               <span class="material-icons" style="font-size:16px;vertical-align:middle;">smart_display</span> ثبت تبلیغ
             </button>

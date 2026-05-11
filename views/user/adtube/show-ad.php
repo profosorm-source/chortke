@@ -8,7 +8,7 @@ $videoId = $m[1] ?? null;
     <h4 class="page-title mb-1"><span class="material-icons text-danger">smart_display</span> جزئیات تبلیغ Adtube</h4>
     <p class="text-muted mb-0" style="font-size:12px;"><?= e($ad->title ?? '') ?></p>
   </div>
-  <a href="<?= url('/adtube/advertise') ?>" class="btn btn-outline-secondary btn-sm">
+  <a href="<?= url('/adtube/ads') ?>" class="btn btn-outline-secondary btn-sm">
     <span class="material-icons" style="font-size:16px;vertical-align:middle;">arrow_back</span> بازگشت
   </a>
 </div>
@@ -78,14 +78,14 @@ $videoId = $m[1] ?? null;
     <div class="card">
       <div class="card-body d-grid gap-2">
         <?php if($st === 'active'): ?>
-        <form method="POST" action="<?= url("/adtube/advertise/{$ad->id}/pause") ?>">
+        <form method="POST" action="<?= url("/adtube/ads/{$ad->id}/pause") ?>">
           <?= csrf_field() ?>
           <button class="btn btn-warning w-100">
             <span class="material-icons" style="font-size:16px;vertical-align:middle;">pause</span> توقف موقت
           </button>
         </form>
         <?php else: ?>
-        <form method="POST" action="<?= url("/adtube/advertise/{$ad->id}/resume") ?>">
+        <form method="POST" action="<?= url("/adtube/ads/{$ad->id}/resume") ?>">
           <?= csrf_field() ?>
           <button class="btn btn-success w-100">
             <span class="material-icons" style="font-size:16px;vertical-align:middle;">play_arrow</span> ادامه

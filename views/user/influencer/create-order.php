@@ -8,7 +8,7 @@ $gradeColors = ['A'=>'success','B'=>'primary','C'=>'warning','D'=>'warning','F'=
       <i class="material-icons text-primary">campaign</i> ثبت سفارش تبلیغ
     </h4>
   </div>
-  <a href="<?= url('/influencer/advertise') ?>" class="btn btn-outline-secondary btn-sm">
+  <a href="<?= url('/influencer/ads') ?>" class="btn btn-outline-secondary btn-sm">
     <i class="material-icons" style="font-size:15px;vertical-align:middle;">arrow_back</i> بازگشت
   </a>
 </div>
@@ -116,7 +116,7 @@ $gradeColors = ['A'=>'success','B'=>'primary','C'=>'warning','D'=>'warning','F'=
     <div class="card">
       <div class="card-header"><h6 class="card-title mb-0">جزئیات سفارش</h6></div>
       <div class="card-body">
-        <form method="POST" action="<?= url('/influencer/advertise/store') ?>" enctype="multipart/form-data">
+        <form method="POST" action="<?= url('/influencer/ads/store') ?>" enctype="multipart/form-data">
           <?= csrf_field() ?>
           <input type="hidden" name="influencer_id" value="<?= (int)$profile->id ?>">
 
@@ -198,7 +198,7 @@ $gradeColors = ['A'=>'success','B'=>'primary','C'=>'warning','D'=>'warning','F'=
           </div>
 
           <div class="d-flex justify-content-end gap-2 mt-3">
-            <a href="<?= url('/influencer/advertise') ?>" class="btn btn-outline-secondary">انصراف</a>
+            <a href="<?= url('/influencer/ads') ?>" class="btn btn-outline-secondary">انصراف</a>
             <button type="submit" class="btn btn-primary">
               <i class="material-icons" style="font-size:15px;vertical-align:middle;">send</i>
               ثبت و پرداخت

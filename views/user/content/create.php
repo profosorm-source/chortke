@@ -29,7 +29,7 @@ function safe_escape($value) {
     <div>
         <strong>نحوه کار:</strong>
         <ol style="margin: 10px 0 0; padding-right: 20px;">
-            <li>ویدیوی خود را در آپارات یا یوتیوب آپلود کنید</li>
+            <li>ویدیوی خود را در آپارات، یوتیوب یا یکی از <strong>آپلود سنترها</strong> (مثل مدیافایر، پیکوفایل و ...) آپلود کنید</li>
             <li>لینک ویدیو را در فرم زیر وارد کنید</li>
             <li>پس از تأیید مدیریت، ویدیو در کانال‌های مجموعه منتشر خواهد شد</li>
             <li>درآمد شما از <strong>ماه سوم</strong> به بعد محاسبه و پرداخت می‌شود</li>
@@ -60,8 +60,9 @@ function safe_escape($value) {
                             aria-required="true"
                             aria-describedby="platform-help">
                         <option value="">انتخاب کنید...</option>
-                        <option value="aparat">آپارات</option>
-                        <option value="youtube">یوتیوب</option>
+                        <option value="aparat">آپارات (ویدیوی منتشر شده)</option>
+                        <option value="youtube">یوتیوب (ویدیوی منتشر شده)</option>
+                        <option value="upload_center">آپلود سنتر (لینک دانلود فایل خام جهت آپلود ما)</option>
                     </select>
                     <small id="platform-help" class="form-text text-muted">
                         ویدیو باید قبلاً در پلتفرم مورد نظر آپلود شده باشد.
@@ -227,6 +228,11 @@ function safe_escape($value) {
             pattern: /^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)/i,
             hint: 'مثال: https://www.youtube.com/watch?v=abcdef یا https://youtu.be/abcdef',
             placeholder: 'https://www.youtube.com/watch?v=...'
+        },
+        'upload_center': {
+            pattern: /^https?:\/\/.+/i,
+            hint: 'لینک دانلود مستقیم فایل ویدیو (از مدیافایر، پیکوفایل، گوگل درایو و غیره)',
+            placeholder: 'https://...'
         }
     };
     

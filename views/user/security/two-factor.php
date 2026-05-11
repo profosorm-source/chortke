@@ -75,8 +75,7 @@ ob_start();
                 <!-- QR Code -->
                 <div class="text-center mb-4">
                     <h6 class="mb-3 fw-bold">QR Code</h6>
-                    <img src="<?= e($qr_code_url ?? '') ?>" alt="QR Code"
-                         class="img-fluid border p-2 rounded" style="max-width:220px">
+                    <div id="qrcode" class="d-inline-block border p-2 bg-white rounded shadow-sm"></div>
                     <div class="mt-3">
                         <small class="text-muted d-block mb-2">یا این کد را به صورت دستی وارد کنید:</small>
                         <div class="input-group">
@@ -284,6 +283,24 @@ function confirmSaved() {
     recoveryModal.hide();
     setTimeout(() => location.reload(), 500);
 }
+</script>
+
+<!-- QR Code Library & Local Generation (Local Privacy Protection) -->
+<script src="<?= asset('assets/vendor/qrcodejs/qrcode.min.js') ?>"></script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const qrContainer = document.getElementById('qrcode');
+    if (qrContainer) {
+        new QRCode(qrContainer, {
+            text: <?= json_encode($qr_code_url ?? '') ?>,
+            width: 200,
+            height: 200,
+            colorDark: '#000000',
+            colorLight: '#ffffff',
+            correctLevel: QRCode.CorrectLevel.M
+        });
+    }
+});
 </script>
 
 <?php
