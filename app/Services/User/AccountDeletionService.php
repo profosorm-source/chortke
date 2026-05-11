@@ -90,7 +90,7 @@ class AccountDeletionService extends \App\Services\BaseService
             $this->db->query("DELETE FROM kyc_verifications WHERE user_id = ?", [$userId]);
 
             // ۶. حذف کارت‌های بانکی
-            $this->db->query("DELETE FROM user_bank_cards WHERE user_id = ?", [$userId]);
+            $this->db->query("DELETE FROM bank_cards WHERE user_id = ?", [$userId]);
 
             // ۷. حذف سشن‌ها
             $this->db->query("DELETE FROM user_sessions WHERE user_id = ?", [$userId]);

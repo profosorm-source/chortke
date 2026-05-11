@@ -3,14 +3,12 @@
 namespace App\Services;
 
 use App\Contracts\LoggerInterface;
-
 use App\Models\BankCard;
 use App\Models\User;
 
 class BankCardService extends \App\Services\BaseService
 {
     private \App\Models\User $userModel;
-
     private BankCard $model;
     private \App\Services\Adapters\BankInquiryAdapter $inquiryAdapter;
 
@@ -28,7 +26,7 @@ class BankCardService extends \App\Services\BaseService
 
     public function create(int $userId, array $data): array
     {
-        $count = (int)$this->model->where('user_id', $userId)->where('deleted_at', null)->count();
+        $count = (int)$this->model->countUserCards($userId);
         if ($count >= 4) {
             return ['success' => false, 'message' => 'حداکثر ۴ کارت بانکی مجاز است'];
         }
@@ -67,35 +65,21 @@ class BankCardService extends \App\Services\BaseService
         $id = $this->model->create([
             'user_id' => $userId,
             'card_number' => $cardNumber,
-            'card_holder_name' => $holder,
+            'owner_name' => $holder,
             'bank_name' => $bankName,
-            'iban' => $iban ?: null,
+            'shaba' => $iban ?: null,
             'status' => 'pending',
             'is_default' => $count === 0,
         ]);
 
-        $this->logger->info('bankcard.created', ['user_id' => $userId, 'card_id' => $id]);
-
-        $message = 'کارت ثبت شد و در انتظار تأیید است';
-
-        // --- U-5: استعلام خودکار بانکی و تأیید آنی ---
-        if ($iban !== '' && $this->inquiryAdapter->isConfigured()) {
-            $inquiry = $this->inquiryAdapter->inquireIban($iban);
-            if ($inquiry['success'] && !empty($inquiry['owner_name'])) {
-                // اگر نام بازگشتی از بانک با نام کاربر مطابقت داشت
-                if ($this->matchName($inquiry['owner_name'], (string)$user->full_name)) {
-                    $this->model->where('id', $id)->update([
-                        'status' => 'approved',
-                        'verified_at' => date('Y-m-d H:i:s'),
-                        'inquiry_data' => json_encode($inquiry)
-                    ]);
-                    $message = 'کارت بانکی با موفقیت استعلام گردید و بصورت خودکار تأیید شد.';
-                    $this->logger->info('bankcard.auto_approved', ['card_id' => $id, 'method' => 'iban_api']);
-                }
-            }
+        if (!$id) {
+             return ['success' => false, 'message' => 'خطا در ایجاد کارت'];
         }
 
-        return ['success' => true, 'message' => $message, 'card_id' => (int)$id];
+        $this->logger->info('bankcard.created', ['user_id' => $userId, 'card_id' => $id->id ?? 0]);
+
+        $message = 'کارت ثبت شد و در انتظار تأیید است';
+        return ['success' => true, 'message' => $message, 'card_id' => (int)($id->id ?? 0)];
     }
 
     public function updateByUser(int $userId, int $cardId, array $data): array
@@ -126,12 +110,10 @@ class BankCardService extends \App\Services\BaseService
         }
 
         $ok = $this->model->update($cardId, [
-            'card_holder' => $holder,
-            'iban' => $iban ?: null,
+            'owner_name' => $holder,
+            'shaba' => $iban ?: null,
             'status' => 'pending',
             'rejection_reason' => null,
-            'verified_at' => null,
-            'verified_by' => null,
             'updated_at' => date('Y-m-d H:i:s'),
         ]);
 
@@ -144,25 +126,8 @@ class BankCardService extends \App\Services\BaseService
 
     public function softDeleteByUser(int $userId, int $cardId): array
     {
-        $card = $this->model->where('id', $cardId)->where('user_id', $userId)->where('deleted_at', null)->first();
-        if (!$card) return ['success' => false, 'message' => 'کارت یافت نشد'];
-
-        $ok = $this->model->update($cardId, ['deleted_at' => date('Y-m-d H:i:s')]);
-        if (!$ok) return ['success' => false, 'message' => 'خطا در حذف کارت'];
-
-        // اگر primary حذف شد، primary جدید انتخاب شود (از verified)
-        if ((int)$card->is_primary === 1) {
-            $next = $this->model
-                ->where('user_id', $userId)
-                ->where('deleted_at', null)
-                ->where('status', 'verified')
-                ->orderBy('created_at', 'DESC')
-                ->first();
-
-            if ($next) {
-                $this->setPrimary($userId, (int)$next->id);
-            }
-        }
+        $deleted = $this->model->deleteForUser($cardId, $userId);
+        if (!$deleted) return ['success' => false, 'message' => 'خطا در حذف کارت (شاید در تراکنش‌ها استفاده شده)'];
 
         return ['success' => true, 'message' => 'کارت حذف شد'];
     }
@@ -178,9 +143,7 @@ class BankCardService extends \App\Services\BaseService
 
         if (!$card) return ['success' => false, 'message' => 'کارت یافت نشد یا تأیید نشده است'];
 
-        // تنظیم کارت پیش‌فرض از طریق Model (که همه کارت‌های دیگر را غیرفعال می‌کند)
-        $ok = $this->model->setPrimary($cardId, $userId);
-
+        $ok = $this->model->setDefault($cardId, $userId);
         return ['success' => (bool)$ok, 'message' => $ok ? 'کارت اصلی تنظیم شد' : 'خطا در تنظیم کارت اصلی'];
     }
 
@@ -189,26 +152,12 @@ class BankCardService extends \App\Services\BaseService
         $card = $this->model->find($cardId);
         if (!$card) return ['success' => false, 'message' => 'کارت یافت نشد'];
 
-        if ($approve) {
-            $this->model->update($cardId, [
-                'status' => 'verified',
-                'verified_at' => date('Y-m-d H:i:s'),
-                'verified_by' => $adminId,
-                'rejection_reason' => null,
-            ]);
-            return ['success' => true, 'message' => 'کارت تأیید شد'];
-        }
+        $status = $approve ? 'verified' : 'rejected';
+        $ok = $this->model->updateStatus($cardId, $status, $reason, $adminId);
+        
+        if (!$ok) return ['success' => false, 'message' => 'خطا در بروزرسانی وضیعت'];
 
-        $reason = trim((string)$reason);
-        if ($reason === '') $reason = 'رد شد';
-
-        $this->model->update($cardId, [
-            'status' => 'rejected',
-            'rejection_reason' => $reason,
-            'verified_by' => $adminId,
-        ]);
-
-        return ['success' => true, 'message' => 'کارت رد شد'];
+        return ['success' => true, 'message' => $approve ? 'کارت تأیید شد' : 'کارت رد شد'];
     }
 
     private function validateLuhn(string $cardNumber): bool
@@ -232,12 +181,9 @@ class BankCardService extends \App\Services\BaseService
     {
         $a = \mb_strtolower(trim(preg_replace('/\s+/', ' ', $a)), 'UTF-8');
         $b = \mb_strtolower(trim(preg_replace('/\s+/', ' ', $b)), 'UTF-8');
-
-        if ($a === '' || $b === '') return true; // Cannot match if empty
-
+        if ($a === '' || $b === '') return true;
         if ($a === $b) return true;
 
-        // Remove common prefixes
         $prefixes = ['سید ', 'سیده ', 'میر ', 'آقا ', 'خانم '];
         $aClean = str_replace($prefixes, '', $a);
         $bClean = str_replace($prefixes, '', $b);
@@ -277,6 +223,34 @@ class BankCardService extends \App\Services\BaseService
     public function findById(int $cardId): ?object
     {
         return $this->model->find($cardId);
+    }
+
+    /**
+     * دریافت کارت‌های بانکی کاربر (اتصال به جدول اصلی bank_cards)
+     */
+    public function getUserCards(int $userId, ?string $status = null): array
+    {
+        return $this->model->getUserCards($userId, $status);
+    }
+
+    /**
+     * یافتن یک کارت تأیید شده برای کاربر خاص
+     */
+    public function findVerifiedCardForUser(int $userId, int $cardId): ?object
+    {
+        $card = $this->model->find($cardId);
+        if ($card && (int)$card->user_id === $userId && $card->status === 'verified') {
+            return $card;
+        }
+        return null;
+    }
+
+    /**
+     * دریافت کارت‌های در انتظار بررسی (برای پنل مدیریت)
+     */
+    public function getPendingCards(int $limit = 50, int $offset = 0): array
+    {
+        return $this->model->getPendingCards($limit, $offset);
     }
 }
 

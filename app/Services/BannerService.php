@@ -274,6 +274,8 @@ class BannerService extends \App\Services\BaseService
         return ['success' => true];
     }
 
+    public function deleteBanner(int $id): array
+    {
         $banner = $this->bannerModel->find($id);
         if (!$banner) {
             return ['success' => false, 'message' => 'بنر یافت نشد'];
@@ -432,7 +434,33 @@ class BannerService extends \App\Services\BaseService
                 $errors['end_date'] = 'تاریخ پایان باید بعد از تاریخ شروع باشد';
             }
         }
-
         return $errors;
+    }
+
+    public function searchBanners(string $q, array $filters, int $limit, int $offset): array
+    {
+        $query = $this->db->table('ads')->where('type', '=', 'banner')->whereNull('deleted_at');
+
+        if (!empty($q)) {
+            $like = "%{$q}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('title', 'LIKE', $like)->orWhere('link', 'LIKE', $like);
+            });
+        }
+
+        if (!empty($filters['placement'])) {
+            $query->where('placement', '=', e($filters['placement'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (!empty($filters['status'])) {
+            $query->where('status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (isset($filters['is_active'])) {
+            $query->where('is_active', '=', (int)$filters['is_active']);
+        }
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('created_at', 'DESC')->limit($limit)->offset($offset)->get() ?? []
+        ];
     }
 }

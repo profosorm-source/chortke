@@ -388,5 +388,29 @@ class KYCService extends \App\Services\BaseService
         return ['success' => false, 'message' => 'خطای سیستمی در رد KYC'];
     }
 }
+
+    /**
+     * دریافت تمامی رکوردهای احراز هویت (برای ادمین)
+     */
+    public function getAll(array $filters = [], int $limit = 50, int $offset = 0): array
+    {
+        return $this->kycModel->getAll($filters, $limit, $offset);
+    }
+
+    /**
+     * شمارش رکوردهای احراز هویت بر اساس فیلتر
+     */
+    public function count(array $filters = []): int
+    {
+        return $this->kycModel->count($filters);
+    }
+
+    /**
+     * یافتن رکورد خاص
+     */
+    public function find(int $id): ?object
+    {
+        return $this->kycModel->find($id);
+    }
 }
 

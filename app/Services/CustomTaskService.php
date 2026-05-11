@@ -1049,4 +1049,97 @@ class CustomTaskService extends \App\Services\BaseService
         return $expired;
     }
 
+    /**
+     * جستجوی یکپارچه تبلیغات (سیستم گلوبال و داشبورد سازنده)
+     */
+    public function quickSearchAds(string $term, ?int $userId = null, int $limit = 5): array
+    {
+        $query = $this->taskModel->query();
+
+        if ($userId !== null) {
+            // کاربر فقط تبلیغات ساخته شده خودش را جستجو می‌کند
+            $query->select('id', 'title', 'platform', 'task_type', 'status', 'created_at')
+                  ->where('user_id', '=', $userId);
+        } else {
+            // جستجوی سیستمی/گلوبال
+            $query->select('ads.id', 'ads.title', 'ads.platform', 'ads.task_type', 'ads.status', 'ads.created_at', 'u.full_name', 'u.email')
+                  ->leftJoin('users as u', 'u.id', '=', 'ads.user_id');
+        }
+
+        $query->whereNull('ads.deleted_at');
+
+        $this->taskModel->applySearch($query, $term);
+
+        if (!empty($term)) {
+            $escaped = addcslashes(trim($term), '%_');
+            $like = "%{$escaped}%";
+            $query->where(function($sub) use ($like, $userId) {
+                $sub->orWhere('ads.title', 'LIKE', $like);
+                if ($userId === null) {
+                    $sub->orWhere('u.email', 'LIKE', $like);
+                }
+            });
+        }
+
+        return $query->orderBy('ads.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
+
+    /**
+     * جستجوی یکپارچه تسک‌های انجام شده (Submissions)
+     */
+    public function quickSearchSubmissions(string $term, ?int $userId = null, int $limit = 5): array
+    {
+        $query = $this->db->table('custom_task_submissions as s')
+            ->join('ads as a', 'a.id', '=', 's.task_id');
+
+        if ($userId !== null) {
+            // اختصاصی داشبورد انجام‌دهنده (Worker)
+            $query->select('s.id', 's.status', 's.reward_amount', 's.created_at', 'a.title as ad_title')
+                  ->where('s.worker_id', '=', $userId);
+        } else {
+            // قابلیت الحاق به ادمین در آینده اگر نیاز شد
+            $query->select('s.*', 'a.title as ad_title');
+        }
+
+        if (!empty($term)) {
+            $escaped = addcslashes(trim($term), '%_');
+            $like = "%{$escaped}%";
+            $query->where('a.title', 'LIKE', $like);
+        }
+
+        return $query->orderBy('s.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
+
+    public function searchAdTasks(string $q, array $filters, int $limit, int $offset): array
+    {
+        $query = $this->db->table('ads as a')
+            ->select('a.*', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'u.id', '=', 'a.advertiser_id')
+            ->where('a.type', '=', 'custom_task')
+            ->whereNull('a.deleted_at');
+
+        if (!empty($q)) {
+            $like = '%' . $this->sanitizeSearch($q) . '%';
+            $query->where(function($sub) use ($like) {
+                $sub->where('a.title', 'LIKE', $like)->orWhere('a.description', 'LIKE', $like);
+            });
+        }
+
+        if (!empty($filters['status'])) {
+            $query->where('a.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (!empty($filters['task_type'])) {
+            $query->where('a.task_type', '=', e($filters['task_type'], ENT_QUOTES, 'UTF-8'));
+        }
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('a.created_at', 'DESC')
+                                     ->limit($limit)->offset($offset)->get() ?? []
+        ];
+    }
 }

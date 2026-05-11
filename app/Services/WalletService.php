@@ -1067,6 +1067,75 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         return $this->transactionModel->countUserTransactions($userId, $type, $currency);
     }
 
+    /**
+     * دریافت لیست کلی تراکنش‌ها (مدیریت)
+     */
+    public function getAllTransactions(?string $status = null, ?string $type = null, ?string $currency = null, int $limit = 50, int $offset = 0): array
+    {
+        return $this->transactionModel->getAll($status, $type, $currency, $limit, $offset);
+    }
+
+    /**
+     * شمارش تعداد کل تراکنش‌ها (مدیریت)
+     */
+    public function countAllTransactions(?string $status = null, ?string $type = null, ?string $currency = null): int
+    {
+        return $this->transactionModel->countAll($status, $type, $currency);
+    }
+
+    /**
+     * یافتن جزئیات یک تراکنش با آی‌دی
+     */
+    public function findTransactionById(int $id): ?object
+    {
+        return $this->transactionModel->find($id);
+    }
+
+    /**
+     * جستجوی هوشمند و سریع تراکنش‌ها (پشتیبانی از سرچ گلوبال و اختصاصی کاربر)
+     */
+    public function quickSearchTransactions(string $term, ?int $userId = null, int $limit = 5): array
+    {
+        $query = $this->transactionModel->query();
+
+        // ۱. تنظیم دسترسی و فیلتر سطح سطر (Row Level Filter)
+        if ($userId !== null) {
+            // 🔒 حالت امن داشبورد کاربر: فقط انتخاب فیلدهای ضروری و اعمال شرط User ID بدون JOIN سنگین
+            $query->select('id', 'type', 'amount', 'currency', 'status', 'description', 'created_at')
+                  ->where('user_id', '=', $userId);
+        } else {
+            // 🌍 حالت مدیریت/سیستمی: الحاق به جدول کاربران برای نمایش نام صاحب تراکنش
+            $query->select('transactions.id', 'transactions.type', 'transactions.amount', 'transactions.currency', 'transactions.status', 'transactions.description', 'transactions.created_at', 'u.full_name', 'u.email')
+                  ->leftJoin('users as u', 'u.id', '=', 'transactions.user_id');
+        }
+
+        // ۲. اعمال هوشمند فیلترهای ثبت شده در مدل تراکنش (مثل reference_id و غیره)
+        $this->transactionModel->applySearch($query, $term);
+
+        // ۳. اعمال شرط‌های اضافی خاص سرچ متنی
+        if (!empty($term)) {
+            $term = trim($term);
+            $escaped = addcslashes($term, '%_');
+            $like = "%{$escaped}%";
+
+            $query->where(function($sub) use ($like, $term, $userId) {
+                $sub->orWhere('transactions.description', 'LIKE', $like);
+                
+                // در صورت نیاز به فیلترهای ادمین (ایمیل یا آیدی تراکنش عددی)
+                if ($userId === null) {
+                    $sub->orWhere('u.email', 'LIKE', $like);
+                    if (\is_numeric($term)) {
+                        $sub->orWhere('transactions.id', '=', (int)$term);
+                    }
+                }
+            });
+        }
+
+        return $query->orderBy('transactions.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Private Helpers
     // ─────────────────────────────────────────────────────────────

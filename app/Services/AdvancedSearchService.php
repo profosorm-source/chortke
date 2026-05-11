@@ -7,6 +7,12 @@ namespace App\Services;
 use App\Models\AdvancedSearch;
 use Core\Cache;
 use App\Contracts\LoggerInterface;
+use App\Services\User\UserService;
+use App\Services\CryptoDeposit\CryptoDepositService;
+use App\Services\SocialTask\SocialTaskService;
+use App\Services\InfluencerService;
+use App\Services\VitrineService;
+use App\Services\InvestmentService;
 
 /**
  * AdvancedSearchService - Unified Advanced Search Service
@@ -21,16 +27,64 @@ use App\Contracts\LoggerInterface;
 class AdvancedSearchService extends \App\Services\BaseService
 {
     private AdvancedSearch $searchModel;
+    private UserService $userService;
+    private WalletService $walletService;
+    private WithdrawalService $withdrawalService;
+    private TicketService $ticketService;
+    private ManualDepositService $manualDepositService;
+    private CryptoDepositService $cryptoDepositService;
+    private CustomTaskService $customTaskService;
+    private BannerService $bannerService;
+    private ContentService $contentService;
+    private ApiTokenService $apiTokenService;
+    private EmailService $emailService;
+    private SocialTaskService $socialTaskService;
+    private InfluencerService $influencerService;
+    private VitrineService $vitrineService;
+    private InvestmentService $investmentService;
     private Cache $cache;
     private const CACHE_TTL = 300; // 5 minutes
     private const MODULES = ['social_task', 'influencer', 'vitrine'];
     private const DEFAULT_LIMIT = 20;
     private const MAX_LIMIT = 100;
 
-    public function __construct(AdvancedSearch $searchModel, LoggerInterface $logger, Cache $cache)
-    {
+    public function __construct(
+        AdvancedSearch $searchModel, 
+        UserService $userService, 
+        WalletService $walletService,
+        WithdrawalService $withdrawalService,
+        TicketService $ticketService,
+        ManualDepositService $manualDepositService,
+        CryptoDepositService $cryptoDepositService,
+        CustomTaskService $customTaskService,
+        BannerService $bannerService,
+        ContentService $contentService,
+        ApiTokenService $apiTokenService,
+        EmailService $emailService,
+        SocialTaskService $socialTaskService,
+        InfluencerService $influencerService,
+        VitrineService $vitrineService,
+        InvestmentService $investmentService,
+        LoggerInterface $logger, 
+        Cache $cache
+    ) {
         parent::__construct($logger);
         $this->searchModel = $searchModel;
+        $this->userService = $userService;
+        $this->walletService = $walletService;
+        $this->withdrawalService = $withdrawalService;
+        $this->ticketService = $ticketService;
+        $this->manualDepositService = $manualDepositService;
+        $this->cryptoDepositService = $cryptoDepositService;
+        $this->customTaskService = $customTaskService;
+        $this->bannerService = $bannerService;
+        $this->contentService = $contentService;
+        $this->apiTokenService = $apiTokenService;
+        $this->emailService = $emailService;
+        $this->socialTaskService = $socialTaskService;
+        $this->influencerService = $influencerService;
+        $this->vitrineService = $vitrineService;
+        $this->investmentService = $investmentService;
         $this->cache = $cache;
     }
 
@@ -55,7 +109,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $results = [
             'users' => $this->searchUsers($q, $limit),
             'transactions' => $this->searchTransactions($q, $limit),
-            'tickets' => $this->searchTickets($q, $limit),
+            'tickets' => $this->searchTicketsGlobal($q, $limit),
             'withdrawals' => $this->searchWithdrawals($q, $limit),
             'deposits' => $this->searchDeposits($q, $limit),
             'ads' => $this->searchAds($q, $limit),
@@ -134,7 +188,7 @@ class AdvancedSearchService extends \App\Services\BaseService
 
             $searchResult = match ($module) {
                 'social_task' => $this->searchSocialTasks($filters, $limit, $offset),
-                'influencer' => $this->searchInfluencers($filters, $limit, $offset),
+                'influencer' => $this->searchInfluencersModule($filters, $limit, $offset),
                 'vitrine' => $this->searchVitrine($filters, $limit, $offset),
                 default => []
             };
@@ -187,7 +241,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         }
 
         $q = $this->sanitize($q);
-        $result = $this->searchModel->searchBanners($q, $filters, $limit, $offset);
+        $result = $this->bannerService->searchBanners($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL);
         return $result;
@@ -210,7 +264,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         }
 
         $q = $this->sanitize($q);
-        $result = $this->searchModel->searchContent($q, $filters, $limit, $offset);
+        $result = $this->contentService->searchContent($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL);
         return $result;
@@ -233,7 +287,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         }
 
         $q = $this->sanitize($q);
-        $result = $this->searchModel->searchTokens($q, $filters, $limit, $offset);
+        $result = $this->apiTokenService->searchTokens($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL);
         return $result;
@@ -256,34 +310,12 @@ class AdvancedSearchService extends \App\Services\BaseService
         }
 
         $q = $this->sanitize($q);
-        $result = $this->searchModel->searchEmails($q, $filters, $limit, $offset);
+        $result = $this->emailService->searchEmails($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL);
         return $result;
     }
 
-    /**
-     * جستجوی Bug Reports برای صفحات Admin
-     */
-    public function searchBugReports(string $q, array $filters = [], int $limit = self::DEFAULT_LIMIT, int $offset = 0): array
-    {
-        $this->logSearch('bug_reports', $q, null);
-
-        $limit = min($limit, self::MAX_LIMIT);
-        $offset = max(0, $offset);
-
-        $cacheKey = $this->generateCacheKey('bug_reports', array_merge(['q' => $q], $filters), $limit, $offset);
-        $cached = $this->cache->get($cacheKey);
-        if ($cached !== null) {
-            return $cached;
-        }
-
-        $q = $this->sanitize($q);
-        $result = $this->searchModel->searchBugReports($q, $filters, $limit, $offset);
-
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
-        return $result;
-    }
 
     /**
      * جستجوی Ad Tasks (وظایف سفارشی) برای صفحات Admin
@@ -302,7 +334,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         }
 
         $q = $this->sanitize($q);
-        $result = $this->searchModel->searchAdTasks($q, $filters, $limit, $offset);
+        $result = $this->customTaskService->searchAdTasks($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL);
         return $result;
@@ -325,34 +357,12 @@ class AdvancedSearchService extends \App\Services\BaseService
         }
 
         $q = $this->sanitize($q);
-        $result = $this->searchModel->searchInvestments($q, $filters, $limit, $offset);
+        $result = $this->investmentService->searchInvestments($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL);
         return $result;
     }
 
-    /**
-     * جستجوی Audit Trail برای صفحات Admin
-     */
-    public function searchAuditTrail(string $q, array $filters = [], int $limit = self::DEFAULT_LIMIT, int $offset = 0): array
-    {
-        $this->logSearch('audit_trail', $q, null);
-
-        $limit = min($limit, self::MAX_LIMIT);
-        $offset = max(0, $offset);
-
-        $cacheKey = $this->generateCacheKey('audit_trail', array_merge(['q' => $q], $filters), $limit, $offset);
-        $cached = $this->cache->get($cacheKey);
-        if ($cached !== null) {
-            return $cached;
-        }
-
-        $q = $this->sanitize($q);
-        $result = $this->searchModel->searchAuditTrail($q, $filters, $limit, $offset);
-
-        $this->cache->set($cacheKey, $result, self::CACHE_TTL);
-        return $result;
-    }
 
     /**
      * جستجوی تیکت‌ها برای صفحات Admin
@@ -371,7 +381,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         }
 
         $q = $this->sanitize($q);
-        $result = $this->searchModel->searchTicketsAdmin($q, $filters, $limit, $offset);
+        $result = $this->ticketService->searchTicketsAdmin($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL);
         return $result;
@@ -394,7 +404,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         }
 
         $q = $this->sanitize($q);
-        $result = $this->searchModel->searchInfluencers($q, $filters, $limit, $offset);
+        $result = $this->influencerService->searchInfluencersAdmin($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL);
         return $result;
@@ -404,87 +414,91 @@ class AdvancedSearchService extends \App\Services\BaseService
 
     private function searchUsers(string $q, int $limit): array
     {
-        return $this->searchModel->searchUsers($q, $limit);
+        // ✅ اتصال به سرویس بومی دامنه (رهایی از مدل غول پیکر)
+        return $this->userService->quickSearch($q, $limit);
     }
 
     private function searchTransactions(string $q, int $limit): array
     {
-        return $this->searchModel->searchTransactions($q, $limit);
+        // ✅ اتصال به سرویس کیف پول (با ارسال null به عنوان شناسه کاربر برای سرچ گلوبال)
+        return $this->walletService->quickSearchTransactions($q, null, $limit);
     }
 
-    private function searchTickets(string $q, int $limit): array
+    private function searchTicketsGlobal(string $q, int $limit): array
     {
-        return $this->searchModel->searchTickets($q, $limit);
+        // ✅ اتصال به سرویس تیکت (با ارسال null برای سرچ گلوبال)
+        return $this->ticketService->quickSearchTickets($q, null, $limit);
     }
 
     private function searchWithdrawals(string $q, int $limit): array
     {
-        return $this->searchModel->searchWithdrawals($q, $limit);
+        // ✅ اتصال به سرویس بومی برداشت
+        return $this->withdrawalService->quickSearchWithdrawals($q, $limit);
     }
 
     private function searchDeposits(string $q, int $limit): array
     {
-        return $this->searchModel->searchDeposits($q, $limit);
+        // ✅ تجمیع هوشمند از سرویس‌های واریز دستی و کریپتو
+        $manual = $this->manualDepositService->quickSearchManualDeposits($q, $limit);
+        $crypto = $this->cryptoDepositService->quickSearchCryptoDeposits($q, $limit);
+        
+        $results = array_merge($manual, $crypto);
+        usort($results, function($a, $b) {
+            $dateA = is_object($a) ? ($a->created_at ?? '') : ($a['created_at'] ?? '');
+            $dateB = is_object($b) ? ($b->created_at ?? '') : ($b['created_at'] ?? '');
+            return strtotime((string)$dateB) <=> strtotime((string)$dateA);
+        });
+        
+        return array_slice($results, 0, $limit);
     }
 
     private function searchAds(string $q, int $limit): array
     {
-        return $this->searchModel->searchAds($q, $limit);
+        // ✅ اتصال به سرویس تبلیغات (با ارسال null برای سرچ گلوبال)
+        return $this->customTaskService->quickSearchAds($q, null, $limit);
     }
 
     private function searchUserTransactions(string $q, int $userId, int $limit): array
     {
-        return $this->searchModel->searchUserTransactions($q, $userId, $limit);
+        // ✅ استفاده از متد یکپارچه هوشمند (ارسال userId برای فیلتر امن)
+        return $this->walletService->quickSearchTransactions($q, $userId, $limit);
     }
 
     private function searchUserTickets(string $q, int $userId, int $limit): array
     {
-        return $this->searchModel->searchUserTickets($q, $userId, $limit);
+        // ✅ استفاده از متد یکپارچه تیکت
+        return $this->ticketService->quickSearchTickets($q, $userId, $limit);
     }
 
     private function searchUserAds(string $q, int $userId, int $limit): array
     {
-        return $this->searchModel->searchUserAds($q, $userId, $limit);
+        // ✅ استفاده از متد یکپارچه تبلیغات
+        return $this->customTaskService->quickSearchAds($q, $userId, $limit);
     }
 
     private function searchUserTasks(string $q, int $userId, int $limit): array
     {
-        return $this->searchModel->searchUserTasks($q, $userId, $limit);
+        // ✅ استفاده از متد یکپارچه تسک‌های انجام شده (Submissions)
+        return $this->customTaskService->quickSearchSubmissions($q, $userId, $limit);
     }
 
     // Module search methods
 
     private function searchSocialTasks(array $f, int $limit, int $offset): array
     {
-        return $this->searchModel->searchSocialTasks($f, $limit, $offset);
+        return $this->socialTaskService->searchSocialTasks($f, $limit, $offset);
     }
 
-    private function searchInfluencers(array $f, int $limit, int $offset): array
+    private function searchInfluencersModule(array $f, int $limit, int $offset): array
     {
-        return $this->searchModel->searchInfluencers($f, $limit, $offset);
+        return $this->influencerService->searchInfluencers($f, $limit, $offset);
     }
 
     private function searchVitrine(array $f, int $limit, int $offset): array
     {
-        return $this->searchModel->searchVitrine($f, $limit, $offset);
+        return $this->vitrineService->searchVitrine($f, $limit, $offset);
     }
 
-    // Count methods
-
-    private function countSocialTasks(array $f): int
-    {
-        return $this->searchModel->countSocialTasks($f);
-    }
-
-    private function countInfluencers(array $f): int
-    {
-        return $this->searchModel->countInfluencers($f);
-    }
-
-    private function countVitrine(array $f): int
-    {
-        return $this->searchModel->countVitrine($f);
-    }
 
     // Helpers
 

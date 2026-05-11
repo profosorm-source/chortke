@@ -17,6 +17,7 @@ use App\Services\BankCardService;
 use App\Services\KYCService;
 use App\Services\AntiFraud\RiskDecisionService;
 use App\Services\PerformanceOptimizationService;
+use App\Services\ReconciliationService;
 
 class WithdrawalService extends PaymentBaseService
 {
@@ -35,6 +36,7 @@ class WithdrawalService extends PaymentBaseService
     private AuditTrail               $auditTrail;
     private PerformanceOptimizationService $performance;
     private StateMachineService      $stateMachine;
+    private ReconciliationService    $reconciliation;
 
     private const PROFILES = [
         'no_kyc'        => ['daily'=>0,  'weekly'=>0,   'monthly'=>0,   'multiplier'=>0],
@@ -60,7 +62,8 @@ class WithdrawalService extends PaymentBaseService
         AuditTrail             $auditTrail,
         LoggerInterface        $logger,
         PerformanceOptimizationService $performance,
-        StateMachineService    $stateMachine
+        StateMachineService    $stateMachine,
+        ReconciliationService  $reconciliation
     ) {
         parent::__construct($logger);
         $this->db               = $db;
@@ -78,6 +81,7 @@ class WithdrawalService extends PaymentBaseService
         $this->auditTrail       = $auditTrail;
         $this->performance      = $performance;
         $this->stateMachine     = $stateMachine;
+        $this->reconciliation   = $reconciliation;
         $this->logger           = $logger;
     }
 
@@ -685,5 +689,200 @@ public function requestFromUser(int $userId, array $payload): array
         $this->transactionModel->recordStatusChange(
             $transactionId, $newStatus, $reason, $changedBy, $metadata
         );
+    }
+
+    public function getAll(?string $status = null, ?string $currency = null, int $limit = 50, int $offset = 0): array
+    {
+        return $this->model->getAll($status, $currency, $limit, $offset);
+    }
+
+    public function countAll(?string $status = null, ?string $currency = null): int
+    {
+        return $this->model->countAll($status, $currency);
+    }
+
+    public function getPendingWithdrawals(int $limit = 50, int $offset = 0): array
+    {
+        return $this->model->getPendingWithdrawals($limit, $offset);
+    }
+
+    public function countPendingWithdrawals(): int
+    {
+        return $this->model->countPendingWithdrawals();
+    }
+
+    public function getSummaryStats(): array
+    {
+        return $this->model->getSummaryStats();
+    }
+
+    public function findById(int $id): ?object
+    {
+        return $this->model->find($id);
+    }
+
+    public function updateStatus(
+        int $id,
+        string $status,
+        ?string $reason = null,
+        ?int $adminId = null,
+        ?string $transactionId = null
+    ): bool {
+        return $this->model->updateStatus($id, $status, $reason, $adminId, $transactionId);
+    }
+
+    /**
+     * بررسی وجود درخواست برداشت در انتظار برای کاربر
+     */
+    public function hasPendingWithdrawal(int $userId): bool
+    {
+        return $this->model->hasPendingWithdrawal($userId);
+    }
+
+    /**
+     * دریافت تمام درخواست‌های برداشت مربوط به یک کاربر
+     */
+    public function getUserWithdrawals(
+        int $userId,
+        ?string $status = null,
+        ?string $currency = null,
+        int $limit = 50,
+        int $offset = 0
+    ): array {
+        return $this->model->getUserWithdrawals($userId, $status, $currency, $limit, $offset);
+    }
+
+    /**
+     * تأیید و پرداخت نهایی درخواست برداشت توسط مدیر
+     */
+    public function approveWithdrawal(int $withdrawalId, string $paymentReference, int $adminId): array
+    {
+        try {
+            $withdrawal = $this->findById($withdrawalId);
+            if (!$withdrawal) {
+                return ['success' => false, 'message' => 'درخواست یافت نشد'];
+            }
+
+            if ($withdrawal->status !== 'pending') {
+                return ['success' => false, 'message' => 'این درخواست قبلاً پردازش شده است'];
+            }
+
+            $this->db->beginTransaction();
+
+            // 1. تکمیل برداشت در کیف پول
+            $completed = $this->wallet->completeWithdrawal(
+                (int)$withdrawal->user_id,
+                (float)$withdrawal->amount,
+                (string)$withdrawal->currency,
+                (string)$withdrawal->transaction_id
+            );
+
+            if (!$completed) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در نهایی‌سازی تراکنش در کیف پول'];
+            }
+
+            // 2. تغییر وضعیت به completed
+            $updated = $this->model->updateStatus($withdrawalId, 'completed', $paymentReference, $adminId);
+            if (!$updated) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در به‌روزرسانی وضعیت درخواست'];
+            }
+
+            // 3. ثبت ایونت تراکنش
+            if (method_exists($this, 'recordTransactionStatusChange')) {
+                $this->recordTransactionStatusChange(
+                    (string)$withdrawal->transaction_id,
+                    'completed',
+                    "تایید و پرداخت توسط ادمین | مرجع: {$paymentReference}",
+                    $adminId,
+                    [
+                        'payment_reference' => $paymentReference,
+                        'withdrawal_id' => $withdrawalId
+                    ]
+                );
+            }
+
+            $this->db->commit();
+
+            // 4. عملیات تطبیق (خارج از Transaction اتمیک به عنوان Best Practice)
+            try {
+                $recon = $this->reconciliation->reconcilePayment([
+                    'transaction_id' => (string)$withdrawal->transaction_id,
+                    'reference_id' => 'withdrawal_settlement_' . $withdrawalId,
+                    'user_id' => (int)$withdrawal->user_id,
+                    'amount' => (float)$withdrawal->amount,
+                    'currency' => $withdrawal->currency,
+                    'status' => 'success',
+                    'gateway' => 'withdrawal_bank',
+                    'description' => "تطبیق اتوماتیک - مرجع: {$paymentReference}",
+                    'timestamp' => time(),
+                ]);
+
+                if (empty($recon['success'])) {
+                    $this->logger->warning('withdrawal.approve.reconcile_failed', [
+                        'withdrawal_id' => $withdrawalId,
+                        'error' => $recon['message'] ?? 'Unknown'
+                    ]);
+                }
+            } catch (\Throwable $reconEx) {
+                $this->logger->error('withdrawal.approve.reconcile_exception', [
+                    'withdrawal_id' => $withdrawalId,
+                    'error' => $reconEx->getMessage()
+                ]);
+            }
+
+            $this->logger->info('withdrawal.approve.success', [
+                'withdrawal_id' => $withdrawalId,
+                'admin_id' => $adminId
+            ]);
+
+            return ['success' => true, 'message' => 'برداشت با موفقیت تایید و پرداخت گردید'];
+
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            $this->logger->critical('withdrawal.approve.critical_failure', [
+                'withdrawal_id' => $withdrawalId,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
+            return ['success' => false, 'message' => 'بروز خطا در سیستم هنگام تایید برداشت'];
+        }
+    }
+
+    /**
+     * جستجوی سریع درخواست‌های برداشت برای سیستم سرچ مرکزی
+     */
+    public function quickSearchWithdrawals(string $term, int $limit = 5): array
+    {
+        $query = $this->model->query()
+            ->select('withdrawals.id', 'withdrawals.amount', 'withdrawals.currency', 'withdrawals.status', 'withdrawals.created_at', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'u.id', '=', 'withdrawals.user_id');
+
+        // ۱. جستجو روی فیلدهای خود برداشت
+        $this->model->applySearch($query, $term);
+
+        // ۲. فیلترهای الحاقی برای ایمیل و آیدی دقیق
+        if (!empty($term)) {
+            $term = trim($term);
+            $escaped = addcslashes($term, '%_');
+            $like = "%{$escaped}%";
+            
+            $query->where(function($sub) use ($like, $term) {
+                $sub->orWhere('u.email', 'LIKE', $like);
+                if (\is_numeric($term)) {
+                     $sub->orWhere('withdrawals.id', '=', (int)$term);
+                }
+            });
+        }
+
+        return $query->orderBy('withdrawals.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
     }
 }

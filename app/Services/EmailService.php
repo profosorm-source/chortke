@@ -582,4 +582,29 @@ HTML;
             'from_name'  => $this->fromName,
         ];
     }
+
+    public function searchEmails(string $q, array $filters, int $limit, int $offset): array
+    {
+        $query = $this->emailQueue->query()
+            ->select('email_queue.*', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'u.id', '=', 'email_queue.user_id');
+
+        if (!empty($q)) {
+            $like = "%{$q}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('email_queue.subject', 'LIKE', $like)
+                    ->orWhere('email_queue.to_email', 'LIKE', $like);
+            });
+        }
+
+        if (!empty($filters['status'])) {
+            $query->where('email_queue.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
+        }
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('email_queue.created_at', 'DESC')
+                                     ->limit($limit)->offset($offset)->get() ?? []
+        ];
+    }
 }

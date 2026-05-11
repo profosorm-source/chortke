@@ -144,5 +144,73 @@ class UserService extends \App\Services\BaseService
         $user = $this->find($userId);
         return $user && isset($user->kyc_status) && $user->kyc_status === 'verified';
     }
+
+    /**
+     * بروزرسانی مشخصات کاربر با اعمال منطق تجاری
+     * (هندل ایمیل تکراری و رمزنگاری پسورد)
+     */
+    public function updateUser(int $id, array $data): array
+    {
+        // 1. بررسی ایمیل تکراری (اگر فرستاده شده باشد)
+        if (isset($data['email'])) {
+            $existing = $this->findByEmail($data['email']);
+            if ($existing && (int)$existing->id !== $id) {
+                return [
+                    'success' => false, 
+                    'errors' => ['email' => ['این ایمیل قبلاً توسط کاربر دیگری ثبت شده است']]
+                ];
+            }
+        }
+
+        // 2. آماده‌سازی دیتا و هش پسورد
+        $updateData = [];
+        $updatableFields = ['full_name', 'email', 'role', 'status'];
+        
+        foreach ($updatableFields as $field) {
+            if (isset($data[$field])) {
+                $updateData[$field] = $data[$field];
+            }
+        }
+
+        if (!empty($data['password'])) {
+            $updateData['password'] = hash_password((string)$data['password']);
+        }
+
+        $updateData['updated_at'] = date('Y-m-d H:i:s');
+
+        // 3. بروزرسانی نهایی
+        $ok = $this->model->update($id, $updateData);
+        
+        if ($ok) {
+            return ['success' => true, 'message' => 'کاربر با موفقیت بروزرسانی شد'];
+        }
+
+        return ['success' => false, 'message' => 'خطا در ذخیره مشخصات کاربر'];
+    }
+
+    /**
+     * جستجوی سریع و سبک برای سیستم سرچ مرکزی (برای AdvancedSearchService)
+     */
+    public function quickSearch(string $term, int $limit = 5): array
+    {
+        $query = $this->model->query()
+            ->select('id', 'full_name', 'email', 'mobile', 'kyc_status', 'created_at')
+            ->whereNull('deleted_at');
+
+        // استفاده از جادوی جدید مدل (اعمال هوشمند فیلتر)
+        $this->model->applySearch($query, $term);
+
+        return $query->orderBy('created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
+
+    /**
+     * پروکسی پایه برای بروزرسانی مستقیم در مدل
+     */
+    public function update(int $id, array $data): bool
+    {
+        return (bool)$this->model->update($id, $data);
+    }
 }
 

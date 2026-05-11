@@ -212,4 +212,30 @@ class ApiTokenService extends \App\Services\BaseService
     {
         return $this->apiTokenModel->revokeAllExpired();
     }
+
+    public function searchTokens(string $q, array $filters, int $limit, int $offset): array
+    {
+        $query = $this->apiTokenModel->query()
+            ->select('api_tokens.*', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'u.id', '=', 'api_tokens.user_id');
+
+        if (!empty($q)) {
+            $like = "%{$q}%";
+            $query->where(function($sub) use ($like, $q) {
+                $sub->where('api_tokens.name', 'LIKE', $like)
+                    ->orWhere('api_tokens.token', '=', $q)
+                    ->orWhere('u.email', 'LIKE', $like);
+            });
+        }
+
+        if (!empty($filters['status'])) {
+            $query->where('api_tokens.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
+        }
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('api_tokens.created_at', 'DESC')
+                                     ->limit($limit)->offset($offset)->get() ?? []
+        ];
+    }
 }

@@ -216,5 +216,29 @@ class ManualDepositService extends \App\Services\BaseService
 
         return ['success' => true, 'message' => 'رد شد'];
     }
+
+    /**
+     * جستجوی سریع واریزهای دستی برای سیستم سرچ مرکزی
+     */
+    public function quickSearchManualDeposits(string $term, int $limit = 5): array
+    {
+        $query = $this->model->query()
+            ->selectRaw("manual_deposits.id, manual_deposits.amount, 'manual' as type, manual_deposits.status, manual_deposits.created_at, u.full_name, u.email")
+            ->leftJoin('users as u', 'u.id', '=', 'manual_deposits.user_id');
+
+        $this->model->applySearch($query, $term);
+
+        if (!empty($term)) {
+            $escaped = addcslashes(trim($term), '%_');
+            $like = "%{$escaped}%";
+            $query->where(function($sub) use ($like) {
+                $sub->orWhere('u.email', 'LIKE', $like);
+            });
+        }
+
+        return $query->orderBy('manual_deposits.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
 }
 

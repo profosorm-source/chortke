@@ -968,6 +968,34 @@ EOT;
         }
     }
 
+    public function searchContent(string $q, array $filters, int $limit, int $offset): array
+    {
+        $query = $this->submissionModel->query()
+            ->select('content_submissions.*', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'u.id', '=', 'content_submissions.user_id');
+
+        if (!empty($q)) {
+            $like = "%{$q}%";
+            $query->where(function($sub) use ($like) {
+                $sub->where('content_submissions.title', 'LIKE', $like)
+                    ->orWhere('content_submissions.description', 'LIKE', $like);
+            });
+        }
+
+        if (!empty($filters['status'])) {
+            $query->where('content_submissions.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (!empty($filters['category'])) {
+            $query->where('content_submissions.category', '=', e($filters['category'], ENT_QUOTES, 'UTF-8'));
+        }
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('content_submissions.created_at', 'DESC')
+                                     ->limit($limit)->offset($offset)->get() ?? []
+        ];
+    }
+
     // successResponse/errorResponse دریافت شده‌اند از BaseService
 }
 

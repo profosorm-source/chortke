@@ -94,9 +94,7 @@ class TicketService extends \App\Services\BaseService
             ]);
             
             // نوتیفیکیشن به ادمین
-            if (function_exists('notify_admins')) {
-                notify_admins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$subject}", "/admin/tickets/show/{$ticketId}");
-            }
+            $this->notificationService->sendToAdmins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$subject}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
             
             $this->db->commit();
             
@@ -156,9 +154,7 @@ class TicketService extends \App\Services\BaseService
             if ($isAdmin) {
                 $this->notificationService->send($ticket->user_id, 'info', "پاسخ جدید برای تیکت: {$ticket->subject}", "/tickets/show/{$ticketId}");
             } else {
-                if (function_exists('notify_admins')) {
-                    notify_admins('info', 'پاسخ جدید تیکت', "پاسخ جدید از کاربر در تیکت #{$ticketId}", "/admin/tickets/show/{$ticketId}");
-                }
+                $this->notificationService->sendToAdmins('info', 'پاسخ جدید تیکت', "پاسخ جدید از کاربر در تیکت #{$ticketId}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
             }
             
             $this->db->commit();
@@ -449,5 +445,80 @@ class TicketService extends \App\Services\BaseService
         }
 
         return ['browser' => $browser, 'os' => $os];
+    }
+
+    /**
+     * جستجوی سریع تیکت‌ها (یکپارچه برای مدیریت و داشبورد کاربر)
+     */
+    public function quickSearchTickets(string $term, ?int $userId = null, int $limit = 5): array
+    {
+        $query = $this->ticketModel->query();
+
+        // ۱. تفکیک سطح دسترسی (Scope Selection)
+        if ($userId !== null) {
+            // داشبورد کاربر: فیلتر امن روی شناسه کاربر و انتخاب فیلدهای سبک
+            $query->select('id', 'subject', 'status', 'priority', 'created_at')
+                  ->where('user_id', '=', $userId);
+        } else {
+            // پنل ادمین: الحاق کاربر برای نمایش اطلاعات فرستنده
+            $query->select('tickets.id', 'tickets.subject', 'tickets.status', 'tickets.created_at', 'u.full_name', 'u.email')
+                  ->leftJoin('users as u', 'u.id', '=', 'tickets.user_id');
+        }
+
+        // ۲. اعمال هوشمند جستجوهای ثبت شده در مدل
+        $this->ticketModel->applySearch($query, $term);
+
+        // ۳. فیلتر الحاقی برای ایمیل و آیدی دقیق
+        if (!empty($term)) {
+            $term = trim($term);
+            $escaped = addcslashes($term, '%_');
+            $like = "%{$escaped}%";
+            $query->where(function($sub) use ($like, $term, $userId) {
+                $sub->orWhere('tickets.subject', 'LIKE', $like);
+                
+                if ($userId === null) {
+                    $sub->orWhere('u.email', 'LIKE', $like);
+                    if (\is_numeric($term)) {
+                        $sub->orWhere('tickets.id', '=', (int)$term);
+                    }
+                }
+            });
+        }
+
+        return $query->orderBy('tickets.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
+
+    public function searchTicketsAdmin(string $q, array $filters, int $limit, int $offset): array
+    {
+        $query = $this->ticketModel->query()
+            ->select('tickets.*', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'u.id', '=', 'tickets.user_id');
+
+        if (!empty($q)) {
+            $like = "%{$q}%";
+            $query->where(function($sub) use ($like, $q) {
+                $sub->where('tickets.subject', 'LIKE', $like)
+                    ->orWhere('tickets.id', '=', $q)
+                    ->orWhere('u.email', 'LIKE', $like);
+            });
+        }
+
+        if (!empty($filters['status'])) {
+            $query->where('tickets.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (!empty($filters['priority'])) {
+            $query->where('tickets.priority', '=', e($filters['priority'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (!empty($filters['category_id'])) {
+            $query->where('tickets.category_id', '=', (int)$filters['category_id']);
+        }
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('tickets.created_at', 'DESC')
+                                     ->limit($limit)->offset($offset)->get() ?? []
+        ];
     }
 }
