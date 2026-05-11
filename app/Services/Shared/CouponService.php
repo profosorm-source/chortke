@@ -83,7 +83,7 @@ class CouponService extends \App\Services\BaseService
     /**
      * ثبت مصرف کوپن
      */
-    public function redeem(
+        public function redeem(
         int $couponId,
         int $userId,
         float $originalAmount,
@@ -93,12 +93,24 @@ class CouponService extends \App\Services\BaseService
         string $entityType,
         ?int $entityId = null
     ): bool {
+        $db = \Core\Container::getInstance()->make(\Core\Database::class);
         try {
-            $this->db->beginTransaction();
+            $db->beginTransaction();
 
-            // Pre-execution validation check
+            $coupon = $db->query("SELECT * FROM coupons WHERE id = ? FOR UPDATE", [$couponId])->fetch(\PDO::FETCH_OBJ);
+            
+            if (!$coupon) {
+                $db->rollback();
+                return false;
+            }
+
+            if ($coupon->usage_limit !== null && $coupon->usage_count >= $coupon->usage_limit) {
+                $db->rollback();
+                throw new \Exception('ظرفیت استفاده از این کد تخفیف به پایان رسیده است.');
+            }
+
             if ($this->redemptionModel->hasUserUsedCoupon($userId, $couponId)) {
-                $this->db->rollback();
+                $db->rollback();
                 throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
             }
 
@@ -129,13 +141,13 @@ class CouponService extends \App\Services\BaseService
             return true;
 
         } catch (\PDOException $e) {
-            $db->rollback();
-            if ($e->getCode() == '23000') { // Integrity constraint violation (Duplicate entry)
+            if ($db->inTransaction()) $db->rollback();
+            if ($e->getCode() == '23000') {
                 throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
             }
             throw $e;
         } catch (\Exception $e) {
-            $db->rollback();
+            if ($db->inTransaction()) $db->rollback();
             throw $e;
         }
     }
