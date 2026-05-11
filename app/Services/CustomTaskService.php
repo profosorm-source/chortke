@@ -20,6 +20,7 @@ use App\Services\SettingService;
 use App\Services\Notification\NotificationService;
 use Core\Database;
 use Core\Logger;
+use App\Models\User;
 
 /**
  * Ø³Ø±ÙˆÛŒØ³ Ù…Ø¯ÛŒØ±ÛŒØª Custom Tasks
@@ -46,6 +47,7 @@ class CustomTaskService extends \App\Services\BaseService
     private SettingService $settingService;
     private \App\Services\XPEngine $xpEngine;
     private \Core\RateLimiter $rateLimiter;
+    private User $userModel;
 
     public function __construct(
         Logger $logger,
@@ -65,7 +67,8 @@ class CustomTaskService extends \App\Services\BaseService
         SessionAnomalyService $sessionAnomalyService,
         SettingService $settingService,
         \App\Services\XPEngine $xpEngine,
-        \Core\RateLimiter $rateLimiter
+        \Core\RateLimiter $rateLimiter,
+        User $userModel
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -82,6 +85,7 @@ class CustomTaskService extends \App\Services\BaseService
         $this->fingerprintService = $fingerprintService;
         $this->ipQualityService = $ipQualityService;
         $this->sessionAnomalyService = $sessionAnomalyService;
+        $this->userModel = $userModel;
         $this->settingService = $settingService;
         $this->xpEngine = $xpEngine;
         $this->rateLimiter = $rateLimiter;
@@ -595,11 +599,10 @@ class CustomTaskService extends \App\Services\BaseService
             ]);
             
             // پورسانت ریفرال (زیرمجموعه‌گیری)
-            $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById($submission->worker_id);
+            $userRecord = $this->userModel->findById($submission->worker_id);
             if ($userRecord && !empty($userRecord->referred_by)) {
-                $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
-                if ($referralService) {
-                    $referralService->processCommission((int)$userRecord->referred_by, (float)$submission->reward_amount, $submission->reward_currency, [
+                if ($this->referralService) {
+                    $this->referralService->processCommission((int)$userRecord->referred_by, (float)$submission->reward_amount, $submission->reward_currency, [
                         'action' => 'custom_task_reward',
                         'executor_id' => $submission->worker_id,
                         'execution_id' => $submission->id

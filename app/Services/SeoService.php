@@ -14,9 +14,8 @@ use App\Services\Shared\ReferralService;
 use Core\Database;
 
 use App\Contracts\LoggerInterface;
-/**
- * SeoService — سرویس اصلی مدیریت تسک‌های SEO
- */
+use App\Models\User;
+
 class SeoService extends \App\Services\BaseService
 {
     public const MAX_TASKS_PER_HOUR = 5;
@@ -30,6 +29,7 @@ class SeoService extends \App\Services\BaseService
     private ReferralService $referralService;
     private Database $db;
     private \App\Services\Shared\RatingService $ratingService;
+    private User $userModel;
 
     public function __construct(
         Ads $adModel,
@@ -41,7 +41,8 @@ class SeoService extends \App\Services\BaseService
         ReferralService $referralService,
         Database $db,
         \App\Services\Shared\RatingService $ratingService,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        User $userModel
     ) {
         parent::__construct($logger);
         $this->adModel = $adModel;
@@ -53,6 +54,7 @@ class SeoService extends \App\Services\BaseService
         $this->referralService = $referralService;
         $this->db = $db;
         $this->ratingService = $ratingService;
+        $this->userModel = $userModel;
     }
 
     /**
@@ -235,11 +237,10 @@ class SeoService extends \App\Services\BaseService
             }
 
             // 9. پورسانت ریفرال
-            $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById($userId);
+            $userRecord = $this->userModel->findById($userId);
             if ($userRecord && !empty($userRecord->referred_by)) {
-                $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
-                if ($referralService) {
-                    $referralService->processCommission((int)$userRecord->referred_by, $payout, 'irt', [
+                if ($this->referralService) {
+                    $this->referralService->processCommission((int)$userRecord->referred_by, $payout, 'irt', [
                         'action' => 'seo_task_reward',
                         'executor_id' => $userId,
                         'execution_id' => $executionId

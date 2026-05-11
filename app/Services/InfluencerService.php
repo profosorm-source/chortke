@@ -8,9 +8,9 @@ use App\Models\StoryOrder;
 use App\Services\InfluencerReputationService;
 use Core\Database;
 use App\Services\AuditTrail;
-
 use App\Contracts\LoggerInterface;
 use App\Services\SettingService;
+use App\Services\XPEngine;
 
 class InfluencerService extends \App\Services\BaseService
 {
@@ -26,6 +26,7 @@ class InfluencerService extends \App\Services\BaseService
     private InfluencerReputationService $reputationService;
     private SettingService             $settingService;
     private \App\Services\Shared\RatingService $ratingService;
+    private XPEngine                   $xpEngine;
 
     public function __construct(
         Database                    $db,
@@ -37,8 +38,11 @@ class InfluencerService extends \App\Services\BaseService
         StoryOrder                  $orderModel,
         InfluencerReputationService $reputationService,
         SettingService             $settingService,
-        \App\Services\Shared\RatingService $ratingService
+        \App\Services\Shared\RatingService $ratingService,
+        LoggerInterface             $logger,
+        XPEngine                   $xpEngine
     ) {
+        parent::__construct($logger);
         $this->db                  = $db;
         $this->walletService       = $walletService;
         $this->notificationService = $notificationService;
@@ -49,6 +53,7 @@ class InfluencerService extends \App\Services\BaseService
         $this->reputationService   = $reputationService;
         $this->settingService      = $settingService;
         $this->ratingService       = $ratingService;
+        $this->xpEngine            = $xpEngine;
     }
 
     // ══════════════════════════════════════════════════════
@@ -482,8 +487,7 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
 
             // تخصیص امتیاز تجربه (XP) گیمیفای شده به اینفلوئنسر
             try {
-                $xpEngine = \Core\Container::getInstance()->make(\App\Services\XPEngine::class);
-                $xpEngine->awardXP((int)$order->influencer_user_id, 'youtube', 'influencer_order_completed');
+                $this->xpEngine->awardXP((int)$order->influencer_user_id, 'youtube', 'influencer_order_completed');
             } catch (\Throwable $t) {
                 $this->logger->error('xp_error', ['error' => $t->getMessage()]);
             }

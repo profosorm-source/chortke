@@ -6,17 +6,19 @@ namespace App\Services;
 
 use App\Contracts\LoggerInterface;
 use App\Services\SettingService;
-
 use App\Contracts\CurrencyServiceInterface;
+use Core\Request;
 
 class CurrencyService extends \App\Services\BaseService implements CurrencyServiceInterface
 {
     private SettingService $settingService;
+    private Request $request;
 
-    public function __construct(SettingService $settingService, LoggerInterface $logger)
+    public function __construct(SettingService $settingService, LoggerInterface $logger, Request $request)
     {
         parent::__construct($logger);
         $this->settingService = $settingService;
+        $this->request = $request;
     }
 
     /**
@@ -71,17 +73,7 @@ class CurrencyService extends \App\Services\BaseService implements CurrencyServi
     public function isInvestmentSection(?string $uri = null): bool
     {
         if ($uri === null) {
-            try {
-                if (\class_exists('\Core\Container')) {
-                    $container = \Core\Container::getInstance();
-                    if ($container->has(\Core\Request::class)) {
-                        $request = $container->get(\Core\Request::class);
-                        $uri = $request ? $request->uri() : '';
-                    }
-                }
-            } catch (\Throwable $e) {
-                $uri = '';
-            }
+            $uri = $this->request->uri() ?? '';
         }
         $uri = $uri ?? '';
         return \strpos($uri, '/investment') !== false;
