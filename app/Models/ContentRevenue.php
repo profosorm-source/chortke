@@ -13,18 +13,34 @@ class ContentRevenue extends Model {
 
     /**
      * ایجاد رکورد درآمد
+     * M25: Use column whitelist to prevent unexpected fields from being inserted
      * خروجی: id یا null
      */
     public function create(array $data): ?int
     {
         $now = \date('Y-m-d H:i:s');
 
-        $data['created_at'] = $data['created_at'] ?? $now;
-        $data['updated_at'] = $data['updated_at'] ?? $now;
-        $data['is_deleted'] = $data['is_deleted'] ?? 0;
+        // M25: Whitelist of allowed columns for this table
+        $allowedColumns = [
+            'user_id', 'submission_id', 'period', 'status',
+            'gross_amount', 'platform_fee', 'net_user_amount',
+            'metadata', 'is_deleted', 'created_at', 'updated_at'
+        ];
 
-        $columns = \array_keys($data);
-        $values  = \array_values($data);
+        // Only keep allowed columns
+        $sanitizedData = [];
+        foreach ($allowedColumns as $col) {
+            if (\array_key_exists($col, $data)) {
+                $sanitizedData[$col] = $data[$col];
+            }
+        }
+
+        $sanitizedData['created_at'] = $sanitizedData['created_at'] ?? $now;
+        $sanitizedData['updated_at'] = $sanitizedData['updated_at'] ?? $now;
+        $sanitizedData['is_deleted'] = $sanitizedData['is_deleted'] ?? 0;
+
+        $columns = \array_keys($sanitizedData);
+        $values  = \array_values($sanitizedData);
 
         $placeholders = \array_fill(0, \count($columns), '?');
         $colsSql = '`' . \implode('`,`', $columns) . '`';

@@ -29,6 +29,7 @@ class Transaction extends Model
 
     /**
      * ایجاد تراکنش جدید
+     * M37: Balance validation removed - responsibility of TransactionService
      */
     public function create(array $data): ?object
     {
@@ -47,27 +48,8 @@ class Transaction extends Model
         try {
             $this->db->beginTransaction();
 
-            $userId = (int)($data['user_id'] ?? 0);
-            $amount = (float)($data['amount'] ?? 0.0);
-            $currency = (string)($data['currency'] ?? 'irt');
-
-            // 2. For debit transaction types, perform balance check with exclusive lock
-            if (\in_array($type, ['withdraw', 'purchase', 'transfer_out'], true)) {
-                $walletModel = new Wallet($this->db);
-                
-                // Exclusively lock the wallet row to prevent concurrent race condition modifications
-                $wallet = $walletModel->findByUserIdForUpdate($userId);
-                if (!$wallet) {
-                    $this->db->rollback();
-                    throw new \Exception('User wallet not found.');
-                }
-
-                $balance = $walletModel->getBalance($userId, $currency);
-                if ($balance < $amount) {
-                    $this->db->rollback();
-                    throw new \Exception("Insufficient balance. Required: {$amount}, Available: {$balance}");
-                }
-            }
+            // M37: Service layer handles balance validation before calling model
+            // Model only persists validated data
 
             if (!isset($data['transaction_id']) || $data['transaction_id'] === '') {
                 $data['transaction_id'] = $this->generateUUID();

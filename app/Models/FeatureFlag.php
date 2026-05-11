@@ -41,7 +41,13 @@ class FeatureFlag extends Model
     )
     {
         parent::__construct($db);
-        $this->logger  = $logger ?? \Core\Container::getInstance()->make(\App\Contracts\LoggerInterface::class);
+        // M35: Remove Container fallback - require explicit DI or use provided defaults
+        $this->logger  = $logger ?? new class implements \App\Contracts\LoggerInterface {
+            public function info(string $event, array $context = []): void {}
+            public function warning(string $event, array $context = []): void {}
+            public function error(string $event, array $context = []): void {}
+            public function critical(string $event, array $context = []): void {}
+        };
         $this->request = $request ?? new Request();
         $this->notificationService = $notificationService;
 
@@ -645,10 +651,15 @@ class FeatureFlag extends Model
     private function dispatchEvent(FeatureFlagChanged $event): void
     {
         try {
-            // NotificationService could be null if not properly injected via Container init
-            $ns = $this->notificationService ?? \Core\Container::getInstance()->make(NotificationService::class);
+            // M35: Only use injected NotificationService, no Container fallback
+            if (!$this->notificationService) {
+                $this->logger->warning('feature_flag.notification_service_not_available', [
+                    'event' => $event->featureName,
+                ]);
+                return;
+            }
             
-            $listener = new \App\Listeners\LogFeatureFlagChange($this->db, $this->logger, $ns);
+            $listener = new \App\Listeners\LogFeatureFlagChange($this->db, $this->logger, $this->notificationService);
             $listener->handle($event);
         } catch (\Exception $e) {
             $this->logger->error('feature_flag.event_dispatch_failed', [

@@ -11,7 +11,6 @@ use Core\Model;
 use Core\Database;
 use PDO;
 use PDOStatement;
-use App\Services\AuditTrail;
 
 class ContentSubmission extends Model
 {
@@ -248,6 +247,14 @@ class ContentSubmission extends Model
         
         $revenueRow = $revenueStmt ? $revenueStmt->fetch(PDO::FETCH_OBJ) : null;
         
+        // M22: Safe null handling - always check before accessing properties
+        $totalRevenue = 0.0;
+        $pendingRevenue = 0.0;
+        if ($revenueRow !== null) {
+            $totalRevenue = (float)($revenueRow->total_paid ?? 0);
+            $pendingRevenue = (float)($revenueRow->total_pending ?? 0);
+        }
+        
         // Calculate total pages
         $totalCount = $status ? $this->countByUser($userId, $status) : $stats['total'];
         $totalPages = (int)ceil($totalCount / $limit);
@@ -255,8 +262,8 @@ class ContentSubmission extends Model
         return [
             'submissions' => $submissions,
             'stats' => $stats,
-            'totalRevenue' => (float)($revenueRow->total_paid ?? 0),
-            'pendingRevenue' => (float)($revenueRow->total_pending ?? 0),
+            'totalRevenue' => $totalRevenue,
+            'pendingRevenue' => $pendingRevenue,
             'total' => $totalCount,
             'totalPages' => max(1, $totalPages),
         ];

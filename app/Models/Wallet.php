@@ -64,6 +64,30 @@ class Wallet extends Model
     }
 
     /**
+     * M42: دریافت چند کیف پول بر اساس user_ids
+     * برای جلوگیری از N+1 query problem در حلقه‌ها
+     */
+    public function findByUserIds(array $userIds): array
+    {
+        if (empty($userIds)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_map(function() { return '?'; }, $userIds));
+        $sql = "SELECT * FROM `" . static::$table . "` WHERE user_id IN ({$placeholders})";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($userIds);
+
+        $results = $stmt->fetchAll(\PDO::FETCH_OBJ);
+        $walletsByUserId = [];
+        foreach ($results as $wallet) {
+            $walletsByUserId[(int)$wallet->user_id] = $wallet;
+        }
+
+        return $walletsByUserId; // key: user_id, value: wallet object
+    }
+
+    /**
      * دریافت موجودی (بر اساس ارز)
      */
     public function getBalance(int $userId, string $currency = 'irt'): float
@@ -139,19 +163,17 @@ class Wallet extends Model
 
     /**
      * بروزرسانی موجودی
+     * M41: Frozen check merged into WHERE clause for atomic TOCTOU prevention
      */
     public function updateBalance(int $userId, float $amount, string $currency = 'irt'): bool
     {
-        if ($this->isFrozen($userId)) {
-            throw new \Exception("Wallet is frozen for user {$userId}");
-        }
-
         $field = $this->currencyField($currency);
 
         $sql = "
             UPDATE `" . static::$table . "`
             SET `{$field}` = `{$field}` + :amount, updated_at = NOW()
             WHERE user_id = :user_id
+              AND (is_frozen IS NULL OR is_frozen = 0)
         ";
 
         $stmt = $this->db->prepare($sql);
@@ -169,14 +191,12 @@ class Wallet extends Model
 
     /**
      * قفل کردن موجودی (برای برداشت)
+     * M41: Frozen check merged into WHERE clause for atomic TOCTOU prevention
      */
     public function lockBalance(int $userId, float $amount, string $currency = 'irt'): bool
     {
         if ($amount < 0) {
             throw new \InvalidArgumentException("Lock amount cannot be negative.");
-        }
-        if ($this->isFrozen($userId)) {
-            throw new \Exception("Wallet is frozen for user {$userId}");
         }
 
         $balanceField = $this->currencyField($currency);
@@ -190,6 +210,7 @@ class Wallet extends Model
               updated_at = NOW()
             WHERE user_id = ?
               AND `{$balanceField}` >= ?
+              AND (is_frozen IS NULL OR is_frozen = 0)
         ";
 
         $stmt = $this->db->prepare($sql);

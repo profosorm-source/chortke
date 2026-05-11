@@ -8,6 +8,11 @@ use Core\Model;
 
 /**
  * AntiFraudModel - Backwards-Compatible Proxy for Hybrid Anti-Fraud Models
+ * M14: DEPRECATED PATTERN - Proxy adds minimal value. Services should inject
+ * specific sub-models (IpAndDeviceModel, VelocityAndScoreModel, FraudAnalyticsModel)
+ * directly. This proxy maintained for BC compatibility only.
+ * 
+ * Consider refactoring to eliminate this layer and use composition in services instead.
  */
 class AntiFraudModel extends Model
 {
@@ -17,12 +22,17 @@ class AntiFraudModel extends Model
     private VelocityAndScoreModel $velocityAndScore;
     private FraudAnalyticsModel $analytics;
 
-    public function __construct(\Core\Database $db)
-    {
+    public function __construct(
+        \Core\Database $db,
+        ?IpAndDeviceModel $ipAndDevice = null,
+        ?VelocityAndScoreModel $velocityAndScore = null,
+        ?FraudAnalyticsModel $analytics = null
+    ) {
         parent::__construct($db);
-        $this->ipAndDevice = new IpAndDeviceModel($db);
-        $this->velocityAndScore = new VelocityAndScoreModel($db);
-        $this->analytics = new FraudAnalyticsModel($db);
+        // M13: Use injected models or create defaults (for backward compatibility)
+        $this->ipAndDevice = $ipAndDevice ?? new IpAndDeviceModel($db);
+        $this->velocityAndScore = $velocityAndScore ?? new VelocityAndScoreModel($db);
+        $this->analytics = $analytics ?? new FraudAnalyticsModel($db);
     }
 
     // ═══════════════════════════════════════════════════════════════════════

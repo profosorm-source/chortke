@@ -81,16 +81,21 @@ class Ads extends Model
 
     /**
      * جستجوی تبلیغات SEO فعال
+     * M08: Fixed LIKE injection with proper escaping
      */
     public function getActiveForSearch(string $keyword, int $limit = 5): array
     {
         $now = date('Y-m-d H:i:s');
+        // M08: Use escapeLikeValue() to prevent wildcard injection
+        $escaped = $this->escapeLikeValue($keyword);
+        $likeKeyword = '%' . $escaped . '%';
+        
         return $this->db->table(static::$table)
             ->where('type', '=', 'seo')
             ->where('status', '=', 'active')
             ->where('remaining_budget', '>', 0)
             ->whereRaw('(deadline IS NULL OR deadline > ?)', [$now])
-            ->where('keyword', 'LIKE', '%' . $keyword . '%')
+            ->where('keyword', 'LIKE', $likeKeyword)
             ->orderBy('price_per_click', 'DESC')
             ->orderBy('created_at', 'ASC')
             ->limit($limit)
@@ -99,9 +104,15 @@ class Ads extends Model
 
     /**
      * کسر هزینه هر کلیک یا اکشن به صورت اتمیک و امن از بودجه تبلیغ
+     * M09: Throws exceptions on critical failures to force service-layer logging
+     * Non-critical failures (ad not found, budget exhausted) return false
      */
     public function deductClick(int $id, float $amount): bool
     {
+        if ($amount < 0) {
+            throw new \InvalidArgumentException("Deduction amount cannot be negative: {$amount}");
+        }
+
         try {
             $this->db->beginTransaction();
 
@@ -111,6 +122,8 @@ class Ads extends Model
 
             if (!$row) {
                 $this->db->rollBack();
+                // Non-critical: ad doesn't exist or not active - return false
+                // Service layer should log this
                 return false;
             }
 
@@ -118,6 +131,8 @@ class Ads extends Model
             if ($currentRemaining <= 0) {
                 $this->db->prepare("UPDATE `" . static::$table . "` SET status = 'exhausted', updated_at = NOW() WHERE id = ?")->execute([$id]);
                 $this->db->commit();
+                // Non-critical: budget already exhausted - return false
+                // Service layer should log this
                 return false;
             }
 
@@ -140,10 +155,17 @@ class Ads extends Model
             }
 
             $this->db->rollBack();
-            return false;
+            // Critical: update failed - throw exception for service to log
+            throw new \RuntimeException("Failed to update ad budget. Ad ID: {$id}, Amount: {$amount}");
+        } catch (\RuntimeException $e) {
+            // Re-throw runtime exceptions (critical failures)
+            throw $e;
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) { $this->db->rollBack(); }
-            return false;
+            if ($this->db->inTransaction()) { 
+                $this->db->rollBack(); 
+            }
+            // Critical: unexpected error - wrap and throw for service to log
+            throw new \RuntimeException("Exception in deductClick: " . $e->getMessage(), 0, $e);
         }
     }
 

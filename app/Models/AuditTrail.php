@@ -59,13 +59,13 @@ class AuditTrail extends Model
                 ORDER BY at.created_at DESC
                 LIMIT :limit OFFSET :offset";
 
+        // M17: Use named parameters consistently to avoid mixing with positional
+        $namedParams = $params;
+        $namedParams['limit'] = $perPage;
+        $namedParams['offset'] = $offset;
+
         $stmt = $this->db->prepare($sql);
-        for ($i = 0; $i < \count($params); $i++) {
-            $stmt->bindValue($i + 1, $params[$i]);
-        }
-        $stmt->bindValue(':limit', $perPage, \PDO::PARAM_INT);
-        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
-        $stmt->execute();
+        $stmt->execute($namedParams);
         $rows = $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
 
         return [

@@ -185,36 +185,10 @@ class CryptoDeposit extends Model
                 return false;
             }
 
-            // 2. If transitioning to verified/auto_verified -> process financially
-            $isTargetVerified = ($status === 'verified' || $status === 'auto_verified');
-            $isCurrentlyVerified = ($deposit->verification_status === 'verified' || $deposit->verification_status === 'auto_verified');
-
-            if ($isTargetVerified && !$isCurrentlyVerified) {
-                // Add to wallet
-                $walletModel = new Wallet($this->db);
-                $walletModel->updateBalance(
-                    (int)$deposit->user_id,
-                    (float)$deposit->amount,
-                    $deposit->currency ?? 'usdt'
-                );
-
-                // Log transaction
-                $transactionModel = new Transaction($this->db, \Core\Container::getInstance()->make(\App\Contracts\LoggerInterface::class));
-                $transactionModel->create([
-                    'user_id' => (int)$deposit->user_id,
-                    'type' => 'crypto_deposit',
-                    'amount' => (float)$deposit->amount,
-                    'currency' => $deposit->currency ?? 'usdt',
-                    'status' => 'completed',
-                    'reference_id' => "crypto_deposit_{$id}",
-                    'metadata' => \json_encode([
-                        'tx_hash' => $deposit->tx_hash,
-                        'network' => $deposit->network
-                    ])
-                ]);
-            }
-
-            // 3. Update deposit status
+            // M27+M28: UPDATE status only - FINANCIAL LOGIC MUST MOVE TO CryptoDepositService
+            // Service responsibility: wallet updates, transaction creation, validation
+            // Model responsibility: persistence only
+            
             $sql = "UPDATE " . static::$table . " SET verification_status = :status, updated_at = NOW()";
             $params = ['id' => $id, 'status' => $status];
 

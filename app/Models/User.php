@@ -180,15 +180,16 @@ class User extends Model
 
     /**
      * آمار کلی کاربران
+     * M39: Fixed status inconsistency (int vs string) - use string values
      */
     public function getUserCountStats(): array
     {
         $row = $this->db->fetch("
             SELECT
                 COUNT(*) as total,
-                SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) as active,
-                SUM(CASE WHEN status = 3 THEN 1 ELSE 0 END) as banned,
-                SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as suspended
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+                SUM(CASE WHEN status = 'banned' THEN 1 ELSE 0 END) as banned,
+                SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) as suspended
             FROM users
             WHERE deleted_at IS NULL
         ");

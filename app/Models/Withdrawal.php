@@ -111,6 +111,7 @@ class Withdrawal extends Model
 
     /**
      * بروزرسانی وضعیت
+     * M43: Financial logic removed - TransactionService responsibility
      */
     public function updateStatus(
         int $id,
@@ -144,41 +145,12 @@ class Withdrawal extends Model
                 return false;
             }
             
-            // 3. اگر completed شد → پردازش مالی کسر موجودی قفل‌شده
-            if ($status === 'completed') {
-                $walletModel = new Wallet($this->db);
-                
-                // بررسی موجودی قفل‌شده کافی
-                $lockedBalance = $walletModel->getLockedBalance((int)$withdrawal->user_id, (string)$withdrawal->currency);
-                if ($lockedBalance < (float)$withdrawal->amount) {
-                    $this->db->rollback();
-                    throw new \Exception('Insufficient locked balance to complete withdrawal.');
-                }
-                
-                // کسر از قفل‌شده
-                $walletModel->deductLocked((int)$withdrawal->user_id, (float)$withdrawal->amount, (string)$withdrawal->currency);
-                
-                // بروزرسانی زمان آخرین برداشت
-                $walletModel->updateLastWithdrawal((int)$withdrawal->user_id);
-                
-                // ثبت transaction log
-                $transactionModel = new Transaction($this->db, \Core\Container::getInstance()->make(\App\Contracts\LoggerInterface::class));
-                $transactionModel->create([
-                    'user_id' => $withdrawal->user_id,
-                    'type' => 'withdraw',
-                    'amount' => $withdrawal->amount,
-                    'currency' => $withdrawal->currency,
-                    'status' => 'completed',
-                    'reference_id' => "withdrawal_{$id}",
-                    'metadata' => ['withdrawal_id' => $id]
-                ]);
-            }
-            
-            // 4. اگر rejected شد → بازگرداندن و آزاد کردن موجودی قفل‌شده
-            if ($status === 'rejected') {
-                $walletModel = new Wallet($this->db);
-                $walletModel->unlockBalance((int)$withdrawal->user_id, (float)$withdrawal->amount, (string)$withdrawal->currency);
-            }
+            // M43: Service layer (WithdrawalService) handles:
+            // - Locked balance deduction on 'completed'
+            // - Balance unlock on 'rejected'
+            // - Transaction log creation
+            // - Last withdrawal timestamp update
+            // Model only updates withdrawal record
             
             // 5. Update withdrawal record
             $sql = "UPDATE " . static::$table . " SET status = :status, updated_at = NOW()";

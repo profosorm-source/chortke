@@ -164,8 +164,10 @@ class Dispute extends Model
             $params[] = $filters['ref_type'];
         }
         if (!empty($filters['search'])) {
+            // M31: Use addcslashes to escape wildcard characters
+            $escaped = addcslashes($filters['search'], '%_\\');
+            $s = '%' . $escaped . '%';
             $where[] = "(cu.full_name LIKE ? OR ou.full_name LIKE ?)";
-            $s = '%' . $filters['search'] . '%';
             $params[] = $s;
             $params[] = $s;
         }
@@ -202,8 +204,10 @@ class Dispute extends Model
             $params[] = $filters['ref_type'];
         }
         if (!empty($filters['search'])) {
+            // M31: Use addcslashes to escape wildcard characters
+            $escaped = addcslashes($filters['search'], '%_\\');
+            $s = '%' . $escaped . '%';
             $where[] = "(cu.full_name LIKE ? OR ou.full_name LIKE ?)";
-            $s = '%' . $filters['search'] . '%';
             $params[] = $s;
             $params[] = $s;
         }

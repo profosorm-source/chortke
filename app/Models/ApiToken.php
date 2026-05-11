@@ -145,7 +145,11 @@ class ApiToken extends Model
 
         $this->validateDate($expiresAt, 'expires_at');
 
-        $hashedToken = hash('sha256', $plainToken);
+        // M15: Use HMAC-SHA256 instead of plain SHA-256 for better security
+        // HMAC provides authentication and is resistant to length extension attacks
+        // Use a constant secret key from config or environment
+        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : 'default-secret-key';
+        $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $this->db->query(
             "INSERT INTO api_tokens (user_id, token, name, scopes, expires_at, created_at)
@@ -187,11 +191,15 @@ class ApiToken extends Model
         return (int)(is_array($count) ? ($count['count'] ?? 0) : ($count->count ?? 0));
     }
 
-    public function revokeByHash(string $hashedToken): bool
+    public function revokeByHash(string $plainToken): bool
     {
-        if (empty($hashedToken)) {
-            throw new \InvalidArgumentException('Token hash cannot be empty');
+        if (empty($plainToken)) {
+            throw new \InvalidArgumentException('Token cannot be empty');
         }
+
+        // M15: Hash the plain token using the same HMAC method
+        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : 'default-secret-key';
+        $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $this->db->query(
             "UPDATE api_tokens SET revoked = 1, revoked_at = NOW() WHERE token = ?",
@@ -201,11 +209,15 @@ class ApiToken extends Model
         return true;
     }
 
-    public function findByHash(string $hashedToken): ?array
+    public function findByHash(string $plainToken): ?array
     {
-        if (empty($hashedToken)) {
-            throw new \InvalidArgumentException('Token hash cannot be empty');
+        if (empty($plainToken)) {
+            throw new \InvalidArgumentException('Token cannot be empty');
         }
+
+        // M15: Hash the plain token using the same HMAC method before lookup
+        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : 'default-secret-key';
+        $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $token = $this->db->fetch(
             "SELECT * FROM api_tokens WHERE token = ? LIMIT 1",
