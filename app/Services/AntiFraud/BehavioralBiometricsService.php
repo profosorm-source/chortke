@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\VelocityAndScoreModel;
 use App\Contracts\LoggerInterface;
 /**
  * BehavioralBiometricsService
@@ -13,8 +13,8 @@ use App\Contracts\LoggerInterface;
  */
 class BehavioralBiometricsService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
-    public function __construct(AntiFraudModel $model, LoggerInterface $logger)
+    private VelocityAndScoreModel $model;
+    public function __construct(VelocityAndScoreModel $model, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->model = $model;

@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+// M-01: Removed AntiFraudModel dependency - uses specific models via composition
 use App\Contracts\LoggerInterface;
+use App\Models\VelocityAndScoreModel;
 /**
  * MLFraudDetectionService
  * 
@@ -13,7 +14,7 @@ use App\Contracts\LoggerInterface;
  */
 class MLFraudDetectionService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
+    private VelocityAndScoreModel $model;
     private const RISK_THRESHOLD_HIGH = 0.75;
     private const RISK_THRESHOLD_MEDIUM = 0.50;
     private const RISK_THRESHOLD_LOW = 0.25;
@@ -27,7 +28,7 @@ class MLFraudDetectionService extends \App\Services\BaseService
         'network_risk' => 0.10,
     ];
     
-    public function __construct(AntiFraudModel $model, LoggerInterface $logger)
+    public function __construct(VelocityAndScoreModel $model, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->model = $model;

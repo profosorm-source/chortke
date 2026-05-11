@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\VelocityAndScoreModel;
 use App\Services\AntiFraud\RiskPolicyService;
 use App\Contracts\LoggerInterface;
 
@@ -25,7 +25,7 @@ use App\Contracts\LoggerInterface;
  */
 class FraudDetectionService extends \App\Services\BaseService
 {
-    private AntiFraudModel $fraudModel;
+    private VelocityAndScoreModel $fraudModel;
     private RiskPolicyService $policy;
 
     // آستانه‌های پیش‌فرض (fallback)
@@ -49,7 +49,7 @@ class FraudDetectionService extends \App\Services\BaseService
     private array $weights;
 
     public function __construct(
-        AntiFraudModel $fraudModel,
+        VelocityAndScoreModel $fraudModel,
         RiskPolicyService $policy,
         LoggerInterface $logger
     ) {

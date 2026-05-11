@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\VelocityAndScoreModel;
 use App\Contracts\LoggerInterface;
 /**
  * GraphAnalysisService
@@ -13,13 +13,13 @@ use App\Contracts\LoggerInterface;
  */
 class GraphAnalysisService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
+    private VelocityAndScoreModel $model;
     private const CLUSTER_MIN_SIZE = 3;
     private const CLUSTER_FRAUD_RATIO = 0.5;
     private const MAX_SHARED_IP_USERS = 5;
     private const CIRCULAR_TRANSACTION_THRESHOLD = 3;
     
-    public function __construct(AntiFraudModel $model, LoggerInterface $logger)
+    public function __construct(VelocityAndScoreModel $model, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->model = $model;

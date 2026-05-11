@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Services\AntiFraud;
 
 use App\Models\SeoExecution;
-use App\Models\AntiFraudModel;
+use App\Models\IpAndDeviceModel;
 use App\Contracts\LoggerInterface;
 /**
  * SeoFraudDetector — تشخیص تقلب در تعاملات SEO
@@ -15,12 +15,12 @@ class SeoFraudDetector extends \App\Services\BaseService
     private BrowserFingerprintService $fingerprintService;
     private SessionAnomalyService $anomalyService;
     private SeoExecution $executionModel;
-    private AntiFraudModel $model;
+    private IpAndDeviceModel $model;
     public function __construct(
         BrowserFingerprintService $fingerprintService,
         SessionAnomalyService $anomalyService,
         SeoExecution $executionModel,
-        AntiFraudModel $model,
+        IpAndDeviceModel $model,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);

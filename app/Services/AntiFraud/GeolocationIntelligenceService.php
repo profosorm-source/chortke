@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\IpAndDeviceModel;
 use App\Services\AntiFraud\RiskPolicyService;
 use App\Contracts\LoggerInterface;
 /**
@@ -14,7 +14,7 @@ use App\Contracts\LoggerInterface;
  */
 class GeolocationIntelligenceService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
+    private IpAndDeviceModel $model;
     private RiskPolicyService $policy;
     private const COUNTRY_RISK_SCORES = [
         'IR' => 10,
@@ -30,7 +30,7 @@ class GeolocationIntelligenceService extends \App\Services\BaseService
     private const MAX_TRAVEL_SPEED_KMH = 900;
 
     public function __construct(
-        AntiFraudModel $model,
+        IpAndDeviceModel $model,
         RiskPolicyService $policy,
         LoggerInterface $logger
     ) {

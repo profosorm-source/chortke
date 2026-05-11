@@ -4,7 +4,7 @@ namespace App\Services\AntiFraud;
 
 use Core\Database;
 use Core\Cache;
-use App\Models\AntiFraudModel;
+use App\Models\IpAndDeviceModel;
 use App\Services\AntiFraud\RiskPolicyService;
 
 use App\Contracts\LoggerInterface;
@@ -18,7 +18,7 @@ class GeoIPService extends \App\Services\BaseService
 {
     private Database $db;
     private Cache $cache;
-    private AntiFraudModel $model;
+    private IpAndDeviceModel $model;
     private RiskPolicyService $policy;
     private ?string $maxmindLicenseKey;
     private string $databasePath;

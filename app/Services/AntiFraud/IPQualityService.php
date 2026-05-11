@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace App\Services\AntiFraud;
 
 use App\Contracts\LoggerInterface;
-use App\Models\AntiFraudModel;
+use App\Models\IpAndDeviceModel;
 
 class IPQualityService extends \App\Services\BaseService
 {
     public function __construct(
-        private AntiFraudModel $model,
+        private IpAndDeviceModel $model,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);

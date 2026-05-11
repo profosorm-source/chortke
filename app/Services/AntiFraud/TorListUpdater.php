@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\IpAndDeviceModel;
 
 use App\Contracts\LoggerInterface;
 /**
@@ -14,9 +14,9 @@ use App\Contracts\LoggerInterface;
  */
 class TorListUpdater extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
+    private IpAndDeviceModel $model;
     
-    public function __construct(AntiFraudModel $model, LoggerInterface $logger)
+    public function __construct(IpAndDeviceModel $model, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->model = $model;

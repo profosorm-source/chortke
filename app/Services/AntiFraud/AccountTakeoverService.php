@@ -4,18 +4,18 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\VelocityAndScoreModel;
 use App\Services\AntiFraud\RiskPolicyService;
 use App\Contracts\LoggerInterface;
 class AccountTakeoverService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
+    private VelocityAndScoreModel $model;
     private SessionAnomalyService $sessionAnomaly;
     private IPQualityService $ipQuality;
     private RiskPolicyService $policy;
     private BrowserFingerprintService $fingerprintService;
     public function __construct(
-        AntiFraudModel $model,
+        VelocityAndScoreModel $model,
         SessionAnomalyService $sessionAnomaly,
         IPQualityService $ipQuality,
         RiskPolicyService $policy,

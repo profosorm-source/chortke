@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\VelocityAndScoreModel;
 use App\Contracts\LoggerInterface;
 
 class FraudManagementService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
+    private VelocityAndScoreModel $model;
     private IPQualityService $ipQualityService;
     private BrowserFingerprintService $fingerprintService;
 

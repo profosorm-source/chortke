@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\IpAndDeviceModel;
 use App\Contracts\LoggerInterface;
 /**
  * DeviceIntelligenceService
@@ -13,8 +13,8 @@ use App\Contracts\LoggerInterface;
  */
 class DeviceIntelligenceService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
-    public function __construct(AntiFraudModel $model, LoggerInterface $logger)
+    private IpAndDeviceModel $model;
+    public function __construct(IpAndDeviceModel $model, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->model = $model;

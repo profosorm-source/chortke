@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\VelocityAndScoreModel;
 use Core\Cache;
 use App\Contracts\LoggerInterface;
 /**
@@ -14,7 +14,7 @@ use App\Contracts\LoggerInterface;
  */
 class VelocityCheckService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
+    private VelocityAndScoreModel $model;
     private Cache $cache;
     
     private const DEFAULT_RULES = [
@@ -63,7 +63,7 @@ class VelocityCheckService extends \App\Services\BaseService
         ],
     ];
     
-    public function __construct(AntiFraudModel $model, LoggerInterface $logger, Cache $cache)
+    public function __construct(VelocityAndScoreModel $model, LoggerInterface $logger, Cache $cache)
     {
         parent::__construct($logger);
         $this->model = $model;

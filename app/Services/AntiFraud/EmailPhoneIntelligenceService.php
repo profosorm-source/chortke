@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Models\AntiFraudModel;
+use App\Models\VelocityAndScoreModel;
 use App\Contracts\LoggerInterface;
 /**
  * EmailPhoneIntelligenceService
@@ -13,7 +13,7 @@ use App\Contracts\LoggerInterface;
  */
 class EmailPhoneIntelligenceService extends \App\Services\BaseService
 {
-    private AntiFraudModel $model;
+    private VelocityAndScoreModel $model;
     private const DISPOSABLE_DOMAINS = [
         'tempmail.com', 'guerrillamail.com', '10minutemail.com', 'mailinator.com',
         'throwaway.email', 'temp-mail.org', 'maildrop.cc', 'getnada.com',
@@ -25,7 +25,7 @@ class EmailPhoneIntelligenceService extends \App\Services\BaseService
         'icloud.com', 'mail.com', 'protonmail.com', 'gmx.com', 'zoho.com'
     ];
 
-    public function __construct(AntiFraudModel $model, LoggerInterface $logger)
+    public function __construct(VelocityAndScoreModel $model, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->model = $model;
