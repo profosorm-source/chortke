@@ -258,10 +258,26 @@ class SocialTaskService extends \App\Services\BaseService
         }
     }
 
-    public function startExecution(int $userId, int $adId, array $context = []): array
+    
+    public function recordBehaviorSignals(int $executionId, int $userId, array $signals): bool
+    {
+        $exec = $this->model->getExecutionById($executionId);
+        if (!$exec || (int)$exec->executor_id !== $userId) return false;
+
+        $behaviorData = $this->model->getBehaviorData($executionId);
+        $prevData = $behaviorData ? json_decode($behaviorData, true) ?: [] : [];
+
+        $merged = $this->mergeBehaviorSignals($prevData, $signals);
+        $this->model->updateExecutionBehavior($executionId, json_encode($merged, JSON_UNESCAPED_UNICODE));
+
+        return true;
+    }
+
+        public function startExecution(int $userId, int $adId, array $context = []): array
     {
         try {
             $this->model->beginTransaction();
+            // قفل کردن ردیف با FOR UPDATE برای جلوگیری از Race Condition
             $ad = $this->model->getAdById($adId, true);
 
             if (!$ad || $ad->status !== 'active' || $ad->remaining_count <= 0) {
@@ -269,16 +285,16 @@ class SocialTaskService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'تسک موجود نیست یا ظرفیت تکمیل شده'];
             }
 
-            // Check existing
+            // چک کردن اینکه قبلا انجام نشده باشد
             $existing = $this->model->getExecutionWithAd($adId, $userId);
-            if ($existing && !in_array($existing->status, ['expired', 'cancelled'], true)) {
+            if ($existing && !in_array($existing->status, ['expired', 'cancelled', 'rejected'], true)) {
                 $this->model->rollBack();
-                return ['success' => false, 'message' => 'قبلاً این تسک را شروع کرده‌اید'];
+                return ['success' => false, 'message' => 'شما قبلاً این تسک را انجام داده‌اید یا در حال انجام آن هستید'];
             }
 
             if (!$this->rateLimiter->check('task_submit', $userId, 50, 60)) {
                 $this->model->rollBack();
-                return ['success' => false, 'message' => 'تعداد تسک در این ساعت به حد مجاز رسیده است'];
+                return ['success' => false, 'message' => 'محدودیت تعداد تسک در ساعت'];
             }
 
             $expectedTime = self::TASK_EXPECTED_TIME[$ad->task_type] ?? 60;
@@ -300,22 +316,8 @@ class SocialTaskService extends \App\Services\BaseService
             return ['success' => true, 'execution_id' => $execId, 'expected_time' => $expectedTime, 'target_url' => $ad->target_url, 'task_type' => $ad->task_type];
         } catch (\Throwable $e) {
             $this->model->rollBack();
-            return ['success' => false, 'message' => 'خطا در شروع تسک'];
+            return ['success' => false, 'message' => 'خطای سیستمی رخ داد'];
         }
-    }
-
-    public function recordBehaviorSignals(int $executionId, int $userId, array $signals): bool
-    {
-        $exec = $this->model->getExecutionById($executionId);
-        if (!$exec || (int)$exec->executor_id !== $userId) return false;
-
-        $behaviorData = $this->model->getBehaviorData($executionId);
-        $prevData = $behaviorData ? json_decode($behaviorData, true) ?: [] : [];
-
-        $merged = $this->mergeBehaviorSignals($prevData, $signals);
-        $this->model->updateExecutionBehavior($executionId, json_encode($merged, JSON_UNESCAPED_UNICODE));
-
-        return true;
     }
 
     public function submitExecution(int $userId, int $executionId, array $payload = []): array
@@ -367,6 +369,19 @@ class SocialTaskService extends \App\Services\BaseService
                         return ['success' => false, 'message' => $pay['message'] ?? 'خطا در پرداخت پاداش'];
                     }
                     $rewardPaid = 1;
+                    
+                    // بررسی ارجاع دهنده (معرف) و پرداخت کمیسیون
+                    $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById($userId);
+                    if ($userRecord && !empty($userRecord->referred_by)) {
+                        $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
+                        if ($referralService) {
+                            $referralService->processCommission((int)$userRecord->referred_by, $rewardAmount, 'irt', [
+                                'action' => 'social_task_reward',
+                                'executor_id' => $userId,
+                                'execution_id' => $executionId
+                            ]);
+                        }
+                    }
                 }
             }
 
@@ -374,19 +389,21 @@ class SocialTaskService extends \App\Services\BaseService
                 'proof_url' => $proofUrl !== '' ? $proofUrl : null,
                 'proof_text' => $proofText !== '' ? $proofText : null,
                 'anti_fraud_score' => (float)($score['score'] ?? 0),
-                'anti_fraud_decision' => (string)($decision['decision'] ?? 'unknown'),
-                'reward_amount' => $rewardAmount,
                 'reward_paid' => $rewardPaid,
-                'submitted_at' => date('Y-m-d H:i:s')
+                'reward_amount' => $rewardAmount
             ]);
 
-            $this->webSocket->notifyExecutionSubmitted($executionId, (int)($exec->user_id ?? 0), $exec->task_type ?? 'Unknown');
             $this->model->commit();
-
-            return ['success' => true, 'message' => $finalStatus === 'approved' ? 'تسک با موفقیت تایید شد' : 'تسک رد شد', 'status' => $finalStatus, 'reward_paid' => (bool)$rewardPaid, 'reward_amount' => $rewardAmount, 'risk_score' => (float)($score['score'] ?? 0), 'decision' => (string)($decision['decision'] ?? 'unknown')];
+            
+            return [
+                'success' => true, 
+                'message' => 'ارسال با موفقیت انجام شد', 
+                'status' => $finalStatus,
+                'score' => $score['score'] ?? 0
+            ];
         } catch (\Throwable $e) {
             $this->model->rollBack();
-            return ['success' => false, 'message' => 'خطا در ثبت نهایی تسک'];
+            return ['success' => false, 'message' => 'خطای سیستمی رخ داد'];
         }
     }
 
