@@ -44,7 +44,7 @@ $container = Container::getInstance();
 // ==========================================
 //  File Lock — جلوگیری از اجرای همزمان cron (مشکل #9)
 // ==========================================
-$lockFile = sys_get_temp_dir() . '/chortke_cron.lock';
+$lockFile = BASE_PATH . '/storage/logs/cron.lock';
 $lockHandle = fopen($lockFile, 'c');
 if ($lockHandle === false || !flock($lockHandle, LOCK_EX | LOCK_NB)) {
     // نمونه دیگری در حال اجراست
@@ -767,7 +767,7 @@ if ($dryRun) {
     exit(0);
 }
 
-$results = $scheduler->run();
+$results = $scheduler->run($onlyJob);
 
 // نمایش نتایج
 foreach ($results as $name => $result) {

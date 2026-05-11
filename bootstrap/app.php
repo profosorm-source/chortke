@@ -667,9 +667,7 @@ $container->singleton(\App\Models\KpiStatistics::class, function($c) {
 $container->singleton(\App\Models\ExportData::class, function($c) {
     return new \App\Models\ExportData($c->make(\Core\Database::class));
 });
-$container->singleton(\App\Models\AntiFraudModel::class, function($c) {
-    return new \App\Models\AntiFraudModel($c->make(\Core\Database::class));
-});
+// M-01: AntiFraudModel proxy removed - use specific models (VelocityAndScoreModel, IpAndDeviceModel) instead
 
 $container->singleton(\App\Models\IpAndDeviceModel::class, function($c) {
     return new \App\Models\IpAndDeviceModel($c->make(\Core\Database::class));
@@ -696,14 +694,14 @@ $container->singleton(\App\Services\AntiFraud\GeoIPService::class, function($c) 
     return new \App\Services\AntiFraud\GeoIPService(
         $c->make(\Core\Database::class),
         $c->make(\Core\Cache::class),
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\IpAndDeviceModel::class),
         $c->make(\App\Services\AntiFraud\RiskPolicyService::class)
     );
 });
 
 $container->singleton(\App\Services\AntiFraud\BrowserFingerprintService::class, function($c) {
     return new \App\Services\AntiFraud\BrowserFingerprintService(
-        $c->make(\App\Models\AntiFraudModel::class)
+        $c->make(\App\Models\IpAndDeviceModel::class)
     );
 });
 
@@ -1287,7 +1285,8 @@ $container->singleton(\App\Services\AdvancedSearchService::class, function($c) {
 
 $container->singleton(\App\Services\AntiFraud\FraudDetectionService::class, function($c) {
     return new \App\Services\AntiFraud\FraudDetectionService(
-        $c->make(\Core\Database::class),
+        $c->make(\App\Models\VelocityAndScoreModel::class),
+        $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
         $c->make(\Core\Logger::class)
     );
 });
@@ -1457,7 +1456,7 @@ $container->singleton(\App\Controllers\User\SeoAdController::class, function($c)
 
 $container->singleton(\App\Services\AntiFraud\FraudManagementService::class, function($c) {
     return new \App\Services\AntiFraud\FraudManagementService(
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\App\Services\AntiFraud\GeoIPService::class),
         $c->make(\App\Services\AntiFraud\BrowserFingerprintService::class)
     );
@@ -1468,13 +1467,14 @@ $container->singleton(\App\Services\AntiFraud\SeoFraudDetector::class, function(
         $c->make(\App\Services\AntiFraud\BrowserFingerprintService::class),
         $c->make(\App\Services\AntiFraud\SessionAnomalyService::class),
         $c->make(\App\Models\SeoExecution::class),
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\IpAndDeviceModel::class),
         $c->make(\Core\Logger::class)
     );
 });
 
 $container->singleton(\App\Services\AntiFraud\MLFraudDetectionService::class, function($c) {
     return new \App\Services\AntiFraud\MLFraudDetectionService(
+        $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\Core\Logger::class)
     );
 });
@@ -1489,7 +1489,7 @@ $container->singleton(\App\Services\AntiFraud\BrowserFingerprintService::class, 
 
 $container->singleton(\App\Services\AntiFraud\BehavioralBiometricsService::class, function($c) {
     return new \App\Services\AntiFraud\BehavioralBiometricsService(
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\Core\Logger::class)
     );
 });
@@ -1498,14 +1498,14 @@ $container->singleton(\App\Services\AntiFraud\BehavioralBiometricsService::class
 
 $container->singleton(\App\Services\AntiFraud\GraphAnalysisService::class, function($c) {
     return new \App\Services\AntiFraud\GraphAnalysisService(
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\Core\Logger::class)
     );
 });
 
 $container->singleton(\App\Services\AntiFraud\GeolocationIntelligenceService::class, function($c) {
     return new \App\Services\AntiFraud\GeolocationIntelligenceService(
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\IpAndDeviceModel::class),
         $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
         $c->make(\Core\Logger::class)
     );
@@ -1513,28 +1513,28 @@ $container->singleton(\App\Services\AntiFraud\GeolocationIntelligenceService::cl
 
 $container->singleton(\App\Services\AntiFraud\FraudDashboardService::class, function($c) {
     return new \App\Services\AntiFraud\FraudDashboardService(
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\Core\Logger::class)
     );
 });
 
 $container->singleton(\App\Services\AntiFraud\EmailPhoneIntelligenceService::class, function($c) {
     return new \App\Services\AntiFraud\EmailPhoneIntelligenceService(
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\Core\Logger::class)
     );
 });
 
 $container->singleton(\App\Services\AntiFraud\DeviceIntelligenceService::class, function($c) {
     return new \App\Services\AntiFraud\DeviceIntelligenceService(
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\IpAndDeviceModel::class),
         $c->make(\Core\Logger::class)
     );
 });
 
 $container->singleton(\App\Services\AntiFraud\AccountTakeoverService::class, function($c) {
     return new \App\Services\AntiFraud\AccountTakeoverService(
-        $c->make(\App\Models\AntiFraudModel::class),
+        $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\App\Services\AntiFraud\SessionAnomalyService::class),
         $c->make(\App\Services\AntiFraud\IPQualityService::class),
         $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
@@ -1548,8 +1548,11 @@ $container->singleton(\App\Services\AntiFraud\AccountTakeoverService::class, fun
 $container->singleton(\App\Services\FeatureFlagService::class, function($c) {
     return new \App\Services\FeatureFlagService(
         $c->make(\App\Models\FeatureFlag::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\App\Models\KYCVerification::class),
         $c->make(Database::class),
         $c->make(\Core\Cache::class),
+        $c->make(\Core\EventDispatcher::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -1684,9 +1687,20 @@ $container->singleton(\App\Services\User\UserScoreService::class);
 
 $container->singleton(\App\Services\AntiFraud\RiskPolicyService::class);
 $container->singleton(\App\Services\AntiFraud\RiskDecisionService::class);
-$container->singleton(\App\Services\AntiFraud\VelocityCheckService::class);
+$container->singleton(\App\Services\AntiFraud\VelocityCheckService::class, function($c) {
+    return new \App\Services\AntiFraud\VelocityCheckService(
+        $c->make(\App\Models\VelocityAndScoreModel::class),
+        $c->make(\Core\Logger::class),
+        $c->make(\Core\Cache::class)
+    );
+});
 $container->singleton(\App\Services\SocialTask\SocialTaskScoringService::class);
-$container->singleton(\App\Services\AntiFraud\TorListUpdater::class);
+$container->singleton(\App\Services\AntiFraud\TorListUpdater::class, function($c) {
+    return new \App\Services\AntiFraud\TorListUpdater(
+        $c->make(\App\Models\IpAndDeviceModel::class),
+        $c->make(\Core\Logger::class)
+    );
+});
 
 $container->singleton(\App\Services\AntiFraud\SessionAnomalyService::class, function($c) {
     return new \App\Services\AntiFraud\SessionAnomalyService(

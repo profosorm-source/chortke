@@ -115,11 +115,16 @@ class Scheduler
     /**
      * اجرای همه وظایف واجد شرایط
      */
-    public function run(): array
+    public function run(?string $onlyJobName = null): array
     {
         $results = [];
 
         foreach ($this->jobs as $job) {
+            // اگر فیلتر اعمال شده باشد، نام جاب باید مطابقت داشته باشد
+            if ($onlyJobName !== null && $job['name'] !== $onlyJobName) {
+                continue;
+            }
+
             $lockKey = 'cron:' . md5($job['key']);
 
             // بررسی lock - جلوگیری از اجرای موازی با استفاده از سیستم کش (Redis/File)
