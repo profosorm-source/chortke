@@ -29,18 +29,17 @@ abstract class BaseApiController extends BaseController
     }
 
     /** پاسخ موفق */
-    protected function success(mixed $data = null, string $message = '', int $code = 200): never
+    protected function success(mixed $data = null, string $message = '', int $code = 200): void
     {
         $this->response->json([
             'success' => true,
             'message' => $message,
             'data'    => $data,
         ], $code);
-        throw new \RuntimeException($message, $code);
     }
 
     /** پاسخ با pagination */
-    protected function paginated(array $items, int $total, int $page, int $perPage): never
+    protected function paginated(array $items, int $total, int $page, int $perPage): void
     {
         $this->response->json([
             'success' => true,
@@ -54,29 +53,26 @@ abstract class BaseApiController extends BaseController
                 'to'           => min($page * $perPage, $total),
             ],
         ], 200);
-        throw new \RuntimeException('paginated', 200);
     }
 
     /** پاسخ خطا */
-    protected function error(string $message, int $code = 400, ?string $errorCode = null): never
+    protected function error(string $message, int $code = 400, ?string $errorCode = null): void
     {
         $this->response->json([
             'success' => false,
             'message' => $message,
             'data'    => ['error_code' => $errorCode],
         ], $code);
-        throw new \RuntimeException($message, $code);
     }
 
     /** خطای اعتبارسنجی */
-    protected function validationError(array $errors): never
+    protected function validationError(array $errors): void
     {
         $this->response->json([
             'success' => false,
             'message' => 'خطای اعتبارسنجی',
             'data'    => ['errors' => $errors],
         ], 422);
-        throw new \RuntimeException('خطای اعتبارسنجی', 422);
     }
 
     /** کاربر جاری (از middleware inject شده) */

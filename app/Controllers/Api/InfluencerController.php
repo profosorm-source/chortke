@@ -5,7 +5,7 @@ namespace App\Controllers\Api;
 use App\Models\InfluencerModel;
 use App\Models\StoryOrder;
 use App\Models\Dispute;
-use App\Services\StoryPromotionService;
+use App\Services\InfluencerService;
 use App\Services\Shared\DisputeService;
 use App\Services\Shared\ScoreService;
 use App\Services\UploadService;
@@ -45,7 +45,7 @@ class InfluencerController extends BaseApiController
     private InfluencerModel           $profileModel;
     private StoryOrder                  $orderModel;
     private Dispute           $disputeModel;
-    private StoryPromotionService       $promotionService;
+    private InfluencerService       $promotionService;
     private DisputeService              $disputeService;
     private ScoreService $scoreService;
     private VerificationService         $verificationService;
@@ -55,7 +55,7 @@ class InfluencerController extends BaseApiController
         InfluencerModel           $profileModel,
         StoryOrder                  $orderModel,
         Dispute           $disputeModel,
-        StoryPromotionService       $promotionService,
+        InfluencerService       $promotionService,
         DisputeService              $disputeService,
         ScoreService $scoreService,
         VerificationService         $verificationService,

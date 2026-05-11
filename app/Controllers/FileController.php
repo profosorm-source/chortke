@@ -60,7 +60,7 @@ class FileController extends BaseController
     ];
 
     /** پسوندهای مجاز در نام فایل (همان الگوی UploadService) */
-    private const FILENAME_PATTERN = '/^(captcha_[a-f0-9]{16}|[a-f0-9]{24})\.(jpg|png|webp|gif)$/i';
+    private const FILENAME_PATTERN = '/^(captcha_[a-f0-9]{16}|[a-f0-9]{8,64})\.(jpg|png|webp|gif)$/i';
 
     public function __construct(
         UploadService $uploadService,

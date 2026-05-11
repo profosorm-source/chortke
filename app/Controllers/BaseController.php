@@ -134,11 +134,15 @@ abstract class BaseController
         if (!headers_sent()) {
             header('Content-Type: application/json; charset=utf-8');
         }
+        $flags = JSON_UNESCAPED_UNICODE;
+        if (config('app.debug', false)) {
+            $flags |= JSON_PRETTY_PRINT;
+        }
         echo json_encode([
             'success' => $success,
             'message' => $message,
             'data'    => $data,
-        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        ], $flags);
         if (defined('TESTING') && TESTING === true) {
             return;
         }

@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Services\Payment\PaymentService;
 use App\Services\WalletService;
+use App\Services\ReconciliationService;
 use App\Controllers\BaseController;
 use App\Validators\Requests\WalletDepositRequest;
 use Core\Exceptions\ValidationException;
@@ -14,14 +15,17 @@ class PaymentController extends BaseController
 {
     private WalletService $walletService;
     private PaymentService $paymentService;
+    private ReconciliationService $reconciliationService;
 
     public function __construct(
         WalletService $walletService,
-        PaymentService $paymentService
+        PaymentService $paymentService,
+        ReconciliationService $reconciliationService
     ) {
         parent::__construct();
         $this->walletService = $walletService;
         $this->paymentService = $paymentService;
+        $this->reconciliationService = $reconciliationService;
     }
 
     /**
@@ -109,9 +113,50 @@ class PaymentController extends BaseController
     try {
         $result = $this->paymentService->callback($gateway, $this->request->all());
 
+        // ✅ **تطبیق پرداخت - همگام‌سازی داده‌ها**
+        // وب‌هوک داده‌های پرداخت را orders/wallets/commissions کے ساتھ ہم آہنگ کریں
         if (!empty($result['success'])) {
+            // وب‌هوک‌های successful پرداخت کو reconcile کریں
+            $webhookData = [
+                'transaction_id' => $result['transaction_id'] ?? null,
+                'reference_id' => $result['reference_id'] ?? null,
+                'order_id' => $result['order_id'] ?? null,
+                'amount' => $result['amount'] ?? 0,
+                'currency' => $result['currency'] ?? 'irt',
+                'status' => 'success',
+                'gateway' => $gateway,
+                'timestamp' => time(),
+            ];
+
+            // ReconciliationService سے تطبیق کریں
+            $reconciliation = $this->reconciliationService->reconcilePayment($webhookData);
+            
+            if (!$reconciliation['success']) {
+                // ⚠️ تنبیہ اگر تطبیق ناکام ہو
+                $this->logger->warning('payment.reconciliation.failed', [
+                    'channel' => 'payment',
+                    'gateway' => $gateway,
+                    'transaction_id' => $webhookData['transaction_id'],
+                    'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
+                ]);
+            }
+
             $this->session->setFlash('success', $result['message'] ?? 'پرداخت با موفقیت انجام شد');
         } else {
+            // ناکام پرداخت کو بھی reconcile کریں
+            $webhookData = [
+                'transaction_id' => $result['transaction_id'] ?? null,
+                'reference_id' => $result['reference_id'] ?? null,
+                'amount' => $result['amount'] ?? 0,
+                'currency' => $result['currency'] ?? 'irt',
+                'status' => 'failed',
+                'failure_reason' => $result['message'] ?? 'Unknown error',
+                'gateway' => $gateway,
+                'timestamp' => time(),
+            ];
+
+            $reconciliation = $this->reconciliationService->reconcilePayment($webhookData);
+            
             $this->session->setFlash('error', $result['message'] ?? 'پرداخت ناموفق بود');
         }
 
