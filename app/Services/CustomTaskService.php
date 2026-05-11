@@ -229,129 +229,7 @@ class CustomTaskService extends \App\Services\BaseService
 }
     }
 
-    /**
-     * Ø´Ø±ÙˆØ¹ Ø§Ù†Ø¬Ø§Ù… ØªØ³Ú© Ø¨Ø§ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Anti-Fraud Ù…ÙˆØ¬ÙˆØ¯
-     */
-    public function startTask(int $taskId, int $workerId): array
-    {
-        // Ù…Ø­Ø¯ÙˆØ¯ÛŒØª Ø´Ø±ÙˆØ¹ Ù‡Ù…Ø²Ù…Ø§Ù† ÛŒØ§ Ù¾ÛŒØ§Ù¾ÛŒ ØªØ³Ú©â€ŒÙ‡Ø§ (Ù…Ø«Ù„Ø§ Ø­Ø¯Ø§Ú©Ø«Ø± Û±Ûµ ØªÙ„Ø§Ø´ Ø¯Ø± Ûµ Ø¯Ù‚ÛŒÙ‚Ù‡)
-        if (!$this->rateLimiter->attempt('custom_task:start:' . $workerId, 15, 5)) {
-            return ['success' => false, 'message' => "ØªØ¹Ø¯Ø§Ø¯ ØªÙ„Ø§Ø´â€ŒÙ‡Ø§ÛŒ Ø´Ù…Ø§ Ø¨Ø±Ø§ÛŒ Ø´Ø±ÙˆØ¹ ØªØ³Ú©â€ŒÙ‡Ø§ÛŒ Ø¬Ø¯ÛŒØ¯ Ø¨ÛŒØ´ Ø§Ø² Ø­Ø¯ Ø§Ø³Øª. Ù„Ø·ÙØ§Ù‹ Ú©Ù…ÛŒ ØªØ£Ù…Ù„ Ú©Ù†ÛŒØ¯."];
-        }
-
-        $task = $this->taskModel->find($taskId);
-
-        if (!$task || $task->status !== 'active') {
-            return ['success' => false, 'message' => 'ÙˆØ¸ÛŒÙÙ‡ ÙØ¹Ø§Ù„ Ù†ÛŒØ³Øª.'];
-        }
-
-        if ($task->user_id === $workerId) {
-            return ['success' => false, 'message' => 'Ù†Ù…ÛŒâ€ŒØªÙˆØ§Ù†ÛŒØ¯ ÙˆØ¸ÛŒÙÙ‡ Ø®ÙˆØ¯ØªØ§Ù† Ø±Ø§ Ø§Ù†Ø¬Ø§Ù… Ø¯Ù‡ÛŒØ¯.'];
-        }
-
-        // Ø¨Ø±Ø±Ø³ÛŒ ØªÚ©Ø±Ø§Ø±ÛŒ
-        if ($this->submissionModel->submission_hasWorkerDone($taskId, $workerId)) {
-            return ['success' => false, 'message' => 'Ø´Ù…Ø§ Ù‚Ø¨Ù„Ø§Ù‹ Ø§ÛŒÙ† ÙˆØ¸ÛŒÙÙ‡ Ø±Ø§ Ø§Ù†Ø¬Ø§Ù… Ø¯Ø§Ø¯Ù‡â€ŒØ§ÛŒØ¯.'];
-        }
-
-        // Ø¨Ø±Ø±Ø³ÛŒ Ø³Ù‚Ù Ø±ÙˆØ²Ø§Ù†Ù‡ - Ø§Ø² setting
-        $maxDaily = (int) $this->settingService->get('custom_task_max_daily_submissions', 20);
-        if ($this->submissionModel->submission_todayCount($workerId) >= $maxDaily) {
-            return ['success' => false, 'message' => "Ø³Ù‚Ù Ø§Ù†Ø¬Ø§Ù… ØªØ³Ú© Ø±ÙˆØ²Ø§Ù†Ù‡ ({$maxDaily}) ØªÚ©Ù…ÛŒÙ„ Ø´Ø¯Ù‡."];
-        }
-
-        // Ø¸Ø±ÙÛŒØª Ø¨Ø§Ù‚ÛŒâ€ŒÙ…Ø§Ù†Ø¯Ù‡ - Ù…Ø­Ø§Ø³Ø¨Ù‡ Ø¯Ù‚ÛŒÙ‚
-        $remaining = (int)$task->total_count - (int)$task->completed_count - (int)$task->pending_count;
-        if ($remaining <= 0) {
-            return ['success' => false, 'message' => 'Ø¸Ø±ÙÛŒØª Ø§ÛŒÙ† ÙˆØ¸ÛŒÙÙ‡ ØªÚ©Ù…ÛŒÙ„ Ø´Ø¯Ù‡.'];
-        }
-
-        // Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Anti-Fraud Ù…ÙˆØ¬ÙˆØ¯ Ù¾Ø±ÙˆÚ˜Ù‡
-        $riskScore = $this->calculateRiskScore($workerId, $taskId);
-        
-        // Ø¨Ø±Ø±Ø³ÛŒ Ø¢Ø³ØªØ§Ù†Ù‡ Ø±ÛŒØ³Ú© - Ø§Ø² setting
-        $riskThreshold = (float) $this->settingService->get('custom_task_risk_threshold', 70.0);
-        if ($riskScore >= $riskThreshold) {
-            $this->logger->warning('High risk task start attempt', [
-                'worker_id' => $workerId,
-                'task_id' => $taskId,
-                'risk_score' => $riskScore,
-            ]);
-            // Ø§Ø±Ø³Ø§Ù„ Ø¨Ù‡ ØµÙ Ø¨Ø±Ø±Ø³ÛŒ Ø¯Ø³ØªÛŒ ÛŒØ§ Ø±Ø¯ Ù…Ø³ØªÙ‚ÛŒÙ…
-            $autoReject = $this->settingService->get('custom_task_auto_reject_high_risk', 0);
-            if ($autoReject) {
-                return ['success' => false, 'message' => 'Ø§Ù…ØªÛŒØ§Ø² Ø±ÛŒØ³Ú© Ø´Ù…Ø§ Ø¨Ø§Ù„Ø§ Ø§Ø³Øª. Ù„Ø·ÙØ§Ù‹ Ø¨Ø¹Ø¯Ø§Ù‹ ØªÙ„Ø§Ø´ Ú©Ù†ÛŒØ¯.'];
-            }
-        }
-
-        try {
-            $this->db->beginTransaction();
-
-            $deadlineAt = date('Y-m-d H:i:s', strtotime("+{$task->deadline_hours} hours"));
-            $idempotencyKey = "ctask_sub_{$taskId}_{$workerId}_" . date('Ymd_His');
-
-            // Ø¨Ø±Ø±Ø³ÛŒ ØªÚ©Ø±Ø§Ø±ÛŒ idempotency
-            if ($this->submissionModel->submission_checkIdempotency($idempotencyKey)) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'Ø¯Ø±Ø®ÙˆØ§Ø³Øª ØªÚ©Ø±Ø§Ø±ÛŒ Ø§Ø³Øª.'];
-            }
-
-            // Ù…Ø­Ø§Ø³Ø¨Ù‡ Ù¾Ø§Ø¯Ø§Ø´ Ø¨Ø§ Ø¨ÙˆÙ†ÙˆØ³
-            $rewardAmount = $this->userLevelService->applyEarningBonus(
-                $workerId,
-                (float) $task->price_per_task
-            );
-
-            // Ø§ÛŒØ¬Ø§Ø¯ submission
-            $submission = $this->submissionModel->submission_create([
-                'task_id' => $taskId,
-                'worker_id' => $workerId,
-                'deadline_at' => $deadlineAt,
-                'reward_amount' => $rewardAmount,
-                'reward_currency' => $task->currency,
-                'idempotency_key' => $idempotencyKey,
-                'worker_ip' => get_client_ip(),
-                'worker_device' => get_user_agent(),
-                'worker_fingerprint' => generate_device_fingerprint(),
-            ]);
-
-            if (!$submission) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'Ø®Ø·Ø§ Ø¯Ø± Ø´Ø±ÙˆØ¹ ÙˆØ¸ÛŒÙÙ‡: Ø³Ø§Ø¨Ù…ÛŒØ´Ù† Ø«Ø¨Øª Ù†Ø´Ø¯.'];
-            }
-
-            // Ø«Ø¨Øª Ø±Ø²Ø±Ùˆ Ø¸Ø±ÙÛŒØª Ø¯Ø± Ù…Ø¯Ù„ Ù…ØªÙ…Ø±Ú©Ø² Ads
-            $this->taskModel->incrementPendingCount($taskId);
-
-            $this->db->commit();
-
-            $this->logger->info('Task started', [
-                'submission_id' => $submission->id,
-                'task_id' => $taskId,
-                'worker_id' => $workerId,
-                'risk_score' => $riskScore,
-            ]);
-
-            return [
-                'success' => true,
-                'message' => 'ÙˆØ¸ÛŒÙÙ‡ Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª Ø´Ø±ÙˆØ¹ Ø´Ø¯.',
-                'submission_id' => $submission->id,
-                'deadline' => $deadlineAt,
-            ];
-
-        } catch (\Exception $e) {
-    $this->db->rollBack();
-    $this->logger->error('task.start.failed', [
-        'channel' => 'task',
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-    return ['success' => false, 'message' => 'Ø®Ø·Ø§ Ø¯Ø± Ø´Ø±ÙˆØ¹ ÙˆØ¸ÛŒÙÙ‡: ' . $e->getMessage()];
-}
-    }
-
+    
     /**
      * Ù…Ø­Ø§Ø³Ø¨Ù‡ Ø±ÛŒØ³Ú© Ø¨Ø§ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Anti-Fraud Ù…ÙˆØ¬ÙˆØ¯
      */
@@ -635,9 +513,66 @@ class CustomTaskService extends \App\Services\BaseService
 }
     }
 
-    /**
-     * Ù¾Ø±Ø¯Ø§Ø®Øª Ù¾Ø§Ø¯Ø§Ø´
-     */
+        public function startTask(int $taskId, int $workerId): array
+    {
+        $this->db->beginTransaction();
+        
+        if (!$this->rateLimiter->attempt('custom_task:start:' . $workerId, 15, 5)) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => "تعداد تلاش‌های شما برای شروع تسک بیش از حد مجاز است."];
+        }
+
+        // قفل گذاری روی تسک برای جلوگیری از اضافه دریافت مجری ها
+        $task = $this->db->query("SELECT * FROM custom_tasks WHERE id = ? FOR UPDATE", [$taskId])->fetch(\PDO::FETCH_OBJ);
+
+        if (!$task || $task->status !== 'active') {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'وظیفه فعال نیست.'];
+        }
+
+        if ($task->user_id === $workerId) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'نمی‌توانید وظیفه خودتان را انجام دهید.'];
+        }
+
+        if ($this->submissionModel->submission_hasWorkerDone($taskId, $workerId)) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'شما قبلاً این وظیفه را شروع کرده اید.'];
+        }
+
+        $maxDaily = (int) $this->settingService->get('custom_task_max_daily_submissions', 20);
+        if ($this->submissionModel->submission_todayCount($workerId) >= $maxDaily) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => "سقف انجام تسک روزانه ({$maxDaily}) تکمیل شده."];
+        }
+
+        $remaining = (int)$task->total_count - (int)$task->completed_count - (int)$task->pending_count;
+        if ($remaining <= 0) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'ظرفیت وظیفه تکمیل شده است.'];
+        }
+
+        try {
+            $deadline = date('Y-m-d H:i:s', time() + ($task->timeout_minutes * 60));
+            $subId = $this->submissionModel->submission_create([
+                'task_id' => $taskId,
+                'worker_id' => $workerId,
+                'reward_amount' => $task->reward_amount,
+                'reward_currency' => $task->reward_currency,
+                'deadline_at' => $deadline,
+                'status' => 'in_progress',
+                'ip_address' => get_client_ip()
+            ]);
+
+            $this->taskModel->incrementPendingCount($taskId);
+            $this->db->commit();
+            return ['success' => true, 'submission_id' => $subId, 'deadline' => $deadline];
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'خطا در تخصیص وظیفه.'];
+        }
+    }
+
     private function payWorkerReward(object $submission): void
     {
         $idempotencyKey = "ctask_reward_{$submission->id}_" . time();
@@ -648,7 +583,7 @@ class CustomTaskService extends \App\Services\BaseService
             $submission->reward_currency,
             [
                 'type' => 'task_reward',
-                'description' => "Ù¾Ø§Ø¯Ø§Ø´ ÙˆØ¸ÛŒÙÙ‡ #{$submission->task_id}",
+                'description' => "پاداش وظیفه #{$submission->task_id}",
                 'idempotency_key' => $idempotencyKey,
             ]
         );
@@ -658,24 +593,20 @@ class CustomTaskService extends \App\Services\BaseService
                 'reward_paid' => 1,
                 'reward_transaction_id' => $txId['transaction_id'],
             ]);
-
-            // Ù¾Ø±Ø¯Ø§Ø®Øª Ù¾ÙˆØ±Ø³Ø§Ù†Øª Ø¯Ø§ÛŒÙ†Ø§Ù…ÛŒÚ© Ùˆ Ù…Ø§Ú˜ÙˆÙ„Ø§Ø± Ø±ÙØ±Ø§Ù„
-            $this->referralService->processModularCommission(
-                (int) $submission->worker_id,
-                'custom_tasks',
-                (float) $submission->reward_amount,
-                $submission->reward_currency
-            );
-        } else {
-            throw new \Exception('Ø®Ø·Ø§ Ø¯Ø± ÙˆØ§Ø±ÛŒØ² Ù¾Ø§Ø¯Ø§Ø´ Ø¨Ù‡ Ú©ÛŒÙ Ù¾ÙˆÙ„ Ø§Ù†Ø¬Ø§Ù…â€ŒØ¯Ù‡Ù†Ø¯Ù‡: ' . ($txId['message'] ?? 'Ù†Ø§Ù…Ø´Ø®Øµ'));
+            
+            // پورسانت ریفرال (زیرمجموعه‌گیری)
+            $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById($submission->worker_id);
+            if ($userRecord && !empty($userRecord->referred_by)) {
+                $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
+                if ($referralService) {
+                    $referralService->processCommission((int)$userRecord->referred_by, (float)$submission->reward_amount, $submission->reward_currency, [
+                        'action' => 'custom_task_reward',
+                        'executor_id' => $submission->worker_id,
+                        'execution_id' => $submission->id
+                    ]);
+                }
+            }
         }
-
-        // ØªØ®ØµÛŒØµ Ø§Ù…ØªÛŒØ§Ø² ØªØ¬Ø±Ø¨Ù‡ (XP) Ú¯ÛŒÙ…ÛŒÙØ§ÛŒ Ø´Ø¯Ù‡
-        $this->xpEngine->awardXP(
-            (int) $submission->worker_id,
-            'custom_tasks',
-            'custom_task_approved'
-        );
     }
 
     // Ù…ØªØ¯Ù‡Ø§ÛŒ Query Ø³Ø§Ø¯Ù‡ Ø¨Ø±Ø§ÛŒ Controller Ù‡Ø§

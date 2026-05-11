@@ -155,17 +155,17 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
         return $amount * ($feePercent / 100);
     }
 
-    public function processPayment(int $adId, int $userId, float $amount, string $currency): array
+        public function processPayment(int $adId, int $userId, float $amount, string $currency): array
     {
-        $result = $this->walletService->withdraw($userId, $amount, $currency, [
+        $result = $this->walletService->pay($userId, $amount, $currency, [
             'type' => 'social_task_payment',
             'ad_id' => $adId
         ]);
         
-        if ($result) {
-            return ['success' => true, 'transaction_id' => $result, 'message' => 'پرداخت انجام شد'];
+        if (!empty($result['success'])) {
+            return ['success' => true, 'transaction_id' => $result['transaction_id'] ?? '', 'message' => 'پرداخت انجام شد'];
         }
-        return ['success' => false, 'message' => 'موجودی ناکافی است'];
+        return ['success' => false, 'message' => 'موجودی ناکافی است یا خطا در پرداخت'];
     }
 
     public function track(int $adId, string $eventType, ?int $userId = null): array

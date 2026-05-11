@@ -60,34 +60,42 @@ class SeoService extends \App\Services\BaseService
      */
     public function startTask(int $adId, int $userId): array
     {
-        $ad = $this->adModel->find($adId);
+        $this->db->beginTransaction();
+        // قفل کردن آگهی برای جلوگیری از Race Condition
+        $ad = $this->db->query("SELECT * FROM ads WHERE id = ? FOR UPDATE", [$adId])->fetch(\PDO::FETCH_OBJ);
         
         if (!$ad) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'آگهی یافت نشد'];
         }
 
         if ($ad->status !== 'active') {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'آگهی فعال نیست'];
         }
 
         if ($ad->remaining_budget < $ad->min_payout) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'بودجه آگهی تمام شده است'];
         }
 
         // بررسی تکراری
         if ($this->executionModel->existsByAdAndUserToday($adId, $userId)) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'شما امروز این تسک را قبلاً انجام داده‌اید'];
         }
 
         // بررسی محدودیت روزانه کاربر
         $todayCount = $this->executionModel->countByUserToday($userId);
         if ($todayCount >= $ad->max_per_day) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => "حداکثر {$ad->max_per_day} تسک در روز مجاز است"];
         }
 
         // بررسی محدودیت ساعتی
         $hourlyCount = $this->executionModel->countByUserLastHour($userId);
         if ($hourlyCount >= self::MAX_TASKS_PER_HOUR) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'حداکثر ' . self::MAX_TASKS_PER_HOUR . ' تسک در ساعت مجاز است. لطفاً کمی صبر کنید'];
         }
 
@@ -95,47 +103,32 @@ class SeoService extends \App\Services\BaseService
         $ip = get_client_ip();
         $ipHourly = $this->executionModel->countByIPLastHour($ip);
         if ($ipHourly >= self::MAX_IP_TASKS_PER_HOUR) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'محدودیت IP. لطفاً بعداً تلاش کنید'];
         }
 
-        // بررسی Blacklist
-        if ($this->fraudDetector->isBlacklisted($userId)) {
-            return ['success' => false, 'message' => 'در حال حاضر امکان انجام تسک وجود ندارد'];
-        }
-
-        // ایجاد Execution
         try {
             $fingerprint = function_exists('generate_device_fingerprint') 
                 ? generate_device_fingerprint() 
-                : null;
+                : md5($_SERVER['HTTP_USER_AGENT'] ?? '' . $ip);
 
-            $execution = $this->executionModel->create([
+            $sessionId = bin2hex(random_bytes(16));
+
+            $this->executionModel->create([
                 'ad_id' => $adId,
                 'user_id' => $userId,
+                'session_id' => $sessionId,
+                'status' => 'started',
                 'ip_address' => $ip,
                 'device_fingerprint' => $fingerprint,
+                'started_at' => date('Y-m-d H:i:s'),
+                'target_keyword' => $ad->keyword,
             ]);
 
-            if (!$execution) {
-                return ['success' => false, 'message' => 'خطا در شروع تسک'];
-            }
-
-            $this->logger->info('seo_task.started', ['user_id' => $userId, 'ad_id' => $adId]);
-
-            return [
-                'success' => true,
-                'message' => 'تسک شروع شد',
-                'execution' => $execution,
-                'ad' => $ad,
-                'config' => [
-                    'target_duration' => $ad->target_duration,
-                    'min_score' => $ad->min_score,
-                    'min_payout' => $ad->min_payout,
-                    'max_payout' => $ad->max_payout,
-                ]
-            ];
-
+            $this->db->commit();
+            return ['success' => true, 'session_id' => $sessionId];
         } catch (\Exception $e) {
+            $this->db->rollBack();
             $this->logger->error('seo_task.start_failed', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطای سیستمی'];
         }
@@ -144,48 +137,47 @@ class SeoService extends \App\Services\BaseService
     /**
      * تکمیل تسک و محاسبه پاداش
      */
-    public function completeTask(int $executionId, int $userId, array $engagementData): array
+     public function completeTask(int $executionId, int $userId, array $engagementData): array
     {
-        $execution = $this->executionModel->findByUser($executionId, $userId);
+        $this->db->beginTransaction();
+        // قفل گذاری روی سطر اجرا و آگهی برای جلوگیری از Double Payout
+        $execution = $this->db->query("SELECT * FROM seo_executions WHERE id = ? AND user_id = ? FOR UPDATE", [$executionId, $userId])->fetch(\PDO::FETCH_OBJ);
         
         if (!$execution) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'تسک یافت نشد'];
         }
 
         if ($execution->status !== 'started') {
-            return ['success' => false, 'message' => 'این تسک قبلاً تکمیل شده است'];
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'این تسک قبلاً پردازش شده است'];
         }
 
-        $ad = $this->adModel->find($execution->ad_id);
+        $ad = $this->db->query("SELECT * FROM ads WHERE id = ? FOR UPDATE", [$execution->ad_id])->fetch(\PDO::FETCH_OBJ);
         
         if (!$ad) {
+            $this->db->rollBack();
             return ['success' => false, 'message' => 'آگهی یافت نشد'];
         }
 
         try {
-            $this->db->beginTransaction();
-
             // 1. اعتبارسنجی داده‌ها
             if (!isset($engagementData['duration'], $engagementData['scroll_depth'], $engagementData['interactions'])) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'داده‌های تعامل ناقص است'];
             }
 
-            // 2. محاسبه امتیاز (استفاده از منطق داخلی)
+            // 2. محاسبه امتیاز
             $scores = $this->calculateEngagementScore($engagementData);
 
             // 3. تشخیص تقلب
             $fraudCheck = $this->fraudDetector->detect($userId, $ad->id, $engagementData);
             
             if ($fraudCheck['is_fraud']) {
-                // علامت‌گذاری به عنوان تقلب
                 $this->executionModel->markAsFraud($executionId, $fraudCheck['flags']);
                 $this->fraudDetector->addToBlacklist($userId, implode(', ', $fraudCheck['flags']));
-                
                 $this->db->commit();
-                
                 $this->logger->warning('seo_task.fraud_detected', ['user_id' => $userId, 'execution_id' => $executionId, 'flags' => $fraudCheck['flags']]);
-                
                 return [
                     'success' => false,
                     'message' => 'تعامل شما معتبر تشخیص داده نشد',
@@ -197,7 +189,6 @@ class SeoService extends \App\Services\BaseService
             if ($scores['final_score'] < $ad->min_score) {
                 $this->executionModel->reject($executionId, "امتیاز کمتر از حد مجاز ({$ad->min_score})");
                 $this->db->commit();
-                
                 return [
                     'success' => false,
                     'message' => "امتیاز شما ({$scores['final_score']}) کمتر از حداقل مجاز ({$ad->min_score}) است",
@@ -207,11 +198,9 @@ class SeoService extends \App\Services\BaseService
 
             // 5. محاسبه پاداش
             $payoutResult = $this->payoutService->calculatePayout($ad->id, $scores['final_score']);
-            
             if (!$payoutResult['can_pay']) {
                 $this->executionModel->reject($executionId, $payoutResult['message']);
                 $this->db->commit();
-                
                 return [
                     'success' => false,
                     'message' => $payoutResult['message'],
@@ -227,60 +216,51 @@ class SeoService extends \App\Services\BaseService
             $this->payoutService->deductFromBudget($ad->id, $payout);
 
             // 8. واریز به کیف پول کاربر
-            $walletResult = $this->walletService->credit(
+            $walletResult = $this->walletService->deposit(
                 $userId,
                 $payout,
                 'irt',
-                'seo_task',
-                "تسک SEO - {$ad->title}",
-                ['ad_id' => $ad->id, 'execution_id' => $executionId]
+                [
+                    'source' => 'seo_task_reward',
+                    'description' => "تسک SEO - {$ad->title}",
+                    'execution_id' => $executionId,
+                    'ad_id' => $ad->id
+                ]
             );
 
-            if (!$walletResult['success']) {
+            if (empty($walletResult['success'])) {
                 $this->db->rollBack();
                 $this->logger->error('seo_task.wallet_credit_failed', ['user_id' => $userId]);
                 return ['success' => false, 'message' => 'خطا در واریز پاداش'];
             }
 
-            // 9. پورسانت ریفرال داینامیک و ماژولار چورتکه
-            try {
-                $this->referralService->processModularCommission(
-                    $userId,
-                    'google_search',
-                    $payout,
-                    'irt',
-                    ['type' => 'seo_task', 'execution_id' => $executionId]
-                );
-            } catch (\Exception $e) {
-                $this->logger->error('seo_task.referral_commission_failed', ['error' => $e->getMessage()]);
-            }
-
-            // 10. تخصیص امتیاز تجربه (XP) گیمیفای شده
-            try {
-                $xpEngine = \Core\Container::getInstance()->make(\App\Services\XPEngine::class);
-                $xpEngine->awardXP($userId, 'google_search', 'seo_task_completed');
-            } catch (\Throwable $t) {
-                $this->logger->error('seo_task.xp_award_failed', ['error' => $t->getMessage()]);
+            // 9. پورسانت ریفرال
+            $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById($userId);
+            if ($userRecord && !empty($userRecord->referred_by)) {
+                $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
+                if ($referralService) {
+                    $referralService->processCommission((int)$userRecord->referred_by, $payout, 'irt', [
+                        'action' => 'seo_task_reward',
+                        'executor_id' => $userId,
+                        'execution_id' => $executionId
+                    ]);
+                }
             }
 
             $this->db->commit();
-
-            $this->logger->info('seo_task.completed', ['user_id' => $userId, 'execution_id' => $executionId, 'payout' => $payout]);
-
             return [
                 'success' => true,
-                'message' => 'تسک با موفقیت تکمیل شد',
+                'message' => 'تسک با موفقیت تایید شد و پاداش واریز گردید',
                 'payout' => $payout,
                 'score' => $scores['final_score'],
-                'scores' => $scores,
             ];
-
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logger->error('seo_task.complete_failed', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطای سیستمی'];
         }
     }
+
 
     /**
      * لغو تسک (قبل از تکمیل)
