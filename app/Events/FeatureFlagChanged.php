@@ -11,30 +11,17 @@ class FeatureFlagChanged
 {
     private const VALID_ACTIONS = ['toggled', 'updated', 'created', 'deleted'];
 
-    public string $featureName;
-    public string $action;  // 'toggled', 'updated', 'created', 'deleted'
-    public array $oldValues;
-    public array $newValues;
-    public ?int $changedBy;
-    public \DateTime $changedAt;
-    
     public function __construct(
-        string $featureName,
-        string $action,
-        array $oldValues = [],
-        array $newValues = [],
-        ?int $changedBy = null
+        public readonly string $featureName,
+        public readonly string $action,
+        public readonly array $oldValues = [],
+        public readonly array $newValues = [],
+        public readonly ?int $changedBy = null,
+        public readonly \DateTime $changedAt = new \DateTime()
     ) {
-        if (!in_array($action, self::VALID_ACTIONS, true)) {
-            throw new \InvalidArgumentException("Invalid action: {$action}");
+        if (!in_array($this->action, self::VALID_ACTIONS, true)) {
+            throw new \InvalidArgumentException("Invalid action: {$this->action}");
         }
-
-        $this->featureName = $featureName;
-        $this->action = $action;
-        $this->oldValues = $oldValues;
-        $this->newValues = $newValues;
-        $this->changedBy = $changedBy;
-        $this->changedAt = new \DateTime();
     }
     
     /**

@@ -42,6 +42,7 @@ class PercentageConstants
     // 💯 Fee percentages
     public const AD_TUBE_FEE_PERCENT = 20;
     public const BANNER_FEE_PERCENT = 12;
+    public const SOCIAL_TASK_FEE_PERCENT = 15;
     public const DEFAULT_FEE_PERCENT = 15;
 
     // 💯 Quality thresholds (in percentages)

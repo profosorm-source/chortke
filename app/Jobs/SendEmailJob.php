@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Services\EmailService;
-use App\Models\EmailQueue;
+use App\Services\RedisEmailQueueService;
 
 /**
  * SendEmailJob — ارسال غیرمسدودکننده و پس‌زمینه ایمیل‌های سیستم چرتکه به صورت آنی
@@ -13,12 +13,12 @@ use App\Models\EmailQueue;
 class SendEmailJob
 {
     private EmailService $emailService;
-    private EmailQueue $emailQueue;
+    private RedisEmailQueueService $redisQueue;
 
-    public function __construct(EmailService $emailService, EmailQueue $emailQueue)
+    public function __construct(EmailService $emailService, RedisEmailQueueService $redisQueue)
     {
         $this->emailService = $emailService;
-        $this->emailQueue = $emailQueue;
+        $this->redisQueue = $redisQueue;
     }
 
     /**
@@ -26,7 +26,7 @@ class SendEmailJob
      */
     public function handle(array $data): void
     {
-        $emailId  = isset($data['email_id']) ? (int)$data['email_id'] : null;
+        $emailId  = isset($data['email_id']) ? (string)$data['email_id'] : null;
         $toEmail  = $data['to_email'] ?? '';
         $toName   = $data['to_name'] ?? '';
         $subject  = $data['subject'] ?? '';
@@ -36,18 +36,14 @@ class SendEmailJob
             return;
         }
 
-        if ($emailId) {
-            $this->emailQueue->markAsSending($emailId);
-        }
-
         // ارسال واقعی ایمیل از طریق SMTP
         $sent = $this->emailService->sendDirect($toEmail, $toName, $subject, $bodyHtml);
 
         if ($emailId) {
             if ($sent) {
-                $this->emailQueue->markAsSent($emailId);
+                $this->redisQueue->markAsSent($emailId);
             } else {
-                $this->emailQueue->markAsFailed($emailId, 'SMTP send failed via SendEmailJob background queue');
+                $this->redisQueue->markAsFailed($emailId, 'SMTP send failed via SendEmailJob background queue');
             }
         }
     }

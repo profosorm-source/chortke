@@ -35,32 +35,26 @@ class ProcessScheduledTasksCommand
      */
     public function handle(): void
     {
-        echo "🔄 در حال پردازش کارهای زمان‌بندی‌شده...\n\n";
+        $this->logger->info('command.scheduled_tasks.starting');
 
         $deletedCount = 0;
         $deletedFiles = 0;
 
         // ۱. حذف خودکار حساب‌های درخواست‌شده
         try {
-            echo "⏳ در حال بررسی درخواست‌های حذف منقضی...\n";
             $deletedCount = $this->accountDeletionService->processExpiredDeletionRequests();
-            echo "✅ {$deletedCount} حساب حذف شد\n\n";
+            $this->logger->info('command.scheduled_tasks.accounts_deleted', ['count' => $deletedCount]);
         } catch (\Throwable $e) {
-            echo "❌ خطا در حذف حساب‌ها: {$e->getMessage()}\n\n";
             $this->logger->error('command.scheduled_tasks.accounts.failed', ['error' => $e->getMessage()]);
         }
 
         // ۲. حذف فایل‌های منقضی‌شده
         try {
-            echo "⏳ در حال پاک‌کردن فایل‌های منقضی...\n";
             $deletedFiles = $this->dataExportService->deleteExpiredExports();
-            echo "✅ {$deletedFiles} فایل حذف شد\n\n";
+            $this->logger->info('command.scheduled_tasks.files_deleted', ['count' => $deletedFiles]);
         } catch (\Throwable $e) {
-            echo "❌ خطا در حذف فایل‌های منقضی: {$e->getMessage()}\n\n";
             $this->logger->error('command.scheduled_tasks.files.failed', ['error' => $e->getMessage()]);
         }
-
-        echo "🎉 همه کارهای زمان‌بندی‌شده انجام شد\n";
         $this->logger->info('command.scheduled_tasks.completed', [
             'deleted_accounts' => $deletedCount,
             'deleted_files' => $deletedFiles

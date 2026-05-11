@@ -306,6 +306,20 @@ class FeatureFlagCommand
      */
     public function clearCache(): void
     {
+        $count = $this->model->getCacheCount();
+        if ($count === 0) {
+            echo "ℹ️ کش خالی است.\n";
+            return;
+        }
+        
+        echo "⚠️ این عمل {$count} رکورد کش را حذف میکند. تأیید کنید (yes/no): ";
+        $confirm = trim(fgets(STDIN) ?: '');
+        
+        if (strtolower($confirm) !== 'yes') {
+            echo "❌ عملیات لغو شد.\n";
+            return;
+        }
+        
         $this->model->clearCache();
         echo "✅ Cache فیچرها پاک شد.\n";
     }
@@ -318,118 +332,118 @@ class FeatureFlagCommand
         $this->model->cleanupMetrics($days);
         echo "✅ Metrics قدیمی‌تر از {$days} روز پاک شدند.\n";
     }
-}
-
-// اجرای Command
-if (php_sapi_name() === 'cli') {
-    $command = \Core\Container::getInstance()->make(FeatureFlagCommand::class);
-    
-    $action = $argv[1] ?? 'help';
-    
-    switch ($action) {
-        case 'feature:list':
-            $command->list();
-            break;
-            
-        case 'feature:enable':
-            $name = $argv[2] ?? null;
-            if (!$name) {
-                echo "Usage: php cli.php feature:enable <name>\n";
-                exit(1);
-            }
-            $command->enable($name);
-            break;
-            
-        case 'feature:disable':
-            $name = $argv[2] ?? null;
-            if (!$name) {
-                echo "Usage: php cli.php feature:disable <name>\n";
-                exit(1);
-            }
-            $command->disable($name);
-            break;
-            
-        case 'feature:status':
-            $name = $argv[2] ?? null;
-            if (!$name) {
-                echo "Usage: php cli.php feature:status <name>\n";
-                exit(1);
-            }
-            $command->status($name);
-            break;
-            
-        case 'feature:create':
-            $name = $argv[2] ?? null;
-            $desc = $argv[3] ?? null;
-            if (!$name || !$desc) {
-                echo "Usage: php cli.php feature:create <name> <description>\n";
-                exit(1);
-            }
-            $command->create($name, $desc);
-            break;
-            
-        case 'feature:delete':
-            $name = $argv[2] ?? null;
-            if (!$name) {
-                echo "Usage: php cli.php feature:delete <name>\n";
-                exit(1);
-            }
-            $command->delete($name);
-            break;
-            
-        case 'feature:rollout':
-            $name = $argv[2] ?? null;
-            $percentage = $argv[3] ?? null;
-            if (!$name || $percentage === null) {
-                echo "Usage: php cli.php feature:rollout <name> <percentage>\n";
-                exit(1);
-            }
-            $command->rollout($name, (int)$percentage);
-            break;
-            
-        case 'feature:schedule':
-            $name = $argv[2] ?? null;
-            $from = $argv[3] ?? null;
-            $until = $argv[4] ?? null;
-            if (!$name || !$from || !$until) {
-                echo "Usage: php cli.php feature:schedule <name> <from> <until>\n";
-                exit(1);
-            }
-            $command->schedule($name, $from, $until);
-            break;
-            
-        case 'feature:history':
-            $name = $argv[2] ?? null;
-            $limit = $argv[3] ?? 20;
-            if (!$name) {
-                echo "Usage: php cli.php feature:history <name> [limit]\n";
-                exit(1);
-            }
-            $command->history($name, (int)$limit);
-            break;
-            
-        case 'feature:clear-cache':
-            $command->clearCache();
-            break;
-            
-        case 'feature:cleanup-metrics':
-            $days = $argv[2] ?? 30;
-            $command->cleanupMetrics((int)$days);
-            break;
-            
-        default:
-            echo "Feature Flag Management Commands:\n";
-            echo "  feature:list                           - List all features\n";
-            echo "  feature:enable <name>                  - Enable a feature\n";
-            echo "  feature:disable <name>                 - Disable a feature\n";
-            echo "  feature:status <name>                  - Show feature status\n";
-            echo "  feature:create <name> <description>    - Create new feature\n";
-            echo "  feature:delete <name>                  - Delete a feature\n";
-            echo "  feature:rollout <name> <percentage>    - Set rollout percentage\n";
-            echo "  feature:schedule <name> <from> <until> - Schedule feature\n";
-            echo "  feature:history <name> [limit]         - Show change history\n";
-            echo "  feature:clear-cache                    - Clear feature cache\n";
-            echo "  feature:cleanup-metrics [days]         - Clean old metrics\n";
-            break;
+    /**
+     * اجرای دستورات
+     */
+    public function run(array $argv): void
+    {
+        $action = $argv[1] ?? 'help';
+        
+        switch ($action) {
+            case 'feature:list':
+                $this->list();
+                break;
+                
+            case 'feature:enable':
+                $name = $argv[2] ?? null;
+                if (!$name) {
+                    echo "Usage: php cli.php feature:enable <name>\n";
+                    exit(1);
+                }
+                $this->enable($name);
+                break;
+                
+            case 'feature:disable':
+                $name = $argv[2] ?? null;
+                if (!$name) {
+                    echo "Usage: php cli.php feature:disable <name>\n";
+                    exit(1);
+                }
+                $this->disable($name);
+                break;
+                
+            case 'feature:status':
+                $name = $argv[2] ?? null;
+                if (!$name) {
+                    echo "Usage: php cli.php feature:status <name>\n";
+                    exit(1);
+                }
+                $this->status($name);
+                break;
+                
+            case 'feature:create':
+                $name = $argv[2] ?? null;
+                $desc = $argv[3] ?? null;
+                if (!$name || !$desc) {
+                    echo "Usage: php cli.php feature:create <name> <description>\n";
+                    exit(1);
+                }
+                $this->create($name, $desc);
+                break;
+                
+            case 'feature:delete':
+                $name = $argv[2] ?? null;
+                if (!$name) {
+                    echo "Usage: php cli.php feature:delete <name>\n";
+                    exit(1);
+                }
+                $this->delete($name);
+                break;
+                
+            case 'feature:rollout':
+                $name = $argv[2] ?? null;
+                $percentage = $argv[3] ?? null;
+                if (!$name || $percentage === null) {
+                    echo "Usage: php cli.php feature:rollout <name> <percentage>\n";
+                    exit(1);
+                }
+                $this->rollout($name, (int)$percentage);
+                break;
+                
+            case 'feature:schedule':
+                $name = $argv[2] ?? null;
+                $from = $argv[3] ?? null;
+                $until = $argv[4] ?? null;
+                if (!$name || !$from || !$until) {
+                    echo "Usage: php cli.php feature:schedule <name> <from> <until>\n";
+                    exit(1);
+                }
+                $this->schedule($name, $from, $until);
+                break;
+                
+            case 'feature:history':
+                $name = $argv[2] ?? null;
+                $limit = $argv[3] ?? 20;
+                if (!$name) {
+                    echo "Usage: php cli.php feature:history <name> [limit]\n";
+                    exit(1);
+                }
+                $this->history($name, (int)$limit);
+                break;
+                
+            case 'feature:clear-cache':
+                $this->clearCache();
+                break;
+                
+            case 'feature:cleanup-metrics':
+                $days = $argv[2] ?? 30;
+                $this->cleanupMetrics((int)$days);
+                break;
+                
+            default:
+                echo "Feature Flag Management Commands:\n";
+                echo "  feature:list                           - List all features\n";
+                echo "  feature:enable <name>                  - Enable a feature\n";
+                echo "  feature:disable <name>                 - Disable a feature\n";
+                echo "  feature:status <name>                  - Show feature status\n";
+                echo "  feature:create <name> <description>    - Create new feature\n";
+                echo "  feature:delete <name>                  - Delete a feature\n";
+                echo "  feature:rollout <name> <percentage>    - Set rollout percentage\n";
+                echo "  feature:schedule <name> <from> <until> - Schedule feature\n";
+                echo "  feature:history <name> [limit]         - Show change history\n";
+                echo "  feature:clear-cache                    - Clear feature cache\n";
+                echo "  feature:cleanup-metrics [days]         - Clean old metrics\n";
+                break;
+        }
     }
 }

@@ -6,6 +6,7 @@ namespace App\Listeners;
 
 use App\Events\FeatureFlagChanged;
 use Core\Database;
+use App\Services\Notification\NotificationService;
 use App\Contracts\LoggerInterface;
 
 /**
@@ -15,11 +16,13 @@ class LogFeatureFlagChange
 {
     private Database $db;
     private LoggerInterface $logger;
+    private NotificationService $notificationService;
     
-    public function __construct(Database $db, LoggerInterface $logger)
+    public function __construct(Database $db, LoggerInterface $logger, NotificationService $notificationService)
     {
         $this->db = $db;
         $this->logger = $logger;
+        $this->notificationService = $notificationService;
     }
     
     /**
@@ -128,8 +131,11 @@ class LogFeatureFlagChange
             return;
         }
         
-        // TODO: ارسال Notification به ادمین‌های سیستم
-        // می‌تونه از طریق Telegram Bot، Email یا SMS باشه
+        // ارسال Notification به ادمین‌های سیستم
+        $this->notificationService->sendToAdmins('critical_feature_change', [
+            'feature' => $event->featureName,
+            'action' => $event->action,
+        ]);
         
         $this->logger->critical('feature_flag.critical_change', [
             'channel' => 'feature_flag',

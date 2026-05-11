@@ -111,7 +111,13 @@ class AdvancedFraudMiddleware extends BaseMiddleware
             ]);
         }
 
-        $takeoverCheck = $this->accountTakeoverService->detect($userId, $ip, $userAgent);
+        $currentFingerprint = $this->fingerprintService->generate([
+            'user_agent' => $userAgent,
+            'language' => $acceptLanguage,
+            'encoding' => $acceptEncoding
+        ]);
+
+        $takeoverCheck = $this->accountTakeoverService->detect($userId, $ip, $userAgent, $currentFingerprint);
         if ($takeoverCheck['is_takeover']) {
             $this->accountTakeoverService->logDetection($userId, $ip, $userAgent, $takeoverCheck);
             $this->scoreService->incrementFraudRawScore($userId, (float) $takeoverCheck['risk_score'] / 2, 'account_takeover', [
