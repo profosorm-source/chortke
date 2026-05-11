@@ -104,7 +104,6 @@ class AuthService extends \App\Services\BaseService
             setcookie('remember_token', $token, time() + (30 * 86400), '/', '', true, true);
         }
 
-        // ✅ Pass HTTP data explicitly (extracted from HTTP Layer)
         $this->sessionService->recordSession(
             userId: (int)$user->id,
             sessionId: $this->session->getId(),
@@ -127,6 +126,48 @@ class AuthService extends \App\Services\BaseService
         }
 
         $this->session->destroy();
+    }
+
+    public function validateRegister(array $data): array
+    {
+        $validator = new \Core\Validator($data, [
+            'full_name' => 'required|min:3',
+            'email' => 'required|email',
+            'password' => 'required|min:6',
+        ]);
+
+        $errors = [];
+        if ($validator->fails()) {
+            foreach ($validator->errors() as $field => $errs) {
+                if (is_array($errs)) {
+                    $errors = array_merge($errors, $errs);
+                } else {
+                    $errors[] = $errs;
+                }
+            }
+        }
+
+        if ($this->userService->emailExists($data['email'])) {
+            $errors[] = 'این ایمیل قبلاً ثبت شده است.';
+        }
+
+        return $errors;
+    }
+
+    public function register(array $data): array
+    {
+        $userId = $this->userService->register($data);
+        if (!$userId) {
+            return ['success' => false, 'message' => 'ثبت‌نام با شکست مواجه شد.'];
+        }
+
+        $user = $this->userService->find($userId);
+        if ($this->emailService && $user && isset($user->email_verification_token)) {
+            $this->emailService->sendVerificationEmail($userId, $user->email_verification_token);
+        }
+        
+        $this->logger->activity('auth.register', 'ثبت‌نام کاربر', $userId);
+        return ['success' => true, 'message' => 'ثبت‌نام با موفقیت انجام شد.'];
     }
 
     public function requestPasswordReset(string $email): array
