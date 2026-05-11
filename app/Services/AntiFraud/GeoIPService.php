@@ -210,17 +210,18 @@ private function lookupLocalDatabase(string $ip): ?array
      * بررسی IP خصوصی
      */
 private function isPrivateIP(string $ip): bool
-{
-    if (!filter_var($ip, FILTER_VALIDATE_IP)) {
-        return true;
-    }
+    {
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            // اگر فرمت آی‌پی اصلاً معتبر نیست، یک آی‌پی خصوصی در نظر گرفته نمی‌شود (بلکه کلاً نامعتبر است)
+            return false; 
+        }
 
-    return filter_var(
-        $ip,
-        FILTER_VALIDATE_IP,
-        FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-    ) === false;
-}
+        return filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) === false;
+    }
     
     /**
      * بررسی قرار گرفتن IP در یک Range
