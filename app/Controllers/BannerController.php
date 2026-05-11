@@ -21,7 +21,7 @@ class BannerController extends BaseController
      */
     public function click()
     {
-                        $id = (int)$this->request->param('id');
+        $id = (int)$this->request->param('id');
 
         $service = $this->bannerService;
         $result = $service->trackClick($id);

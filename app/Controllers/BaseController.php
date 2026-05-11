@@ -160,12 +160,19 @@ abstract class BaseController
     }
 
     /** redirect به صفحه قبلی (یا fallback) */
-    protected function back(string $fallback = '/'): void
-    {
-        $ref = $_SERVER['HTTP_REFERER'] ?? '';
-        $this->response->redirect($ref ?: url($fallback));
-        exit;
+   protected function back(string $fallback = '/'): void {
+    $ref = $_SERVER['HTTP_REFERER'] ?? '';
+    $host = parse_url($ref, PHP_URL_HOST);
+    $appHost = parse_url(config('app.url'), PHP_URL_HOST);
+    
+    // فقط به همین domain redirect شود
+    if ($host && $host === $appHost) {
+        $this->response->redirect($ref);
+    } else {
+        $this->response->redirect(url($fallback));
     }
+    exit;
+}
 
     /** flash + redirect ترکیبی */
     protected function redirectWithError(string $message, string $to = ''): void
@@ -210,12 +217,14 @@ abstract class BaseController
             if ($this instanceof \App\Controllers\Api\BaseApiController || is_ajax()) {
                 // ارسال پاسخ استاندارد JSON در صورت درخواست AJAX
                 $this->json(false, 'داده‌های ورودی نامعتبر است', ['errors' => $errors], 422);
+                return [];  // Exit execution to prevent validated() from running
             } else {
                 $firstError = is_array($errors) ? (reset($errors)[0] ?? reset($errors)) : 'داده‌های ورودی نامعتبر است';
                 $this->session->setFlash('error', $firstError);
                 $this->session->setFlash('errors', $errors);
                 $this->session->setFlash('old', $data);
                 $this->back();
+                return [];  // Exit execution after redirect
             }
         }
 

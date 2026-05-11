@@ -20,10 +20,7 @@ class CaptchaController extends BaseController
      */
     public function refresh(): void
     {
-        $isAjax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
-            strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
-
-        if (!$isAjax) {
+        if (!is_ajax()) {
             http_response_code(400);
             exit;
         }
@@ -57,10 +54,7 @@ class CaptchaController extends BaseController
      */
     public function behavioralPing(): void
     {
-        $isAjax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
-            strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
-
-        if (!$isAjax) {
+        if (!is_ajax()) {
             $this->json(false, 'Bad request', [], 400);
             return;
         }

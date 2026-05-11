@@ -54,6 +54,7 @@ class FingerprintController extends BaseApiController
                 'fingerprint' => substr($fingerprint, 0, 16) . '...',
                 'suspicious' => $analysis['suspicious'] ?? false
             ]);
+            return;  // ← Critical: Exit after response to prevent double response
         }
 
         // برای کاربران مهمان فقط تولید و بازگشت می‌دهیم (بدون ذخیره دیتابیسی سنگین یا با منطق متفاوت)

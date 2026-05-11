@@ -42,9 +42,6 @@ use App\Services\VerificationService;
  */
 class InfluencerController extends BaseApiController
 {
-    private InfluencerModel           $profileModel;
-    private StoryOrder                  $orderModel;
-    private Dispute           $disputeModel;
     private InfluencerService       $promotionService;
     private DisputeService              $disputeService;
     private ScoreService $scoreService;
@@ -52,9 +49,6 @@ class InfluencerController extends BaseApiController
     private UploadService               $uploadService;
 
     public function __construct(
-        InfluencerModel           $profileModel,
-        StoryOrder                  $orderModel,
-        Dispute           $disputeModel,
         InfluencerService       $promotionService,
         DisputeService              $disputeService,
         ScoreService $scoreService,
@@ -62,9 +56,6 @@ class InfluencerController extends BaseApiController
         UploadService               $uploadService
     ) {
         parent::__construct();
-        $this->profileModel      = $profileModel;
-        $this->orderModel        = $orderModel;
-        $this->disputeModel      = $disputeModel;
         $this->promotionService  = $promotionService;
         $this->disputeService    = $disputeService;
         $this->scoreService = $scoreService;
@@ -83,7 +74,7 @@ class InfluencerController extends BaseApiController
     public function myProfile(): never
     {
         $userId  = $this->userId();
-        $profile = $this->profileModel->findByUserId($userId);
+        $profile = $this->promotionService->getProfileByUserId($userId);
 
         if (!$profile) {
             $this->success(null, 'پروفایلی ثبت نشده است');
@@ -174,7 +165,7 @@ class InfluencerController extends BaseApiController
      * GET /api/v1/influencer/list
      * لیست اینفلوئنسرهای تایید شده با فیلتر و رتبه
      */
-    public function list(): never
+    public function getList(): never
     {
         [$page, $perPage, $offset] = $this->paginationParams(15);
 
@@ -187,8 +178,8 @@ class InfluencerController extends BaseApiController
         ];
         $sort = $this->request->get('sort') ?? 'priority';
 
-        $profiles = $this->profileModel->getVerified($filters, $sort, $perPage, $offset);
-        $total    = $this->profileModel->countVerified($filters);
+        $profiles = $this->promotionService->listVerifiedProfiles($filters, $sort, $perPage, $offset);
+        $total    = $this->promotionService->countVerifiedProfiles($filters);
 
         $items = \array_map(function($p) {
             $stats = $this->scoreService->getInfluencerStats((int)$p->id);
@@ -205,7 +196,7 @@ class InfluencerController extends BaseApiController
     public function show(): never
     {
         $id      = (int)($this->request->param('id') ?? 0);
-        $profile = $this->profileModel->find($id);
+        $profile = $this->promotionService->getProfileById($id);
 
         if (!$profile || $profile->status !== 'verified' || !(int)$profile->is_active) {
             $this->error('اینفلوئنسر یافت نشد', 404, 'NOT_FOUND');
@@ -266,8 +257,8 @@ class InfluencerController extends BaseApiController
         [$page, $perPage, $offset] = $this->paginationParams(20);
         $status = $this->request->get('status');
 
-        $orders = $this->orderModel->getByCustomer($userId, $status, $perPage, $offset);
-        $total  = \count($this->orderModel->getByCustomer($userId, $status, 1000, 0));
+        $orders = $this->promotionService->getOrdersByCustomer($userId, $status, $perPage, $offset);
+        $total  = $this->promotionService->countOrdersByCustomer($userId, $status);
 
         $this->paginated(
             \array_map([$this, 'formatOrder'], $orders),
