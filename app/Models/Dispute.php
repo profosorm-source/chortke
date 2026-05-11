@@ -223,22 +223,6 @@ class Dispute extends Model
         return (int) $stmt->fetchColumn();
     }
 
-    public function statusLabel(string $status): string
-    {
-        $labels = [
-            'open' => 'باز',
-            'open_peer' => 'گفت‌وگوی طرفین',
-            'under_review' => 'در حال بررسی',
-            'resolved_peer' => 'حل دوستانه',
-            'escalated' => 'ارجاع به مدیر',
-            'resolved_admin' => 'رأی مدیر صادر شد',
-            'resolved_for_executor' => 'حل شده (به نفع انجام‌دهنده)',
-            'resolved_for_advertiser' => 'حل شده (به نفع تبلیغ‌دهنده)',
-            'closed' => 'بسته شده',
-        ];
-        return $labels[$status] ?? $status;
-    }
-
     // ┌─────────────────────────────────────────────────────────────┐
     // │ State Machine Validation
     // └─────────────────────────────────────────────────────────────┘

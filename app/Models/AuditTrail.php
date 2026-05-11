@@ -199,34 +199,34 @@ class AuditTrail extends Model
         $where = 'WHERE 1=1';
 
         if ($event !== null && $event !== '') {
-            $where .= ' AND at.event = ?';
-            $params[] = $event;
+            $where .= ' AND at.event = :event';
+            $params['event'] = $event;
         }
 
         if ($userId !== null) {
-            $where .= ' AND (at.user_id = ? OR at.actor_id = ?)';
-            $params[] = $userId;
-            $params[] = $userId;
+            $where .= ' AND (at.user_id = :user_id OR at.actor_id = :actor_id)';
+            $params['user_id'] = $userId;
+            $params['actor_id'] = $userId;
         }
 
         if ($dateFrom !== null && $dateFrom !== '') {
-            $where .= ' AND at.created_at >= ?';
-            $params[] = $dateFrom . ' 00:00:00';
+            $where .= ' AND at.created_at >= :date_from';
+            $params['date_from'] = $dateFrom . ' 00:00:00';
         }
 
         if ($dateTo !== null && $dateTo !== '') {
-            $where .= ' AND at.created_at <= ?';
-            $params[] = $dateTo . ' 23:59:59';
+            $where .= ' AND at.created_at <= :date_to';
+            $params['date_to'] = $dateTo . ' 23:59:59';
         }
 
         if ($search !== null && $search !== '') {
             $searchTerm = \trim((string)$search);
-            $escaped = \addcslashes($searchTerm, '%_');
+            $escaped = \addcslashes($searchTerm, '%_\\');
             $like = "%{$escaped}%";
-            $where .= ' AND (at.event LIKE ? OR at.context LIKE ? OR u.email LIKE ?)';
-            $params[] = $like;
-            $params[] = $like;
-            $params[] = $like;
+            $where .= ' AND (at.event LIKE :search_event OR at.context LIKE :search_context OR u.email LIKE :search_email)';
+            $params['search_event'] = $like;
+            $params['search_context'] = $like;
+            $params['search_email'] = $like;
         }
 
         return $where;

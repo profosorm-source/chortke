@@ -45,7 +45,8 @@ class ContentRevenue extends Model {
         $placeholders = \array_fill(0, \count($columns), '?');
         $colsSql = '`' . \implode('`,`', $columns) . '`';
 
-        $sql = "INSERT INTO `content_revenues` ({$colsSql}) VALUES (" . \implode(',', $placeholders) . ")";
+        // L-07: Use static::$table instead of hard-coded 'content_revenues'
+        $sql = "INSERT INTO `" . static::$table . "` ({$colsSql}) VALUES (" . \implode(',', $placeholders) . ")";
 
         $stmt = $this->db->prepare($sql);
         $ok = $stmt->execute($values);

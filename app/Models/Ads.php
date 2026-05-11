@@ -193,6 +193,10 @@ class Ads extends Model
     {
         if (empty($ids)) return true;
         
+        // ✅ H-04: Validate all IDs are positive integers
+        $ids = array_filter($ids, fn($id) => is_int($id) && $id > 0);
+        if (empty($ids)) return false;
+        
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $sql = "UPDATE `" . static::$table . "` 
                 SET impressions = impressions + 1,

@@ -55,10 +55,14 @@ class Transaction extends Model
                 $data['transaction_id'] = $this->generateUUID();
             }
 
-            $data['ip_address'] = $data['ip_address'] ?? (function_exists('get_client_ip') ? get_client_ip() : null);
-            $data['device_fingerprint'] = $data['device_fingerprint'] ?? (
-                \function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : null
-            );
+            // M-02: IP and Fingerprint must be passed from Controller/Service, not fetched from globals
+            // This ensures testability and proper separation of concerns
+            if (!isset($data['ip_address'])) {
+                throw new \InvalidArgumentException('ip_address must be provided');
+            }
+            if (!isset($data['device_fingerprint'])) {
+                throw new \InvalidArgumentException('device_fingerprint must be provided');
+            }
 
             if (isset($data['metadata']) && \is_array($data['metadata'])) {
                 $data['metadata'] = \json_encode($data['metadata'], JSON_UNESCAPED_UNICODE);

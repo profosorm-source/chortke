@@ -158,20 +158,26 @@ class Escrow extends Model
 
     public function logEscrowAction(int $escrowId, string $action, float $amount, string $performedBy, ?string $note = null): bool
     {
-        $stmt = $this->db->prepare(
-            "INSERT INTO escrow_audit 
-             (escrow_id, action, amount, performed_by, note, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)"
-        );
+        try {
+            $stmt = $this->db->prepare(
+                "INSERT INTO escrow_audit 
+                 (escrow_id, action, amount, performed_by, note, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)"
+            );
 
-        return $stmt->execute([
-            $escrowId,
-            $action,
-            $amount,
-            $performedBy,
-            $note,
-            date('Y-m-d H:i:s')
-        ]);
+            return $stmt->execute([
+                $escrowId,
+                $action,
+                $amount,
+                $performedBy,
+                $note,
+                date('Y-m-d H:i:s')
+            ]);
+        } catch (\Throwable $e) {
+            // M-09: Audit logging must not break business transactions
+            // Log the failure but don't throw - transaction should continue
+            return false;
+        }
     }
 
     public function findRefundable(int $escrowId, int $buyerId): ?object

@@ -15,27 +15,25 @@ class ActivityLog extends Model
 
     /**
      * دریافت لاگ‌های اخیر
+     * L-01: Removed cache() from Model - Caching must be in Service layer
      */
     public function getRecent(int $limit = 50, ?int $userId = null, ?string $action = null): array
     {
         $limit = max(1, min(500, $limit));
-        $cacheKey = "activity_logs:recent:{$limit}:" . ($userId ?? 'all') . ":" . ($action ?? 'all');
+        
+        $query = $this->db->table('activity_logs as al')
+            ->select('al.*', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'al.user_id', '=', 'u.id')
+            ->whereNull('al.deleted_at');
 
-        return cache()->remember($cacheKey, 5, function() use ($limit, $userId, $action) {
-            $query = $this->db->table('activity_logs as al')
-                ->select('al.*', 'u.full_name', 'u.email')
-                ->leftJoin('users as u', 'al.user_id', '=', 'u.id')
-                ->whereNull('al.deleted_at');
+        if ($userId !== null) {
+            $query->where('al.user_id', '=', $userId);
+        }
+        if ($action !== null) {
+            $query->where('al.action', '=', $action);
+        }
 
-            if ($userId !== null) {
-                $query->where('al.user_id', '=', $userId);
-            }
-            if ($action !== null) {
-                $query->where('al.action', '=', $action);
-            }
-
-            return $query->orderBy('al.created_at', 'DESC')->limit($limit)->get();
-        });
+        return $query->orderBy('al.created_at', 'DESC')->limit($limit)->get();
     }
 
     /**

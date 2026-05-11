@@ -117,12 +117,15 @@ class AdvancedAnalytics extends Model
                 ORDER BY value DESC
                 LIMIT ?";
 
-        $params[] = $limit;
+        // ✅ M-08: Params must include WHERE conditions twice (subquery + main query)
+        $allParams = array_merge($params, $params); // Duplicate params for subquery and main query
+        $allParams[] = $limit;
+        
         $stmt = $this->db->prepare($sql);
         
         // Bind limit strictly
-        foreach ($params as $index => $val) {
-            if ($index === \count($params) - 1) {
+        foreach ($allParams as $index => $val) {
+            if ($index === \count($allParams) - 1) {
                 $stmt->bindValue($index + 1, (int)$val, \PDO::PARAM_INT);
             } else {
                 $stmt->bindValue($index + 1, $val);

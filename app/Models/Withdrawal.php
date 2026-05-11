@@ -179,9 +179,11 @@ class Withdrawal extends Model
             $this->db->commit();
             return true;
             
-        } catch (\Exception $e) {
-            $this->db->rollback();
-            throw $e;
+        } finally {
+            // M-05: Always ensure transaction is rolled back if still active
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
         }
     }
 

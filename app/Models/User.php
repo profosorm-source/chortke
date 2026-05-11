@@ -76,7 +76,7 @@ class User extends Model
     {
         return $this->db->table('users')
             ->where('id', '=', $userId)
-            ->where('deleted_at', 'IS NULL')
+            ->whereNull('deleted_at')
             ->first();  // ✓ Returns all columns
     }
 

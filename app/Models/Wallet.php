@@ -230,14 +230,12 @@ class Wallet extends Model
 
     /**
      * آزاد کردن موجودی قفل‌شده
+     * M41: Frozen check merged into WHERE clause for atomic TOCTOU prevention
      */
     public function unlockBalance(int $userId, float $amount, string $currency = 'irt'): bool
     {
         if ($amount < 0) {
             throw new \InvalidArgumentException("Unlock amount cannot be negative.");
-        }
-        if ($this->isFrozen($userId)) {
-            throw new \Exception("Wallet is frozen for user {$userId}");
         }
 
         $balanceField = $this->currencyField($currency);

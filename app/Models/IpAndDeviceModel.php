@@ -66,6 +66,64 @@ class IpAndDeviceModel extends Model
         );
     }
 
+    // M-01: Missing method - Tor list management
+    public function truncateTorNodes(): bool
+    {
+        return (bool)$this->db->query("TRUNCATE TABLE tor_exit_nodes");
+    }
+
+    public function insertTorNode(string $ip): bool
+    {
+        return (bool)$this->db->query(
+            "INSERT INTO tor_exit_nodes (ip_address) VALUES (?) ON DUPLICATE KEY UPDATE ip_address = VALUES(ip_address)",
+            [$ip]
+        );
+    }
+
+    public function getTorNodesCount(): int
+    {
+        $row = $this->db->fetch("SELECT COUNT(*) as count FROM tor_exit_nodes");
+        return (int)($row->count ?? 0);
+    }
+
+    public function getLastUpdateTime(): ?string
+    {
+        $row = $this->db->fetch("SELECT MAX(created_at) as last_update FROM tor_exit_nodes");
+        return $row ? $row->last_update : null;
+    }
+
+    // M-01: Missing method - Count unique devices in 7 days
+    public function getDeviceCountLast7Days(int $userId): int
+    {
+        $row = $this->db->fetch(
+            "SELECT COUNT(DISTINCT device_fingerprint) as count FROM user_sessions 
+             WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
+            [$userId]
+        );
+        return (int)($row->count ?? 0);
+    }
+
+    // M-01: Missing method - Count unique IPs in 24 hours
+    public function getIPCountLast24Hours(int $userId): int
+    {
+        $row = $this->db->fetch(
+            "SELECT COUNT(DISTINCT ip_address) as count FROM user_sessions 
+             WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)",
+            [$userId]
+        );
+        return (int)($row->count ?? 0);
+    }
+
+    // M-01: Missing method - Add user to blacklist
+    public function addToBlacklist(int $userId, string $reason): bool
+    {
+        return (bool)$this->db->query(
+            "INSERT INTO user_blacklist (user_id, reason, blocked_at) VALUES (?, ?, NOW())
+             ON DUPLICATE KEY UPDATE reason = VALUES(reason)",
+            [$userId, $reason]
+        );
+    }
+
     public function getLastLoginLocation(int $userId): ?object
     {
         $sql = "SELECT ip_address, country, city, latitude, longitude, created_at as login_at

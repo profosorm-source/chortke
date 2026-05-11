@@ -10,7 +10,6 @@ namespace App\Models;
 use Core\Model;
 use Core\Database;
 use PDO;
-use PDOStatement;
 
 class ContentSubmission extends Model
 {
@@ -97,7 +96,7 @@ class ContentSubmission extends Model
     public function find(int $id): ?object
     {
         $stmt = $this->db->query(
-            "SELECT * FROM {$this->table} WHERE id = ? AND is_deleted = 0 LIMIT 1",
+            "SELECT * FROM " . static::$table . " WHERE id = ? AND is_deleted = 0 LIMIT 1",
             [$id]
         );
 

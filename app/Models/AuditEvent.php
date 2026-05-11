@@ -4,16 +4,12 @@ declare(strict_types=1);
 
 namespace App\Models;
 
-use Core\Database;
+use Core\Model;
 
-class AuditEvent
+// L-05: Fixed inheritance - AuditEvent should extend Model like other models
+class AuditEvent extends Model
 {
-    private Database $db;
-
-    public function __construct(Database $db)
-    {
-        $this->db = $db;
-    }
+    protected static string $table = 'audit_trail';
 
     public function findById(int $id): ?array
     {
@@ -106,8 +102,9 @@ class AuditEvent
         }
 
         if ($search) {
+            $escaped = addcslashes($search, '%_\\');
             $where .= ' AND (at.description LIKE :search OR u.email LIKE :search)';
-            $params['search'] = "%{$search}%";
+            $params['search'] = "%{$escaped}%";
         }
 
         if ($dateFrom) {

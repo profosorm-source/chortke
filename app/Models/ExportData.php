@@ -181,6 +181,9 @@ class ExportData extends Model
 
     /**
      * صادرات آمارهای سرانه
+     * L-08: Note - For large datasets (>5000 users), consider cursor-based pagination
+     * to avoid memory overflow. Current implementation loads all data into memory.
+     * Consider implementing chunked export: export in batches of 1000 rows
      */
     public function exportUserAnalytics(?string $dateFrom = null, ?string $dateTo = null, int $limit = self::MAX_EXPORT_LIMIT): array
     {

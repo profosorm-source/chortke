@@ -18,6 +18,14 @@ class CryptoDeposit extends Model
         'user_id' => ['d.user_id', '='],
     ];
 
+    protected ?\App\Contracts\LoggerInterface $logger;
+
+    public function __construct(\Core\Database $db, ?\App\Contracts\LoggerInterface $logger = null)
+    {
+        parent::__construct($db);
+        $this->logger = $logger;
+    }
+
     public function findByHash(string $txHash): ?object
     {
         $sql = "SELECT * FROM " . static::$table . " WHERE tx_hash = :tx_hash LIMIT 1";
@@ -227,6 +235,15 @@ class CryptoDeposit extends Model
         } catch (\Throwable $e) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
+            }
+            // M-04: Log critical errors before silently returning false
+            if ($this->logger) {
+                $this->logger->error('crypto_deposit.update_status_failed', [
+                    'deposit_id' => $id,
+                    'new_status' => $status,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
             }
             return false;
         }

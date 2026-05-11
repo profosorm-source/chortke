@@ -147,8 +147,10 @@ class ApiToken extends Model
 
         // M15: Use HMAC-SHA256 instead of plain SHA-256 for better security
         // HMAC provides authentication and is resistant to length extension attacks
-        // Use a constant secret key from config or environment
-        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : 'default-secret-key';
+        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
+        if (!$secret || strlen($secret) < 32) {
+            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak (minimum 32 characters required)');
+        }
         $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $this->db->query(
@@ -198,7 +200,10 @@ class ApiToken extends Model
         }
 
         // M15: Hash the plain token using the same HMAC method
-        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : 'default-secret-key';
+        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
+        if (!$secret || strlen($secret) < 32) {
+            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak');
+        }
         $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $this->db->query(
@@ -216,7 +221,10 @@ class ApiToken extends Model
         }
 
         // M15: Hash the plain token using the same HMAC method before lookup
-        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : 'default-secret-key';
+        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
+        if (!$secret || strlen($secret) < 32) {
+            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak');
+        }
         $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $token = $this->db->fetch(

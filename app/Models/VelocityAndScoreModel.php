@@ -27,6 +27,49 @@ class VelocityAndScoreModel extends Model
         return (int)($row->count ?? 0);
     }
 
+    // M-01: Missing method - Get total transaction amount within time period
+    public function getTotalAmount(int $userId, string $type, int $seconds): float
+    {
+        $row = $this->db->fetch(
+            "SELECT COALESCE(SUM(amount), 0) as total FROM transactions 
+             WHERE user_id = ? AND type = ? AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)",
+            [$userId, $type, $seconds]
+        );
+        return (float)($row->total ?? 0);
+    }
+
+    // M-01: Missing method - Count repeated transactions with same amount
+    public function getRepeatedTransactionsCount(int $userId, string $type, float $amount): int
+    {
+        $row = $this->db->fetch(
+            "SELECT COUNT(*) as count FROM transactions 
+             WHERE user_id = ? AND type = ? AND amount = ? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
+            [$userId, $type, $amount]
+        );
+        return (int)($row->count ?? 0);
+    }
+
+    // M-01: Missing method - Get stats on round number transactions
+    public function getRoundNumberStats(int $userId): array
+    {
+        $roundNumbers = [10000, 50000, 100000, 500000, 1000000, 5000000, 10000000];
+        $placeholders = implode(',', array_fill(0, count($roundNumbers), '?'));
+        
+        $row = $this->db->fetch(
+            "SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN amount IN ($placeholders) THEN 1 ELSE 0 END) as round_count
+             FROM transactions 
+             WHERE user_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 90 DAY)",
+            array_merge($roundNumbers, [$userId])
+        );
+        
+        return [
+            'total' => (int)($row->total ?? 0),
+            'round_count' => (int)($row->round_count ?? 0)
+        ];
+    }
+
     public function getRecentTransactionCount(int $userId, int $hours): int
     {
         $row = $this->db->fetch(

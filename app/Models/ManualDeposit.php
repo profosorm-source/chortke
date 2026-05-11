@@ -119,53 +119,14 @@ class ManualDeposit extends Model
     }
 
     /**
-     * بروزرسانی وضعیت تحت تراکنش و با شارژ کیف پول
+     * دریافت درخواست برای استفاده در transaction (with FOR UPDATE lock)
      */
-    public function updateStatusWithTransaction(
-        int $id,
-        string $status,
-        ?string $rejectionReason = null,
-        ?int $reviewedBy = null,
-        ?string $transactionId = null
-    ): bool {
-        try {
-            $this->db->beginTransaction();
-
-            $stmt = $this->db->prepare("SELECT * FROM " . static::$table . " WHERE id = ? FOR UPDATE");
-            $stmt->execute([$id]);
-            $deposit = $stmt->fetch(\PDO::FETCH_OBJ);
-
-            if (!$deposit || $deposit->status === 'completed' || $deposit->status === 'rejected') {
-                $this->db->rollBack();
-                return false;
-            }
-
-            $success = $this->updateStatus($id, $status, $rejectionReason, $reviewedBy, $transactionId);
-            if (!$success) {
-                $this->db->rollBack();
-                return false;
-            }
-
-            if ($status === 'completed') {
-                $walletModel = new \App\Models\Wallet($this->db);
-                $currency = \strtolower($deposit->currency ?? 'irt');
-                $amount = (float)$deposit->amount;
-
-                $walletSuccess = $walletModel->updateBalance((int)$deposit->user_id, $amount, $currency);
-                if (!$walletSuccess) {
-                    $this->db->rollBack();
-                    return false;
-                }
-            }
-
-            $this->db->commit();
-            return true;
-        } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            return false;
-        }
+    public function findForUpdate(int $id): ?object
+    {
+        $sql = "SELECT * FROM " . static::$table . " WHERE id = ? FOR UPDATE";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([$id]);
+        return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
     }
 
     /**
