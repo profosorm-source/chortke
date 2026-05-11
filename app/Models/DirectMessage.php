@@ -1,0 +1,157 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Models;
+
+use Core\Model;
+
+/**
+ * DirectMessage Model
+ */
+class DirectMessage extends Model
+{
+    protected static string $table = 'direct_messages';
+
+    public function createMessage(int $senderId, int $recipientId, string $message, bool $isEncrypted): ?int
+    {
+        $id = $this->db->table(static::$table)->insert([
+            'sender_id' => $senderId,
+            'recipient_id' => $recipientId,
+            'message' => $message,
+            'is_encrypted' => $isEncrypted ? 1 : 0,
+            'created_at' => date('Y-m-d H:i:s')
+        ]);
+
+        return $id ? (int)$id : null;
+    }
+
+    public function addAttachments(int $messageId, array $attachments): void
+    {
+        foreach ($attachments as $attachment) {
+            $this->db->table('message_attachments')->insert([
+                'message_id' => $messageId,
+                'filename' => $attachment['filename'],
+                'file_path' => $attachment['file_path'],
+                'file_size' => $attachment['file_size'],
+                'mime_type' => $attachment['mime_type'],
+                'created_at' => date('Y-m-d H:i:s')
+            ]);
+        }
+    }
+
+    public function updateConversation(int $senderId, int $recipientId, int $messageId): void
+    {
+        $sql = "INSERT INTO user_conversations (user1_id, user2_id, last_message_id, updated_at)
+                VALUES (LEAST(?, ?), GREATEST(?, ?), ?, NOW())
+                ON DUPLICATE KEY UPDATE last_message_id = ?, updated_at = NOW()";
+
+        $this->db->query($sql, [$senderId, $recipientId, $senderId, $recipientId, $messageId, $messageId]);
+    }
+
+    public function getConversation(int $userId, int $otherUserId, int $limit = 50, int $offset = 0): array
+    {
+        return $this->db->table(static::$table . ' as dm')
+            ->select('dm.*', 'u.full_name as sender_name')
+            ->selectRaw('COUNT(da.id) as attachment_count')
+            ->join('users as u', 'dm.sender_id', '=', 'u.id')
+            ->leftJoin('message_attachments as da', 'dm.id', '=', 'da.message_id')
+            ->whereNested(function ($q) use ($userId, $otherUserId) {
+                $q->whereNested(function ($sub1) use ($userId, $otherUserId) {
+                    $sub1->where('dm.sender_id', '=', $userId)
+                         ->where('dm.recipient_id', '=', $otherUserId);
+                })->orWhereNested(function ($sub2) use ($userId, $otherUserId) {
+                    $sub2->where('dm.sender_id', '=', $otherUserId)
+                         ->where('dm.recipient_id', '=', $userId);
+                });
+            })
+            ->groupBy('dm.id')
+            ->orderBy('dm.created_at', 'DESC')
+            ->limit($limit)
+            ->offset($offset)
+            ->get();
+    }
+
+    public function getConversations(int $userId, int $limit = 20, int $offset = 0): array
+    {
+        $sql = "SELECT 
+                    CASE 
+                        WHEN uc.user1_id = ? THEN uc.user2_id 
+                        ELSE uc.user1_id 
+                    END as user_id,
+                    u.full_name,
+                    u.avatar,
+                    dm.message as last_message,
+                    uc.updated_at as last_message_at,
+                    (SELECT COUNT(*) FROM direct_messages 
+                     WHERE sender_id = u.id AND recipient_id = ? AND read_at IS NULL) as unread_count
+                FROM user_conversations uc
+                JOIN users u ON u.id = CASE WHEN uc.user1_id = ? THEN uc.user2_id ELSE uc.user1_id END
+                LEFT JOIN direct_messages dm ON dm.id = uc.last_message_id
+                WHERE uc.user1_id = ? OR uc.user2_id = ?
+                ORDER BY uc.updated_at DESC
+                LIMIT ? OFFSET ?";
+
+        return $this->db->fetchAll($sql, [
+            $userId, 
+            $userId, 
+            $userId, 
+            $userId, 
+            $userId, 
+            $limit, 
+            $offset
+        ]);
+    }
+
+    public function getUserInfo(int $userId): ?object
+    {
+        return $this->db->table('users')
+            ->select('id', 'username', 'full_name', 'avatar', 'is_online')
+            ->where('id', '=', $userId)
+            ->first();
+    }
+
+    public function softDeleteMessage(int $messageId, int $userId): bool
+    {
+        return (bool)$this->db->table(static::$table)
+            ->where('id', '=', $messageId)
+            ->update([
+                'deleted_by' => $userId,
+                'deleted_at' => date('Y-m-d H:i:s')
+            ]);
+    }
+
+    public function addReaction(int $messageId, int $userId, string $emoji): bool
+    {
+        $sql = "INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
+                VALUES (?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE emoji = ?";
+
+        return (bool)$this->db->query($sql, [$messageId, $userId, $emoji, $emoji]);
+    }
+
+    public function markAsRead(int $userId, int $otherUserId): void
+    {
+        $this->db->table(static::$table)
+            ->where('recipient_id', '=', $userId)
+            ->where('sender_id', '=', $otherUserId)
+            ->whereNull('read_at')
+            ->update(['read_at' => date('Y-m-d H:i:s')]);
+    }
+
+    public function isBlocked(int $userId, int $blockedUserId): bool
+    {
+        return (bool)$this->db->table('user_blocks')
+            ->where('blocker_id', '=', $blockedUserId)
+            ->where('blocked_id', '=', $userId)
+            ->first();
+    }
+
+    public function countUnread(int $userId): int
+    {
+        return $this->db->table(static::$table)
+            ->where('recipient_id', '=', $userId)
+            ->whereNull('read_at')
+            ->count();
+    }
+}
