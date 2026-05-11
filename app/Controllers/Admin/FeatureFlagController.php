@@ -71,6 +71,14 @@ class FeatureFlagController extends BaseAdminController
                 ], 404);
             }
             
+            $user = auth_user();
+            if (!$this->policy->update($user, $feature)) {
+                return $this->response->json([
+                    'success' => false,
+                    'message' => 'شما دسترسی لازم برای تغییر این فیچر را ندارید.'
+                ], 403);
+            }
+            
             if ($this->featureService->toggle($name)) {
                 $newStatus = !$feature->enabled ? 'فعال' : 'غیرفعال';
                 
@@ -122,6 +130,14 @@ class FeatureFlagController extends BaseAdminController
                     'success' => false,
                     'message' => 'فیچر مورد نظر یافت نشد.'
                 ], 404);
+            }
+            
+            $user = auth_user();
+            if (!$this->policy->update($user, $feature)) {
+                return $this->response->json([
+                    'success' => false,
+                    'message' => 'شما دسترسی لازم برای ویرایش این فیچر را ندارید.'
+                ], 403);
             }
             
             $updateData = [];
@@ -217,6 +233,14 @@ class FeatureFlagController extends BaseAdminController
     public function create()
     {
         try {
+            $user = auth_user();
+            if (!$this->policy->create($user)) {
+                return $this->response->json([
+                    'success' => false,
+                    'message' => 'شما دسترسی لازم برای ایجاد فیچر را ندارید.'
+                ], 403);
+            }
+            
             $data = $this->request->json();
             
             $required = ['name', 'description'];
@@ -278,6 +302,22 @@ class FeatureFlagController extends BaseAdminController
                     'success' => false,
                     'message' => 'نام فیچر الزامی است.'
                 ], 400);
+            }
+            
+            $feature = $this->featureService->findByName($name);
+            if (!$feature) {
+                return $this->response->json([
+                    'success' => false,
+                    'message' => 'فیچر مورد نظر یافت نشد.'
+                ], 404);
+            }
+            
+            $user = auth_user();
+            if (!$this->policy->delete($user, $feature)) {
+                return $this->response->json([
+                    'success' => false,
+                    'message' => 'شما دسترسی لازم برای حذف این فیچر را ندارید.'
+                ], 403);
             }
             
             if ($this->featureService->delete($name)) {
