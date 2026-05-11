@@ -4,6 +4,19 @@ $uri       = $_SERVER['REQUEST_URI'] ?? '/';
 $active    = fn(string $p) => str_contains($uri, $p);
 $exact     = fn(string $p) => rtrim(strtok($uri,'?'),'/') === rtrim($p,'/');
 $anyActive = fn(array $ps) => array_reduce($ps, fn($c,$p) => $c || str_contains($uri,$p), false);
+
+// Fetch active disputes badge count - استفاده از db() helper بجای Container
+$__db = db();
+$__uid = user_id();
+$__disputeBadge = 0;
+if ($__uid) {
+    $__disputeRes = $__db->fetch("SELECT COUNT(*) as total FROM disputes WHERE (user_id = ? OR target_user_id = ?) AND status NOT IN ('resolved','closed','resolved_advertiser','resolved_executor','admin_closed')", [$__uid, $__uid]);
+    $__disputeBadge = (int)($__disputeRes->total ?? 0);
+
+    // Fetch new influencer orders count
+    $__infRes = $__db->fetch("SELECT COUNT(*) as total FROM story_orders WHERE influencer_user_id = ? AND status = 'paid'", [$__uid]);
+    $__influencerBadge = (int)($__infRes->total ?? 0);
+}
 ?>
 <div class="sidebar" id="mainSidebar">
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -25,40 +38,36 @@ $anyActive = fn(array $ps) => array_reduce($ps, fn($c,$p) => $c || str_contains(
     </li>
 
     <!-- ═══ کسب درآمد ═══ -->
-    <li class="menu-section-title">کسب درآمد</li>
+    <li class="menu-section-title text-info"><i class="material-icons small align-middle">engineering</i> کسب درآمد (انجام‌دهنده)</li>
 
     <li>
-      <a href="<?= url('/social-tasks') ?>" class="<?= $active('/social-tasks') ? 'active' : '' ?>">
-        <span class="material-icons">thumb_up</span><span class="menu-title">Adsocial</span>
+      <a href="<?= url('/tasks') ?>" class="<?= $exact('/tasks') ? 'active' : '' ?>">
+        <span class="material-icons">monetization_on</span><span class="menu-title">تسک‌های درآمدزا</span>
       </a>
     </li>
 
-    <?php $o = $anyActive(['/custom-tasks/available','/custom-tasks/my-submissions']); ?>
-    <li class="has-submenu <?= $o?'open':'' ?>">
-      <a href="#" class="<?= $o?'active':'' ?>" data-submenu-toggle="adtask-in">
-        <span class="material-icons">work_outline</span><span class="menu-title">Adtask</span>
-        <span class="material-icons submenu-arrow">expand_more</span>
-      </a>
-      <ul class="submenu">
-        <li><a href="<?= url('/custom-tasks/available') ?>" class="<?= $active('/custom-tasks/available')?'active':'' ?>"><span class="material-icons">search</span><span class="menu-title">تسک‌های موجود</span></a></li>
-        <li><a href="<?= url('/custom-tasks/my-submissions') ?>" class="<?= $active('/custom-tasks/my-submissions')?'active':'' ?>"><span class="material-icons">assignment_turned_in</span><span class="menu-title">اجراهای من</span></a></li>
-      </ul>
-    </li>
-
-    <?php $o = $active('/influencer')&&!$active('/influencer/advertise'); ?>
+    <?php $o = $active('/influencer')&&!$active('/influencer/ads'); ?>
     <li class="has-submenu <?= $o?'open':'' ?>">
       <a href="#" class="<?= $o?'active':'' ?>" data-submenu-toggle="inf-in">
         <span class="material-icons">stars</span><span class="menu-title">Influencer</span>
+        <?php if(($__influencerBadge ?? 0) > 0): ?>
+           <span class="badge bg-danger rounded-pill ms-auto me-2" style="font-size: 0.6rem;"><?= $__influencerBadge ?></span>
+        <?php endif; ?>
         <span class="material-icons submenu-arrow">expand_more</span>
       </a>
       <ul class="submenu">
         <li><a href="<?= url('/influencer') ?>" class="<?= $exact('/influencer')?'active':'' ?>"><span class="material-icons">person_pin</span><span class="menu-title">پروفایل من</span></a></li>
         <li><a href="<?= url('/influencer/register') ?>" class="<?= $active('/influencer/register')?'active':'' ?>"><span class="material-icons">how_to_reg</span><span class="menu-title">ثبت پیج</span></a></li>
-        <li><a href="<?= url('/influencer/orders') ?>" class="<?= $active('/influencer/orders')?'active':'' ?>"><span class="material-icons">pending_actions</span><span class="menu-title">سفارش‌های دریافتی</span></a></li>
+        <li><a href="<?= url('/influencer/orders') ?>" class="<?= $active('/influencer/orders')?'active':'' ?>">
+            <span class="material-icons">pending_actions</span><span class="menu-title">سفارش‌های دریافتی</span>
+            <?php if(($__influencerBadge ?? 0) > 0): ?>
+               <span class="badge bg-danger rounded-pill ms-auto" style="font-size: 0.6rem;"><?= $__influencerBadge ?></span>
+            <?php endif; ?>
+        </a></li>
       </ul>
     </li>
 
-    <?php $o = $active('/adtube')&&!$active('/adtube/advertise'); ?>
+    <?php $o = $active('/adtube')&&!$active('/adtube/ads'); ?>
     <li class="has-submenu <?= $o?'open':'' ?>">
       <a href="#" class="<?= $o?'active':'' ?>" data-submenu-toggle="adtube-in">
         <span class="material-icons">play_circle</span><span class="menu-title">Adtube</span>
@@ -70,17 +79,6 @@ $anyActive = fn(array $ps) => array_reduce($ps, fn($c,$p) => $c || str_contains(
       </ul>
     </li>
 
-    <?php $o = $active('/seo-tasks'); ?>
-    <li class="has-submenu <?= $o?'open':'' ?>">
-      <a href="#" class="<?= $o?'active':'' ?>" data-submenu-toggle="seo-in">
-        <span class="material-icons">travel_explore</span><span class="menu-title">SEO Search</span>
-        <span class="material-icons submenu-arrow">expand_more</span>
-      </a>
-      <ul class="submenu">
-        <li><a href="<?= url('/seo-tasks') ?>" class="<?= $active('/seo-tasks')&&!$active('/history')?'active':'' ?>"><span class="material-icons">manage_search</span><span class="menu-title">تسک‌های سئو</span></a></li>
-        <li><a href="<?= url('/seo-tasks/history') ?>" class="<?= $active('/seo-tasks/history')?'active':'' ?>"><span class="material-icons">history</span><span class="menu-title">تاریخچه</span></a></li>
-      </ul>
-    </li>
 
     <?php $o = $active('/content'); ?>
     <li class="has-submenu <?= $o?'open':'' ?>">
@@ -95,41 +93,32 @@ $anyActive = fn(array $ps) => array_reduce($ps, fn($c,$p) => $c || str_contains(
       </ul>
     </li>
 
-    <!-- ═══ تبلیغات ═══ -->
-    <li class="menu-section-title">تبلیغات</li>
+    <!-- ═══ تبلیغات من ═══ -->
+    <li class="menu-section-title text-warning"><i class="material-icons small align-middle">business_center</i> پنل کارفرمایان (تبلیغ‌دهنده)</li>
 
-    <li>
-      <a href="<?= url('/social-ads') ?>" class="<?= $active('/social-ads')?'active':'' ?>">
-        <span class="material-icons">thumb_up_alt</span><span class="menu-title">Adsocial</span>
+    <?php $o = $active('/ads'); ?>
+    <li class="has-submenu <?= $o?'open':'' ?>">
+      <a href="#" class="<?= $o?'active':'' ?>" data-submenu-toggle="my-ads-uni">
+        <span class="material-icons">campaign</span><span class="menu-title">آگهی‌های من</span>
+        <span class="material-icons submenu-arrow">expand_more</span>
       </a>
-    </li>
-    <li>
-      <a href="<?= url('/custom-tasks/create') ?>" class="<?= $active('/custom-tasks/create')?'active':'' ?>">
-        <span class="material-icons">assignment</span><span class="menu-title">Adtask</span>
-      </a>
+      <ul class="submenu">
+        <li><a href="<?= url('/ads') ?>" class="<?= $exact('/ads')?'active':'' ?>"><span class="material-icons">view_list</span><span class="menu-title">لیست آگهی‌ها</span></a></li>
+        <li><a href="<?= url('/ads/create') ?>" class="<?= $active('/ads/create')?'active':'' ?>"><span class="material-icons">add_circle</span><span class="menu-title">ثبت آگهی جدید</span></a></li>
+      </ul>
     </li>
 
-    <?php $o = $active('/influencer/advertise'); ?>
+    <!-- همچنین موارد دیگر مربوط به تبلیغات خاص که هنوز در یکپارچه سازی کامل نیستند -->
+    <?php $o = $active('/influencer/ads'); ?>
     <li class="has-submenu <?= $o?'open':'' ?>">
       <a href="#" class="<?= $o?'active':'' ?>" data-submenu-toggle="inf-adv">
         <span class="material-icons">auto_awesome</span><span class="menu-title">Influencer</span>
         <span class="material-icons submenu-arrow">expand_more</span>
       </a>
       <ul class="submenu">
-        <li><a href="<?= url('/influencer/advertise') ?>" class="<?= $exact('/influencer/advertise')?'active':'' ?>"><span class="material-icons">search</span><span class="menu-title">پیدا کردن اینفلوئنسر</span></a></li>
-        <li><a href="<?= url('/influencer/advertise/my-orders') ?>" class="<?= $active('/influencer/advertise/my-orders')?'active':'' ?>"><span class="material-icons">list_alt</span><span class="menu-title">سفارش‌های من</span></a></li>
+        <li><a href="<?= url('/influencer/ads') ?>" class="<?= $exact('/influencer/ads')?'active':'' ?>"><span class="material-icons">search</span><span class="menu-title">پیدا کردن اینفلوئنسر</span></a></li>
+        <li><a href="<?= url('/influencer/ads/my-orders') ?>" class="<?= $active('/influencer/ads/my-orders')?'active':'' ?>"><span class="material-icons">list_alt</span><span class="menu-title">سفارش‌های من</span></a></li>
       </ul>
-    </li>
-
-    <li>
-      <a href="<?= url('/adtube/advertise') ?>" class="<?= $active('/adtube/advertise')?'active':'' ?>">
-        <span class="material-icons">smart_display</span><span class="menu-title">Adtube</span>
-      </a>
-    </li>
-    <li>
-      <a href="<?= url('/seo-ad') ?>" class="<?= $active('/seo-ad')?'active':'' ?>">
-        <span class="material-icons">manage_search</span><span class="menu-title">SEO Ad</span>
-      </a>
     </li>
     <?php $vitActive = $active('/vitrine'); ?>
     <li class="has-submenu <?= $vitActive?'open':'' ?>">
@@ -179,17 +168,6 @@ $anyActive = fn(array $ps) => array_reduce($ps, fn($c,$p) => $c || str_contains(
       <a href="<?= url('/prediction') ?>" class="<?= $active('/prediction')?'active':'' ?>">
         <span class="material-icons">sports_soccer</span><span class="menu-title">پیش‌بینی بازی‌ها</span>
       </a>
-    </li>
-	<?php $o = $active('/banner-request'); ?>
-    <li class="has-submenu <?= $o?'open':'' ?>">
-      <a href="#" class="<?= $o?'active':'' ?>" data-submenu-toggle="banner-req">
-        <span class="material-icons">campaign</span><span class="menu-title">درخواست تبلیغ بنری</span>
-        <span class="material-icons submenu-arrow">expand_more</span>
-      </a>
-      <ul class="submenu">
-        <li><a href="<?= url('/banner-request') ?>" class="<?= $exact('/banner-request')?'active':'' ?>"><span class="material-icons">list_alt</span><span class="menu-title">درخواست‌های من</span></a></li>
-        <li><a href="<?= url('/banner-request/create') ?>" class="<?= $active('/banner-request/create')?'active':'' ?>"><span class="material-icons">add_box</span><span class="menu-title">درخواست جدید</span></a></li>
-      </ul>
     </li>
     <li>
       <a href="<?= url('/startup-banner') ?>" class="<?= $active('/startup-banner')?'active':'' ?>">
@@ -251,6 +229,16 @@ $anyActive = fn(array $ps) => array_reduce($ps, fn($c,$p) => $c || str_contains(
         <li><a href="<?= url('/sessions') ?>" class="<?= $active('/sessions')?'active':'' ?>"><span class="material-icons">devices</span><span class="menu-title">جلسات فعال</span></a></li>
         <li><a href="<?= url('/api-tokens') ?>" class="<?= $active('/api-tokens')?'active':'' ?>"><span class="material-icons">vpn_key</span><span class="menu-title">توکن‌های API</span></a></li>
       </ul>
+    </li>
+
+    <li>
+      <a href="<?= url('/disputes') ?>" class="<?= $active('/disputes')?'active':'' ?>">
+        <span class="material-icons">gavel</span>
+        <span class="menu-title">اختلافات و شکایات</span>
+        <?php if($__disputeBadge > 0): ?>
+           <span class="badge bg-danger rounded-pill ms-auto" style="font-size: 0.7rem;"><?= $__disputeBadge ?></span>
+        <?php endif; ?>
+      </a>
     </li>
 
     <!-- ═══ پشتیبانی ═══ -->
