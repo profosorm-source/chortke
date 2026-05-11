@@ -4,9 +4,22 @@ namespace App\Models;
 
 use Core\Model;
 use Core\Database;
+use App\Traits\Filterable;
 
 class Ticket extends Model {
-    protected static array $searchable = ['tickets.subject'];
+    use Filterable;
+
+    protected static string $table = 'tickets';
+    protected static array $searchable = ['t.subject', 't.ticket_id'];
+
+    protected static array $filterable = [
+        'status' => ['t.status', '='],
+        'priority' => ['t.priority', '='],
+        'category_id' => ['t.category_id', '='],
+        'assigned_to' => ['t.assigned_to', '='],
+        'user_id' => ['t.user_id', '='],
+    ];
+
 /* -------------------------
      * Helpers (DB fetch wrappers)
      * ------------------------- */
@@ -302,6 +315,32 @@ class Ticket extends Model {
             'on_hold' => $row ? (int)$row->on_hold : 0,
             'closed' => $row ? (int)$row->closed : 0,
             'urgent' => $row ? (int)$row->urgent : 0,
+        ];
+    }
+
+    /**
+     * Advanced search logic utilizing Central Filterable architecture.
+     */
+    public function searchNative(string $q, array $filters, int $limit, int $offset): array
+    {
+        $query = $this->db->table('tickets as t')
+            ->select('t.*', 'tc.name as category_name', 'u.full_name as user_name', 'u.email as user_email')
+            ->leftJoin('ticket_categories as tc', 'tc.id', '=', 't.category_id')
+            ->leftJoin('users as u', 'u.id', '=', 't.user_id');
+
+        if (!empty($q)) {
+            $query = $this->applySearch($query, $q);
+        }
+
+        $query = $this->applyFilters($query, $filters);
+
+        // Specialized intelligent support prioritization
+        $query->orderByRaw("CASE t.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 WHEN 'low' THEN 4 ELSE 5 END")
+              ->orderBy('t.updated_at', 'DESC');
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->limit($limit)->offset($offset)->get() ?? []
         ];
     }
 }

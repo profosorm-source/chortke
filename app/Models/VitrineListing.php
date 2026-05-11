@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use Core\Model;
+use App\Traits\Filterable;
 
 /**
  * VitrineListing — مدل آگهی‌های ویترین
@@ -14,7 +15,19 @@ use Core\Model;
  */
 class VitrineListing extends Model
 {
+    use Filterable;
+
     protected static string $table = 'vitrine_listings';
+    protected static array $searchable = ['vl.title', 'vl.description', 'vl.username'];
+
+    protected static array $filterable = [
+        'category' => ['vl.category', '='],
+        'platform' => ['vl.platform', '='],
+        'listing_type' => ['vl.listing_type', '='],
+        'status' => ['vl.status', '='],
+        'min_price' => ['vl.price_usdt', '>='],
+        'max_price' => ['vl.price_usdt', '<='],
+    ];
 
     // ─── ثابت‌های وضعیت ──────────────────────────────────────────────────────
 
@@ -620,6 +633,31 @@ class VitrineListing extends Model
         );
         $result->execute([$listingId, $userId, $userId]);
         return (int)$result->fetchColumn();
+    }
+
+    /**
+     * Native query builder powered by Central Filterable Trait system.
+     */
+    public function searchNative(string $q, array $filters, int $limit, int $offset, string $sortCol = 'created_at', string $sortDir = 'DESC'): array
+    {
+        $query = $this->db->table('vitrine_listings as vl')
+            ->select('vl.*')
+            ->whereNull('vl.deleted_at');
+
+        if (!empty($q)) {
+            $query = $this->applySearch($query, $q);
+        }
+
+        $query = $this->applyFilters($query, $filters);
+
+        $allowedSortCols = ['created_at', 'price_usdt', 'member_count'];
+        $sort = in_array($sortCol, $allowedSortCols, true) ? $sortCol : 'created_at';
+        $dir = strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC';
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy("vl.{$sort}", $dir)->limit($limit)->offset($offset)->get() ?? []
+        ];
     }
 }
 

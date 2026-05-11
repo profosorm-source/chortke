@@ -3,11 +3,21 @@
 namespace App\Models;
 
 use Core\Model;
+use App\Traits\Filterable;
 
 class Transaction extends Model
 {
+    use Filterable;
+
     protected static string $table = 'transactions';
-    protected static array $searchable = ['transactions.reference_id', 'transactions.description'];
+    protected static array $searchable = ['t.reference_id', 't.description'];
+
+    protected static array $filterable = [
+        'status' => ['t.status', '='],
+        'type' => ['t.type', '='],
+        'currency' => ['t.currency', '='],
+        'user_id' => ['t.user_id', '='],
+    ];
 
     protected \App\Contracts\LoggerInterface $logger;
 
@@ -664,6 +674,29 @@ class Transaction extends Model
             'total_transactions' => (int)($row->total_transactions ?? 0),
             'arpu' => $arpu,
             'net_flow' => $totalDeposits - $totalWithdrawals,
+        ];
+    }
+
+    /**
+     * Native modern searching backed by central Filterable Trait.
+     */
+    public function searchNative(string $q, array $filters, int $limit, int $offset, string $sortDir = 'DESC'): array
+    {
+        $query = $this->db->table('transactions as t')
+            ->select('t.*', 'u.full_name as user_name', 'u.email as user_email')
+            ->leftJoin('users as u', 'u.id', '=', 't.user_id');
+
+        if (!empty($q)) {
+            $query = $this->applySearch($query, $q);
+        }
+
+        $query = $this->applyFilters($query, $filters);
+
+        $dir = strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC';
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy("t.created_at", $dir)->limit($limit)->offset($offset)->get() ?? []
         ];
     }
 }

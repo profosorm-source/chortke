@@ -5,14 +5,25 @@ declare(strict_types=1);
 namespace App\Models;
 
 use Core\Model;
+use App\Traits\Filterable;
 
 /**
  * Ads Model - متمرکزکننده تمام انواع تبلیغات در سیستم
  */
 class Ads extends Model
 {
+    use Filterable;
+
     protected static string $table = 'ads';
     protected static array $searchable = ['ads.title', 'ads.description'];
+
+    protected static array $filterable = [
+        'type' => '=',
+        'status' => '=',
+        'user_id' => '=',
+        'a.type' => ['a.type', '='],
+        'a.status' => ['a.status', '=']
+    ];
 
     /**
      * دریافت بر اساس شناسه مالک تبلیغ (یکدست‌سازی به user_id)
@@ -22,12 +33,10 @@ class Ads extends Model
         $q = $this->db->table(static::$table)
             ->where('user_id', '=', $userId);
             
-        if ($type) {
-            $q->where('type', '=', $type);
-        }
-        if ($status) {
-            $q->where('status', '=', $status);
-        }
+        $this->applyFilters($q, [
+            'type' => $type,
+            'status' => $status
+        ]);
 
         return $q->orderBy('created_at', 'DESC')
             ->limit($limit)
@@ -44,12 +53,10 @@ class Ads extends Model
             ->select('a.*', 'u.full_name as user_name', 'u.email as user_email')
             ->leftJoin('users as u', 'u.id', '=', 'a.user_id');
             
-        if (!empty($type)) {
-            $q->where('a.type', '=', $type);
-        }
-        if (!empty($status)) {
-            $q->where('a.status', '=', $status);
-        }
+        $this->applyFilters($q, [
+            'a.type' => $type,
+            'a.status' => $status
+        ]);
         
         return $q->orderBy('a.created_at', 'DESC')
             ->limit($limit)
@@ -64,12 +71,10 @@ class Ads extends Model
     {
         $q = $this->db->table(static::$table);
             
-        if (!empty($type)) {
-            $q->where('type', '=', $type);
-        }
-        if (!empty($status)) {
-            $q->where('status', '=', $status);
-        }
+        $this->applyFilters($q, [
+            'type' => $type,
+            'status' => $status
+        ]);
         
         return $q->count();
     }

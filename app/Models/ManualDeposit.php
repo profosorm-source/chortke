@@ -3,11 +3,19 @@
 namespace App\Models;
 
 use Core\Model;
+use App\Traits\Filterable;
 
 class ManualDeposit extends Model
 {
+    use Filterable;
+
     protected static string $table = 'manual_deposits';
-    protected static array $searchable = ['manual_deposits.tracking_code'];
+    protected static array $searchable = ['d.tracking_code'];
+
+    protected static array $filterable = [
+        'status' => ['d.status', '='],
+        'user_id' => ['d.user_id', '='],
+    ];
 
     /**
      * ایجاد درخواست واریز دستی
@@ -252,5 +260,29 @@ class ManualDeposit extends Model
 
         $result = $stmt->fetch(\PDO::FETCH_OBJ);
         return (int)($result->count ?? 0);
+    }
+
+    /**
+     * Advanced Dynamic Filter Engine backed by Central Filterable system.
+     */
+    public function searchNative(string $q, array $filters, int $limit, int $offset, string $sortDir = 'DESC'): array
+    {
+        $query = $this->db->table('manual_deposits as d')
+            ->select('d.*', 'u.full_name as user_name', 'u.email as user_email', 'c.card_number', 'c.bank_name')
+            ->leftJoin('users as u', 'u.id', '=', 'd.user_id')
+            ->leftJoin('bank_cards as c', 'c.id', '=', 'd.card_id');
+
+        if (!empty($q)) {
+            $query = $this->applySearch($query, $q);
+        }
+
+        $query = $this->applyFilters($query, $filters);
+
+        $dir = strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC';
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('d.created_at', $dir)->limit($limit)->offset($offset)->get() ?? []
+        ];
     }
 }

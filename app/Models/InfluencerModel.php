@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use Core\Model;
+use App\Traits\Filterable;
 
 /**
  * InfluencerModel - مدل اشتراکی مدیریت اینفلوئنسرها
@@ -19,6 +20,19 @@ use Core\Model;
  */
 class InfluencerModel extends Model
 {
+    use Filterable;
+
+    protected static string $table = 'influencer_profiles';
+    protected static array $searchable = ['ip.username', 'ip.bio', 'u.full_name', 'u.email'];
+
+    protected static array $filterable = [
+        'status' => ['ip.status', '='],
+        'platform' => ['ip.platform', '='],
+        'category' => ['ip.category', '='],
+        'min_followers' => ['ip.follower_count', '>='],
+        'max_followers' => ['ip.follower_count', '<='],
+        'max_price' => ['ip.story_price_24h', '<='],
+    ];
     // ==========================================
     // Constants (Profiles)
     // ==========================================
@@ -580,5 +594,34 @@ class InfluencerModel extends Model
             return ['letter'=>'D', 'label'=>'ضعیف', 'color'=>'orange', 'stars'=>2];
         }
         return ['letter'=>'F', 'label'=>'نامناسب', 'color'=>'danger', 'stars'=>1];
+    }
+
+    /**
+     * Native Modern Search Method utilizing central Filterable architecture.
+     */
+    public function searchNative(string $q, array $filters, int $limit, int $offset, string $sortColumn = 'created_at', string $sortDir = 'DESC'): array
+    {
+        $query = $this->db->table('influencer_profiles as ip')
+            ->select('ip.*', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'u.id', '=', 'ip.user_id')
+            ->whereNull('ip.deleted_at');
+
+        // 1. Standard text search from base Core\Model helper
+        if (!empty($q)) {
+            $query = $this->applySearch($query, $q);
+        }
+
+        // 2. Auto filter resolution via powerful Trait architecture!
+        $query = $this->applyFilters($query, $filters);
+
+        // Standard validation to guarantee syntax security for dynamic ordering
+        $allowedSortColumns = ['created_at', 'follower_count', 'average_rating', 'story_price_24h', 'priority', 'completed_orders'];
+        $sort = in_array($sortColumn, $allowedSortColumns, true) ? $sortColumn : 'created_at';
+        $dir = strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC';
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy("ip.{$sort}", $dir)->limit($limit)->offset($offset)->get() ?? []
+        ];
     }
 }

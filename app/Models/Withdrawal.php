@@ -3,11 +3,20 @@
 namespace App\Models;
 
 use Core\Model;
+use App\Traits\Filterable;
 
 class Withdrawal extends Model
 {
+    use Filterable;
+
     protected static string $table = 'withdrawals';
-    protected static array $searchable = ['withdrawals.tracking_code'];
+    protected static array $searchable = ['w.tracking_code'];
+
+    protected static array $filterable = [
+        'status' => ['w.status', '='],
+        'currency' => ['w.currency', '='],
+        'user_id' => ['w.user_id', '='],
+    ];
 
     /**
      * ایجاد درخواست برداشت
@@ -39,10 +48,6 @@ class Withdrawal extends Model
         $stmt->execute();
         $row = $stmt->fetch(\PDO::FETCH_ASSOC);
         return $row ?: ['pending'=>0,'completed'=>0,'rejected'=>0,'total_amount'=>0];
-    
-
-
-
     }
 
     /**
@@ -307,5 +312,29 @@ class Withdrawal extends Model
 
         $result = $stmt->fetch(\PDO::FETCH_OBJ);
         return (int)($result->count ?? 0);
+    }
+
+    /**
+     * Advanced dynamic filter engine backed by central Filterable architecture.
+     */
+    public function searchNative(string $q, array $filters, int $limit, int $offset, string $sortDir = 'DESC'): array
+    {
+        $query = $this->db->table('withdrawals as w')
+            ->select('w.*', 'u.full_name as user_name', 'u.email as user_email', 'c.card_number', 'c.bank_name')
+            ->leftJoin('users as u', 'u.id', '=', 'w.user_id')
+            ->leftJoin('bank_cards as c', 'c.id', '=', 'w.card_id');
+
+        if (!empty($q)) {
+            $query = $this->applySearch($query, $q);
+        }
+
+        $query = $this->applyFilters($query, $filters);
+
+        $dir = strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC';
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('w.created_at', $dir)->limit($limit)->offset($offset)->get() ?? []
+        ];
     }
 }

@@ -4,8 +4,18 @@ namespace App\Models;
 
 use Core\Model;
 use Core\Database;
+use App\Traits\Filterable;
 
 class Investment extends Model {
+    use Filterable;
+
+    protected static string $table = 'investments';
+    protected static array $searchable = ['u.full_name', 'u.email', 'i.status'];
+
+    protected static array $filterable = [
+        'status' => ['i.status', '='],
+        'user_id' => ['i.user_id', '='],
+    ];
     public const STATUS_ACTIVE = 'active';
     public const STATUS_FROZEN = 'frozen';
     public const STATUS_CLOSED = 'closed';
@@ -341,5 +351,29 @@ class Investment extends Model {
 
         $row = $stmt ? $stmt->fetch(\PDO::FETCH_OBJ) : null;
         return $row ?: (object)[];
+    }
+
+    /**
+     * Native Modern Query Builder utilizing central Filterable architecture.
+     */
+    public function searchNative(string $q, array $filters, int $limit, int $offset, string $sortDir = 'DESC'): array
+    {
+        $query = $this->db->table('investments as i')
+            ->select('i.*', 'u.full_name as user_name', 'u.email as user_email')
+            ->leftJoin('users as u', 'u.id', '=', 'i.user_id')
+            ->where('i.deleted_at', '=', 0);
+
+        if (!empty($q)) {
+            $query = $this->applySearch($query, $q);
+        }
+
+        $query = $this->applyFilters($query, $filters);
+
+        $dir = strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC';
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy("i.created_at", $dir)->limit($limit)->offset($offset)->get() ?? []
+        ];
     }
 }

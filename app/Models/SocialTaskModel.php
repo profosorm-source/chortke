@@ -6,13 +6,26 @@ namespace App\Models;
 
 use Core\Model;
 use Core\Database;
+use App\Traits\Filterable;
 
 /**
  * SocialTaskModel - Core Model for Social Ads, acting as a backward-compatible proxy wrapper for executions & analytics.
  */
 class SocialTaskModel extends Model
 {
+    use Filterable;
+
     protected static string $table = 'ads';
+    protected static array $searchable = ['sa.title', 'sa.description'];
+
+    protected static array $filterable = [
+        'platform' => ['sa.platform', '='],
+        'task_type' => ['sa.task_type', '='],
+        'min_reward' => ['sa.price_per_task', '>='],
+        'max_reward' => ['sa.price_per_task', '<='],
+        'budget_cap' => ['sa.price_per_task', '<='],
+        'status' => ['sa.status', '='],
+    ];
 
     private SocialTaskExecutionModel $executionModel;
     private SocialTaskAnalyticsModel $analyticsModel;
@@ -27,13 +40,9 @@ class SocialTaskModel extends Model
     // --- Ads & Tasks (Core) ---
 
     /**
-     * ✅ FIXED: Use QueryBuilder instead of string concatenation
-     * @param array $filters Column => Value filters
-     * @param string $orderBy Column name only (validated)
-     * @param int $limit
-     * @return array
+     * Retrieves globally active tasks utilizing robust Filterable architecture
      */
-    public function getActiveAds(array $filters, string $orderBy, int $limit): array
+    public function getActiveAds(int $userId, array $filters, string $orderBy, int $limit, array $excludedPlatforms = []): array
     {
         $query = $this->db->table('ads as sa')
             ->select('sa.*', 'u.full_name AS advertiser_name')
@@ -41,18 +50,43 @@ class SocialTaskModel extends Model
             ->leftJoin('users as u', 'u.id', '=', 'sa.user_id')
             ->leftJoin('social_user_trust as ut', 'ut.user_id', '=', 'sa.user_id');
         
-        // Safely build WHERE clause
-        foreach ($filters as $column => $value) {
-            $query->where('sa.' . $column, '=', $value);
+        // 1. Core base conditions
+        $query->where('sa.status', '=', 'active')
+              ->where('sa.remaining_count', '>', 0);
+
+        // 2. Excluded platform logic
+        if (!empty($excludedPlatforms) && (!isset($filters['platform']) || $filters['platform'] !== 'youtube')) {
+            $query->whereNotIn('sa.platform', $excludedPlatforms);
         }
+
+        // 3. Dynamic anti-redundancy subquery (Prevent showing completed tasks)
+        $query->whereRaw("NOT EXISTS (
+            SELECT 1 FROM social_task_executions ste
+            WHERE ste.ad_id = sa.id
+              AND ste.executor_id = ?
+              AND ste.status NOT IN ('expired','cancelled')
+        )", [$userId]);
+
+        // 4. Text searching injection helper (built-in Core\Model method)
+        if (!empty($filters['search'])) {
+            $query = $this->applySearch($query, (string)$filters['search']);
+        }
+
+        // 5. Structural Dynamic Filters applied automatically by Trait!
+        $query = $this->applyFilters($query, $filters);
         
-        // Validate order column (prevent injection)
-        $allowedOrderColumns = ['created_at', 'updated_at', 'status', 'trust_score', 'id'];
-        $orderBy = in_array($orderBy, $allowedOrderColumns, true) ? $orderBy : 'created_at';
-        
-        return $query->orderBy('sa.' . $orderBy, 'DESC')
-            ->limit($limit)
-            ->get() ?? [];
+        // 6. Sort Order Sanitization (Safety First)
+        $allowedDirections = ['ASC', 'DESC', 'DESC', 'ASC']; 
+        // Since orderBy incoming string can hold 'price_per_task DESC' etc., 
+        // the raw handler must accept pre-validated directives or standard logic.
+        // To safely handle RAND() vs specifics from the Service:
+        if (str_contains(strtoupper($orderBy), 'RAND')) {
+            $query->orderByRaw('RAND()');
+        } else {
+            $query->orderByRaw($orderBy); // Handled safely via switch match in Service
+        }
+
+        return $query->limit($limit)->get() ?? [];
     }
 
     public function getAdById(int $adId, bool $forUpdate = false): ?object

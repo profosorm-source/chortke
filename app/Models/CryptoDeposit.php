@@ -3,11 +3,20 @@
 namespace App\Models;
 
 use Core\Model;
+use App\Traits\Filterable;
 
 class CryptoDeposit extends Model
 {
+    use Filterable;
+
     protected static string $table = 'crypto_deposits';
-    protected static array $searchable = ['crypto_deposits.tx_hash'];
+    protected static array $searchable = ['d.tx_hash'];
+
+    protected static array $filterable = [
+        'status' => ['d.verification_status', '='],
+        'network' => ['d.network', '='],
+        'user_id' => ['d.user_id', '='],
+    ];
 
     public function findByHash(string $txHash): ?object
     {
@@ -282,5 +291,28 @@ class CryptoDeposit extends Model
         $stmt = $this->db->prepare($sql);
         $stmt->execute([$minAttempts, $minutes]);
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
+    }
+
+    /**
+     * Dynamic native search engine backed by unified Filterable architecture.
+     */
+    public function searchNative(string $q, array $filters, int $limit, int $offset, string $sortDir = 'DESC'): array
+    {
+        $query = $this->db->table('crypto_deposits as d')
+            ->select('d.*', 'u.full_name as user_name', 'u.email as user_email')
+            ->leftJoin('users as u', 'u.id', '=', 'd.user_id');
+
+        if (!empty($q)) {
+            $query = $this->applySearch($query, $q);
+        }
+
+        $query = $this->applyFilters($query, $filters);
+
+        $dir = strtoupper($sortDir) === 'ASC' ? 'ASC' : 'DESC';
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('d.created_at', $dir)->limit($limit)->offset($offset)->get() ?? []
+        ];
     }
 }

@@ -5,14 +5,22 @@ declare(strict_types=1);
 namespace App\Models;
 
 use Core\Model;
+use App\Traits\Filterable;
 
 /**
  * User Model - Centralized data access for users table
  */
 class User extends Model
 {
+    use Filterable;
+
     protected static string $table = 'users';
     protected static array $searchable = ['full_name', 'email', 'mobile'];
+
+    protected static array $filterable = [
+        'status' => ['status', '='],
+        'role' => ['role', '='],
+    ];
 
     /**
      * شخصی‌سازی جستجو برای مدل کاربر (افزودن تطبیق دقیق برای کد معرف)
@@ -110,13 +118,7 @@ class User extends Model
             $this->applySearch($query, $filters['search']);
         }
 
-        if (!empty($filters['role'])) {
-            $query->where('role', '=', $filters['role']);
-        }
-
-        if (!empty($filters['status'])) {
-            $query->where('status', '=', $filters['status']);
-        }
+        $query = $this->applyFilters($query, $filters);
 
         return $query->orderBy('created_at', 'DESC')
                      ->limit($limit)
@@ -131,6 +133,8 @@ class User extends Model
         if (!empty($filters['search'])) {
             $this->applySearch($query, $filters['search']);
         }
+
+        $query = $this->applyFilters($query, $filters);
 
         return $query->count();
     }
