@@ -38,7 +38,10 @@ abstract class BaseController
     protected LoggerInterface $logger;
 
     /**
-     * وابستگی‌ها را از طریق سازنده دریافت کرده یا به صورت خودکار از کانتینر رِزولوش می‌کند.
+     * وابستگی‌ها از طریق Constructor Dependency Injection
+     * Container خودکار این dependencies را resolve می‌کند (Auto-wiring)
+     * 
+     * توجه: اگر parameters null باشند، resolveFromContainer استفاده می‌شود
      */
     public function __construct(
         ?Session $session = null,
@@ -47,13 +50,20 @@ abstract class BaseController
         ?PolicyService $policyService = null,
         ?LoggerInterface $logger = null
     ) {
-        $container = \Core\Container::getInstance();
-        
-        $this->session = $session ?? $container->make(\Core\Session::class);
-        $this->request = $request ?? $container->make(\Core\Request::class);
-        $this->response = $response ?? $container->make(\Core\Response::class);
-        $this->policyService = $policyService ?? $container->make(\App\Services\Shared\PolicyService::class);
-        $this->logger = $logger ?? $container->make(\App\Contracts\LoggerInterface::class);
+        $this->session = $session ?? $this->resolveFromContainer(\Core\Session::class);
+        $this->request = $request ?? $this->resolveFromContainer(\Core\Request::class);
+        $this->response = $response ?? $this->resolveFromContainer(\Core\Response::class);
+        $this->policyService = $policyService ?? $this->resolveFromContainer(\App\Services\Shared\PolicyService::class);
+        $this->logger = $logger ?? $this->resolveFromContainer(\App\Contracts\LoggerInterface::class);
+    }
+    
+    /**
+     * Helper method برای resolve کردن dependencies از Container
+     * استفاده می‌شود زمانی که parameters null باشند
+     */
+    protected function resolveFromContainer(string $class): object
+    {
+        return \Core\Container::getInstance()->make($class);
     }
 
     // ─────────────────────────────────────────────────────────────
