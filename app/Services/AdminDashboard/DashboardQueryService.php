@@ -103,11 +103,26 @@ class DashboardQueryService extends \App\Services\BaseService
     /**
      * ✅ OPTIMIZED: Consolidated query to replace 5 separate queries
      * Get all dashboard statistics in a single database round trip
+     * MED-08: بررسی وجود جداول قبل اجرا
      */
     private function getConsolidatedStats()
     {
         // Cache the heavy aggregation for 60 seconds to reduce repeated load
         return $this->cache->remember('dashboard:admin:consolidated_stats', 60, function() {
+            // MED-08: بررسی وجود جداول مهم
+            $requiredTables = ['users', 'transactions', 'tickets'];
+            foreach ($requiredTables as $table) {
+                if (!$this->tableExists($table)) {
+                    $this->logger->warning('dashboard.table_missing', ['table' => $table]);
+                    return null; // بازگردان null در صورت عدم وجود جدول
+                }
+            }
+
+            // جداول optional
+            $optionalTables = ['disputes', 'appeals', 'activities'];
+            $haDisputes = $this->tableExists('disputes');
+            $hasAppeals = $this->tableExists('appeals');
+
             $sql = "
                 SELECT
                     -- Users stats
@@ -116,9 +131,9 @@ class DashboardQueryService extends \App\Services\BaseService
                     (SELECT COUNT(*) FROM users WHERE kyc_status = 'pending') as users_pending_kyc,
                     
                     -- Disputes stats
-                    (SELECT COUNT(*) FROM disputes) as disputes_total,
-                    (SELECT COUNT(*) FROM disputes WHERE status IN ('open', 'open_peer', 'under_review', 'escalated')) as disputes_open,
-                    (SELECT COUNT(*) FROM disputes WHERE status IN ('resolved_peer', 'resolved_admin', 'closed')) as disputes_resolved,
+                    " . ($haDisputes ? "(SELECT COUNT(*) FROM disputes) as disputes_total," : "0 as disputes_total," ) . "
+                    " . ($haDisputes ? "(SELECT COUNT(*) FROM disputes WHERE status IN ('open', 'open_peer', 'under_review', 'escalated')) as disputes_open," : "0 as disputes_open," ) . "
+                    " . ($haDisputes ? "(SELECT COUNT(*) FROM disputes WHERE status IN ('resolved_peer', 'resolved_admin', 'closed')) as disputes_resolved," : "0 as disputes_resolved," ) . "
                     
                     -- Financial stats
                     (SELECT COUNT(*) FROM transactions WHERE status = 'completed') as fin_count,
@@ -129,12 +144,46 @@ class DashboardQueryService extends \App\Services\BaseService
                     (SELECT COUNT(*) FROM tickets WHERE status = 'pending') as tickets_pending,
                     
                     -- Appeals stats
-                    (SELECT COUNT(*) FROM appeals) as appeals_total,
-                    (SELECT COUNT(*) FROM appeals WHERE status = 'pending') as appeals_pending
+                    " . ($hasAppeals ? "(SELECT COUNT(*) FROM appeals) as appeals_total," : "0 as appeals_total," ) . "
+                    " . ($hasAppeals ? "(SELECT COUNT(*) FROM appeals WHERE status = 'pending') as appeals_pending" : "0 as appeals_pending" ) . "
             ";
             
-            return $this->db->fetch($sql);
+            try {
+                return $this->db->fetch($sql);
+            } catch (\Throwable $e) {
+                $this->logger->error('dashboard.consolidated_query_failed', [
+                    'error' => $e->getMessage(),
+                    'sql' => substr($sql, 0, 200) // لاگ کردن بخشی از query
+                ]);
+                return null;
+            }
         });
+    }
+
+    /**
+     * MED-08: بررسی وجود یک جدول در دیتابیس
+     */
+    private function tableExists(string $tableName): bool
+    {
+        try {
+            $databaseName = $this->db->fetchOne(
+                "SELECT DATABASE()"
+            );
+            
+            $result = $this->db->fetch(
+                "SELECT 1 FROM INFORMATION_SCHEMA.TABLES 
+                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1",
+                [$databaseName, $tableName]
+            );
+            
+            return $result !== null;
+        } catch (\Throwable $e) {
+            $this->logger->warning('dashboard.table_check_failed', [
+                'table' => $tableName,
+                'error' => $e->getMessage()
+            ]);
+            return false; // فرض کن جدول موجود نیست
+        }
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\AntiFraud;
 
 use App\Models\AntiFraudModel;
+use App\Services\AntiFraud\RiskPolicyService;
 use App\Contracts\LoggerInterface;
 
 /**
@@ -25,8 +26,9 @@ use App\Contracts\LoggerInterface;
 class FraudDetectionService extends \App\Services\BaseService
 {
     private AntiFraudModel $fraudModel;
+    private RiskPolicyService $policy;
 
-    // آستانه‌های امتیاز تقلب
+    // آستانه‌های پیش‌فرض (fallback)
     private const RISK_THRESHOLDS = [
         'flag'     => 50,
         'kyc'      => 70,
@@ -34,7 +36,7 @@ class FraudDetectionService extends \App\Services\BaseService
         'suspend'  => 95
     ];
 
-    // وزن عوامل مختلف در محاسبه امتیاز
+    // وزن‌های پیش‌فرض (fallback)
     private const WEIGHTS = [
         'account_age'     => 0.2,
         'reputation'      => 0.3,
@@ -42,10 +44,22 @@ class FraudDetectionService extends \App\Services\BaseService
         'geographic'      => 0.2
     ];
 
-    public function __construct(AntiFraudModel $fraudModel, LoggerInterface $logger)
-    {
+    // MED-06: وزن‌های پویا از RiskPolicyService
+    private array $thresholds;
+    private array $weights;
+
+    public function __construct(
+        AntiFraudModel $fraudModel,
+        RiskPolicyService $policy,
+        LoggerInterface $logger
+    ) {
         parent::__construct($logger);
         $this->fraudModel = $fraudModel;
+        $this->policy = $policy;
+        
+        // MED-06: بارگذاری وزن‌ها و آستانه‌ها از RiskPolicyService
+        $this->thresholds = $this->policy->getArray('fraud', 'risk_thresholds', self::RISK_THRESHOLDS);
+        $this->weights = $this->policy->getArray('fraud', 'score_weights', self::WEIGHTS);
     }
 
     /**
@@ -56,10 +70,10 @@ class FraudDetectionService extends \App\Services\BaseService
         $factors = $this->gatherRiskFactors($userId);
 
         $score = 0;
-        $score += $this->calculateAccountAgeFactor($factors['account_age']) * self::WEIGHTS['account_age'];
-        $score += $this->calculateReputationFactor($factors['reputation']) * self::WEIGHTS['reputation'];
-        $score += $this->calculateVelocityFactor($factors['velocity']) * self::WEIGHTS['velocity'];
-        $score += $this->calculateGeographicFactor($factors['geographic']) * self::WEIGHTS['geographic'];
+        $score += $this->calculateAccountAgeFactor($factors['account_age']) * $this->weights['account_age'];
+        $score += $this->calculateReputationFactor($factors['reputation']) * $this->weights['reputation'];
+        $score += $this->calculateVelocityFactor($factors['velocity']) * $this->weights['velocity'];
+        $score += $this->calculateGeographicFactor($factors['geographic']) * $this->weights['geographic'];
 
         $finalScore = (int) min(100, max(0, round($score)));
 

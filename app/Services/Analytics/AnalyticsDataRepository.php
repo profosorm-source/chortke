@@ -19,7 +19,10 @@ use App\Contracts\LoggerInterface;
  */
 class AnalyticsDataRepository extends \App\Services\BaseService
 {
-    private int $cacheTtl;
+    // MED-10: TTLهای متفاوت براساس نوع داده
+    private const CACHE_TTL_HOT = 300;      // Real-time: 5 دقیقه (آمار لحظه‌ای)
+    private const CACHE_TTL_WARM = 3600;    // Daily: 1 ساعت (آمار روزانه)
+    private const CACHE_TTL_COLD = 86400;   // Historical: 24 ساعت (آمار تاریخی)
 
     public function __construct(
         private KpiStatistics $kpiStats,
@@ -29,10 +32,9 @@ class AnalyticsDataRepository extends \App\Services\BaseService
         private KYCVerification $kycModel,
         private Transaction $transactionModel,
         LoggerInterface $logger,
-        int $cacheTtl = 60 // افزایش به یک ساعت برای کشینگ Event-based
+        int $cacheTtl = 60 // Deprecated - استفاده نشود
     ) {
         parent::__construct($logger);
-        $this->cacheTtl = $cacheTtl;
     }
 
     // ==========================================
@@ -40,12 +42,12 @@ class AnalyticsDataRepository extends \App\Services\BaseService
     // ==========================================
 
     /**
-     * آمار کاربران جامع (همراه با کشینگ هوشمند)
+     * آمار کاربران جامع (همراه با کشینگ هوشمند) - WARM: 1 ساعت
      */
     public function getUserStats(): array
     {
         $cacheKey = 'user_comprehensive_stats';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, function() {
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_WARM, function() {
             $countStats = $this->userModel->getUserCountStats();
             $newUserStats = $this->userModel->getNewUserStats();
             $activityStats = $this->userModel->getUserActivityStats();
@@ -88,72 +90,72 @@ class AnalyticsDataRepository extends \App\Services\BaseService
     // ==========================================
 
     /**
-     * آمار تسک‌ها
+     * آمار تسک‌ها - HOT: 5 دقیقه
      */
     public function getTaskStats(): array
     {
         $cacheKey = 'task_stats';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getTaskStats());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getTaskStats());
     }
 
     public function getTicketStats(): array
     {
         $cacheKey = 'ticket_stats';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getTicketStats());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_WARM, fn() => $this->kpiStats->getTicketStats());
     }
 
     public function getFraudStats(): array
     {
         $cacheKey = 'fraud_stats';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getFraudStats());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getFraudStats());
     }
 
     public function getChurnRate(): float
     {
         $cacheKey = 'churn_rate';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getChurnRate());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_WARM, fn() => $this->kpiStats->getChurnRate());
     }
 
     public function getConversionRate(): float
     {
         $cacheKey = 'conversion_rate';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getConversionRate());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_WARM, fn() => $this->kpiStats->getConversionRate());
     }
 
     public function getTasksByPlatform(): array
     {
         $cacheKey = 'tasks_by_platform';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getTasksByPlatform());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getTasksByPlatform());
     }
 
     public function getHourlyActivity(int $days = 30): array
     {
         $cacheKey = "hourly_activity_{$days}";
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getHourlyActivity($days));
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getHourlyActivity($days));
     }
 
     public function getInvestmentStats(): array
     {
         $cacheKey = 'investment_stats';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getInvestmentStats());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_WARM, fn() => $this->kpiStats->getInvestmentStats());
     }
 
     public function getReferralStats(): array
     {
         $cacheKey = 'referral_stats';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getReferralStats());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_WARM, fn() => $this->kpiStats->getReferralStats());
     }
 
     public function getTopUsers(int $limit = 20): array
     {
         $cacheKey = "top_users_{$limit}";
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getTopUsers($limit));
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_WARM, fn() => $this->kpiStats->getTopUsers($limit));
     }
 
     public function getLotteryStats(): array
     {
         $cacheKey = 'lottery_stats';
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getLotteryStats());
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getLotteryStats());
     }
 
     /**
@@ -182,40 +184,40 @@ class AnalyticsDataRepository extends \App\Services\BaseService
     // ==========================================
 
     /**
-     * دریافت آمار کامل یک تسک سفارشی
+     * دریافت آمار کامل یک تسک سفارشی - HOT: 5 دقیقه
      */
     public function getCustomTaskStats(int $taskId, int $days = 30): array
     {
         $cacheKey = "task_stats_{$taskId}_{$days}";
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, function () use ($taskId, $days) {
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, function () use ($taskId, $days) {
             return $this->customTaskAnalyticsModel->analytics_getTaskStats($taskId, $days);
         });
     }
 
     /**
-     * دریافت آمار داشبورد creator
+     * دریافت آمار داشبورد creator - HOT: 5 دقیقه
      */
     public function getCreatorDashboard(int $userId): array
     {
         $cacheKey = "creator_dashboard_{$userId}";
-        return $this->cache->remember($cacheKey, 600, function () use ($userId) {
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, function () use ($userId) {
             return $this->customTaskAnalyticsModel->analytics_getCreatorDashboard($userId);
         });
     }
 
     /**
-     * دریافت آمار داشبورد worker
+     * دریافت آمار داشبورد worker - HOT: 5 دقیقه
      */
     public function getWorkerDashboard(int $userId): array
     {
         $cacheKey = "worker_dashboard_{$userId}";
-        return $this->cache->remember($cacheKey, 600, function () use ($userId) {
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, function () use ($userId) {
             return $this->customTaskAnalyticsModel->analytics_getWorkerDashboard($userId);
         });
     }
 
     /**
-     * تسک‌های محبوب
+     * تسک‌های محبوب - WARM: 30 دقیقه
      */
     public function getTrendingTasks(int $limit = 10): array
     {
@@ -230,41 +232,41 @@ class AnalyticsDataRepository extends \App\Services\BaseService
     // ==========================================
 
     /**
-     * ثبت‌نام روزانه
+     * ثبت‌نام روزانه - HOT: 5 دقیقه
      */
     public function getDailyRegistrations(int $days = 30): array
     {
         $cacheKey = "daily_registrations_{$days}";
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getDailyRegistrations($days));
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getDailyRegistrations($days));
     }
 
     /**
-     * درآمد روزانه
+     * درآمد روزانه - HOT: 5 دقیقه
      */
     public function getDailyRevenue(int $days = 30, ?string $currency = null): array
     {
         $curr = strtoupper($currency ?: 'IRT');
         $cacheKey = "daily_revenue_{$days}_{$curr}";
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getDailyRevenue($days, $curr));
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getDailyRevenue($days, $curr));
     }
 
     /**
-     * واریز و برداشت روزانه
+     * واریز و برداشت روزانه - HOT: 5 دقیقه
      */
     public function getDailyDepositsWithdrawals(int $days = 30, ?string $currency = null): array
     {
         $curr = strtoupper($currency ?: 'IRT');
         $cacheKey = "daily_deposits_withdrawals_{$days}_{$curr}";
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getDailyDepositsWithdrawals($days, $curr));
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getDailyDepositsWithdrawals($days, $curr));
     }
 
     /**
-     * تسک‌های تکمیل‌شده روزانه
+     * تسک‌های تکمیل‌شده روزانه - HOT: 5 دقیقه
      */
     public function getDailyCompletedTasks(int $days = 30): array
     {
         $cacheKey = "daily_completed_tasks_{$days}";
-        return $this->cache->remember($cacheKey, $this->cacheTtl * 60, fn() => $this->kpiStats->getDailyCompletedTasks($days));
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getDailyCompletedTasks($days));
     }
 
     /**

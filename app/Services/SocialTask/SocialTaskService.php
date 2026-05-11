@@ -56,49 +56,32 @@ class SocialTaskService extends \App\Services\BaseService
         $restriction = $this->antiFraud->getRestrictionLevel($userId);
         $effectiveLimit = $this->antiFraud->filterTaskCount($userId, $limit);
 
-        $where = [
-            "sa.status = 'active'",
-            "sa.remaining_count > 0",
-            (!isset($filters['platform']) || $filters['platform'] !== 'youtube' ? "sa.platform NOT IN ('" . implode("','", self::EXCLUDED_PLATFORMS_FROM_SOCIAL) . "')" : "1=1"),
-            "NOT EXISTS (
-                SELECT 1 FROM social_task_executions ste
-                WHERE ste.ad_id = sa.id
-                  AND ste.executor_id = ?
-                  AND ste.status NOT IN ('expired','cancelled')
-            )"
-        ];
-        $params = [$userId];
+        // Construction of Clean Filter Map for centralized Filterable Trait processing
+        $mappedFilters = [];
 
         if (!empty($filters['platform'])) {
-            $where[] = 'sa.platform = ?';
-            $params[] = $filters['platform'];
+            $mappedFilters['platform'] = $filters['platform'];
         }
-
+        
         if (!empty($filters['task_type'])) {
-            $where[] = 'sa.task_type = ?';
-            $params[] = $filters['task_type'];
+            $mappedFilters['task_type'] = $filters['task_type'];
         }
 
         if (!empty($filters['min_reward'])) {
-            $where[] = 'sa.price_per_task >= ?';
-            $params[] = (float)$filters['min_reward'];
+            $mappedFilters['min_reward'] = (float)$filters['min_reward'];
         }
+
         if (!empty($filters['max_reward'])) {
-            $where[] = 'sa.price_per_task <= ?';
-            $params[] = (float)$filters['max_reward'];
+            $mappedFilters['max_reward'] = (float)$filters['max_reward'];
         }
 
         $medianReward = $this->model->getMedianReward();
         if (empty($filters['is_mobile'])) {
-            $where[] = 'sa.price_per_task <= ?';
-            $params[] = $medianReward;
+            $mappedFilters['budget_cap'] = $medianReward;
         }
 
         if (!empty($filters['search'])) {
-            $like = '%' . $this->sanitizeSearch((string)$filters['search']) . '%';
-            $where[] = '(sa.title LIKE ? OR sa.description LIKE ?)';
-            $params[] = $like;
-            $params[] = $like;
+            $mappedFilters['search'] = (string)$filters['search'];
         }
 
         $orderBy = match ($filters['sort'] ?? 'random') {
@@ -108,7 +91,14 @@ class SocialTaskService extends \App\Services\BaseService
             default      => 'RAND()',
         };
 
-        $tasks = $this->model->getActiveAds($where, $params, $orderBy, $effectiveLimit);
+        // High level secure dispatch to overhauled Model method
+        $tasks = $this->model->getActiveAds(
+            $userId, 
+            $mappedFilters, 
+            $orderBy, 
+            $effectiveLimit,
+            self::EXCLUDED_PLATFORMS_FROM_SOCIAL
+        );
 
         foreach ($tasks as &$task) {
             $task->display_reward = $this->antiFraud->adjustedReward($userId, (float)$task->price_per_task);

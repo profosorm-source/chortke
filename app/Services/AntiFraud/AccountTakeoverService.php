@@ -32,6 +32,16 @@ class AccountTakeoverService extends \App\Services\BaseService
 
     public function detect(int $userId, string $ip, string $userAgent, ?string $fingerprint = null): array
     {
+        // MED-07: اعتبارسنجی IP بر اساس فرمت معتبر
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            $this->logger->warning('takeover.invalid_ip', [
+                'raw_ip' => $ip,
+                'user_id' => $userId,
+                'user_agent' => $userAgent
+            ]);
+            $ip = '0.0.0.0'; // مقدار خنثی
+        }
+
         $this->logger->info('takeover.detect.started', [
             'user_id' => $userId,
             'ip' => $ip
