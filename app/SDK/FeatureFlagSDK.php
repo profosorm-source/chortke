@@ -2,7 +2,7 @@
 
 namespace App\SDK;
 
-use App\Models\FeatureFlag;
+use App\Services\FeatureFlagService;
 
 /**
  * Feature Flag SDK با Fluent Interface
@@ -11,14 +11,14 @@ use App\Models\FeatureFlag;
  */
 class FeatureFlagSDK
 {
-    private FeatureFlag $model;
+    private FeatureFlagService $featureService;
     private ?int $userId = null;
     private ?string $role = null;
     private array $context = [];
     
-    public function __construct(FeatureFlag $model)
+    public function __construct(FeatureFlagService $featureService)
     {
-        $this->model = $model;
+        $this->featureService = $featureService;
     }
     
     /**
@@ -53,7 +53,7 @@ class FeatureFlagSDK
      */
     public function isEnabled(string $feature): bool
     {
-        return $this->model->isEnabled($feature, $this->userId, $this->role);
+        return $this->featureService->isEnabled($feature, $this->userId, $this->role);
     }
     
     /**
@@ -115,7 +115,7 @@ class FeatureFlagSDK
      */
     public function getEnabled(): array
     {
-        $all = $this->model->getAll();
+        $all = $this->featureService->getAll();
         $enabled = [];
         
         foreach ($all as $feature) {
@@ -137,7 +137,7 @@ class FeatureFlagSDK
         }
         
         // اگر Percentage-based است، تعیین Variant
-        $featureObj = $this->model->findByName($feature);
+        $featureObj = $this->featureService->findByName($feature);
         
         if (!$featureObj) {
             return $variants['default'] ?? 'control';
@@ -167,7 +167,7 @@ class FeatureFlagSDK
      */
     public function toggle(string $feature): bool
     {
-        return $this->model->toggle($feature);
+        return $this->featureService->toggle($feature);
     }
     
     /**
@@ -175,7 +175,7 @@ class FeatureFlagSDK
      */
     public function enable(string $feature): bool
     {
-        return $this->model->update($feature, ['enabled' => true]);
+        return $this->featureService->update($feature, ['enabled' => true]);
     }
     
     /**
@@ -183,7 +183,7 @@ class FeatureFlagSDK
      */
     public function disable(string $feature): bool
     {
-        return $this->model->update($feature, ['enabled' => false]);
+        return $this->featureService->update($feature, ['enabled' => false]);
     }
     
     /**
@@ -191,7 +191,7 @@ class FeatureFlagSDK
      */
     public function rollout(string $feature, int $percentage): bool
     {
-        return $this->model->update($feature, ['enabled_percentage' => $percentage]);
+        return $this->featureService->update($feature, ['enabled_percentage' => $percentage]);
     }
     
     /**
@@ -199,7 +199,7 @@ class FeatureFlagSDK
      */
     public function schedule(string $feature, string $from, string $until): bool
     {
-        return $this->model->update($feature, [
+        return $this->featureService->update($feature, [
             'enabled_from' => $from,
             'enabled_until' => $until,
         ]);
@@ -210,7 +210,7 @@ class FeatureFlagSDK
      */
     public function dependsOn(string $feature, array $dependencies): bool
     {
-        return $this->model->update($feature, ['depends_on' => $dependencies]);
+        return $this->featureService->update($feature, ['depends_on' => $dependencies]);
     }
     
     /**
@@ -218,7 +218,7 @@ class FeatureFlagSDK
      */
     public function limitToEnvironments(string $feature, array $environments): bool
     {
-        return $this->model->update($feature, ['environments' => $environments]);
+        return $this->featureService->update($feature, ['environments' => $environments]);
     }
     
     /**
@@ -226,7 +226,7 @@ class FeatureFlagSDK
      */
     public function limitToRoles(string $feature, array $roles): bool
     {
-        return $this->model->update($feature, ['enabled_for_roles' => $roles]);
+        return $this->featureService->update($feature, ['enabled_for_roles' => $roles]);
     }
     
     /**
@@ -234,7 +234,7 @@ class FeatureFlagSDK
      */
     public function limitToUsers(string $feature, array $userIds): bool
     {
-        return $this->model->update($feature, ['enabled_for_users' => $userIds]);
+        return $this->featureService->update($feature, ['enabled_for_users' => $userIds]);
     }
     
     /**
@@ -242,7 +242,7 @@ class FeatureFlagSDK
      */
     public function getMetadata(string $feature): ?array
     {
-        $featureObj = $this->model->findByName($feature);
+        $featureObj = $this->featureService->findByName($feature);
         
         if (!$featureObj || !$featureObj->metadata) {
             return null;
@@ -256,7 +256,7 @@ class FeatureFlagSDK
      */
     public function setMetadata(string $feature, array $metadata): bool
     {
-        return $this->model->update($feature, ['metadata' => $metadata]);
+        return $this->featureService->update($feature, ['metadata' => $metadata]);
     }
     
     /**
@@ -264,7 +264,7 @@ class FeatureFlagSDK
      */
     public function stats(string $feature): array
     {
-        return $this->model->getMetrics($feature, 24);
+        return $this->featureService->getMetrics($feature, 24);
     }
     
     /**
@@ -272,7 +272,7 @@ class FeatureFlagSDK
      */
     public function history(string $feature, int $limit = 20): array
     {
-        return $this->model->getHistory($feature, $limit);
+        return $this->featureService->getHistory($feature, $limit);
     }
     
     /**
@@ -285,7 +285,7 @@ class FeatureFlagSDK
             'description' => $description,
         ], $options);
         
-        return $this->model->create($data);
+        return $this->featureService->create($data);
     }
     
     /**
@@ -293,7 +293,7 @@ class FeatureFlagSDK
      */
     public function delete(string $feature): bool
     {
-        return $this->model->delete($feature);
+        return $this->featureService->delete($feature);
     }
     
     /**
@@ -338,7 +338,7 @@ class FeatureFlagSDK
     
     private function getFeaturesByTag(string $tag): array
     {
-        $all = $this->model->getAll();
+        $all = $this->featureService->getAll();
         $result = [];
         
         foreach ($all as $feature) {
@@ -375,8 +375,8 @@ class FeatureFlag
     public static function instance(): FeatureFlagSDK
     {
         if (self::$instance === null) {
-            $model = app(\App\Models\FeatureFlag::class);
-            self::$instance = new FeatureFlagSDK($model);
+            $service = app(\App\Services\FeatureFlagService::class);
+            self::$instance = new FeatureFlagSDK($service);
         }
         
         return self::$instance;

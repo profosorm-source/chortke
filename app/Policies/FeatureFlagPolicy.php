@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Policies;
 
 use App\Models\User;
+use App\Models\FeatureFlag;
 
 /**
  * Feature Flag Policy
@@ -33,8 +34,9 @@ class FeatureFlagPolicy
 
     /**
      * آیا کاربر می‌تواند یک feature flag را ویرایش کند؟
+     * L-06: Type hint $featureFlag as FeatureFlag object instead of generic object
      */
-    public function update(?User $user, object $featureFlag): bool
+    public function update(?User $user, FeatureFlag $featureFlag): bool
     {
         if (!$user || !in_array($user->role, ['admin', 'super_admin'])) {
             return false;

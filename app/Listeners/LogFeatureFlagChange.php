@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace App\Listeners;
 
 use App\Events\FeatureFlagChanged;
+use App\Events\CriticalFeatureChangedEvent;
 use Core\Database;
-use App\Services\Notification\NotificationService;
+use Core\EventDispatcher;
 use App\Contracts\LoggerInterface;
 
 /**
@@ -16,13 +17,16 @@ class LogFeatureFlagChange
 {
     private Database $db;
     private LoggerInterface $logger;
-    private NotificationService $notificationService;
+    private EventDispatcher $eventDispatcher;
     
-    public function __construct(Database $db, LoggerInterface $logger, NotificationService $notificationService)
-    {
+    public function __construct(
+        Database $db,
+        LoggerInterface $logger,
+        EventDispatcher $eventDispatcher
+    ) {
         $this->db = $db;
         $this->logger = $logger;
-        $this->notificationService = $notificationService;
+        $this->eventDispatcher = $eventDispatcher;
     }
     
     /**
@@ -37,8 +41,8 @@ class LogFeatureFlagChange
             // لاگ کردن در سیستم Logging
             $this->logChange($event);
             
-            // اگر فیچر مهمی تغییر کرده، Notification بفرست
-            $this->sendNotificationIfCritical($event);
+            // MED-09: اگر فیچر مهمی تغییر کرده، Event dispatch کن
+            $this->dispatchCriticalFeatureEventIfNeeded($event);
             
         } catch (\Throwable $e) {
             $this->logger->error('feature_flag.listener.failed', [
@@ -115,27 +119,34 @@ class LogFeatureFlagChange
     }
     
     /**
-     * ارسال Notification برای فیچرهای Critical
+     * MED-09: ارسال Event برای فیچرهای Critical
+     * این روش نقض SRP را برطرف می‌کند
      */
-    private function sendNotificationIfCritical(FeatureFlagChanged $event): void
+    private function dispatchCriticalFeatureEventIfNeeded(FeatureFlagChanged $event): void
     {
-        // استخراج فیچرهای حساس از تنظیمات پویا
-        $criticalFeatures = config('feature_flags.critical') ?? [
-            'payment_gateway',
-            'user_registration',
-            'crypto_wallet',
-            'withdrawal_system',
-        ];
+        $criticalFeatures = config('feature_flags.critical');
+        if (!is_array($criticalFeatures) || empty($criticalFeatures)) {
+            $criticalFeatures = [
+                'payment_gateway',
+                'user_registration',
+                'crypto_wallet',
+                'withdrawal_system',
+            ];
+        }
         
         if (!in_array($event->featureName, $criticalFeatures, true)) {
             return;
         }
         
-        // ارسال Notification به ادمین‌های سیستم
-        $this->notificationService->sendToAdmins('critical_feature_change', [
-            'feature' => $event->featureName,
-            'action' => $event->action,
-        ]);
+        // MED-09: Dispatch event بجای direct service call
+        // listeners می‌توانند مستقل مسئول ارسال notification باشند
+        $this->eventDispatcher->dispatch(new CriticalFeatureChangedEvent(
+            $event->featureName,
+            $event->action,
+            $event->changedAt,
+            $event->changedBy,
+            $event->getChanges()
+        ));
         
         $this->logger->critical('feature_flag.critical_change', [
             'channel' => 'feature_flag',

@@ -18,18 +18,18 @@ declare(strict_types=1);
 
 namespace App\Commands;
 
-use App\Models\FeatureFlag;
+use App\Services\FeatureFlagService;
 use App\Contracts\LoggerInterface;
 
 class FeatureFlagCommand
 {
-    private FeatureFlag $model;
+    private FeatureFlagService $featureService;
     private LoggerInterface $logger;
     
-    public function __construct(LoggerInterface $logger, FeatureFlag $model)
+    public function __construct(LoggerInterface $logger, FeatureFlagService $featureService)
     {
         $this->logger = $logger;
-        $this->model = $model;
+        $this->featureService = $featureService;
     }
     
     /**
@@ -37,7 +37,7 @@ class FeatureFlagCommand
      */
     public function list(): void
     {
-        $features = $this->model->getAll();
+        $features = $this->featureService->getAll();
         
         if (empty($features)) {
             echo "هیچ فیچری یافت نشد.\n";
@@ -62,7 +62,7 @@ class FeatureFlagCommand
         
         echo "└──────────────────────────────┴──────────┴──────────┴───────────────────┘\n";
         
-        $stats = $this->model->getStats();
+        $stats = $this->featureService->getStats();
         echo "\nآمار: {$stats['total']} فیچر | {$stats['enabled']} فعال | {$stats['disabled']} غیرفعال\n\n";
     }
     
@@ -71,7 +71,7 @@ class FeatureFlagCommand
      */
     public function enable(string $name): void
     {
-        $feature = $this->model->findByName($name);
+        $feature = $this->featureService->findByName($name);
         
         if (!$feature) {
             echo "❌ فیچر '{$name}' یافت نشد.\n";
@@ -83,7 +83,7 @@ class FeatureFlagCommand
             return;
         }
         
-        if ($this->model->update($name, ['enabled' => true])) {
+        if ($this->featureService->update($name, ['enabled' => true])) {
             echo "✅ فیچر '{$name}' با موفقیت فعال شد.\n";
         } else {
             echo "❌ خطا در فعال‌سازی فیچر.\n";
@@ -96,7 +96,7 @@ class FeatureFlagCommand
      */
     public function disable(string $name): void
     {
-        $feature = $this->model->findByName($name);
+        $feature = $this->featureService->findByName($name);
         
         if (!$feature) {
             echo "❌ فیچر '{$name}' یافت نشد.\n";
@@ -108,7 +108,7 @@ class FeatureFlagCommand
             return;
         }
         
-        if ($this->model->update($name, ['enabled' => false])) {
+        if ($this->featureService->update($name, ['enabled' => false])) {
             echo "✅ فیچر '{$name}' با موفقیت غیرفعال شد.\n";
         } else {
             echo "❌ خطا در غیرفعال‌سازی فیچر.\n";
@@ -121,7 +121,7 @@ class FeatureFlagCommand
      */
     public function status(string $name): void
     {
-        $feature = $this->model->findByName($name);
+        $feature = $this->featureService->findByName($name);
         
         if (!$feature) {
             echo "❌ فیچر '{$name}' یافت نشد.\n";
@@ -164,7 +164,7 @@ class FeatureFlagCommand
         echo "╚═══════════════════════════════════════════════════════════════╝\n\n";
         
         // نمایش متریک‌ها
-        $metrics = $this->model->getMetrics($name, 24);
+        $metrics = $this->featureService->getMetrics($name, 24);
         
         if (!empty($metrics)) {
             echo "📊 Metrics (Last 24 hours):\n";
@@ -186,7 +186,7 @@ class FeatureFlagCommand
     public function create(string $name, string $description): void
     {
         try {
-            if ($this->model->create([
+            if ($this->featureService->create([
                 'name' => $name,
                 'description' => $description,
                 'enabled' => false,
@@ -217,7 +217,7 @@ class FeatureFlagCommand
             return;
         }
         
-        if ($this->model->delete($name)) {
+        if ($this->featureService->delete($name)) {
             echo "✅ فیچر '{$name}' با موفقیت حذف شد.\n";
         } else {
             echo "❌ خطا در حذف فیچر یا فیچر یافت نشد.\n";
@@ -235,7 +235,7 @@ class FeatureFlagCommand
             exit(1);
         }
         
-        if ($this->model->update($name, ['enabled_percentage' => $percentage])) {
+        if ($this->featureService->update($name, ['enabled_percentage' => $percentage])) {
             echo "✅ درصد rollout فیچر '{$name}' به {$percentage}% تغییر کرد.\n";
         } else {
             echo "❌ خطا در تغییر rollout.\n";
@@ -263,7 +263,7 @@ class FeatureFlagCommand
         }
         
         try {
-            $this->model->update($name, [
+            $this->featureService->update($name, [
                 'enabled_from' => date('Y-m-d H:i:s', $fromTime),
                 'enabled_until' => date('Y-m-d H:i:s', $untilTime),
             ]);
@@ -282,7 +282,7 @@ class FeatureFlagCommand
      */
     public function history(string $name, int $limit = 20): void
     {
-        $history = $this->model->getHistory($name, $limit);
+        $history = $this->featureService->getHistory($name, $limit);
         
         if (empty($history)) {
             echo "هیچ تاریخچه‌ای برای '{$name}' یافت نشد.\n";
@@ -306,7 +306,7 @@ class FeatureFlagCommand
      */
     public function clearCache(): void
     {
-        $count = $this->model->getCacheCount();
+        $count = $this->featureService->getCacheCount();
         if ($count === 0) {
             echo "ℹ️ کش خالی است.\n";
             return;
@@ -320,7 +320,7 @@ class FeatureFlagCommand
             return;
         }
         
-        $this->model->clearCache();
+        $this->featureService->clearCache();
         echo "✅ Cache فیچرها پاک شد.\n";
     }
     
@@ -329,7 +329,7 @@ class FeatureFlagCommand
      */
     public function cleanupMetrics(int $days = 30): void
     {
-        $this->model->cleanupMetrics($days);
+        $this->featureService->cleanupMetrics($days);
         echo "✅ Metrics قدیمی‌تر از {$days} روز پاک شدند.\n";
     }
     /**

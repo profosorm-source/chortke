@@ -16,6 +16,7 @@ class RateLimitPolicy
 {
     private RateLimiter $limiter;
     private Logger $logger;
+    private ?\App\Models\FeatureFlag $featureFlagModel;
 
     private const ACTIONS = [
         'withdrawal'         => 'withdrawal_limits',
@@ -32,10 +33,11 @@ class RateLimitPolicy
         'login'              => 'auth_limits',
     ];
 
-    public function __construct(RateLimiter $limiter, Logger $logger)
+    public function __construct(RateLimiter $limiter, Logger $logger, ?\App\Models\FeatureFlag $featureFlagModel = null)
     {
         $this->limiter = $limiter;
         $this->logger = $logger;
+        $this->featureFlagModel = $featureFlagModel;
     }
 
     /**
@@ -74,11 +76,23 @@ class RateLimitPolicy
 
     private function getFeatureConfig(string $featureName, string $limitKey): array
     {
-        // در اینجا باید FeatureFlagService یا Model خوانده شود. 
-        // برای حفظ سرعت، از پیش‌فرض‌ها استفاده می‌کنیم اگر تنظیم نشده باشد.
+        // H-05: Load feature flags from model if available
+        if ($this->featureFlagModel) {
+            $flag = $this->featureFlagModel->findByName($featureName);
+            if ($flag) {
+                $metadata = json_decode($flag->metadata ?? '{}', true);
+                if (isset($metadata[$limitKey])) {
+                    return [
+                        'max_attempts' => $metadata[$limitKey]['max'] ?? 5,
+                        'decay_minutes' => $metadata[$limitKey]['window'] ?? 60,
+                    ];
+                }
+            }
+        }
         
+        // Safe defaults if flag not found or model not available
         return [
-            'max_attempts' => 10,
+            'max_attempts' => 5,
             'decay_minutes' => 60
         ];
     }
