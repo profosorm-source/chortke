@@ -368,27 +368,7 @@ public function archiveOlderThan(int $days = 30, int $chunkSize = 2000): array
         return $masked;
     }
 
-    private function currentUserId(): ?int
-    {
-        try {
-            if (function_exists('user_id')) {
-                $id = user_id();
-                return $id ? (int)$id : null;
-            }
-            return null;
-        } catch (\Throwable) {
-            return null;
-        }
-    }
 
-    private function clientIp(): ?string
-    {
-        return $_SERVER['REMOTE_ADDR'] ?? null;
-    }
 
-    private function userAgent(): ?string
-    {
-        $ua = $_SERVER['HTTP_USER_AGENT'] ?? null;
-        return $ua ? mb_substr($ua, 0, 300) : null;
-    }
+
 }

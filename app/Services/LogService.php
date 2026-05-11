@@ -459,6 +459,20 @@ class LogService extends BaseService
     private function cleanupLogFiles(int $days): void
     {
         try {
+            // 1. Rotate single large log files that aren't dated automatically
+            $staticLogs = ['_exception_fallback.log', '_fallback.log'];
+            $maxSize = 5 * 1024 * 1024; // 5MB
+            
+            foreach ($staticLogs as $staticLog) {
+                $filePath = $this->logDir . $staticLog;
+                if (file_exists($filePath) && filesize($filePath) > $maxSize) {
+                    // Rename to include date so glob picks it up and rotates it
+                    $rotatedName = $this->logDir . pathinfo($staticLog, PATHINFO_FILENAME) . '_' . date('Y-m-d_His') . '.log';
+                    @rename($filePath, $rotatedName);
+                }
+            }
+
+            // 2. General cleanup of older log files
             $cutoff = strtotime("-{$days} days");
             $files = glob($this->logDir . '*.log');
             

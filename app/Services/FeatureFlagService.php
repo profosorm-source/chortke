@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\FeatureFlag;
+use App\Models\User;
+use App\Models\KYCVerification;
 use App\Contracts\FeatureFlagRepositoryInterface;
 use Core\Cache;
+use Core\EventDispatcher;
 use App\Contracts\LoggerInterface;
+use App\Events\FeatureFlagChanged;
+use App\Listeners\LogFeatureFlagChange;
 
 /**
  * Feature Flag Service
@@ -19,18 +24,34 @@ class FeatureFlagService extends \App\Services\BaseService
 {
     private \Core\Database $db;
     private FeatureFlag $featureModel;
+    private User $userModel;
+    private KYCVerification $kycModel;
     private Cache $cache;
+    private EventDispatcher $eventDispatcher;
+
+    private const ALLOWED_UPDATE_FIELDS = [
+        'enabled', 'description', 'enabled_percentage',
+        'enabled_for_roles', 'enabled_for_users', 'metadata',
+        'enabled_from', 'enabled_until', 'depends_on',
+        'environments', 'priority', 'tags',
+    ];
     
     public function __construct(
         FeatureFlag $featureModel,
+        User $userModel,
+        KYCVerification $kycModel,
         \Core\Database $db,
         Cache $cache,
+        EventDispatcher $eventDispatcher,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
         $this->featureModel = $featureModel;
+        $this->userModel = $userModel;
+        $this->kycModel = $kycModel;
         $this->db = $db;
         $this->cache = $cache;
+        $this->eventDispatcher = $eventDispatcher;
     }
     
     /**
@@ -134,7 +155,7 @@ class FeatureFlagService extends \App\Services\BaseService
     public function getValue(string $name, mixed $default = null): mixed
     {
         $feature = $this->featureModel->findByName($name);
-        if (!$feature || !$feature->config_values) {
+        if (!$feature || !isset($feature->config_values)) {
             return $default;
         }
 
@@ -280,31 +301,23 @@ class FeatureFlagService extends \App\Services\BaseService
             return array_merge(['user_id' => $userId], $context);
         }
 
-        // دریافت از database
-        $sql = "
-            SELECT 
-                u.id as user_id,
-                u.role
-            FROM users u
-            WHERE u.id = ?
-            LIMIT 1
-        ";
-        
-        $user = $this->db->fetch($sql, [$userId]);
+        // دریافت از طریق مدلهای تزریق شده
+        $user = $this->userModel->find($userId);
         if (!$user) {
             return ['user_id' => $userId, 'role' => 'user'];
         }
-
+        
         $plan = null;
         $device = null;
+        
         try {
-            $kyc = $this->db->fetch("SELECT plan, device_type FROM kyc_verifications WHERE user_id = ? LIMIT 1", [$userId]);
+            $kyc = $this->kycModel->findByUserId($userId);
             if ($kyc) {
                 $plan = $kyc->plan ?? null;
                 $device = $kyc->device_type ?? null;
             }
         } catch (\Throwable $e) {
-            // Ignore if table or columns don't exist
+            // Silent fail
         }
 
         return [
@@ -358,36 +371,162 @@ class FeatureFlagService extends \App\Services\BaseService
 
     public function toggle(string $name): bool
     {
+        $feature = $this->featureModel->findByName($name);
+        if (!$feature) {
+            return false;
+        }
+        
+        $oldValues = ['enabled' => (bool)$feature->enabled];
+        
         $result = $this->featureModel->toggle($name);
+        
         if ($result) {
             $this->clearCache($name);
+            
+            $this->dispatchEvent(new FeatureFlagChanged(
+                $name,
+                'toggled',
+                $oldValues,
+                ['enabled' => !$oldValues['enabled']],
+                function_exists('user_id') ? user_id() : 0
+            ));
         }
         return $result;
     }
 
     public function update(string $name, array $data): bool
     {
-        $result = $this->featureModel->update($name, $data);
+        $feature = $this->featureModel->findByName($name);
+        if (!$feature) {
+            throw new \InvalidArgumentException("Feature '{$name}' not found");
+        }
+        
+        // 1. Business Validation & Sanitization
+        $sanitizedData = [];
+        foreach ($data as $key => $value) {
+            if (!in_array($key, self::ALLOWED_UPDATE_FIELDS, true)) {
+                throw new \InvalidArgumentException("Invalid field for update: $key");
+            }
+            
+            if (in_array($key, ['enabled_for_roles', 'enabled_for_users', 'metadata', 'depends_on', 'environments', 'tags'])) {
+                $value = is_array($value) ? json_encode($value) : $value;
+            }
+            
+            if ($key === 'enabled_percentage') {
+                $value = max(0, min(100, (int)$value));
+            }
+            
+            if ($key === 'enabled') {
+                $value = $value ? 1 : 0;
+            }
+            
+            $sanitizedData[$key] = $value;
+        }
+        
+        if (empty($sanitizedData)) {
+            return false;
+        }
+        
+        // 2. Prepare Event tracking
+        $oldValues = [];
+        foreach (array_keys($sanitizedData) as $key) {
+            if (property_exists($feature, $key)) {
+                $oldValues[$key] = $feature->$key;
+            }
+        }
+        
+        // 3. Delegate to persistence layer
+        $result = $this->featureModel->update($name, $sanitizedData);
+        
         if ($result) {
             $this->clearCache($name);
+            
+            $this->dispatchEvent(new FeatureFlagChanged(
+                $name,
+                'updated',
+                $oldValues,
+                $data, // original human-readable data
+                function_exists('user_id') ? user_id() : 0
+            ));
         }
         return $result;
     }
 
     public function create(array $data): bool
     {
-        $result = $this->featureModel->create($data);
+        // 1. Business Validation
+        $required = ['name', 'description'];
+        foreach ($required as $field) {
+            if (empty($data[$field])) {
+                throw new \InvalidArgumentException("Field '$field' is required");
+            }
+        }
+        
+        if ($this->featureModel->findByName($data['name'])) {
+            throw new \InvalidArgumentException("Feature '{$data['name']}' already exists");
+        }
+        
+        // 2. Fill defaults and sanitize
+        $defaults = [
+            'enabled' => false,
+            'enabled_percentage' => 100,
+            'enabled_for_roles' => null,
+            'enabled_for_users' => null,
+            'metadata' => null,
+            'enabled_from' => null,
+            'enabled_until' => null,
+            'depends_on' => null,
+            'environments' => null,
+            'priority' => 0,
+            'tags' => null,
+        ];
+        
+        $fullData = array_merge($defaults, $data);
+        
+        // 3. Serialization
+        foreach (['enabled_for_roles', 'enabled_for_users', 'metadata', 'depends_on', 'environments', 'tags'] as $field) {
+            if (is_array($fullData[$field])) {
+                $fullData[$field] = json_encode($fullData[$field]);
+            }
+        }
+        
+        $fullData['enabled'] = $fullData['enabled'] ? 1 : 0;
+        $fullData['enabled_percentage'] = max(0, min(100, (int)$fullData['enabled_percentage']));
+        
+        // 4. Persistence
+        $result = $this->featureModel->create($fullData);
+        
         if ($result) {
             $this->clearCache();
+            
+            $this->dispatchEvent(new FeatureFlagChanged(
+                $data['name'] ?? 'unknown',
+                'created',
+                [],
+                $data,
+                function_exists('user_id') ? user_id() : 0
+            ));
         }
         return $result;
     }
 
     public function delete(string $name): bool
     {
+        $feature = $this->featureModel->findByName($name);
+        $oldValues = $feature ? (array)$feature : [];
+        
         $result = $this->featureModel->delete($name);
+        
         if ($result) {
             $this->clearCache();
+            
+            $this->dispatchEvent(new FeatureFlagChanged(
+                $name,
+                'deleted',
+                $oldValues,
+                [],
+                function_exists('user_id') ? user_id() : 0
+            ));
         }
         return $result;
     }
@@ -402,9 +541,35 @@ class FeatureFlagService extends \App\Services\BaseService
         return $this->featureModel->getHistory($name);
     }
 
+    public function getCacheCount(): int
+    {
+        return $this->featureModel->getCacheCount();
+    }
+
+    public function cleanupMetrics(int $days = 30): void
+    {
+        $this->featureModel->cleanupMetrics($days);
+    }
+
     public function getMetrics(string $name): array
     {
         return $this->featureModel->getMetrics($name);
+    }
+    
+    /**
+     * Dispatch logging event for feature changes
+     */
+    private function dispatchEvent(FeatureFlagChanged $event): void
+    {
+        try {
+            $listener = new LogFeatureFlagChange($this->db, $this->logger, $this->eventDispatcher);
+            $listener->handle($event);
+        } catch (\Throwable $e) {
+            $this->logger->error('feature_flag.service.dispatch_failed', [
+                'channel' => 'feature_flag',
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
 
