@@ -34,9 +34,6 @@ class ReferralController extends BaseAdminController
      */
     public function index()
     {
-
-                $commissionModel = $this->referralCommissionModel;
-
         $filters = [
             'status'      => $this->request->get('status'),
             'source_type' => $this->request->get('source_type'),
@@ -48,10 +45,12 @@ class ReferralController extends BaseAdminController
         $limit = 30;
         $offset = ($page - 1) * $limit;
 
-        $commissions = $commissionModel->adminList($filters, $limit, $offset);
-        $total = $commissionModel->adminCount($filters);
-        $stats = $commissionModel->globalStats();
-        $topReferrers = $commissionModel->topReferrers('irt', 5);
+        $result = $this->referralService->adminList($filters, $limit, $offset);
+        $commissions = $result['commissions'] ?? [];
+        $total = $result['total'] ?? 0;
+        
+        $stats = $this->referralService->globalStats();
+        $topReferrers = $this->referralService->topReferrers('irt', 5);
 
         $this->logger->activity('referrals.view', 'مشاهده لیست کمیسیون‌ها', user_id(), []);
 
@@ -129,8 +128,7 @@ class ReferralController extends BaseAdminController
      */
     public function userDetail()
     {
-
-                $userId = (int) $this->request->param('id');
+        $userId = (int) $this->request->param('id');
 
         $user = $this->userService->find($userId);
 
@@ -140,11 +138,10 @@ class ReferralController extends BaseAdminController
             exit;
         }
 
-        $commissionModel = $this->referralCommissionModel;
-        $stats = $commissionModel->getReferrerStats($userId);
-        $referredUsers = $commissionModel->getReferredUsers($userId, 50, 0);
-        $commissions = $commissionModel->getByReferrer($userId, [], 50, 0);
-        $referredCount = $commissionModel->countReferredUsers($userId);
+        $stats = $this->referralService->getReferrerStats($userId);
+        $referredUsers = $this->referralService->getReferredUsers($userId, 50, 0);
+        $commissions = $this->referralService->getByReferrer($userId, [], 50, 0);
+        $referredCount = $this->referralService->countReferredUsers($userId);
 
         return view('admin.referral.user-detail', [
             'user'          => $user,

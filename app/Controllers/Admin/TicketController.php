@@ -49,23 +49,24 @@ class TicketController extends BaseAdminController
         $perPage = 20;
         $offset = ($page - 1) * $perPage;
         
-        // استفاده از AdvancedSearchService برای جستجو
+        // استفاده از TicketService برای دریافت تیکت‌ها
         if (!empty($search)) {
             $result = $this->searchService->searchTickets($search, $filters, $perPage, $offset);
             $tickets = $result['items'] ?? [];
             $total = $result['total'] ?? 0;
         } else {
-            $tickets = $this->ticketModel->getForAdmin($filters, $page, $perPage);
-            $total = $this->ticketModel->countForAdmin($filters);
+            $result = $this->ticketService->listForAdmin($filters, $page, $perPage);
+            $tickets = $result['tickets'] ?? [];
+            $total = $result['total'] ?? 0;
         }
 
         $totalPages = ceil($total / $perPage);
         
-        // آمار
-        $stats = $this->ticketModel->getStats();
+        // آمار از Service
+        $stats = $this->ticketService->getStats();
         
-        // دسته‌بندی‌ها
-        $categories = $this->categoryModel->getAll();
+        // دسته‌بندی‌ها از Service
+        $categories = $this->ticketService->getCategories();
         
         return view('admin/tickets/index', [
             'tickets' => $tickets,
@@ -84,17 +85,17 @@ class TicketController extends BaseAdminController
      */
     public function show(int $id)
     {
-        $ticket = $this->ticketModel->findById($id);
+        $ticket = $this->ticketService->getById($id);
         
         if (!$ticket) {
-            session()->setFlash('error', 'تیکت یافت نشد.');
+            $this->session->setFlash('error', 'تیکت یافت نشد.');
             return redirect('/admin/tickets');
         }
         
-        $messages = $this->messageModel->getByTicketId($id);
+        $messages = $this->ticketService->getMessages($id);
         
         // علامت‌گذاری به عنوان خوانده شده
-        $this->messageModel->markAsRead($id, true);
+        $this->ticketService->markAsRead($id, true);
         
         return view('admin/tickets/show', [
             'ticket' => $ticket,
@@ -134,7 +135,7 @@ class TicketController extends BaseAdminController
             return $this->response->json(['success' => false, 'message' => 'داده‌های ناقص.']);
         }
         
-        if ($this->ticketModel->updateStatus($ticketId, $status)) {
+        if ($this->ticketService->updateStatus($ticketId, $status)) {
             $this->logger->activity('ticket_status_changed', "وضعیت تیکت #{$ticketId} به {$status} تغییر کرد", user_id(), []);
             
             return $this->response->json([
@@ -160,7 +161,7 @@ class TicketController extends BaseAdminController
             return $this->response->json(['success' => false, 'message' => 'داده‌های ناقص.']);
         }
         
-        if ($this->ticketModel->assign($ticketId, $adminId)) {
+        if ($this->ticketService->assignTo($ticketId, $adminId)) {
             return $this->response->json([
                 'success' => true,
                 'message' => 'تیکت تخصیص داده شد.'

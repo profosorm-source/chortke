@@ -50,11 +50,13 @@ class ManualDepositController extends BaseAdminController
 
         try {
             if ($status) {
-                $deposits = $this->depositModel->getAll($status, $limit, $offset);
-                $total = $this->depositModel->countAll($status);
+                $result = $this->manualDepositService->listByStatus($status, $limit, $offset);
+                $deposits = $result['deposits'] ?? [];
+                $total = $result['total'] ?? 0;
             } else {
-                $deposits = $this->depositModel->getPendingDeposits($limit, $offset);
-                $total = $this->depositModel->countPendingDeposits();
+                $result = $this->manualDepositService->listPending($limit, $offset);
+                $deposits = $result['deposits'] ?? [];
+                $total = $result['total'] ?? 0;
             }
 
             $totalPages = (int)\ceil($total / $limit);
@@ -90,7 +92,7 @@ class ManualDepositController extends BaseAdminController
                 $depositId = (int)$this->request->get('id');
 
         try {
-            $deposit = $this->depositModel->find($depositId);
+            $deposit = $this->manualDepositService->getDeposit($depositId);
 
             if (!$deposit) {
                 $this->session->setFlash('error', 'واریز یافت نشد');
@@ -102,8 +104,7 @@ class ManualDepositController extends BaseAdminController
             $user = $this->userService->find($deposit->user_id);
 
             // دریافت اطلاعات کارت
-            $cardModel = $this->BankCardModel;
-            $card = $cardModel->find($deposit->card_id);
+            $card = $this->manualDepositService->getCard($deposit->card_id);
 
             view('admin.manual-deposits.review', [
                 'deposit' => $deposit,

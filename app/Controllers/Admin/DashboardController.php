@@ -72,9 +72,9 @@ class DashboardController extends BaseAdminController
 
     public function recentActivity(): void
     {
-        $type  = $_GET['type']  ?? 'all';
-        $limit = min((int)($_GET['limit'] ?? 20), 100);
-        $page  = max((int)($_GET['page']  ?? 1), 1);
+        $type  = $this->request->get('type', 'all');
+        $limit = min((int)$this->request->get('limit', 20), 100);
+        $page  = max((int)$this->request->get('page', 1), 1);
 
         try {
     $result = $this->dashboardService->getRecentActivity($type, $limit, $page);
@@ -148,8 +148,8 @@ class DashboardController extends BaseAdminController
     {
         header('Content-Type: application/json');
 
-        $email    = trim($_POST['email'] ?? '');
-        $password = $_POST['password'] ?? '';
+        $email    = trim($this->request->input('email', ''));
+        $password = $this->request->input('password', '');
 
         if (!$email || !$password) {
             echo json_encode(['status' => 'error', 'message' => 'تمام فیلدها باید پر شوند.']);

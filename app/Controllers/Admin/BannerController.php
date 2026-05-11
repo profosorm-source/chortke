@@ -27,18 +27,18 @@ class BannerController extends BaseAdminController
 
     public function index()
     {
-        $page = max(1, (int)($_GET['page'] ?? 1));
+        $page = max(1, (int)$this->request->get('page', 1));
         $perPage = 20;
 
         $filters = array_filter([
-            'placement' => $_GET['placement'] ?? null,
-            'banner_type' => $_GET['banner_type'] ?? null,
-            'category' => $_GET['category'] ?? null,
-            'is_active' => $_GET['is_active'] ?? null,
-            'status' => $_GET['status'] ?? null,
+            'placement' => $this->request->get('placement'),
+            'banner_type' => $this->request->get('banner_type'),
+            'category' => $this->request->get('category'),
+            'is_active' => $this->request->get('is_active'),
+            'status' => $this->request->get('status'),
         ], fn($v) => $v !== null && $v !== '');
 
-        $search = trim($_GET['search'] ?? '');
+        $search = trim($this->request->get('search', ''));
         $offset = ($page - 1) * $perPage;
 
         // استفاده از AdvancedSearchService برای جستجو
@@ -47,31 +47,16 @@ class BannerController extends BaseAdminController
             $banners = $result['items'] ?? [];
             $total = $result['total'] ?? 0;
         } else {
-            // اگر جستجو نباشد، از QueryBuilder استفاده شود
-            $q = $this->banner->db->table('ads')
-                ->where('type', '=', 'banner')
-                ->whereNull('deleted_at');
-
-            if (!empty($filters['placement'])) $q->where('placement', '=', $filters['placement']);
-            if (!empty($filters['category'])) $q->where('category', '=', $filters['category']);
-            if (isset($filters['is_active'])) $q->where('is_active', '=', (int)$filters['is_active']);
-            if (!empty($filters['status'])) $q->where('status', '=', $filters['status']);
-
-            $total = $q->count();
-            $banners = $q->orderBy('sort_order', 'ASC')
-                         ->orderBy('created_at', 'DESC')
-                         ->limit($perPage)
-                         ->offset($offset)
-                         ->get();
+            // استفاده از Service برای دریافت بنرها
+            $result = $this->searchService->searchBanners('', $filters, $perPage, $offset);
+            $banners = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
         }
                      
         $placements = $this->placement->all();
         
-        // آمار یکدست بنرها
-        $stats = [
-            'total' => $this->banner->db->table('ads')->where('type', '=', 'banner')->whereNull('deleted_at')->count(),
-            'active' => $this->banner->db->table('ads')->where('type', '=', 'banner')->where('status', '=', 'active')->whereNull('deleted_at')->count(),
-        ];
+        // آمار از Service
+        $stats = $this->searchService->getBannerStats();
 
         return view('admin.banners.index', compact('banners', 'placements', 'filters', 'stats', 'total', 'page', 'perPage', 'search'));
     }
@@ -84,22 +69,23 @@ class BannerController extends BaseAdminController
 
     public function store()
     {
-        $title = $_POST['title'] ?? '';
-        $placement = $_POST['placement'] ?? '';
+        $title = trim($this->request->input('title', ''));
+        $placement = trim($this->request->input('placement', ''));
 
         if (empty($title) || empty($placement)) {
-            $_SESSION['error'] = 'عنوان و جایگاه الزامی است';
+            $this->session->setFlash('error', 'عنوان و جایگاه الزامی است');
             return redirect('/admin/banners/create');
         }
 
         // استفاده از UploadService (Sprint 6)
         $imagePath = null;
-        if (!empty($_FILES['image']['name'])) {
-            $result = $this->uploadService->upload($_FILES['image'], 'banners', ['jpg', 'png', 'webp', 'gif'], 5 * 1024 * 1024);
+        if ($this->request->hasFile('image')) {
+            $file = $this->request->file('image');
+            $result = $this->uploadService->upload($file, 'banners', ['jpg', 'png', 'webp', 'gif'], 5 * 1024 * 1024);
             if ($result['success']) {
                 $imagePath = $result['path'];
             } else {
-                $_SESSION['error'] = 'خرابی در آپلود تصویر: ' . $result['message'];
+                $this->session->setFlash('error', 'خرابی در آپلود تصویر: ' . $result['message']);
                 return redirect('/admin/banners/create');
             }
         }
@@ -108,33 +94,33 @@ class BannerController extends BaseAdminController
             'type' => 'banner', // اجبار نوع متمرکز
             'title' => $title,
             'image_path' => $imagePath,
-            'link' => $_POST['link'] ?? null,
+            'link' => $this->request->input('link'),
             'placement' => $placement,
-            'banner_type' => $_POST['banner_type'] ?? 'system',
-            'category' => $_POST['category'] ?? null,
-            'sort_order' => (int)($_POST['sort_order'] ?? 0),
-            'is_active' => (int)($_POST['is_active'] ?? 1),
-            'start_date' => $_POST['start_date'] ?? null,
-            'end_date' => $_POST['end_date'] ?? null,
-            'target' => $_POST['target'] ?? '_blank',
-            'alt_text' => $_POST['alt_text'] ?? null,
+            'banner_type' => $this->request->input('banner_type', 'system'),
+            'category' => $this->request->input('category'),
+            'sort_order' => (int)$this->request->input('sort_order', 0),
+            'is_active' => (int)$this->request->input('is_active', 1),
+            'start_date' => $this->request->input('start_date'),
+            'end_date' => $this->request->input('end_date'),
+            'target' => $this->request->input('target', '_blank'),
+            'alt_text' => $this->request->input('alt_text'),
             'user_id' => user_id(), // نگاشت یکدست به user_id
             'status' => 'active'
         ];
 
         $id = $this->banner->create($data);
 
-        $_SESSION['success'] = 'بنر ایجاد شد';
+        $this->session->setFlash('success', 'بنر ایجاد شد');
         return redirect('/admin/banners');
     }
 
     public function edit()
     {
-        $id = (int)($_GET['id'] ?? 0);
+        $id = (int)$this->request->get('id', 0);
         $banner = $this->banner->find($id);
 
         if (!$banner) {
-            $_SESSION['error'] = 'بنر یافت نشد';
+            $this->session->setFlash('error', 'بنر یافت نشد');
             return redirect('/admin/banners');
         }
 
@@ -144,31 +130,32 @@ class BannerController extends BaseAdminController
 
     public function update()
     {
-        $id = (int)($_POST['id'] ?? 0);
+        $id = (int)$this->request->input('id', 0);
 
         // استفاده از UploadService (Sprint 6)
         $imagePath = null;
-        if (!empty($_FILES['image']['name'])) {
-            $result = $this->uploadService->upload($_FILES['image'], 'banners', ['jpg', 'png', 'webp', 'gif'], 5 * 1024 * 1024);
+        if ($this->request->hasFile('image')) {
+            $file = $this->request->file('image');
+            $result = $this->uploadService->upload($file, 'banners', ['jpg', 'png', 'webp', 'gif'], 5 * 1024 * 1024);
             if ($result['success']) {
                 $imagePath = $result['path'];
             } else {
-                $_SESSION['error'] = 'خرابی در آپلود تصویر: ' . $result['message'];
+                $this->session->setFlash('error', 'خرابی در آپلود تصویر: ' . $result['message']);
                 return redirect('/admin/banners/edit?id=' . $id);
             }
         }
 
         $data = [
-            'title' => $_POST['title'] ?? '',
-            'link' => $_POST['link'] ?? null,
-            'placement' => $_POST['placement'] ?? '',
-            'category' => $_POST['category'] ?? null,
-            'sort_order' => (int)($_POST['sort_order'] ?? 0),
-            'is_active' => (int)($_POST['is_active'] ?? 1),
-            'start_date' => $_POST['start_date'] ?? null,
-            'end_date' => $_POST['end_date'] ?? null,
-            'target' => $_POST['target'] ?? '_blank',
-            'alt_text' => $_POST['alt_text'] ?? null,
+            'title' => $this->request->input('title', ''),
+            'link' => $this->request->input('link'),
+            'placement' => $this->request->input('placement', ''),
+            'category' => $this->request->input('category'),
+            'sort_order' => (int)$this->request->input('sort_order', 0),
+            'is_active' => (int)$this->request->input('is_active', 1),
+            'start_date' => $this->request->input('start_date'),
+            'end_date' => $this->request->input('end_date'),
+            'target' => $this->request->input('target', '_blank'),
+            'alt_text' => $this->request->input('alt_text'),
         ];
 
         if ($imagePath) {
@@ -177,51 +164,49 @@ class BannerController extends BaseAdminController
 
         $this->banner->update($id, $data);
 
-        $_SESSION['success'] = 'بنر بروزرسانی شد';
+        $this->session->setFlash('success', 'بنر بروزرسانی شد');
         return redirect('/admin/banners');
     }
 
     public function approve()
     {
-        $id = (int)($_POST['id'] ?? 0);
+        $id = (int)$this->request->input('id', 0);
         // آپدیت مستقیم و صریح به کمک متدهای پیش‌فرض Core
         $this->banner->update($id, [
             'status' => 'active',
             'approved_at' => date('Y-m-d H:i:s'),
             'is_active' => 1
         ]);
-        $_SESSION['success'] = 'بنر تایید شد';
+        $this->session->setFlash('success', 'بنر تایید شد');
         return redirect('/admin/banners');
     }
 
     public function reject()
     {
-        $id = (int)($_POST['id'] ?? 0);
-        $reason = $_POST['reason'] ?? 'رد شد';
+        $id = (int)$this->request->input('id', 0);
+        $reason = $this->request->input('reason', 'رد شد');
         $this->banner->update($id, [
             'status' => 'rejected',
             'rejection_reason' => $reason,
             'is_active' => 0
         ]);
-        $_SESSION['success'] = 'بنر رد شد';
+        $this->session->setFlash('success', 'بنر رد شد');
         return redirect('/admin/banners');
     }
 
     public function delete()
     {
-        $id = (int)($_POST['id'] ?? 0);
+        $id = (int)$this->request->input('id', 0);
         // استفاده از مکانیزم قدرتمند داخلی softDelete کلاس Core\Model
         $this->banner->delete($id);
-        $_SESSION['success'] = 'بنر حذف شد';
+        $this->session->setFlash('success', 'بنر حذف شد');
         return redirect('/admin/banners');
     }
 
     public function stats()
     {
-        $stats = [
-            'total' => $this->banner->db->table('ads')->where('type', '=', 'banner')->whereNull('deleted_at')->count(),
-            'active' => $this->banner->db->table('ads')->where('type', '=', 'banner')->where('status', '=', 'active')->whereNull('deleted_at')->count(),
-        ];
+        // استفاده از Service برای دریافت آمار
+        $stats = $this->searchService->getBannerStats();
         $placements = $this->placement->allWithBannerCount();
         return view('admin.banners.stats', compact('stats', 'placements'));
     }

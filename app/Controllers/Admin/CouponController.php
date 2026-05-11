@@ -31,11 +31,11 @@ class CouponController extends BaseAdminController
      */
     public function index(): void
     {
-        $coupons = $this->couponModel->all();
+        $coupons = $this->couponService->all();
 
         view('admin/coupons/index', [
             'coupons' => $coupons,
-            'user' => auth()
+            'user' => user()
         ]);
     }
 
@@ -46,7 +46,7 @@ class CouponController extends BaseAdminController
     public function create(): void
     {
         view('admin/coupons/create', [
-            'user' => auth()
+            'user' => user()
         ]);
     }
 
@@ -77,7 +77,7 @@ class CouponController extends BaseAdminController
         $data['active'] = isset($data['active']) ? 1 : 0;
 
         // بررسی تکراری نبودن کد
-        if ($this->couponModel->findByCode($data['code'])) {
+        if ($this->couponService->findByCode($data['code'])) {
             $this->response->json([
                 'success' => false,
                 'message' => 'کد تخفیف تکراری است',
@@ -93,7 +93,7 @@ class CouponController extends BaseAdminController
         $data['usage_limit'] = !empty($data['usage_limit']) ? (int)$data['usage_limit'] : 0;
         $data['usage_count'] = 0;
 
-        $couponId = $this->couponModel->create($data);
+        $couponId = $this->couponService->create($data);
 
         if ($couponId) {
             $this->logger->info('coupon_created', [
@@ -124,7 +124,7 @@ class CouponController extends BaseAdminController
         $id = (int)$this->request->param('id');
         if (!$id) $id = (int)$this->request->get('id');
 
-        $coupon = $this->couponModel->find($id);
+        $coupon = $this->couponService->find($id);
 
         if (!$coupon) {
             redirect('admin/coupons');
@@ -133,7 +133,7 @@ class CouponController extends BaseAdminController
 
         view('admin/coupons/edit', [
             'coupon' => $coupon,
-            'user' => auth()
+            'user' => user()
         ]);
     }
 
@@ -145,10 +145,10 @@ class CouponController extends BaseAdminController
     {
         $id = (int)$this->request->param('id');
         if (!$id) $id = (int)$this->request->input('id');
-        $coupon = $this->couponModel->find($id);
+        $coupon = $this->couponService->find($id);
 
         if (!$coupon) {
-            $response->json([
+            $this->response->json([
                 'success' => false,
                 'message' => 'کوپن یافت نشد'
             ]);
@@ -181,7 +181,7 @@ class CouponController extends BaseAdminController
             'active'        => $this->request->input('active') ? 1 : 0,
         ];
 
-        if ($this->couponModel->update($id, $data)) {
+        if ($this->couponService->update($id, $data)) {
             $this->logger->info('coupon_updated', [
                 'coupon_id' => $id,
                 'admin_id' => user_id()

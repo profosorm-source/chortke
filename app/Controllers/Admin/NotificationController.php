@@ -63,16 +63,16 @@ class NotificationController extends BaseAdminController
      */
     public function send(): void
     {
-        $target      = trim((string)($_POST['target']      ?? 'all'));
-        $segment     = trim((string)($_POST['segment']     ?? 'all'));
-        $type        = trim((string)($_POST['type']        ?? 'info'));
-        $title       = trim((string)($_POST['title']       ?? ''));
-        $message     = trim((string)($_POST['message']     ?? ''));
-        $userId      = (int)($_POST['user_id']  ?? 0);
-        $priority    = trim((string)($_POST['priority']    ?? 'normal'));
-        $scheduledAt = trim((string)($_POST['scheduled_at'] ?? ''));
-        $actionUrl   = trim((string)($_POST['action_url']  ?? ''));
-        $actionText  = trim((string)($_POST['action_text'] ?? ''));
+        $target      = trim($this->request->input('target', 'all'));
+        $segment     = trim($this->request->input('segment', 'all'));
+        $type        = trim($this->request->input('type', 'info'));
+        $title       = trim($this->request->input('title', ''));
+        $message     = trim($this->request->input('message', ''));
+        $userId      = (int)$this->request->input('user_id', 0);
+        $priority    = trim($this->request->input('priority', 'normal'));
+        $scheduledAt = trim($this->request->input('scheduled_at', ''));
+        $actionUrl   = trim($this->request->input('action_url', ''));
+        $actionText  = trim($this->request->input('action_text', ''));
 
         if ($title === '' || $message === '') {
             $this->session->setFlash('error', 'عنوان و متن اعلان الزامی است.');
@@ -126,7 +126,7 @@ class NotificationController extends BaseAdminController
      */
     public function stats(): void
     {
-        $days      = max(7, min(90, (int)($_GET['days'] ?? 30)));
+        $days      = max(7, min(90, (int)$this->request->get('days', 30)));
         $dashboard = $this->notificationService->getAnalyticsOverview($days);
 
         view('admin/notifications/stats', [
@@ -141,7 +141,7 @@ class NotificationController extends BaseAdminController
      */
     public function statsFetch(): void
     {
-        $days = max(7, min(90, (int)($_GET['days'] ?? 30)));
+        $days = max(7, min(90, (int)$this->request->get('days', 30)));
 
         $this->response->json([
             'success'   => true,
@@ -169,9 +169,9 @@ class NotificationController extends BaseAdminController
      */
     public function saveTemplate(): void
     {
-        $key     = trim((string)($_POST['template_key'] ?? ''));
-        $title   = trim((string)($_POST['title']        ?? ''));
-        $message = trim((string)($_POST['message']      ?? ''));
+        $key     = trim($this->request->input('template_key', ''));
+        $title   = trim($this->request->input('title', ''));
+        $message = trim($this->request->input('message', ''));
 
         if (empty($key) || empty($title) || empty($message)) {
             $this->response->json(['success' => false, 'error' => 'فیلدهای الزامی خالی است.'], 400);
@@ -192,7 +192,7 @@ class NotificationController extends BaseAdminController
      */
     public function deleteTemplate(): void
     {
-        $key = trim((string)($_POST['template_key'] ?? ''));
+        $key = trim($this->request->input('template_key', ''));
 
         if (empty($key)) {
             $this->response->json(['success' => false, 'error' => 'کلید template الزامی است.'], 400);

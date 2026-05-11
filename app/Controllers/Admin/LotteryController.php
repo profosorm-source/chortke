@@ -33,20 +33,19 @@ class LotteryController extends BaseAdminController
 
     public function index()
     {
-        $roundModel = $this->lotteryRoundModel;
-
-        $filters = ['status' => $_GET['status'] ?? null];
-        $page = \max(1, (int)($_GET['page'] ?? 1));
+        $filters = ['status' => $this->request->get('status')];
+        $page = \max(1, (int)$this->request->get('page', 1));
         $perPage = 15;
         $offset = ($page - 1) * $perPage;
 
-        $rounds = $roundModel->getAll($filters, $perPage, $offset);
-        $total = $roundModel->countAll($filters);
+        $result = $this->lotteryService->listRounds($filters, $perPage, $offset);
+        $rounds = $result['rounds'] ?? [];
+        $total = $result['total'] ?? 0;
         $totalPages = \ceil($total / $perPage);
-        $stats = $roundModel->getStats();
+        $stats = $this->lotteryService->getStats();
 
         $roundIds = \array_map(fn($r) => (int)$r->id, $rounds);
-        $participationCounts = !empty($roundIds) ? $this->lotteryParticipationModel->getCountsByRounds($roundIds) : [];
+        $participationCounts = !empty($roundIds) ? $this->lotteryService->getParticipationCounts($roundIds) : [];
 
         foreach ($roundIds as $rid) {
             if (!isset($participationCounts[$rid])) {
@@ -54,10 +53,8 @@ class LotteryController extends BaseAdminController
             }
         }
 
-        $user = auth()->user();
-
         return view('admin.lottery.index', [
-            'user' => $user,
+            'user' => user(),
             'rounds' => $rounds,
             'stats' => $stats,
             'total' => $total,
@@ -70,8 +67,7 @@ class LotteryController extends BaseAdminController
 
     public function create()
     {
-        $user = auth()->user();
-        return view('admin.lottery.create', ['user' => $user]);
+        return view('admin.lottery.create', ['user' => user()]);
     }
 
     public function store()
@@ -106,18 +102,16 @@ class LotteryController extends BaseAdminController
         $participationModel = $this->lotteryParticipationModel;
         $dailyModel = $this->lotteryDailyNumberModel;
 
-        $round = $roundModel->findWithWinner($id);
+        $round = $this->lotteryService->getRound($id);
         if (!$round) return view('errors.404');
 
-        $participants = $participationModel->getByRound($id, 100);
-        $participantCount = $participationModel->countByRound($id);
-        $dailyNumbers = $dailyModel->getByRound($id);
-        $distribution = $participationModel->getChanceDistribution($id);
-
-        $user = auth()->user();
+        $participants = $this->lotteryService->getRoundParticipants($id, 100);
+        $participantCount = $this->lotteryService->countRoundParticipants($id);
+        $dailyNumbers = $this->lotteryService->getRoundDailyNumbers($id);
+        $distribution = $this->lotteryService->getChanceDistribution($id);
 
         return view('admin.lottery.show', [
-            'user' => $user,
+            'user' => user(),
             'round' => $round,
             'participants' => $participants,
             'participantCount' => $participantCount,
@@ -155,16 +149,14 @@ class LotteryController extends BaseAdminController
 
     public function cancel()
     {
-                        $id = (int)$this->request->param('id');
+        $id = (int)$this->request->param('id');
 
-        $roundModel = $this->lotteryRoundModel;
-        $round = $roundModel->find($id);
-
-        if (!$round || $round->status === LotteryRound::STATUS_COMPLETED) {
-            return $this->response->json(['success' => false, 'message' => 'دوره قابل لغو نیست.'], 422);
+        $result = $this->lotteryService->cancelRound($id);
+        
+        if (!$result['success']) {
+            return $this->response->json(['success' => false, 'message' => $result['message'] ?? 'دوره قابل لغو نیست.'], 422);
         }
 
-        $roundModel->update($id, ['status' => LotteryRound::STATUS_CANCELLED]);
         $this->logger->info('lottery_cancelled', ['message' => "Admin " . user_id() . " cancelled round #{$id}"]);
 
         return $this->response->json(['success' => true, 'message' => 'دوره لغو شد.']);

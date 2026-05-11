@@ -35,18 +35,18 @@ class ReferralController extends BaseUserController
         $user   = $this->userService->find($userId);
 
         // آمار کلی کمیسیون‌ها - نئی ReferralService سے
-        $stats = $this->referralCommissionModel->getReferrerStats($userId);
+        $stats = $this->referralService->getReferrerStats($userId);
 
         // تعداد و لیست زیرمجموعه‌ها
-        $referredCount = $this->referralCommissionModel->countReferredUsers($userId);
-        $referredUsers = $this->referralCommissionModel->getReferredUsers($userId, 10, 0);
+        $referredCount = $this->referralService->countReferredUsers($userId);
+        $referredUsers = $this->referralService->getReferredUsers($userId, 10, 0);
 
         // آخرین ۱۰ کمیسیون
-        $recentCommissions = $this->referralCommissionModel->getByReferrer($userId, [], 10, 0);
+        $recentCommissions = $this->referralService->getByReferrer($userId, [], 10, 0);
 
         // برچسب‌گذاری کمیسیون‌ها
         foreach ($recentCommissions as $c) {
-            $c->source_label = $c->source_type ?? 'ناشناخته'; // Update: Removed getSourceLabel which doesn't exist in Shared Service
+            $c->source_label = $c->source_type ?? 'ناشناخته';
             $c->status_label = self::statusLabel($c->status);
             $c->status_class = self::statusClass($c->status);
         }
@@ -69,7 +69,7 @@ class ReferralController extends BaseUserController
             'recentCommissions' => $recentCommissions,
             'referralLink'      => $referralLink,
             'percents'          => $percents,
-            'sourceTypes'       => [], // Removed getSourceTypes() as it doesn't exist
+            'sourceTypes'       => [],
         ]);
     }
 
@@ -90,8 +90,8 @@ class ReferralController extends BaseUserController
         $limit  = 15;
         $offset = ($page - 1) * $limit;
 
-        $commissions = $this->referralCommissionModel->getByReferrer($userId, $filters, $limit, $offset);
-        $total       = $this->referralCommissionModel->countByReferrer($userId, $filters);
+        $commissions = $this->referralService->getByReferrer($userId, $filters, $limit, $offset);
+        $total       = $this->referralService->countByReferrer($userId, $filters);
 
         foreach ($commissions as $c) {
             $c->created_at_jalali = to_jalali($c->created_at ?? '');
@@ -121,8 +121,8 @@ class ReferralController extends BaseUserController
         $limit  = 15;
         $offset = ($page - 1) * $limit;
 
-        $users = $this->referralCommissionModel->getReferredUsers($userId, $limit, $offset);
-        $total = $this->referralCommissionModel->countReferredUsers($userId);
+        $users = $this->referralService->getReferredUsers($userId, $limit, $offset);
+        $total = $this->referralService->countReferredUsers($userId);
 
         foreach ($users as $u) {
             $u->joined_at_jalali = to_jalali($u->joined_at ?? '');

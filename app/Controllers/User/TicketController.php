@@ -39,18 +39,19 @@ class TicketController extends BaseUserController
      */
     public function index()
     {
-                $userId = user_id();
+        $userId = user_id();
         
         $status = $this->request->get('status', '');
         $page = (int) $this->request->get('page', 1);
         $perPage = 20;
         
-        $tickets = $this->ticketModel->getUserTickets($userId, $status, $page, $perPage);
-        $total = $this->ticketModel->countUserTickets($userId, $status);
+        $result = $this->ticketService->listUserTickets($userId, $status, $page, $perPage);
+        $tickets = $result['tickets'] ?? [];
+        $total = $result['total'] ?? 0;
         $totalPages = ceil($total / $perPage);
         
         // شمارش خوانده نشده
-        $unreadCount = $this->messageModel->countUnread($userId, false);
+        $unreadCount = $this->ticketService->countUnread($userId, false);
         
         return view('user/tickets/index', [
             'tickets' => $tickets,
@@ -68,7 +69,7 @@ class TicketController extends BaseUserController
      */
     public function create()
     {
-        $categories = $this->categoryModel->getAll();
+        $categories = $this->ticketService->getCategories();
         
         return view('user/tickets/create', [
             'categories' => $categories,
@@ -113,30 +114,27 @@ class TicketController extends BaseUserController
         // آپلود فایل
         $attachments = [];
         
-        if (!empty($_FILES['attachments']['name'][0])) {
-            foreach ($_FILES['attachments']['name'] as $key => $name) {
-                if ($_FILES['attachments']['error'][$key] === UPLOAD_ERR_OK) {
-                    $file = [
-                        'name' => $_FILES['attachments']['name'][$key],
-                        'type' => $_FILES['attachments']['type'][$key],
-                        'tmp_name' => $_FILES['attachments']['tmp_name'][$key],
-                        'error' => $_FILES['attachments']['error'][$key],
-                        'size' => $_FILES['attachments']['size'][$key]
+        if ($this->request->hasFile('attachments')) {
+            $files = $this->request->file('attachments');
+            
+            // اگر یک فایل است، آن را آرایه کنید
+            if (!is_array($files) || !isset($files[0])) {
+                $files = [$files];
+            }
+            
+            foreach ($files as $file) {
+                $uploadResult = $this->uploadService->upload(
+                    $file,
+                    'ticket_attachments',
+                    ['image/jpeg', 'image/png', 'application/pdf'],
+                    5 * 1024 * 1024 // 5MB
+                );
+                
+                if ($uploadResult['success']) {
+                    $attachments[] = [
+                        'name' => $file['name'] ?? 'attachment',
+                        'path' => $uploadResult['path']
                     ];
-                    
-                    $uploadResult = $this->uploadService->upload(
-                        $file,
-                        'ticket_attachments',
-                        ['image/jpeg', 'image/png', 'application/pdf'],
-                        5 * 1024 * 1024 // 5MB
-                    );
-                    
-                    if ($uploadResult['success']) {
-                        $attachments[] = [
-                            'name' => $name,
-                            'path' => $uploadResult['path']
-                        ];
-                    }
                 }
             }
         }
@@ -164,17 +162,17 @@ class TicketController extends BaseUserController
     {
         $userId = user_id();
         
-        $ticket = $this->ticketModel->findById($id);
+        $ticket = $this->ticketService->getById($id);
         
         if (!$ticket || $ticket->user_id != $userId) {
-            session()->setFlash('error', 'تیکت یافت نشد.');
+            $this->session->setFlash('error', 'تیکت یافت نشد.');
             return redirect('/tickets');
         }
         
-        $messages = $this->messageModel->getByTicketId($id);
+        $messages = $this->ticketService->getMessages($id);
         
         // علامت‌گذاری به عنوان خوانده شده
-        $this->messageModel->markAsRead($id, false);
+        $this->ticketService->markAsRead($id, false);
         
         return view('user/tickets/show', [
             'ticket' => $ticket,
