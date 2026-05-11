@@ -45,8 +45,11 @@ class SocialTaskService extends \App\Services\BaseService
         private FinancialEscrowService $escrow,
         private StateMachineService $stateMachine,
         private WebSocketService $webSocket,
-        private \App\Services\Shared\RatingService $ratingService
-    ) {}
+        private \App\Services\Shared\RatingService $ratingService,
+        private User $userModel
+    ) {
+        parent::__construct($this->logger);
+    }
 
     /**
      * لیست تسک‌های فعال برای کاربر با اعمال فیلتر نامحسوس
@@ -371,11 +374,10 @@ class SocialTaskService extends \App\Services\BaseService
                     $rewardPaid = 1;
                     
                     // بررسی ارجاع دهنده (معرف) و پرداخت کمیسیون
-                    $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById($userId);
+                    $userRecord = $this->userModel->findById($userId);
                     if ($userRecord && !empty($userRecord->referred_by)) {
-                        $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
-                        if ($referralService) {
-                            $referralService->processCommission((int)$userRecord->referred_by, $rewardAmount, 'irt', [
+                        if ($this->referralService) {
+                            $this->referralService->processCommission((int)$userRecord->referred_by, $rewardAmount, 'irt', [
                                 'action' => 'social_task_reward',
                                 'executor_id' => $userId,
                                 'execution_id' => $executionId
