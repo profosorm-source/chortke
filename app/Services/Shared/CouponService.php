@@ -6,8 +6,9 @@ namespace App\Services\Shared;
 
 use App\Models\Coupon;
 use App\Models\CouponRedemption;
-
 use App\Contracts\LoggerInterface;
+use Core\Database;
+
 /**
  * CouponService - سرویس اشتراکی مدیریت کوپن و تخفیف‌ها
  *
@@ -18,6 +19,7 @@ class CouponService extends \App\Services\BaseService
     public function __construct(
         private Coupon $couponModel,
         private CouponRedemption $redemptionModel,
+        private Database $db,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -91,13 +93,12 @@ class CouponService extends \App\Services\BaseService
         string $entityType,
         ?int $entityId = null
     ): bool {
-        $db = \Core\Container::getInstance()->make(\Core\Database::class);
         try {
-            $db->beginTransaction();
+            $this->db->beginTransaction();
 
             // Pre-execution validation check
             if ($this->redemptionModel->hasUserUsedCoupon($userId, $couponId)) {
-                $db->rollback();
+                $this->db->rollback();
                 throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
             }
 
