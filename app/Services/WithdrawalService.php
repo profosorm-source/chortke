@@ -85,115 +85,116 @@ class WithdrawalService extends PaymentBaseService
         $this->logger           = $logger;
     }
 
-public function requestFromUser(int $userId, array $payload): array
-{
-    $amount = (float)($payload['amount'] ?? 0);
-    $currency = (string)($payload['currency'] ?? 'irt');
-    $bankCardId = (int)($payload['bank_card_id'] ?? 0);
-    $requestId = (string)($payload['request_id'] ?? bin2hex(random_bytes(8)));
-    $ip = (string)($payload['ip'] ?? '');
-    $fingerprint = (string)($payload['fingerprint'] ?? '');
+    public function requestFromUser(int $userId, array $payload): array
+    {
+        $amount = (float)($payload['amount'] ?? 0);
+        $currency = (string)($payload['currency'] ?? 'irt');
+        $bankCardId = (int)($payload['bank_card_id'] ?? 0);
+        $requestId = (string)($payload['request_id'] ?? bin2hex(random_bytes(8)));
+        $ip = (string)($payload['ip'] ?? '');
+        $fingerprint = (string)($payload['fingerprint'] ?? '');
 
-    try {
-        if ($amount <= 0) {
-            return ['success' => false, 'message' => 'مبلغ نامعتبر است'];
+        try {
+            if ($amount <= 0) {
+                return ['success' => false, 'message' => 'مبلغ نامعتبر است'];
+            }
+
+            $minAmount = (float)($this->settings->get('withdrawal_min_amount', 10000));
+            if ($amount < $minAmount) {
+                return ['success' => false, 'message' => "حداقل مبلغ برداشت {$minAmount} است"];
+            }
+
+            if (!$this->kycService->isApproved($userId)) {
+                return ['success' => false, 'message' => 'احراز هویت شما کامل نیست'];
+            }
+
+            // کارت
+            $card = $this->bankCardService->findVerifiedCardForUser($userId, $bankCardId);
+            if (!$card) {
+                return ['success' => false, 'message' => 'کارت بانکی معتبر یافت نشد'];
+            }
+
+            // ریسک
+            $riskDecision = $this->riskDecisionService->decide($userId, ['action' => 'withdraw']);
+            if (!empty($riskDecision['deny'])) {
+                return ['success' => false, 'message' => $riskDecision['message'] ?? 'درخواست شما رد شد'];
+            }
+
+            // تکراری/pending
+            if ($this->model->hasPending($userId)) {
+                return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
+            }
+
+            // موجودی
+            $can = $this->wallet->canWithdraw($userId, $amount, $currency);
+            if (empty($can['success'])) {
+                return ['success' => false, 'message' => $can['message'] ?? 'موجودی کافی نیست'];
+            }
+
+            $this->db->beginTransaction();
+
+            // قفل پول و جلوگیری از Race condition
+            $idempotencyKey = $this->uuid();
+            $debit = $this->wallet->withdraw($userId, $amount, $currency, [
+                'type' => 'withdrawal_request',
+                'request_id' => $requestId,
+                'ip' => $ip,
+                'fingerprint' => $fingerprint,
+                'idempotency_key' => $idempotencyKey,
+                'bank_card_id' => $bankCardId,
+            ]);
+
+            if (empty($debit['success'])) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => $debit['message'] ?? 'خطا در رزرو مبلغ برداشت'];
+            }
+
+            $withdrawalId = $this->model->create([
+                'user_id' => $userId,
+                'bank_card_id' => $bankCardId,
+                'amount' => $amount,
+                'currency' => $currency,
+                'status' => 'pending',
+                'request_id' => $requestId,
+                'ip_address' => $ip,
+                'device_fingerprint' => $fingerprint,
+                'transaction_id' => $debit['transaction_id'] ?? null,
+            ]);
+
+            if (!$withdrawalId) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در ثبت درخواست برداشت'];
+            }
+
+            $this->db->commit();
+            return ['success' => true, 'message' => 'درخواست برداشت با موفقیت ثبت شد'];
+
+        } catch (\Exception $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            $this->logger->error('withdrawal.request.failed', [
+                'user_id' => $userId,
+                'error'   => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سیستمی رخ داد'];
         }
-
-        // حداقل مبلغ یکپارچه (از config/settings بخوان)
-        $minAmount = (float)($this->settings->get('withdrawal_min_amount', 10000));
-        if ($amount < $minAmount) {
-            return ['success' => false, 'message' => "حداقل مبلغ برداشت {$minAmount} است"];
-        }
-
-        // KYC
-        if (!$this->kycService->isApproved($userId)) {
-            return ['success' => false, 'message' => 'احراز هویت شما کامل نیست'];
-        }
-
-        // کارت
-        $card = $this->bankCardService->findVerifiedCardForUser($userId, $bankCardId);
-        if (!$card) {
-            return ['success' => false, 'message' => 'کارت بانکی معتبر یافت نشد'];
-        }
-
-        // ریسک
-        $riskDecision = $this->riskDecisionService->decide($userId, ['action' => 'withdraw']);
-        if (!empty($riskDecision['deny'])) {
-            return ['success' => false, 'message' => $riskDecision['message'] ?? 'درخواست شما رد شد'];
-        }
-
-        // تکراری/pending
-        if ($this->model->hasPending($userId)) {
-            return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
-        }
-
-        // موجودی
-        $can = $this->wallet->canWithdraw($userId, $amount, $currency);
-        if (empty($can['success'])) {
-            return ['success' => false, 'message' => $can['message'] ?? 'موجودی کافی نیست'];
-        }
-
-        $this->db->beginTransaction();
-
-        // قفل پول
-        $debit = $this->wallet->withdraw($userId, $amount, $currency, [
-            'type' => 'withdrawal_request',
-            'request_id' => $requestId,
-            'ip' => $ip,
-            'fingerprint' => $fingerprint,
-            'bank_card_id' => $bankCardId,
-        ]);
-
-        if (empty($debit['success'])) {
-            $this->db->rollBack();
-            return ['success' => false, 'message' => $debit['message'] ?? 'خطا در رزرو مبلغ'];
-        }
-
-        $withdrawalId = $this->model->create([
-            'user_id' => $userId,
-            'bank_card_id' => $bankCardId,
-            'amount' => $amount,
-            'currency' => $currency,
-            'status' => 'pending',
-            'request_id' => $requestId,
-            'ip_address' => $ip,
-            'device_fingerprint' => $fingerprint,
-            'transaction_id' => $debit['transaction_id'] ?? null,
-        ]);
-
-        if (!$withdrawalId) {
-            $this->db->rollBack();
-            return ['success' => false, 'message' => 'خطا در ثبت درخواست برداشت'];
-        }
-
-        $this->auditTrail->record('withdrawal.requested', $userId, [
-            'withdrawal_id' => (int)$withdrawalId,
-            'amount' => $amount,
-            'currency' => $currency,
-            'request_id' => $requestId,
-        ], $userId);
-
-        $this->db->commit();
-
-        return [
-            'success' => true,
-            'message' => 'درخواست برداشت با موفقیت ثبت شد',
-            'data' => ['withdrawal_id' => (int)$withdrawalId],
-        ];
-    } catch (\Throwable $e) {
-        $this->db->rollBack();
-        $this->logger->error('withdrawal.request.service.failed', [
-            'channel' => 'withdrawal',
-            'user_id' => $userId,
-            'request_id' => $requestId,
-            'error' => $e->getMessage(),
-            'exception' => get_class($e),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
-        ]);
-        return ['success' => false, 'message' => 'خطای سیستمی در ثبت برداشت'];
     }
-}
+
+    /**
+     * تولید شناسه یکتا برای جلوگیری از اجرای دوبار تراکنش (Idempotency)
+     */
+    private function uuid(): string
+    {
+        return sprintf(
+            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0x0fff) | 0x4000,
+            mt_rand(0, 0x3fff) | 0x8000,
+            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+        );
+    }
 
     /**
      * ثبت درخواست برداشت
