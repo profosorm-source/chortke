@@ -42,7 +42,7 @@ class CliDispatcher
         }
 
         try {
-            $container = \Core\Container::getInstance();
+            $container = Container::getInstance();
             $instance = $container->make($matchedCommand['class']);
             
             // بررسی اینکه آیا این دستور از متد run یا هندلر داینامیک پشتیبانی می‌کند
