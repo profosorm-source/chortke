@@ -4,19 +4,19 @@ declare(strict_types=1);
 
 namespace App\Controllers\Api;
 
-use App\Models\FeatureFlag;
+use App\Services\FeatureFlagService;
 
 /**
  * RESTful API برای مدیریت Feature Flags از راه دور
  */
 class FeatureFlagApiController extends BaseApiController
 {
-    private FeatureFlag $model;
+    private FeatureFlagService $featureService;
     
-    public function __construct(FeatureFlag $model)
+    public function __construct(FeatureFlagService $featureService)
     {
         parent::__construct();
-        $this->model = $model;
+        $this->featureService = $featureService;
         
         // API Authentication check
         $this->authenticate();
@@ -46,7 +46,7 @@ class FeatureFlagApiController extends BaseApiController
     public function index(): void
     {
         try {
-            $features = $this->model->getAll();
+            $features = $this->featureService->getAll();
             
             $public = array_map(function($feature) {
                 return [
@@ -74,7 +74,7 @@ class FeatureFlagApiController extends BaseApiController
     public function show(string $name): void
     {
         try {
-            $feature = $this->model->findByName($name);
+            $feature = $this->featureService->findByName($name);
             
             if (!$feature) {
                 $this->error("Feature '{$name}' does not exist", 404);
@@ -112,7 +112,7 @@ class FeatureFlagApiController extends BaseApiController
             $data = $this->request->body();
             $userId = $data['user_id'] ?? null;
             
-            $enabled = $this->model->isEnabled($name, $userId);
+            $enabled = $this->featureService->isEnabled($name, $userId);
             
             $this->success([
                 'feature' => $name,
@@ -138,7 +138,7 @@ class FeatureFlagApiController extends BaseApiController
                 $this->error('name and description are required', 400);
             }
             
-            $this->model->create($data);
+            $this->featureService->create($data);
             
             $this->success(['name' => $data['name']], 'Feature created successfully', 201);
             
@@ -156,7 +156,7 @@ class FeatureFlagApiController extends BaseApiController
     {
         try {
             $data = $this->request->body();
-            $this->model->update($name, $data);
+            $this->featureService->update($name, $data);
             $this->success(['name' => $name], 'Feature updated successfully');
         } catch (\InvalidArgumentException $e) {
             $this->error($e->getMessage(), 400);
@@ -171,13 +171,13 @@ class FeatureFlagApiController extends BaseApiController
     public function toggle(string $name): void
     {
         try {
-            $result = $this->model->toggle($name);
+            $result = $this->featureService->toggle($name);
             
             if (!$result) {
                 $this->error("Feature '{$name}' does not exist", 404);
             }
             
-            $feature = $this->model->findByName($name);
+            $feature = $this->featureService->findByName($name);
             
             $this->success([
                 'name' => $name,
@@ -207,7 +207,7 @@ class FeatureFlagApiController extends BaseApiController
                 $this->error('percentage must be between 0 and 100', 400);
             }
             
-            $this->model->update($name, ['enabled_percentage' => $percentage]);
+            $this->featureService->update($name, ['enabled_percentage' => $percentage]);
             
             $this->success([
                 'name' => $name,
@@ -225,7 +225,7 @@ class FeatureFlagApiController extends BaseApiController
     public function delete(string $name): void
     {
         try {
-            $result = $this->model->delete($name);
+            $result = $this->featureService->delete($name);
             
             if (!$result) {
                 $this->error("Feature '{$name}' does not exist", 404);
@@ -244,14 +244,14 @@ class FeatureFlagApiController extends BaseApiController
     public function stats(string $name): void
     {
         try {
-            $feature = $this->model->findByName($name);
+            $feature = $this->featureService->findByName($name);
             
             if (!$feature) {
                 $this->error('Feature not found', 404);
             }
             
-            $metrics = $this->model->getMetrics($name, 24);
-            $history = $this->model->getHistory($name, 10);
+            $metrics = $this->featureService->getMetrics($name, 24);
+            $history = $this->featureService->getHistory($name, 10);
             
             $this->success([
                 'feature' => $name,
@@ -271,7 +271,7 @@ class FeatureFlagApiController extends BaseApiController
     public function systemStats(): void
     {
         try {
-            $stats = $this->model->getStats();
+            $stats = $this->featureService->getStats();
             $this->success($stats);
         } catch (\Exception $e) {
             $this->error('Internal server error: ' . $e->getMessage(), 500);
@@ -294,7 +294,7 @@ class FeatureFlagApiController extends BaseApiController
             $results = [];
             
             foreach ($data['features'] as $featureName) {
-                $results[$featureName] = $this->model->isEnabled($featureName, $userId);
+                $results[$featureName] = $this->featureService->isEnabled($featureName, $userId);
             }
             
             $this->success([
