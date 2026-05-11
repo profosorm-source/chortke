@@ -24,6 +24,7 @@ namespace Core;
  */
 abstract class Model
 {
+    protected static array $searchable = [];
     protected static string $table = '';
 
     protected Database $db;
@@ -190,6 +191,30 @@ abstract class Model
     public function rollback(): void
     {
         $this->db->rollback();
+    }
+
+    /**
+     * اعمال هوشمند فیلتر کلمه کلیدی (LIKE) بر روی ستون‌های تعریف شده در $searchable
+     */
+    public function applySearch(QueryBuilder $query, ?string $term): QueryBuilder
+    {
+        $term = trim((string)$term);
+        if (empty($term) || empty(static::$searchable)) {
+            return $query;
+        }
+
+        $escaped = $this->escapeLikeValue($term);
+        $like = "%{$escaped}%";
+
+        return $query->where(function(QueryBuilder $q) use ($like) {
+            foreach (static::$searchable as $index => $column) {
+                if ($index === 0) {
+                    $q->where($column, 'LIKE', $like);
+                } else {
+                    $q->orWhere($column, 'LIKE', $like);
+                }
+            }
+        });
     }
 
     /**
