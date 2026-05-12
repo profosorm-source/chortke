@@ -37,6 +37,9 @@ class KYCController extends BaseAdminController
         $total = $this->kycService->count($filters);
         $totalPages = (int)\ceil($total / $perPage);
 
+        // ✅ استفاده از یک کوئری جامع با GROUP BY به جای 4 کوئری جداگانه
+        $stats = $this->kycService->getStatsByStatus();
+
         view('admin.kyc.index', [
             'kycs' => $kycs,
             'total' => $total,
@@ -44,12 +47,7 @@ class KYCController extends BaseAdminController
             'totalPages' => $totalPages,
             'statusFilter' => $status,
             'search' => $search,
-            'stats' => [
-                'pending' => $this->kycService->count(['status' => 'pending']),
-                'under_review' => $this->kycService->count(['status' => 'under_review']),
-                'verified' => $this->kycService->count(['status' => 'verified']),
-                'rejected' => $this->kycService->count(['status' => 'rejected']),
-            ],
+            'stats' => $stats,
         ]);
     }
 
@@ -68,8 +66,9 @@ class KYCController extends BaseAdminController
         // Photoshop check (اگر فایل موجود باشد)
         $photoshopCheck = ['suspicious' => false, 'reasons' => []];
         if (!empty($kyc->verification_image) && $kyc->verification_image !== '[DELETED]') {
-            $uploadPath = __DIR__ . '/../../../storage/uploads/kyc/' . $kyc->verification_image;
-            if (\file_exists($uploadPath)) {
+            // ✅ استفاده از base_path() helper و basename() برای جلوگیری از path traversal
+            $uploadPath = base_path('storage/uploads/kyc/' . basename($kyc->verification_image));
+            if (file_exists($uploadPath) && is_file($uploadPath)) {
                 $photoshopCheck = $this->kycService->detectPhotoshop($uploadPath);
             }
         }

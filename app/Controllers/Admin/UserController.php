@@ -72,25 +72,10 @@ class UserController extends BaseAdminController
 
     public function store(): void
     {
-        $validator = new Validator($this->request->all());
-        $validator->validate([
-            'full_name' => 'required|min:3|max:100',
-            'email' => 'required|email',
-            'password' => 'required|min:8',
-            'role' => 'required|in:user,admin,support',
-            'status' => 'required|in:active,inactive,suspended,banned'
-        ]);
+        // ✅ استفاده از validateRequest برای اعتبارسنجی یکپارچه
+        $validated = $this->validateRequest(\App\Validators\Requests\UserCreateRequest::class);
 
-        if ($validator->fails()) {
-            $this->response->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-            return;
-        }
-
-        $data = $validator->validated();
-        $existingUser = $this->userService->findByEmail($data->email);
+        $existingUser = $this->userService->findByEmail($validated->email);
         if ($existingUser) {
             $this->response->json([
                 'success' => false,
@@ -100,11 +85,11 @@ class UserController extends BaseAdminController
         }
 
         $userId = $this->userService->register([
-            'full_name' => $data->full_name,
-            'email' => $data->email,
-            'password' => $data->password,
-            'role' => $data->role,
-            'status' => $data->status,
+            'full_name' => $validated->full_name,
+            'email' => $validated->email,
+            'password' => $validated->password,
+            'role' => $validated->role,
+            'status' => $validated->status,
             'email_verified_at' => date('Y-m-d H:i:s'),
         ]);
 

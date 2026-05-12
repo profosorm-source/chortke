@@ -8,13 +8,11 @@ use App\Controllers\Admin\BaseAdminController;
 class DashboardController extends BaseAdminController
 {
     private AdminDashboardService $dashboardService;
-    private \App\Services\Auth\AuthService $authService;
 
-    public function __construct(AdminDashboardService $dashboardService, \App\Services\Auth\AuthService $authService)
+    public function __construct(AdminDashboardService $dashboardService)
     {
         parent::__construct();
         $this->dashboardService = $dashboardService;
-        $this->authService = $authService;
     }
 
     // ══════════════════════════════════════════════════════════
@@ -129,73 +127,5 @@ class DashboardController extends BaseAdminController
     header('Content-Type: application/json');
     echo json_encode(['success' => false, 'message' => 'خطا در دریافت وضعیت سیستم'], JSON_UNESCAPED_UNICODE);
 }
-    }
-
-    // ══════════════════════════════════════════════════════════
-    // متدهای Auth (دست نخورده از نسخه اصلی)
-    // ══════════════════════════════════════════════════════════
-
-    public function loginForm(): void
-    {
-        if ($this->userId() && $this->session->get('role') === 'admin') {
-            redirect('/admin/dashboard');
-            return;
-        }
-        view('admin/login', ['title' => 'ورود ادمین']);
-    }
-
-    public function login(): void
-    {
-        header('Content-Type: application/json');
-
-        $email    = trim($this->request->input('email', ''));
-        $password = $this->request->input('password', '');
-
-        if (!$email || !$password) {
-            echo json_encode(['status' => 'error', 'message' => 'تمام فیلدها باید پر شوند.']);
-            return;
-        }
-
-        try {
-            // استفاده از سرویس متمرکز احراز هویت و لاگین اتمیک
-            $result = $this->authService->login($email, $password);
-
-            if (!$result['success']) {
-                echo json_encode(['status' => 'error', 'message' => $result['message'] ?? 'ایمیل یا رمز عبور اشتباه است.']);
-                return;
-            }
-
-            $user = $result['user'];
-            // بررسی نهایی که حتماً دسترسی مدیریت داشته باشد
-            if (!in_array($user->role, ['admin', 'super_admin'], true)) {
-                 $this->authService->logout(); // لاگ‌اوت اجباری چون کاربر عادی حق ورود به پنل ادمین ندارد
-                 echo json_encode(['status' => 'error', 'message' => 'شما دسترسی لازم برای ورود به این بخش را ندارید.']);
-                 return;
-            }
-
-            echo json_encode([
-                'status' => 'success',
-                'message' => 'ورود موفقیت‌آمیز بود.',
-                'redirect' => '/admin/dashboard',
-            ]);
-
-} catch (\Throwable $e) {
-    $this->logger->error('admin.auth.login.failed', [
-        'channel' => 'admin_auth',
-        'email' => $email ?? null,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-
-    echo json_encode(['status' => 'error', 'message' => 'خطای سرور، لطفاً دوباره تلاش کنید.']);
-}
-    }
-
-    public function logout(): void
-    {
-        $this->session->destroy();
-        redirect('/admin/login');
     }
 }

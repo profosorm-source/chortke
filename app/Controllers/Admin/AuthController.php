@@ -40,7 +40,8 @@ class AuthController extends BaseController
         return redirect('/admin/dashboard');
     }
 
-    return view('admin.login');
+    // ✅ استفاده از مسیر یکسان: 'admin/login' (اسلش بجای نقطه)
+    return view('admin/login');
 }
     /**
      * پردازش لاگین

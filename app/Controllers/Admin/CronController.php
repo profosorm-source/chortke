@@ -43,30 +43,23 @@ class CronController extends BaseAdminController
                 'ip' => $this->request->ip()
             ]);
 
-            // تعریف فلگ اختصاصی برای اجازه اجرا در محیط وب و جلوگیری از exit()
-            if (!defined('INTERNAL_APP_CRON_TRIGGER')) {
-                define('INTERNAL_APP_CRON_TRIGGER', true);
-            }
-
             // پشتیبانی از اجرای یک جاب خاص اگر ارسال شده باشد
             $jobName = $this->request->get('job');
-            $_SERVER['argv'] = ['cron.php'];
-            if ($jobName) {
-                $_SERVER['argv'][] = '--job=' . (string)$jobName;
-            }
 
-            // اجرای فایل کرون اصلی سیستم (که خود شامل تمام تعریف جاب‌ها و منطق اجراست)
+            // استفاده از Scheduler برای اجرای جاب‌ها به صورت امن
             $results = [];
-            if (file_exists(BASE_PATH . '/cron.php')) {
-                ob_start();
-                // استفاده از require به جای require_once برای اطمینان از اجرا در هر ریکوئست
-                require BASE_PATH . '/cron.php';
-                $consoleOutput = ob_get_clean();
+            if ($jobName) {
+                // اجرای یک جاب خاص
+                $result = $this->scheduler->runJob((string)$jobName);
+                $results[$jobName] = $result;
+            } else {
+                // اجرای تمام جاب‌های در انتظار
+                $results = $this->scheduler->runAll();
             }
 
-            // هندل کردن وضعیت skipped در صورت فعال بودن لاک فایل سراسری
-            if (empty($results) && isset($consoleOutput) && str_contains($consoleOutput, '[SKIP]')) {
-                 $results = ['system' => ['status' => 'skipped', 'reason' => 'cron_file_lock_active']];
+            // هندل کردن وضعیت skipped یا خطا
+            if (empty($results)) {
+                 $results = ['system' => ['status' => 'skipped', 'reason' => 'no_jobs_to_execute']];
             }
             
             $this->jsonSuccess('Cron jobs executed successfully', [

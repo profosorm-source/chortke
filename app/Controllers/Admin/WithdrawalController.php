@@ -138,7 +138,7 @@ public function __construct(
     /**
      * تأیید و پرداخت درخواست برداشت
      */
-    public function approve(): void
+    public function process(): void
     {
         $adminId = $this->userId();
         
