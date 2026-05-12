@@ -191,29 +191,7 @@ public function callback(string $gatewayName, array $callbackData): array
     }
 
     // برای جلوگیری از پردازش دوباره از idempotency key استفاده می‌کنیم
-    $idemKey = "payment_cb:{$gatewayName}:{$authority}";
-    $idem = $this->idempotencyKey->check($idemKey, 0, 'payment_callback', $callbackData);
-    if (!empty($idem['is_duplicate'])) {
-        return $idem['result'] ?? ['success' => true, 'message' => 'پرداخت قبلاً پردازش شده'];
-    }
-
-    // لاگ گرفتن از درخواست دریافتی
-    $this->logger->info('payment.callback.received', [
-        'gateway' => $gatewayName,
-        'callback_data' => $callbackData,
-        'authority' => $authority
-    ]);
-    
-    // بررسی صحت درگاه پرداخت
-    $gw = $this->gateway($gatewayName);
-    if (!$gw) {
-        $this->logger->error('payment.callback.invalid_gateway', [
-            'gateway' => $gatewayName
-        ]);
-        return ['success' => false, 'message' => 'درگاه نامعتبر است'];
-    }
-
-    // جستجو برای پرداخت
+    // H18 Fix: انتقال چک idempotency به پس از شناسایی کاربر و قفل کردن آن روی user_id واقعی برای جلوگیری از split-brain
     $pay = $this->log->where('authority', $authority)->first();
     if (!$pay) {
         $this->logger->error('payment.callback.not_found', [
@@ -223,185 +201,204 @@ public function callback(string $gatewayName, array $callbackData): array
         return ['success' => false, 'message' => 'پرداخت یافت نشد'];
     }
 
-    // بررسی وضعیت پرداخت
-    if ($pay->status === 'completed') {
-        $this->logger->warning('payment.callback.already_completed', [
-            'gateway' => $gatewayName,
-            'authority' => $authority,
-            'user_id' => $pay->user_id,
-            'ref_id' => $pay->ref_id
-        ]);
-        return ['success' => true, 'message' => 'این پرداخت قبلاً تکمیل شده است', 'ref_id' => $pay->ref_id];
-    }
+    $idemKey = "payment_cb:{$gatewayName}:{$authority}";
+    $userId = (int)$pay->user_id;
 
-    // بررسی وضعیت پرداخت (لغو یا عدم تایید)
-    $status = $callbackData['Status'] ?? $callbackData['status'] ?? null;
-    if ($status === 'NOK' || $status === 'cancel' || $status === 0) {
+    // استفاده از Wrapper امن برای مدیریت خودکار Lock, Complete و Fail
+    return IdempotencyKey::wrap($idemKey, $userId, 'payment_callback', function() use ($gatewayName, $callbackData, $authority, $pay) {
+
+        // حل کردن اینستنس گیت‌وی
+        $gw = $this->gateway($gatewayName);
+
+        // لاگ گرفتن از درخواست دریافتی
+        $this->logger->info('payment.callback.received', [
+            'gateway' => $gatewayName,
+            'callback_data' => $callbackData,
+            'authority' => $authority,
+            'user_id' => $pay->user_id
+        ]);
+        
+        // بررسی صحت درگاه پرداخت
+        if (!$gw) {
+            $this->logger->error('payment.callback.invalid_gateway', [
+                'gateway' => $gatewayName
+            ]);
+            return ['success' => false, 'message' => 'درگاه نامعتبر است'];
+        }
+
+        // بررسی وضعیت پرداخت
+        if ($pay->status === 'completed') {
+            $this->logger->warning('payment.callback.already_completed', [
+                'gateway' => $gatewayName,
+                'authority' => $authority,
+                'user_id' => $pay->user_id,
+                'ref_id' => $pay->ref_id
+            ]);
+            return ['success' => true, 'message' => 'این پرداخت قبلاً تکمیل شده است', 'ref_id' => $pay->ref_id];
+        }
+
+        // بررسی وضعیت پرداخت (لغو یا عدم تایید)
+        $status = $callbackData['Status'] ?? $callbackData['status'] ?? null;
+        if ($status === 'NOK' || $status === 'cancel' || $status === 0) {
+            $this->log->update((int)$pay->id, [
+                'status' => 'cancelled',
+                'response_data' => \json_encode($callbackData, JSON_UNESCAPED_UNICODE),
+            ]);
+            
+            $this->logger->info('payment.callback.cancelled', [
+                'gateway' => $gatewayName,
+                'authority' => $authority,
+                'user_id' => $pay->user_id,
+                'amount' => $pay->amount
+            ]);
+            
+            return ['success' => false, 'message' => 'پرداخت لغو شد'];
+        }
+
+        // عملیات تأیید پرداخت
+        try {
+            $verify = $gw->verifyPayment($authority, (float)$pay->amount);
+        } catch (\Exception $e) {
+            $this->logger->critical('payment.verify.exception', [
+                'gateway' => $gatewayName,
+                'authority' => $authority,
+                'user_id' => $pay->user_id,
+                'amount' => $pay->amount,
+                'exception' => get_class($e),
+                'message' => $e->getMessage()
+            ]);
+            
+            $this->log->update((int)$pay->id, [
+                'status' => 'failed',
+                'response_data' => \json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE),
+            ]);
+            
+            return ['success' => false, 'message' => 'خطا در تأیید پرداخت'];
+        }
+
+        // به‌روزرسانی وضعیت پرداخت در سیستم
         $this->log->update((int)$pay->id, [
-            'status' => 'cancelled',
-            'response_data' => \json_encode($callbackData, JSON_UNESCAPED_UNICODE),
-        ]);
-        
-        $this->logger->info('payment.callback.cancelled', [
-            'gateway' => $gatewayName,
-            'authority' => $authority,
-            'user_id' => $pay->user_id,
-            'amount' => $pay->amount
-        ]);
-        
-        return ['success' => false, 'message' => 'پرداخت لغو شد'];
-    }
-
-    // عملیات تأیید پرداخت
-    try {
-        $verify = $gw->verifyPayment($authority, (float)$pay->amount);
-    } catch (\Exception $e) {
-        $this->logger->critical('payment.verify.exception', [
-            'gateway' => $gatewayName,
-            'authority' => $authority,
-            'user_id' => $pay->user_id,
-            'amount' => $pay->amount,
-            'exception' => get_class($e),
-            'message' => $e->getMessage()
-        ]);
-        
-        $this->log->update((int)$pay->id, [
-            'status' => 'failed',
-            'response_data' => \json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE),
-        ]);
-        
-        return ['success' => false, 'message' => 'خطا در تأیید پرداخت'];
-    }
-
-    // به‌روزرسانی وضعیت پرداخت در سیستم
-    $this->log->update((int)$pay->id, [
-        'status' => $verify['success'] ? 'verified' : 'failed',
-        'ref_id' => $verify['ref_id'] ?? null,
-        'paid_at' => $verify['success'] ? date('Y-m-d H:i:s') : null,
-        'response_data' => \json_encode($verify, JSON_UNESCAPED_UNICODE),
-    ]);
-
-    // در صورتی که پرداخت تأیید نشده باشد
-    if (!$verify['success']) {
-        $this->logger->error('payment.verify.failed', [
-            'gateway' => $gatewayName,
-            'authority' => $authority,
-            'user_id' => $pay->user_id,
-            'amount' => $pay->amount,
-            'verify_message' => $verify['message'] ?? 'unknown'
-        ]);
-        return ['success' => false, 'message' => $verify['message'] ?? 'تأیید پرداخت ناموفق'];
-    }
-
-    // واریز مبلغ به کیف پول
-    try {
-        $ok = $this->wallet->deposit(
-            (int) $pay->user_id,        // 1. userId
-            (float) $pay->amount,        // 2. amount
-            'irt',                       // 3. currency (lowercase)
-            [                            // 4. metadata
-                'type'                  => 'gateway_deposit',
-                'gateway'               => $gatewayName,
-                'authority'             => $authority,
-                'ref_id'                => $verify['ref_id'] ?? null,
-                'description'           => 'واریز آنلاین (درگاه)'
-            ]
-        );
-    } catch (\Exception $e) {
-        $this->logger->critical('payment.wallet_deposit.exception', [
-            'gateway' => $gatewayName,
-            'authority' => $authority,
-            'user_id' => $pay->user_id,
-            'amount' => $pay->amount,
+            'status' => $verify['success'] ? 'verified' : 'failed',
             'ref_id' => $verify['ref_id'] ?? null,
-            'exception' => get_class($e),
-            'message' => $e->getMessage()
+            'paid_at' => $verify['success'] ? date('Y-m-d H:i:s') : null,
+            'response_data' => \json_encode($verify, JSON_UNESCAPED_UNICODE),
         ]);
-        
-        return [
-            'success' => false,
-            'message' => 'پرداخت تأیید شد اما خطا در شارژ کیف پول رخ داد، با پشتیبانی تماس بگیرید'
-        ];
-    }
 
-    // چک کردن موفقیت شارژ کیف پول
-    if (!$ok['success']) {
-        $this->logger->error('payment.wallet_deposit.failed', [
+        // در صورتی که پرداخت تأیید نشده باشد
+        if (!$verify['success']) {
+            $this->logger->error('payment.verify.failed', [
+                'gateway' => $gatewayName,
+                'authority' => $authority,
+                'user_id' => $pay->user_id,
+                'amount' => $pay->amount,
+                'verify_message' => $verify['message'] ?? 'unknown'
+            ]);
+            return ['success' => false, 'message' => $verify['message'] ?? 'تأیید پرداخت ناموفق'];
+        }
+
+        // واریز مبلغ به کیف پول
+        try {
+            $ok = $this->wallet->deposit(
+                (int) $pay->user_id,        
+                (float) $pay->amount,        
+                'irt',                       
+                [                            
+                    'type'                  => 'gateway_deposit',
+                    'gateway'               => $gatewayName,
+                    'authority'             => $authority,
+                    'ref_id'                => $verify['ref_id'] ?? null,
+                    'description'           => 'واریز آنلاین (درگاه)'
+                ]
+            );
+        } catch (\Exception $e) {
+            $this->logger->critical('payment.wallet_deposit.exception', [
+                'gateway' => $gatewayName,
+                'authority' => $authority,
+                'user_id' => $pay->user_id,
+                'amount' => $pay->amount,
+                'ref_id' => $verify['ref_id'] ?? null,
+                'exception' => get_class($e),
+                'message' => $e->getMessage()
+            ]);
+            
+            return [
+                'success' => false,
+                'message' => 'پرداخت تأیید شد اما خطا در شارژ کیف پول رخ داد، با پشتیبانی تماس بگیرید'
+            ];
+        }
+
+        // چک کردن موفقیت شارژ کیف پول
+        if (!$ok['success']) {
+            $this->logger->error('payment.wallet_deposit.failed', [
+                'gateway' => $gatewayName,
+                'authority' => $authority,
+                'user_id' => $pay->user_id,
+                'amount' => $pay->amount,
+                'ref_id' => $verify['ref_id'] ?? null,
+                'wallet_message' => $ok['message'] ?? 'unknown'
+            ]);
+            
+            return [
+                'success' => false,
+                'message' => 'پرداخت تأیید شد اما شارژ کیف پول ناموفق بود، با پشتیبانی تماس بگیرید'
+            ];
+        }
+
+        // تغییر وضعیت پرداخت به تکمیل شده
+        $this->log->update((int)$pay->id, ['status' => 'completed']);
+        
+        // ✅ **تطبیق callback پرداخت با ledger**
+        $reconciliation = $this->reconciliationService->reconcilePayment([
+            'transaction_id' => (string)$authority,
+            'reference_id' => $verify['ref_id'] ?? 'payment_' . $pay->id,
+            'user_id' => (int)$pay->user_id,
+            'amount' => (float)$pay->amount,
+            'currency' => 'irt',
+            'status' => 'success',
+            'gateway' => $gatewayName,
+            'description' => "تطبیق callback پرداخت - Gateway: {$gatewayName}, Authority: {$authority}",
+            'timestamp' => time(),
+        ]);
+
+        if (!$reconciliation['success']) {
+            $this->logger->warning('payment.callback_reconciliation_failed', [
+                'gateway' => $gatewayName,
+                'authority' => $authority,
+                'user_id' => $pay->user_id,
+                'amount' => $pay->amount,
+                'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
+            ]);
+        }
+        
+        // 📢 شلیک رویداد تکمیل پرداخت
+        try {
+            \Core\EventDispatcher::getInstance()->dispatch('payment.completed', new \App\Events\PaymentCompletedEvent(
+                (int)$pay->user_id,
+                (string)($verify['ref_id'] ?? $authority),
+                (float)$pay->amount,
+                'IRT',
+                $gatewayName
+            ));
+        } catch (\Throwable $e) {
+            $this->logger->error('payment.event_dispatch_failed', ['error' => $e->getMessage()]);
+        }
+
+        $this->logger->info('payment.completed', [
             'gateway' => $gatewayName,
             'authority' => $authority,
             'user_id' => $pay->user_id,
             'amount' => $pay->amount,
-            'ref_id' => $verify['ref_id'] ?? null,
-            'wallet_message' => $ok['message'] ?? 'unknown'
+            'ref_id' => $verify['ref_id'] ?? null
         ]);
-        
+
+        // نوتیفیکیشن موفقیت پرداخت
+        $this->notifier->depositSuccess((int)$pay->user_id, (float)$pay->amount, 'IRT');
+
         return [
-            'success' => false,
-            'message' => 'پرداخت تأیید شد اما شارژ کیف پول ناموفق بود، با پشتیبانی تماس بگیرید'
+            'success' => true,
+            'message' => 'پرداخت موفق و کیف پول شارژ شد',
+            'ref_id'  => $verify['ref_id'] ?? null
         ];
-    }
-
-    // تغییر وضعیت پرداخت به تکمیل شده
-    $this->log->update((int)$pay->id, ['status' => 'completed']);
-    
-    // ✅ **تطبیق callback پرداخت با ledger**
-    // تأیید: آیا پرداخت درگاه واقعاً به wallet رسید؟
-    $reconciliation = $this->reconciliationService->reconcilePayment([
-        'transaction_id' => (string)$authority,
-        'reference_id' => $verify['ref_id'] ?? 'payment_' . $pay->id,
-        'user_id' => (int)$pay->user_id,
-        'amount' => (float)$pay->amount,
-        'currency' => 'irt',
-        'status' => 'success',
-        'gateway' => $gatewayName,
-        'description' => "تطبیق callback پرداخت - Gateway: {$gatewayName}, Authority: {$authority}",
-        'timestamp' => time(),
-    ]);
-
-    if (!$reconciliation['success']) {
-        $this->logger->warning('payment.callback_reconciliation_failed', [
-            'gateway' => $gatewayName,
-            'authority' => $authority,
-            'user_id' => $pay->user_id,
-            'amount' => $pay->amount,
-            'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
-        ]);
-    }
-    
-    // 📢 شلیک رویداد تکمیل پرداخت به صورت رویدادمحور
-    try {
-        \Core\EventDispatcher::getInstance()->dispatch('payment.completed', new \App\Events\PaymentCompletedEvent(
-            (int)$pay->user_id,
-            (string)($verify['ref_id'] ?? $authority),
-            (float)$pay->amount,
-            'IRT',
-            $gatewayName
-        ));
-    } catch (\Throwable $e) {
-        $this->logger->error('payment.event_dispatch_failed', ['error' => $e->getMessage()]);
-    }
-
-    $this->logger->info('payment.completed', [
-        'gateway' => $gatewayName,
-        'authority' => $authority,
-        'user_id' => $pay->user_id,
-        'amount' => $pay->amount,
-        'ref_id' => $verify['ref_id'] ?? null
-    ]);
-
-    // ثبت نتیجه نهایی در idempotency key
-    $this->idempotencyKey->complete($idemKey, [
-        'success' => true,
-        'message' => 'پرداخت تایید شد'
-    ], (int)$pay->user_id);
-
-    // نوتیفیکیشن موفقیت پرداخت
-    $this->notifier->depositSuccess((int)$pay->user_id, (float)$pay->amount, 'IRT');
-
-    return [
-        'success' => true,
-        'message' => 'پرداخت موفق و کیف پول شارژ شد',
-        'ref_id'  => $verify['ref_id'] ?? null
-    ];
+    }, $callbackData);
 }
 }

@@ -20,13 +20,31 @@ class DashboardService
      */
     public function getOverview(): array
     {
+        $cache = function_exists('app') ? app(\Core\Cache::class) : null;
+        
+        if ($cache) {
+            // M29 Fix: مهار سربار دیتابیس با کش کردن ۵ دقیقه‌ای اطلاعات حجیم تجمیعی داشبورد
+            return $cache->remember('sentry:dashboard:overview_v2', 300, function() {
+                return $this->buildOverviewData();
+            });
+        }
+
+        return $this->buildOverviewData();
+    }
+
+    /**
+     * M29 Fix: تجمیع‌گر متمرکز ساختار داده‌های آماری
+     */
+    private function buildOverviewData(): array
+    {
         return [
-            'summary' => $this->getSummary(),
-            'health_score' => $this->calculateHealthScore(),
-            'error_stats' => $this->getErrorStatistics(),
+            'summary'           => $this->getSummary(),
+            'health_score'      => $this->calculateHealthScore(),
+            'error_stats'       => $this->getErrorStatistics(),
             'performance_stats' => $this->getPerformanceStatistics(),
-            'trending_issues' => $this->model->getTrendingIssues(10),
-            'recent_events' => $this->model->getRecentSentryEvents(20),
+            'trending_issues'   => $this->model->getTrendingIssues(10),
+            'recent_events'     => $this->model->getRecentSentryEvents(20),
+            'cron_status'       => $this->getCronHeartbeatStatus(), // M28 Fix: مانیتورینگ ضربان قلب کرون‌جاب سیستم
         ];
     }
 
@@ -290,6 +308,44 @@ class DashboardService
             }
         } catch (\Throwable $ignore) {
             // Never crash the dashboard even if restore fails
+        }
+    }
+
+    /**
+     * M28 Fix: استخراج آخرین پالس سلامت اجرای سیستم زمانبندی (Cron Job Heartbeat)
+     */
+    private function getCronHeartbeatStatus(): array
+    {
+        try {
+            $db = \Core\Database::getInstance();
+            $lastLog = $db->query("SELECT created_at FROM activity_logs WHERE action = 'cron' ORDER BY id DESC LIMIT 1")->fetch();
+            
+            if (!$lastLog || !isset($lastLog->created_at)) {
+                return ['status' => 'inactive', 'message' => 'بدون اجرای اخیر', 'delay_minutes' => null];
+            }
+
+            $diffSec = time() - strtotime($lastLog->created_at);
+            $diffMin = round($diffSec / 60, 1);
+
+            $status = 'healthy';
+            $msg = 'سیستم فعال و در حال اجرا است';
+
+            if ($diffMin > 15) {
+                $status = 'critical';
+                $msg = 'قطع فعالیت شدید! کرون کار نمی‌کند';
+            } elseif ($diffMin > 5) {
+                $status = 'warning';
+                $msg = 'تاخیر در زمان‌بندی تشخیص داده شد';
+            }
+
+            return [
+                'status'        => $status,
+                'last_run'      => $lastLog->created_at,
+                'delay_minutes' => $diffMin,
+                'message'       => $msg
+            ];
+        } catch (\Throwable) {
+            return ['status' => 'unknown', 'message' => 'خطا در رهگیری کرون', 'delay_minutes' => null];
         }
     }
 }
