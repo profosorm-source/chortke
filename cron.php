@@ -11,6 +11,9 @@
  *   php cron.php --job=email_queue   (فقط یک job خاص)
  *   php cron.php --dry-run            (فقط نمایش بدون اجرا)
  */
+if (php_sapi_name() !== 'cli') {
+    die("Access Denied: Cron jobs can only be run via CLI.\n");
+}
 
 if (!defined('CRON_MODE')) {
     define('CRON_MODE', true);
@@ -18,9 +21,6 @@ if (!defined('CRON_MODE')) {
 if (!defined('BASE_PATH')) {
     define('BASE_PATH', __DIR__);
 }
-
-// بارگذاری bootstrap
-require_once __DIR__ . '/bootstrap/app.php';
 
 use Core\Scheduler;
 use Core\Container;
@@ -38,6 +38,12 @@ use App\Models\Notification as NotificationModel;
 use App\Models\Advertisement;
 use Core\Cache;
 use Core\Database;
+use App\Services\SocialTask\TrustScoreService as SocialTrustService;
+use App\Services\SocialTask\SocialTaskService as SocialTaskSvc;
+
+try {
+// بارگذاری bootstrap
+require_once __DIR__ . '/bootstrap/app.php';
 
 $container = Container::getInstance();
 
@@ -553,8 +559,6 @@ $scheduler->weekly('Sunday', '05:00', function () {
 //  SocialTask Jobs
 // ==========================================
 
-use App\Services\SocialTask\TrustScoreService  as SocialTrustService;
-use App\Services\SocialTask\SocialTaskService   as SocialTaskSvc;
 
 // ── هر شب ساعت ۱ — Web/Mobile Split (محاسبه median reward)
 $scheduler->daily('01:00', function () {
@@ -800,3 +804,28 @@ foreach ($results as $name => $result) {
 }
 
 echo '[' . date('Y-m-d H:i:s') . '] پایان' . PHP_EOL;
+
+} catch (\Throwable $e) {
+    $errorMsg = "CRON FATAL ERROR: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine();
+    // 1. Echo to standard output (will capture in redirected logs)
+    echo "\n❌ " . $errorMsg . "\n";
+    echo substr($e->getTraceAsString(), 0, 2000) . "\n";
+
+    // 2. Try to utilize framework Logger if initialized
+    try {
+        if (function_exists('logger')) {
+            logger()->critical('cron_execution_failed', [
+                'error' => $e->getMessage(),
+                'file'  => $e->getFile(),
+                'line'  => $e->getLine(),
+                'trace' => substr($e->getTraceAsString(), 0, 2048)
+            ]);
+        }
+    } catch (\Throwable $loggerException) {
+        // Logger failed or not booted
+    }
+
+    // 3. Native server logging
+    error_log($errorMsg);
+    exit(1);
+}

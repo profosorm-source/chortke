@@ -102,21 +102,6 @@ if (!function_exists('unless_feature')) {
     }
 }
 
-if (!function_exists('feature_value')) {
-    /**
-     * دریافت مقدار از Feature Flag با بازگشت به Config به عنوان Fallback
-     * 
-     * @param string $name نام فیچر
-     * @param string $key کلید مقدار
-     * @param mixed $default مقدار پیش‌فرض
-     * @return mixed
-     */
-    function feature_value(string $name, string $key, $default = null)
-    {
-        return app(\App\Services\FeatureFlagService::class)->getConfig($name, $key, $default);
-    }
-}
-
 if (!function_exists('feature_config')) {
     /**
      * دریافت مقدار از پیکربندی فیچر (نام مستعار)
@@ -156,13 +141,4 @@ if (!function_exists('enabled_features')) {
 }
 
 
-if (!function_exists('feature')) {
-    /**
-     * بررسی فعال بودن یک فیچر (legacy wrapper)
-     */
-    function feature(string $name, ?int $userId = null): bool
-    {
-        return feature_enabled($name, $userId);
-    }
-}
 

@@ -54,7 +54,7 @@ $r->group(['prefix' => '/api/v1'], function ($r) {
      */
     $r->group(['middleware' => [ApiAuthMiddleware::class . ':influencer.read']], function ($r) {
         $r->get('/influencer/profile', [ApiInfluencerController::class, 'myProfile']);
-        $r->get('/influencer/list', [ApiInfluencerController::class, 'list']);
+        $r->get('/influencer/list', [ApiInfluencerController::class, 'getList']);
         $r->get('/influencer/{id}', [ApiInfluencerController::class, 'show']);
         $r->get('/influencer/orders/placed', [ApiInfluencerController::class, 'myPlacedOrders']);
         $r->get('/influencer/orders/received', [ApiInfluencerController::class, 'receivedOrders']);

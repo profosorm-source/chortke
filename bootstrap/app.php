@@ -14,7 +14,6 @@ use App\Models\KpiStatistics;
 use App\Models\ExportData;
 use App\Services\AuthService;
 use App\Services\CaptchaService;
-use App\Models\SystemSetting;
 use App\Models\SecurityModel;
 use App\Services\AuditTrail;
 use App\Services\WalletService;
@@ -62,6 +61,11 @@ if (!defined('BASE_PATH')) {
 require_once BASE_PATH . '/core/Autoloader.php';
 \Core\Autoloader::register();
 
+// ── Hardened Security Defaults (Entry Safeguard) ───────────────
+error_reporting(0);
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+
 // Helpers از طریق composer autoload (files section) لود می‌شوند
 // نیازی به require_once دستی نیست
 
@@ -79,8 +83,10 @@ if (empty($env)) {
             ini_set('log_errors', '1');
             error_log('[Chortke] .env file is invalid or unreadable');
         } else {
+            $isProduction = ($env['APP_ENV'] ?? 'production') === 'production';
             $appDebug = filter_var($env['APP_DEBUG'] ?? false, FILTER_VALIDATE_BOOLEAN);
-            if ($appDebug) {
+
+            if (!$isProduction && $appDebug) {
                 error_reporting(E_ALL);
                 ini_set('display_errors', '1');
             } else {
@@ -89,8 +95,8 @@ if (empty($env)) {
             }
         }
     } else {
-        // بدون .env: خطاها فقط لاگ می‌شوند — هرگز نمایش داده نمی‌شوند
-        error_reporting(E_ALL);
+        // بدون .env: امنیت حداکثری
+        error_reporting(0);
         ini_set('display_errors', '0');
         ini_set('log_errors', '1');
     }
@@ -429,9 +435,6 @@ $container->singleton(AnalyticsService::class, function($c) {
     );
 });
 
-$container->singleton(SystemSetting::class, function($c) {
-    return new SystemSetting($c->make(Database::class));
-});
 
 $container->singleton(\App\Models\SecurityModel::class, function($c) {
     return new \App\Models\SecurityModel($c->make(\Core\Database::class));
@@ -492,7 +495,7 @@ $container->singleton(\App\Services\Auth\AuthService::class, function($c) {
 $container->singleton(CaptchaService::class, function($c) {
     return new CaptchaService(
         $c->make(App\Models\CaptchaLog::class),
-        $c->make(SystemSetting::class),
+        $c->make(\App\Services\SettingService::class),
         $c->make(Session::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
@@ -695,7 +698,8 @@ $container->singleton(\App\Services\AntiFraud\GeoIPService::class, function($c) 
         $c->make(\Core\Database::class),
         $c->make(\Core\Cache::class),
         $c->make(\App\Models\IpAndDeviceModel::class),
-        $c->make(\App\Services\AntiFraud\RiskPolicyService::class)
+        $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -1454,11 +1458,19 @@ $container->singleton(\App\Controllers\User\SeoAdController::class, function($c)
 });
 
 
+$container->singleton(\App\Services\AntiFraud\IPQualityService::class, function($c) {
+    return new \App\Services\AntiFraud\IPQualityService(
+        $c->make(\App\Models\IpAndDeviceModel::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
 $container->singleton(\App\Services\AntiFraud\FraudManagementService::class, function($c) {
     return new \App\Services\AntiFraud\FraudManagementService(
         $c->make(\App\Models\VelocityAndScoreModel::class),
-        $c->make(\App\Services\AntiFraud\GeoIPService::class),
-        $c->make(\App\Services\AntiFraud\BrowserFingerprintService::class)
+        $c->make(\App\Services\AntiFraud\IPQualityService::class),
+        $c->make(\App\Services\AntiFraud\BrowserFingerprintService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
