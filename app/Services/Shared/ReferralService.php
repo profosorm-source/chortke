@@ -239,8 +239,10 @@ class ReferralService extends \App\Services\BaseService
         )->fetch();
 
         if ($top) {
-            $bonus = $top->total * 0.05;
+            $bonusPercent = (float)$this->settingService->get('referral_top_bonus_percent', 5) / 100;
+            $bonus = $top->total * $bonusPercent;
             $this->walletService->deposit($top->id, $bonus, 'irt', ['type' => 'referral_bonus']);
+            return ['bonus_percent' => $bonusPercent];
         }
 
         return ['bonus_percent' => 0.05];
@@ -252,12 +254,12 @@ class ReferralService extends \App\Services\BaseService
 
     public function checkAndAwardMilestones(int $userId): array
     {
-        $milestones = [
+        $milestones = $this->settingService->get('referral_milestones', [
             ['name' => 'first_referral',   'condition' => 1,   'reward' => 50000],
             ['name' => 'ten_referrals',    'condition' => 10,  'reward' => 500000],
             ['name' => 'fifty_referrals',  'condition' => 50,  'reward' => 2000000],
             ['name' => 'hundred_referrals','condition' => 100, 'reward' => 5000000],
-        ];
+        ]);
 
         $refCount = $this->db->query("SELECT COUNT(*) as count FROM referral_commissions WHERE referrer_id = ?", [$userId])->fetch()->count ?? 0;
 
@@ -294,12 +296,12 @@ class ReferralService extends \App\Services\BaseService
     {
         $refCount = $this->db->query("SELECT COUNT(*) as c FROM referral_commissions WHERE referrer_id = ? AND status = 'paid'", [$userId])->fetch()->c ?? 0;
 
-        $tiers = [
+        $tiers = $this->settingService->get('referral_tiers', [
             ['name' => 'bronze',   'min_referrals' => 5,   'bonus_percent' => 1],
             ['name' => 'silver',   'min_referrals' => 25,  'bonus_percent' => 2],
             ['name' => 'gold',     'min_referrals' => 100, 'bonus_percent' => 3],
             ['name' => 'platinum', 'min_referrals' => 500, 'bonus_percent' => 5],
-        ];
+        ]);
 
         foreach (array_reverse($tiers) as $tier) {
             if ($refCount >= $tier['min_referrals']) {
