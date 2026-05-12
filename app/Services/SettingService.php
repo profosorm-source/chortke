@@ -6,20 +6,20 @@ namespace App\Services;
 
 use App\Models\Setting;
 use Core\Cache;
-
 use App\Contracts\LoggerInterface;
+
 class SettingService extends \App\Services\BaseService
 {
     private \Core\Database $db;
     private Setting $model;
     private Cache $cache;
 
-    // کلید کش در Redis / فایل
-    private const CACHE_KEY = 'system:settings';
-    private const CACHE_TTL = 60; // دقیقه
+    // کش درون حافظه‌ای (Runtime Stack) برای پیشگیری از مراجعه مکرر در طول یک درخواست واحد
+    private static ?array $runtimeCache = null;
 
-    // فایل cache استاندارد JSON
-    private string $cacheFile;
+    // کلید کش مرکزی سیستم
+    private const CACHE_KEY = 'system:settings:v2';
+    private const CACHE_TTL = 60; // دقیقه
 
     public function __construct(
         Setting $model,
@@ -31,112 +31,63 @@ class SettingService extends \App\Services\BaseService
         $this->model     = $model;
         $this->db        = $db;
         $this->cache     = $cache;
-        $this->cacheFile = __DIR__ . '/../../storage/cache/system_settings.json';
     }
 
-    // ─────────────────────────────────────────────────
-    //  بارگذاری تنظیمات
-    // ─────────────────────────────────────────────────
-
+    /**
+     * بارگذاری هوشمند و کش‌شده تمام تنظیمات با قابلیت Type-Casting
+     */
     public function load(): array
     {
-        // ① Redis / File Cache
-        $cached = $this->cache->get(self::CACHE_KEY);
-        if (is_array($cached)) {
-            return $cached;
+        // ۱. لایه طلایی: کش مستقیم در حافظه (Memory Stack)
+        if (self::$runtimeCache !== null) {
+            return self::$runtimeCache;
         }
 
-        // ② فایل JSON (اگر Redis در دسترس نبود و فایل وجود داشت)
-        if ($this->cache->driver() === 'file' && file_exists($this->cacheFile)) {
-            $raw = @file_get_contents($this->cacheFile);
-            if ($raw !== false && $raw !== '') {
-                $data = json_decode($raw, true);
-                if (is_array($data)) {
-                    return $data;
-                }
+        // ۲. لایه نقره‌ای: کش توزیع شده (Redis / File Driver)
+        $cachedData = $this->cache->get(self::CACHE_KEY);
+        if (is_array($cachedData)) {
+            self::$runtimeCache = $cachedData;
+            return $cachedData;
+        }
+
+        // ۳. لایه دیتابیس: واکشی و تبدیل هوشمند مقادیر
+        try {
+            // دریافت کامل سطرها شامل ستون Type
+            $rawSettings = $this->model->getAll();
+            $parsedSettings = [];
+
+            foreach ($rawSettings as $row) {
+                $key = (string)($row->key ?? '');
+                if ($key === '') continue;
+
+                // تبدیل هوشمند نوع داده (Smart Casting)
+                $parsedSettings[$key] = $this->castValue($row->value ?? '', (string)($row->type ?? 'string'));
             }
+
+            // ذخیره در لایه‌های کش برای مراجعات بعدی
+            $this->cache->put(self::CACHE_KEY, $parsedSettings, self::CACHE_TTL);
+            self::$runtimeCache = $parsedSettings;
+
+            return $parsedSettings;
+
+        } catch (\Throwable $e) {
+            $this->logger->error('settings.load_failed', ['error' => $e->getMessage()]);
+            return [];
         }
-
-        // ③ دیتابیس
-        $settings = $this->model->all();
-
-        // ذخیره در کش
-        $this->cache->put(self::CACHE_KEY, $settings, self::CACHE_TTL);
-
-        // ذخیره فایل JSON (فقط در حالت فایل — برای سازگاری)
-        if ($this->cache->driver() === 'file') {
-            $this->writeJsonCacheFile($settings);
-        }
-
-        return $settings;
     }
 
-    // ─────────────────────────────────────────────────
-    //  Get / Update
-    // ─────────────────────────────────────────────────
-
+    /**
+     * دریافت مقدار یک تنظیم خاص با هوشمندسازی نوع داده
+     */
     public function get(string $key, mixed $default = null): mixed
     {
         $all = $this->load();
         return $all[$key] ?? $default;
     }
 
-    public function updateById(int $id, string $key, string $value): bool
-    {
-        $row = $this->db->query(
-            "SELECT `key` FROM system_settings WHERE id = ? LIMIT 1",
-            [$id]
-        )->fetch(\PDO::FETCH_ASSOC);
-
-        if (!$row || (string) $row['key'] !== $key) {
-            return false;
-        }
-
-        $stmt = $this->db->query(
-            "UPDATE system_settings SET `value` = ?, updated_at = NOW() WHERE id = ?",
-            [$value, $id]
-        );
-
-        if ($stmt->rowCount() === 0) {
-            return false;
-        }
-
-        $this->clearCache();
-        return true;
-    }
-
-    public function loadAll(): array
-    {
-        $rows = $this->db->query(
-            "SELECT `key`, `value`, `type` FROM system_settings"
-        )->fetchAll(\PDO::FETCH_ASSOC);
-
-        $out = [];
-        foreach ($rows as $r) {
-            $k = (string) ($r['key'] ?? '');
-            if ($k === '') {
-                continue;
-            }
-            $out[$k] = $r['value'];
-        }
-        return $out;
-    }
-
-    public function getByCategory(string $category): array
-    {
-        return $this->model->getByCategory($category);
-    }
-
-    public function find(int $id): ?object
-    {
-        return $this->model->find($id);
-    }
-
-    public function findByKey(string $key): ?object
-    {
-        return $this->model->findByKey($key);
-    }
-
+    /**
+     * ذخیره مقدار جدید برای یک کلید خاص و پاکسازی آنی تمام کش‌ها
+     */
     public function set(string $key, string $value): bool
     {
         $ok = $this->model->set($key, $value);
@@ -146,6 +97,9 @@ class SettingService extends \App\Services\BaseService
         return $ok;
     }
 
+    /**
+     * ذخیره دسته‌ای تنظیمات و پاکسازی تجمیعی کش
+     */
     public function setMany(array $settings): bool
     {
         $ok = $this->model->setMany($settings);
@@ -155,6 +109,24 @@ class SettingService extends \App\Services\BaseService
         return $ok;
     }
 
+    /**
+     * بروزرسانی امن مقدار با شناسه (جایگزین کوئری‌های خام قبلی)
+     */
+    public function updateById(int $id, string $key, string $value): bool
+    {
+        $record = $this->model->find($id);
+        
+        // اعتبارسنجی تطابق کلید جهت جلوگیری از بروزرسانی‌های ناخواسته
+        if (!$record || (string)($record->key ?? '') !== $key) {
+            return false;
+        }
+
+        return $this->updateValueById($id, $value);
+    }
+
+    /**
+     * بروزرسانی مقدار با شناسه مستقیم و پاکسازی کش
+     */
     public function updateValueById(int $id, string $value): bool
     {
         $ok = $this->model->updateValueById($id, $value);
@@ -164,48 +136,88 @@ class SettingService extends \App\Services\BaseService
         return $ok;
     }
 
-    // ─────────────────────────────────────────────────
-    //  Cache Management
-    // ─────────────────────────────────────────────────
-
-    public function clearCache(): void
+    /**
+     * دریافت تنظیمات تفکیک شده بر اساس دسته‌بندی (مستقیم از مدل)
+     */
+    public function getByCategory(string $category): array
     {
-        $this->cache->forget(self::CACHE_KEY);
-
-        // فایل کش JSON هم پاک می‌شود
-        if (file_exists($this->cacheFile)) {
-            @unlink($this->cacheFile);
-        }
+        return $this->model->getByCategory($category);
     }
 
-    // ─────────────────────────────────────────────────
-    //  Private
-    // ─────────────────────────────────────────────────
-
-    private function writeJsonCacheFile(array $settings): void
+    /**
+     * جستجوی یک تنظیم کامل بر اساس شناسه
+     */
+    public function find(int $id): ?object
     {
-        try {
-            $dir = dirname($this->cacheFile);
-            if (!is_dir($dir)) {
-                if (!mkdir($dir, 0750, true) && !is_dir($dir)) {
-                    $this->logger->error('settings.mkdir_failed', ['dir' => $dir]);
-                    return;
+        return $this->model->find($id);
+    }
+
+    /**
+     * جستجوی یک تنظیم کامل بر اساس کلید
+     */
+    public function findByKey(string $key): ?object
+    {
+        return $this->model->findByKey($key);
+    }
+
+    /**
+     * متد پشتیبان بارگذاری همه تنظیمات (همگام‌سازی شده با لودر هوشمند)
+     */
+    public function loadAll(): array
+    {
+        return $this->load();
+    }
+
+    /**
+     * پاک‌سازی فوری تمام لایه‌های کش (دستی و توزیع شده)
+     */
+    public function clearCache(): void
+    {
+        self::$runtimeCache = null;
+        $this->cache->forget(self::CACHE_KEY);
+    }
+
+    // =========================================================================
+    // Private Engine
+    // =========================================================================
+
+    /**
+     * تبدیل هوشمند داده‌های دیتابیس بر اساس تایپ تعریف شده
+     */
+    private function castValue(?string $value, string $type): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $type = strtolower(trim($type));
+
+        switch ($type) {
+            case 'boolean':
+            case 'bool':
+                // مدیریت دقیق مقادیر متنی رایج برای بولین
+                if (in_array(strtolower($value), ['false', '0', 'no', 'off', ''], true)) {
+                    return false;
                 }
-            }
+                return true;
 
-            // Secure the directory to prevent direct HTTP access
-            $htaccessPath = $dir . '/.htaccess';
-            if (!file_exists($htaccessPath)) {
-                file_put_contents($htaccessPath, "Order Deny,Allow\nDeny from all\n");
-            }
+            case 'integer':
+            case 'int':
+                return (int) $value;
 
-            $json = json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-            if ($json !== false) {
-                file_put_contents($this->cacheFile, $json);
-            }
-        } catch (\Throwable $e) {
-            $this->logger->error('settings.write_cache_failed', ['error' => $e->getMessage()]);
+            case 'float':
+            case 'double':
+            case 'numeric':
+                return (float) $value;
+
+            case 'json':
+            case 'array':
+                $decoded = json_decode($value, true);
+                return is_array($decoded) ? $decoded : [];
+
+            case 'string':
+            default:
+                return (string) $value;
         }
     }
 }
-

@@ -2,7 +2,7 @@
 
 namespace App\Services\Adapters;
 
-use App\Models\Setting;
+use App\Services\SettingService;
 use Core\Database;
 use App\Contracts\LoggerInterface;
 
@@ -10,14 +10,14 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
 {
     private Database $db;
     private LoggerInterface $logger;
-    private Setting $settingModel;
+    private SettingService $settingService;
     private array $siteWallets = [];
 
-    public function __construct(Database $db, LoggerInterface $logger, Setting $settingModel)
+    public function __construct(Database $db, LoggerInterface $logger, SettingService $settingService)
     {
         $this->db = $db;
         $this->logger = $logger;
-        $this->settingModel = $settingModel;
+        $this->settingService = $settingService;
         $this->loadSiteWallets();
     }
 
@@ -35,11 +35,11 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function loadSiteWallets(): void
     {
         $this->siteWallets = [
-            'BNB20' => $this->settingModel->get('site_wallet_bnb20', ''),
-            'TRC20' => $this->settingModel->get('site_wallet_trc20', ''),
-            'ERC20' => $this->settingModel->get('site_wallet_erc20', ''),
-            'TON' => $this->settingModel->get('site_wallet_ton', ''),
-            'SOL' => $this->settingModel->get('site_wallet_sol', ''),
+            'BNB20' => $this->settingService->get('site_wallet_bnb20', ''),
+            'TRC20' => $this->settingService->get('site_wallet_trc20', ''),
+            'ERC20' => $this->settingService->get('site_wallet_erc20', ''),
+            'TON'   => $this->settingService->get('site_wallet_ton', ''),
+            'SOL'   => $this->settingService->get('site_wallet_sol', ''),
         ];
     }
 
@@ -118,7 +118,7 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function verifyBscTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
         try {
-            $url = "https://api.bscscan.com/api?module=proxy&action=eth_getTransactionByHash&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($this->settingModel->get('bscscan_api_key', '') ?: 'YourApiKeyToken');
+            $url = "https://api.bscscan.com/api?module=proxy&action=eth_getTransactionByHash&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($this->settingService->get('bscscan_api_key', '') ?: 'YourApiKeyToken');
             $ch = \curl_init($url);
             \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             \curl_setopt($ch, CURLOPT_TIMEOUT, 10);
