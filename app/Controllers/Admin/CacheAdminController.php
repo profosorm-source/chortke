@@ -6,13 +6,13 @@ use App\Services\CacheAdminService;
 
 class CacheAdminController extends BaseAdminController
 {
-    private \App\Models\Setting $settingModel;
+
     private CacheAdminService $cacheService;
 
-    public function __construct(\App\Models\Setting $settingModel, CacheAdminService $cacheService)
+    public function __construct(CacheAdminService $cacheService)
     {
         parent::__construct();
-        $this->settingModel  = $settingModel;
+
         $this->cacheService  = $cacheService;
     }
 
