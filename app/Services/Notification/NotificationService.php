@@ -7,6 +7,7 @@ namespace App\Services\Notification;
 use App\Models\Notification;
 use Core\RateLimiter;
 use App\Services\EmailService;
+use App\Services\SettingService;
 use App\Services\Notification\FcmService;
 
 use App\Contracts\LoggerInterface;
@@ -30,6 +31,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         private NotificationPreferenceService $preferenceService,
         private NotificationTracker $tracker,
         private NotificationAnalyticsService $analyticsService,
+        private SettingService $settingService,
         private ?EmailService $emailService = null
     ) {
         parent::__construct($logger);
@@ -114,7 +116,10 @@ class NotificationService extends \App\Services\BaseService implements Notificat
     private function checkRateLimit(int $userId): bool
     {
         $key = "notif_rl_user_{$userId}";
-        return $this->rateLimiter->attempt($key, self::RATE_MAX_PER_USER_PER_HOUR, self::RATE_WINDOW_MINUTES);
+        $max = (int)$this->settingService->get('notif_rate_max_hour', self::RATE_MAX_PER_USER_PER_HOUR);
+        $window = (int)$this->settingService->get('notif_rate_window_minutes', self::RATE_WINDOW_MINUTES);
+        
+        return $this->rateLimiter->attempt($key, $max, $window);
     }
 
     public function sendFromTemplate(
