@@ -15,7 +15,7 @@ class SafeModeMiddleware
 {
     public function handle(Request $request, Closure $next): Response
     {
-        $isSafeMode = config('app.safe_mode', env('APP_SAFE_MODE', false));
+        $isSafeMode = (bool)config('app.safe_mode', false);
 
         if ($isSafeMode && in_array($request->method(), ['POST', 'PUT', 'PATCH', 'DELETE'])) {
             // اجازه دادن به متدهای مربوط به Session/Auth (اختیاری)

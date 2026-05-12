@@ -6,7 +6,7 @@ namespace App\Middleware;
 
 use Core\Request;
 use Core\Response;
-use App\Models\SystemSetting;
+use App\Services\SettingService;
 use Closure;
 
 /**
@@ -14,9 +14,9 @@ use Closure;
  */
 class MaintenanceMiddleware
 {
-    private SystemSetting $setting;
+    private SettingService $setting;
 
-    public function __construct(SystemSetting $setting)
+    public function __construct(SettingService $setting)
     {
         $this->setting = $setting;
     }

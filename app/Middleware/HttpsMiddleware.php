@@ -15,20 +15,21 @@ class HttpsMiddleware
 {
     public function handle(Request $request, Closure $next): Response
     {
-        $env = config('app.env', env('APP_ENV', 'production'));
+        $env = config('app.env', 'production');
 
         if ($env === 'production' && !$request->isSecure()) {
-            // استفاده از APP_URL به جای اعتماد به هدر HTTP_HOST کاربر
-            $appUrl = rtrim(config('app.url', env('APP_URL', '')), '/');
+            // Obtain authoritative host ONLY from application configuration to prevent Host Header Injection.
+            $appUrl = rtrim((string)config('app.url', ''), '/');
             
             if (empty($appUrl)) {
-                // اگر تنظیم نشده بود، به عنوان راهکار امنیتی به لوکال هاست یا دامنه فعلی (با فیلتر شدید) برمی‌گردیم
-                $host = preg_replace('/[^a-zA-Z0-9.\-:]/', '', $_SERVER['HTTP_HOST'] ?? 'localhost');
+                // Critical Fallback: If APP_URL is missing in prod, use raw server defined host name, NEVER user header.
+                $host = $_SERVER['SERVER_NAME'] ?? 'localhost';
                 $appUrl = 'https://' . $host;
             }
 
             $uri = $request->uri();
-            $redirectUrl = $appUrl . ($uri === '/' ? '' : $uri);
+            // Ensure safe and valid fully qualified URL construction
+            $redirectUrl = $appUrl . '/' . ltrim($uri, '/');
 
             $response = new Response();
             return $response->redirect($redirectUrl, 301);

@@ -62,14 +62,14 @@ class LoggingMiddleware extends BaseMiddleware
     private function logPerformance(Request $request, int $statusCode): void
     {
         try {
-            if (env('LOG_PERFORMANCE', 'true') !== 'true') {
+            if (!config('logging.performance.log_performance', true)) {
                 return;
             }
 
             $executionTime = (microtime(true) - self::$startTime) * 1000; // ms
             $memoryUsage = memory_get_usage() - self::$startMemory;
             
-            $slowThreshold = (float)env('LOG_PERFORMANCE_THRESHOLD', 500); // 500ms
+            $slowThreshold = (float)config('logging.performance.performance_threshold_ms', 500); // 500ms
             $isSlow = $executionTime > $slowThreshold;
 
             $userId = $this->session->get('user_id');

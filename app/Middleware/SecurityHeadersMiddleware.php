@@ -32,7 +32,7 @@ class SecurityHeadersMiddleware
             $response->setContent($content);
         }
 
-        $env = config('app.env', env('APP_ENV', 'production'));
+        $env = config('app.env', 'production');
         $nonce = $this->generateNonce();
 
         // Content Security Policy
@@ -68,23 +68,18 @@ class SecurityHeadersMiddleware
     
     private function buildCSP(string $env, string $nonce): string
     {
-        $scripts = "'self' 'nonce-{$nonce}' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com";
-        $styles = "'self' 'nonce-{$nonce}' https://fonts.googleapis.com https://cdn.jsdelivr.net";
-        
-        if ($env === 'development') {
-            $styles .= " 'unsafe-inline'";
-        }
+        // Synchronized whitelisted sources from previous hardcoded index configuration.
+        $scripts = "'self' 'nonce-{$nonce}' https://cdn.jsdelivr.net https://code.jquery.com https://www.google.com https://www.gstatic.com";
+        $styles = "'self' 'unsafe-inline' 'nonce-{$nonce}' https://fonts.googleapis.com https://cdn.jsdelivr.net";
         
         return implode('; ', [
             "default-src 'self'",
             "script-src {$scripts}",
             "style-src {$styles}",
-            "font-src 'self' https://fonts.gstatic.com data:",
-            "img-src 'self' data: https: blob:",
-            "connect-src 'self' https://api.chortke.ir",
-            "frame-ancestors 'self'",
-            "base-uri 'self'",
-            "form-action 'self'",
+            "font-src 'self' https://fonts.gstatic.com",
+            "img-src 'self' data: https:",
+            "frame-src https://www.google.com",
+            "connect-src 'self' https://www.google.com",
             "upgrade-insecure-requests"
         ]);
     }
@@ -94,6 +89,12 @@ class SecurityHeadersMiddleware
         $nonce = base64_encode(random_bytes(16));
         $this->session->set('csp_nonce', $nonce);
         $_SESSION['csp_nonce'] = $nonce;
+        
+        // Ensure backward compatibility with legacy layout defines if needed.
+        if (!defined('CSP_NONCE')) {
+            define('CSP_NONCE', $nonce);
+        }
+        
         return $nonce;
     }
 }

@@ -41,8 +41,8 @@ class RateLimitMiddleware
         $this->rateLimiter = $rateLimiter;
         $this->logger = $logger;
         $this->session = $session;
-        $this->maxAttempts = (int)env('RATE_LIMIT_DEFAULT_MAX', $maxAttempts);
-        $this->decayMinutes = (int)env('RATE_LIMIT_DEFAULT_DECAY', $decayMinutes);
+        $this->maxAttempts = (int)config('rate_limits.default.max_attempts', $maxAttempts);
+        $this->decayMinutes = (int)config('rate_limits.default.decay_minutes', $decayMinutes);
     }
 
     public function handle(Request $request, Closure $next): Response
