@@ -2,8 +2,8 @@
 
 namespace App\Controllers\User;
 
-use App\Models\ManualDeposit;
-use App\Models\BankCard;
+use App\Services\ManualDepositService;
+use App\Services\BankCardService;
 use App\Services\UploadService;
 use Core\Validator;
 use App\Services\ApiRateLimiter;
@@ -11,18 +11,18 @@ use App\Controllers\User\BaseUserController;
 
 class ManualDepositController extends BaseUserController
 {
-    private ManualDeposit $depositModel;
-    private BankCard $cardModel;
+    private ManualDepositService $depositService;
+    private BankCardService $cardService;
     private UploadService $uploadService;
 
     public function __construct(
-        \App\Models\ManualDeposit $depositModel,
-        \App\Models\BankCard $cardModel,
+        ManualDepositService $depositService,
+        BankCardService $cardService,
         \App\Services\UploadService $uploadService)
     {
         parent::__construct();
-        $this->depositModel = $depositModel;
-        $this->cardModel = $cardModel;
+        $this->depositService = $depositService;
+        $this->cardService = $cardService;
         $this->uploadService = $uploadService;
     }
 
@@ -34,15 +34,8 @@ class ManualDepositController extends BaseUserController
         $userId = $this->userId();
 
         try {
-            // بررسی درخواست در انتظار
-            if ($this->depositModel->hasPendingDeposit($userId)) {
-                $this->session->setFlash('error', 'شما یک درخواست واریز در انتظار بررسی دارید');
-                redirect('/wallet');
-                return;
-            }
-
             // دریافت کارت‌های تأییدشده
-            $cards = $this->cardModel->getUserCards($userId, 'verified');
+            $cards = $this->cardService->getUserCards($userId, 'verified');
 
             if (empty($cards)) {
                 $this->session->setFlash('error', 'ابتدا باید کارت بانکی خود را ثبت و تأیید کنید');
@@ -99,37 +92,25 @@ class ManualDepositController extends BaseUserController
         $ipAddress         = get_client_ip();
         $deviceFingerprint = generate_device_fingerprint();
 
-        // بررسی درخواست در انتظار
-        if ($this->depositModel->hasPendingDeposit($userId)) {
-            $this->session->setFlash('error', 'شما یک درخواست واریز در انتظار بررسی دارید');
-            redirect('/wallet');
-            return;
-        }
-
         $data = [
-            'card_id'        => $this->request->input('card_id'),
+            'bank_card_id'   => $this->request->input('bank_card_id'),
             'amount'         => $this->request->input('amount'),
             'tracking_code'  => $this->request->input('tracking_code'),
-            'deposit_date'   => $this->request->input('deposit_date'),
-            'deposit_time'   => $this->request->input('deposit_time'),
+            'user_description' => $this->request->input('description'),
         ];
 
         $idempotencyKey = $this->request->input('idempotency_key');
 
         $validator = new Validator($data, [
-            'card_id'       => 'required|numeric',
-            'amount'        => 'required|numeric|min:10000',
-            'tracking_code' => 'required|min:5|max:50',
-            'deposit_date'  => 'required',
-            'deposit_time'  => 'required',
+            'bank_card_id'   => 'required|numeric',
+            'amount'         => 'required|numeric|min:10000',
+            'tracking_code'  => 'required|min:5|max:50',
         ], [
-            'card_id.required'       => 'انتخاب کارت الزامی است',
-            'amount.required'        => 'مبلغ الزامی است',
-            'amount.numeric'         => 'مبلغ باید عددی باشد',
-            'amount.min'             => 'حداقل مبلغ واریز 10,000 تومان است',
-            'tracking_code.required' => 'شماره پیگیری الزامی است',
-            'deposit_date.required'  => 'تاریخ واریز الزامی است',
-            'deposit_time.required'  => 'ساعت واریز الزامی است',
+            'bank_card_id.required'   => 'انتخاب کارت الزامی است',
+            'amount.required'         => 'مبلغ الزامی است',
+            'amount.numeric'          => 'مبلغ باید عددی باشد',
+            'amount.min'              => 'حداقل مبلغ واریز 10,000 تومان است',
+            'tracking_code.required'  => 'شماره پیگیری الزامی است',
         ]);
 
         if ($validator->fails()) {
@@ -140,15 +121,10 @@ class ManualDepositController extends BaseUserController
         }
 
         try {
-            $card = $this->cardModel->find((int)$data['card_id']);
-
-            if (!$card || $card->user_id !== $userId || $card->status !== 'verified') {
+            // بررسی کارت با استفاده از Service
+            $card = $this->cardService->findVerifiedCardForUser($userId, (int)$data['bank_card_id']);
+            if (!$card) {
                 throw new \RuntimeException('کارت نامعتبر است');
-            }
-
-            $existingDeposit = $this->depositModel->findByTrackingCode($data['tracking_code'], $userId);
-            if ($existingDeposit) {
-                throw new \RuntimeException('این شماره پیگیری قبلاً ثبت شده است');
             }
 
             $receiptPath = null;
@@ -169,22 +145,20 @@ class ManualDepositController extends BaseUserController
                 }
             }
 
-            $data['user_id']            = $userId;
-            $data['receipt_image']      = $receiptPath;
-            $data['status']             = 'pending';
-            $data['request_id']         = $requestId;
-            $data['ip_address']         = $ipAddress;
-            $data['device_fingerprint'] = $deviceFingerprint;
-            $data['idempotency_key']    = $idempotencyKey;
+            // استفاده از ManualDepositService برای ایجاد درخواست
+            $result = $this->depositService->create($userId, [
+                'bank_card_id' => (int)$data['bank_card_id'],
+                'amount' => (float)$data['amount'],
+                'tracking_code' => (string)$data['tracking_code'],
+                'user_description' => (string)($data['user_description'] ?? ''),
+            ], $receiptPath);
 
-            $deposit = $this->depositModel->create($data);
-
-            if (!$deposit) {
-                throw new \RuntimeException('خطا در ثبت درخواست');
+            if (!($result['success'] ?? false)) {
+                throw new \RuntimeException($result['message'] ?? 'خطا در ثبت درخواست');
             }
 
             $this->logger->activity('manual_deposit_requested', "درخواست واریز دستی {$data['amount']} تومان", $userId, [
-                    'deposit_id'    => $deposit->id,
+                    'deposit_id'    => $result['deposit_id'] ?? null,
                     'tracking_code' => $data['tracking_code'],
                     'request_id'    => $requestId,
                     'ip'            => $ipAddress,
@@ -222,7 +196,9 @@ class ManualDepositController extends BaseUserController
         $userId = $this->userId();
 
         try {
-            $deposits = $this->depositModel->getUserDeposits($userId);
+            // دریافت Model از طریق Container برای نمایش لیست
+            $depositModel = app()->make(\App\Models\ManualDeposit::class);
+            $deposits = $depositModel->where('user_id', $userId)->orderBy('created_at', 'DESC')->get();
 
             view('user.manual-deposit.index', [
                 'deposits'  => $deposits,

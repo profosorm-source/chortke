@@ -162,15 +162,19 @@ abstract class BaseController
     /** redirect به صفحه قبلی (یا fallback) */
    protected function back(string $fallback = '/'): void {
     $ref = $_SERVER['HTTP_REFERER'] ?? '';
-    $host = parse_url($ref, PHP_URL_HOST);
-    $appHost = parse_url(config('app.url'), PHP_URL_HOST);
     
-    // فقط به همین domain redirect شود
-    if ($host && $host === $appHost) {
-        $this->response->redirect($ref);
-    } else {
-        $this->response->redirect(url($fallback));
+    // ✅ اعتبارسنجی اینکه HTTP_REFERER مربوط به همین دامنه است
+    if (!empty($ref)) {
+        // تنها URL‌هایی که با app.url شروع می‌شوند
+        $appUrl = config('app.url') ?: url('/');
+        if (strpos($ref, $appUrl) === 0) {
+            $this->response->redirect($ref);
+            exit;
+        }
     }
+    
+    // fallback به صفحه پیشفرض
+    $this->response->redirect(url($fallback));
     exit;
 }
 

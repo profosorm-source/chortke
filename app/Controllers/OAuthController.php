@@ -49,6 +49,7 @@ class OAuthController extends BaseController
 
         if (empty($code) || empty($state)) {
             $this->jsonError('پارامترهای بازگشتی نامعتبر است', [], 400);
+            return;
         }
 
         $result = $this->oauthService->handleGoogleCallback($code, $state);
@@ -64,16 +65,20 @@ class OAuthController extends BaseController
 
             if ($this->request->isAjax()) {
                 $this->jsonSuccess($message, ['redirect' => url('dashboard')]);
+                return;
             }
             $this->session->setFlash('success', $message);
             $this->response->redirect(url('dashboard'));
+            return;
         }
 
         if ($this->request->isAjax()) {
             $this->jsonError($result['message'] ?? 'خطا در لاگین با گوگل');
+            return;
         }
         $this->session->setFlash('error', $result['message'] ?? 'خطا در لاگین با گوگل');
         $this->response->redirect(url('login'));
+        return;
     }
 
     /**
@@ -86,6 +91,7 @@ class OAuthController extends BaseController
 
         if (empty($code) || empty($state)) {
             $this->jsonError('پارامترهای بازگشتی نامعتبر است', [], 400);
+            return;
         }
 
         $result = $this->oauthService->handleFacebookCallback($code, $state);
@@ -100,16 +106,20 @@ class OAuthController extends BaseController
 
             if ($this->request->isAjax()) {
                 $this->jsonSuccess($message, ['redirect' => url('dashboard')]);
+                return;
             }
             $this->session->setFlash('success', $message);
             $this->response->redirect(url('dashboard'));
+            return;
         }
 
         if ($this->request->isAjax()) {
             $this->jsonError($result['message'] ?? 'خطا در لاگین با فیسبوک');
+            return;
         }
         $this->session->setFlash('error', $result['message'] ?? 'خطا در لاگین با فیسبوک');
         $this->response->redirect(url('login'));
+        return;
     }
 
     /**
@@ -139,14 +149,17 @@ class OAuthController extends BaseController
 
         if (empty($provider) || empty($userData)) {
             $this->jsonError('پارامترهای ارسالی نامعتبر است');
+            return;
         }
 
         $result = $this->oauthService->linkSocialAccount($this->userId(), $provider, $userData);
 
         if ($result['success']) {
             $this->jsonSuccess($result['message'] ?? 'حساب با موفقیت متصل شد');
+            return;
         }
         $this->jsonError($result['message'] ?? 'خطا در اتصال حساب');
+        return;
     }
 
     /**
@@ -160,6 +173,7 @@ class OAuthController extends BaseController
         $provider = (string)$this->request->post('provider');
         if (empty($provider)) {
             $this->jsonError('انتخاب سرویس‌دهنده الزامی است');
+            return;
         }
 
         $userId = $this->userId();
@@ -168,6 +182,7 @@ class OAuthController extends BaseController
 
         if ($result['success']) {
             $this->jsonSuccess($result['message'] ?? 'اتصال حساب قطع شد');
+            return;
         }
         $this->jsonError($result['message'] ?? 'خطا در قطع اتصال');
     }

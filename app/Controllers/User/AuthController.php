@@ -60,9 +60,10 @@ class AuthController extends BaseController
 
         $captchaType = $this->loginRiskService->getCaptchaType('login');
         if ($captchaType !== null) {
-            $captchaToken = trim((string)($_POST['captcha_token'] ?? ''));
-            $captchaResp = trim((string)($_POST['captcha_response'] ?? ''));
-            $recaptchaResp = trim((string)($_POST['g-recaptcha-response'] ?? ''));
+            // ✅ استفاده از $this->request->input() به جای $_POST
+            $captchaToken = trim((string)$this->request->input('captcha_token', ''));
+            $captchaResp = trim((string)$this->request->input('captcha_response', ''));
+            $recaptchaResp = trim((string)$this->request->input('g-recaptcha-response', ''));
 
             if ($captchaType === 'recaptcha_v2') {
                 if ($recaptchaResp === '' || !$this->captchaService->verify('', '', $recaptchaResp)) {

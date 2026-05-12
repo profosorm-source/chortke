@@ -85,6 +85,7 @@ class ProfileController extends BaseUserController
         if (!empty($errors)) {
             $this->session->setFlash('error', implode('<br>', $errors));
             redirect('profile');
+            return;
         }
         
         $data = [
