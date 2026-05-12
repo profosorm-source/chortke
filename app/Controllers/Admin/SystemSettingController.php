@@ -91,7 +91,7 @@ class SystemSettingController extends BaseAdminController
         $settingId = (int)$this->request->post('setting_id', 0);
         $setting = $this->settingService->find($settingId);
         
-        if (!$setting || ($setting->category !== 'images' && $setting->type !== 'image')) {
+        if (!$setting || (($setting->group ?? '') !== 'images' && $setting->type !== 'image')) {
             $this->jsonError('تنظیم یافت نشد یا نوع آن تصویر نیست', [], 404);
         }
         
