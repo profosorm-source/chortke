@@ -85,7 +85,7 @@ class MaintenanceController extends BaseAdminController
      */
     public function status(Request $request, Response $response)
     {
-        $isEnabled = env('MAINTENANCE_MODE') === 'true' || env('MAINTENANCE_MODE') === true;
+        $isEnabled = config('maintenance.enabled', false) === true;
         
         return $this->response->json([
             'success' => true,

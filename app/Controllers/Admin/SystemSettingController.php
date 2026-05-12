@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Controllers\Admin;
 
-use App\Models\SystemSetting;
 use App\Services\SettingService;
 use App\Services\UploadService;
 use Core\PathResolver;
@@ -12,17 +11,14 @@ use Core\PathResolver;
 class SystemSettingController extends BaseAdminController
 {
     private SettingService $settingService;
-    private SystemSetting $settingModel;
     private UploadService $uploadService;
     private PathResolver $pathResolver;
     
     public function __construct(
-        SystemSetting $settingModel,
         SettingService $settingService,
         UploadService $uploadService
     ) {
         parent::__construct();
-        $this->settingModel   = $settingModel;
         $this->settingService = $settingService;
         $this->uploadService  = $uploadService;
         $this->pathResolver   = PathResolver::getInstance();
@@ -34,7 +30,7 @@ class SystemSettingController extends BaseAdminController
     public function index()
     {
         $category = (string)$this->request->get('category', 'general');
-        $settings = $this->settingModel->getByCategory($category);
+        $settings = $this->settingService->getByCategory($category);
         
         $categories = [
             'general' => 'عمومی',
@@ -93,7 +89,7 @@ class SystemSettingController extends BaseAdminController
         }
         
         $settingId = (int)$this->request->post('setting_id', 0);
-        $setting = $this->settingModel->find($settingId);
+        $setting = $this->settingService->find($settingId);
         
         if (!$setting || ($setting->category !== 'images' && $setting->type !== 'image')) {
             $this->jsonError('تنظیم یافت نشد یا نوع آن تصویر نیست', [], 404);
@@ -121,7 +117,7 @@ class SystemSettingController extends BaseAdminController
             $imagePath = $result['path'];
             
             // بروزرسانی در دیتابیس
-            $updated = $this->settingModel->updateValueById($settingId, $imagePath);
+            $updated = $this->settingService->updateValueById($settingId, $imagePath);
             
             if (!$updated) {
                 throw new \Exception('خطا در ذخیره اطلاعات در دیتابیس');
@@ -148,7 +144,7 @@ class SystemSettingController extends BaseAdminController
         $data = $this->request->body();
         $settingId = (int)($data['setting_id'] ?? 0);
         
-        $setting = $this->settingModel->find($settingId);
+        $setting = $this->settingService->find($settingId);
         if (!$setting) {
             $this->jsonError('تنظیم یافت نشد', [], 404);
         }
@@ -161,7 +157,7 @@ class SystemSettingController extends BaseAdminController
                 }
             }
             
-            $this->settingModel->updateValueById($settingId, '');
+            $this->settingService->updateValueById($settingId, '');
             $this->settingService->clearCache();
             
             $this->jsonSuccess('تصویر با موفقیت حذف شد');
