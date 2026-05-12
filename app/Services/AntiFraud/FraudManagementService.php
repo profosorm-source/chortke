@@ -14,7 +14,7 @@ class FraudManagementService extends \App\Services\BaseService
     private BrowserFingerprintService $fingerprintService;
 
     public function __construct(
-        AntiFraudModel $model,
+        VelocityAndScoreModel $model,
         IPQualityService $ipQualityService,
         BrowserFingerprintService $fingerprintService,
         LoggerInterface $logger

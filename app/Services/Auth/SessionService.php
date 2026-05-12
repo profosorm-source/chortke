@@ -98,7 +98,7 @@ class SessionService extends \App\Services\BaseService
 
             // Lock existing session if it exists
             $existing = $this->model->getDb()->selectOne(
-                "SELECT id FROM sessions WHERE session_id = ? FOR UPDATE",
+                "SELECT id FROM user_sessions WHERE session_id = ? FOR UPDATE",
                 [$sessionId]
             );
 

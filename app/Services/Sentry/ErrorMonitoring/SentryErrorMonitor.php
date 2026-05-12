@@ -363,7 +363,7 @@ class SentryErrorMonitor
                 return basename($matches[1]);
             }
         }
-        return $_ENV['APP_RELEASE'] ?? 'unknown';
+        return config('app.release', 'unknown');
     }
 
     private function shouldCapture(): bool

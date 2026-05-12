@@ -28,10 +28,10 @@ class SmsNotificationAdapter
     public function __construct(Logger $logger)
     {
         $this->logger   = $logger;
-        $this->enabled  = filter_var(env('SMS_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
-        $this->provider = env('SMS_PROVIDER', '');
-        $this->apiKey   = env('SMS_API_KEY', '');
-        $this->from     = env('SMS_FROM', '');
+        $this->enabled  = (bool)config('services.sms.enabled', false);
+        $this->provider = config('services.sms.provider', '');
+        $this->apiKey   = config('services.sms.api_key', '');
+        $this->from     = config('services.sms.from', '');
     }
 
     /**

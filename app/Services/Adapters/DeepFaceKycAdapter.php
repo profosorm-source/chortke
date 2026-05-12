@@ -21,8 +21,8 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
     {
         $this->logger   = $logger;
         // این تنظیمات از فایل .env خوانده می‌شوند.
-        $this->apiUrl   = env('KYC_AI_SERVICE_URL');
-        $this->apiToken = env('KYC_AI_SERVICE_TOKEN');
+        $this->apiUrl   = config('services.deepface.api_url');
+        $this->apiToken = config('services.deepface.api_token');
     }
 
     public function isConfigured(): bool

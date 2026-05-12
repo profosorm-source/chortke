@@ -35,8 +35,8 @@ class FcmNotificationAdapter
         $this->logger             = $logger;
         $this->cache              = $cache;
         $this->db                 = $db;
-        $this->projectId          = env('FCM_PROJECT_ID');
-        $this->serviceAccountPath = env('FCM_SERVICE_ACCOUNT_JSON');
+        $this->projectId          = config('services.fcm.project_id');
+        $this->serviceAccountPath = config('services.fcm.service_account_json');
     }
 
     /**

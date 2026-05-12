@@ -11,7 +11,9 @@ use App\Models\SentryModel;
  */
 class DashboardService
 {
-    public function __construct(private SentryModel $model) {}
+    public function __construct(private SentryModel $model) {
+        $this->syncEmergencyLogs();
+    }
 
     /**
      * 📊 Get Dashboard Overview
@@ -200,5 +202,94 @@ class DashboardService
     private function getHealthStatus(float $score): string
     {
         return match(true) { $score >= 90 => 'excellent', $score >= 80 => 'good', $score >= 70 => 'fair', $score >= 60 => 'poor', default => 'critical' };
+    }
+    private function syncEmergencyLogs(): void
+    {
+        // Adjust path safely from app/Services/Sentry/Analytics to root
+        $emergencyFile = dirname(__DIR__, 4) . '/storage/logs/sentry_emergency.jsonl';
+        
+        if (!file_exists($emergencyFile)) {
+            return;
+        }
+
+        try {
+            $content = file_get_contents($emergencyFile);
+            // Delete now to prevent infinite repetition if DB blocks
+            @unlink($emergencyFile);
+
+            if (empty($content)) {
+                return;
+            }
+
+            $lines = explode("\n", trim($content));
+            // Group all db failures under one consistent fingerprint
+            $fingerprint = hash('sha256', 'emergency_database_bootstrap_failed');
+            $environment = 'production'; // Fixed fallback for core bootstrap
+
+            // Check if issue bucket exists
+            $existing = $this->model->findExistingIssue($fingerprint, $environment);
+            
+            if ($existing) {
+                $issueId = (int)$existing->id;
+            } else {
+                $issueId = $this->model->createIssue([
+                    'fingerprint' => $fingerprint,
+                    'level' => 'critical',
+                    'title' => 'Critical: Database Connection Bootstrap Failure',
+                    'culprit' => 'Core\Application::__construct',
+                    'environment' => $environment,
+                    'release' => 'unknown',
+                    'metadata' => [
+                        'exception_type' => 'RuntimeException',
+                        'source' => 'emergency_log'
+                    ]
+                ]);
+            }
+
+            foreach ($lines as $line) {
+                $data = json_decode($line, true);
+                if (empty($data) || !isset($data['message'])) {
+                    continue;
+                }
+
+                if ($existing) {
+                    $this->model->updateIssueStats($issueId, 'critical');
+                }
+
+                $this->model->storeEventRecord([
+                    'event_id' => bin2hex(random_bytes(16)),
+                    'issue_id' => $issueId,
+                    'level' => 'critical',
+                    'message' => $data['message'],
+                    'exception_type' => 'RuntimeException',
+                    'stack_trace' => json_encode([
+                        'frames' => [[
+                            'file' => 'Application.php',
+                            'line' => 0,
+                            'function' => '__construct'
+                        ]]
+                    ]),
+                    'breadcrumbs' => json_encode([]),
+                    'user_context' => json_encode([]),
+                    'request_context' => json_encode([
+                        'ip' => $data['ip'] ?? 'unknown',
+                        'via' => 'offline_emergency_queue'
+                    ]),
+                    'device_context' => json_encode([]),
+                    'tags' => json_encode(['automated' => true, 'subsystem' => 'core']),
+                    'extra' => json_encode([
+                        'trace' => $data['trace'] ?? 'No trace provided',
+                        'offline_time' => isset($data['timestamp']) ? date('Y-m-d H:i:s', (int)$data['timestamp']) : 'unknown'
+                    ]),
+                    'environment' => $environment,
+                    'release_version' => 'unknown',
+                    'user_id' => null,
+                    'ip_address' => $data['ip'] ?? null,
+                    'user_agent' => 'Backend Internal Sync',
+                ]);
+            }
+        } catch (\Throwable $ignore) {
+            // Never crash the dashboard even if restore fails
+        }
     }
 }

@@ -28,7 +28,7 @@ class GeoIPService extends \App\Services\BaseService
     public function __construct(
         Database $db,
         Cache $cache,
-        AntiFraudModel $model,
+        IpAndDeviceModel $model,
         RiskPolicyService $policy,
         LoggerInterface $logger
     ) {
@@ -37,7 +37,7 @@ class GeoIPService extends \App\Services\BaseService
         $this->cache = $cache;
         $this->model = $model;
         $this->policy = $policy;
-        $this->maxmindLicenseKey = env('MAXMIND_LICENSE_KEY', '');
+        $this->maxmindLicenseKey = config('services.geoip.maxmind_license_key', '');
         $this->databasePath = dirname(__DIR__, 2) . '/storage/geoip/';
         
         // بررسی وجود MaxMind

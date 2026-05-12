@@ -21,8 +21,8 @@ class JibitInquiryAdapter implements BankInquiryAdapter
     {
         $this->logger = $logger;
         // دریافت متغیرهای اتصال از .env
-        $this->apiKey = env('JIBIT_API_KEY');
-        $this->apiSecret = env('JIBIT_API_SECRET');
+        $this->apiKey = config('services.jibit.api_key');
+        $this->apiSecret = config('services.jibit.api_secret');
     }
 
     /**

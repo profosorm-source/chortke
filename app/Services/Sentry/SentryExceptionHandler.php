@@ -102,8 +102,8 @@ class SentryExceptionHandler
     private function displayErrorPage(\Throwable $exception): void
     {
         http_response_code(500);
-        $appEnv = $_ENV['APP_ENV'] ?? 'production';
-        $isDebug = (bool)($_ENV['APP_DEBUG'] ?? false);
+        $appEnv = config('app.env', 'production');
+        $isDebug = (bool)config('app.debug', false);
         
         if ($appEnv === 'production' && !$isDebug) {
             $errorView = dirname(__DIR__, 3) . '/views/errors/500.php';
@@ -119,7 +119,7 @@ class SentryExceptionHandler
 
     private function fallbackDisplay(\Throwable $exception): void
     {
-        $appEnv = $_ENV['APP_ENV'] ?? 'production';
+        $appEnv = config('app.env', 'production');
         if ($appEnv !== 'production') {
             echo '<h1>Error</h1><p>' . e($exception->getMessage()) . '</p>';
         } else {
