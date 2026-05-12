@@ -31,6 +31,7 @@ class LogService extends BaseService
     private SystemLog $systemLog;
     private SecurityLog $securityLog;
     private PerformanceLog $performanceLog;
+    private array $logBuffer = []; // M24 Fix: بافر مرکزی موقت جهت ذخیره‌سازی انباشته لاگ‌ها
     
     // PSR-3 Level Mapping
     private const LEVEL_MAP = [
@@ -99,6 +100,9 @@ class LogService extends BaseService
         if (!is_dir($this->logDir)) {
             @mkdir($this->logDir, 0755, true);
         }
+        
+        // M24 Fix: اتصال هوشمند رویداد Shutdown جهت تخلیه خودکار لاگ‌ها به دیتابیس در انتهای ریکوئست
+        register_shutdown_function([$this, 'flush']);
     }
 
     /**
@@ -120,13 +124,15 @@ class LogService extends BaseService
             $metadataJson = json_encode(['truncated' => true, 'original_size' => strlen($metadataJson)], JSON_UNESCAPED_UNICODE);
         }
         
-        $this->activityLog->create([
+        // M24 Fix: بافر کردن اطلاعات فعالیت بجای درج مستقیم سنگین دیتابیس
+        $this->bufferLog('activity', [
             'user_id'     => $userId,
             'action'      => $this->sanitizeString($action, 100),
             'description' => $this->sanitizeString($description, 500),
             'metadata'    => $metadataJson,
             'ip_address'  => $enriched['ip'] ?? null,
             'user_agent'  => $enriched['user_agent'] ?? null,
+            'created_at'  => date('Y-m-d H:i:s'),
         ]);
     }
 
@@ -151,10 +157,12 @@ class LogService extends BaseService
                 $contextJson = json_encode(['truncated' => true, 'original_size' => strlen($contextJson)], JSON_UNESCAPED_UNICODE);
             }
 
-            $this->performanceLog->insert([
-                'metric' => $this->sanitizeString($metric, 100),
-                'value' => $value,
-                'context' => $contextJson,
+            // M24 Fix: بافر کردن مقادیر Performance
+            $this->bufferLog('performance', [
+                'metric'     => $this->sanitizeString($metric, 100),
+                'value'      => $value,
+                'context'    => $contextJson,
+                'created_at' => date('Y-m-d H:i:s'),
             ]);
         } catch (\Throwable $e) {
     $this->writeToFile(self::TYPE_SYSTEM, 'ERROR', 'log_service.performance.failed', [
@@ -307,11 +315,9 @@ class LogService extends BaseService
                 'user_agent' => $context['user_agent'] ?? null,
             ];
 
-            if ($type === self::TYPE_SECURITY) {
-                $this->securityLog->insert($data);
-            } else {
-                $this->systemLog->insert($data);
-            }
+            // M24 Fix: هدایت لاگ امنیتی/سیستمی به صف فله‌ای
+            $data['created_at'] = date('Y-m-d H:i:s');
+            $this->bufferLog($type === self::TYPE_SECURITY ? 'security' : 'system', $data);
         } catch (\Throwable $e) {
             $this->fallbackLog('log_service.write_to_database.failed', [
     'error' => $e->getMessage(),
@@ -533,6 +539,93 @@ class LogService extends BaseService
         } catch (\Throwable $e) {
             $this->fallbackLog('log_service.query_security_logs.failed', ['error' => $e->getMessage()]);
             return ['rows' => [], 'total' => 0, 'page' => $page, 'perPage' => $perPage, 'totalPages' => 0];
+        }
+    }
+
+    /**
+     * M24 Fix: درج اطلاعات در بافر موقت حافظه
+     */
+    private function bufferLog(string $type, array $data): void
+    {
+        $this->logBuffer[] = ['type' => $type, 'data' => $data];
+        
+        // فلاش کردن زودهنگام جهت مسدود کردن انباشت رم در سرویس‌های دائمی (CLI Daemons)
+        if (count($this->logBuffer) >= 25) {
+            $this->flush();
+        }
+    }
+
+    /**
+     * M24 Fix: ذخیره‌سازی هوشمند و اتمیک گروهی لاگ‌ها
+     */
+    public function flush(): void
+    {
+        if (empty($this->logBuffer)) {
+            return;
+        }
+
+        $grouped = [
+            'activity_logs'    => [],
+            'performance_logs' => [],
+            'security_logs'    => [],
+            'system_logs'      => []
+        ];
+
+        foreach ($this->logBuffer as $item) {
+            $tbl = match($item['type']) {
+                'activity'    => 'activity_logs',
+                'performance' => 'performance_logs',
+                'security'    => 'security_logs',
+                default       => 'system_logs'
+            };
+            $grouped[$tbl][] = $item['data'];
+        }
+
+        // پاکسازی بافر بلافاصله برای مهار هرگونه خطای چرخه‌ای
+        $this->logBuffer = [];
+
+        foreach ($grouped as $table => $rows) {
+            if (!empty($rows)) {
+                $this->insertMany($table, $rows);
+            }
+        }
+    }
+
+    /**
+     * M24 Fix: درج چندسطری فله‌ای (Bulk Multi-row Insert) در دیتابیس با یک کوئری خام و پرسرعت
+     */
+    private function insertMany(string $table, array $rows): void
+    {
+        if (empty($rows)) return;
+
+        // استخراج تمام نام ستون‌ها بر مبنای رکورد نخست
+        $columns = array_keys($rows[0]);
+        $escapedColumns = array_map(fn($col) => "`" . str_replace("`", "", $col) . "`", $columns);
+        $colList = implode(', ', $escapedColumns);
+
+        $sql = "INSERT INTO `{$table}` ({$colList}) VALUES ";
+        $valuesSql = [];
+        $params = [];
+
+        foreach ($rows as $row) {
+            $placeholders = array_fill(0, count($columns), '?');
+            $valuesSql[] = "(" . implode(', ', $placeholders) . ")";
+            
+            foreach ($columns as $col) {
+                $params[] = $row[$col] ?? null;
+            }
+        }
+
+        $sql .= implode(', ', $valuesSql);
+
+        try {
+            $this->db->query($sql, $params);
+        } catch (\Throwable $e) {
+            $this->fallbackLog('log_service.bulk_insert_many.failed', [
+                'table' => $table,
+                'count' => count($rows),
+                'error' => $e->getMessage()
+            ]);
         }
     }
 }
