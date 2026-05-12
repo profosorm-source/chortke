@@ -130,4 +130,47 @@ class Setting extends Model
         self::$memCache = [];
         Cache::getInstance()->forget(self::CACHE_KEY);
     }
+    /**
+     * دریافت با کلید
+     */
+    public function findByKey(string $key): ?object
+    {
+        $sql = "SELECT * FROM " . static::$table . " WHERE `key` = ? LIMIT 1";
+        $row = $this->db->query($sql, [$key])->fetch(\PDO::FETCH_OBJ);
+        return $row ?: null;
+    }
+
+    /**
+     * دریافت بر اساس دسته
+     */
+    public function getByCategory(string $category): array
+    {
+        $sql = "SELECT * FROM " . static::$table . " WHERE category = ? ORDER BY `key` ASC";
+        return $this->db->query($sql, [$category])->fetchAll(\PDO::FETCH_OBJ);
+    }
+
+    /**
+     * دریافت همه کامل (به همراه جزئیات رکوردها)
+     */
+    public function getAll(): array
+    {
+        $sql = "SELECT * FROM " . static::$table . " ORDER BY category, `key`";
+        return $this->db->query($sql)->fetchAll(\PDO::FETCH_OBJ);
+    }
+
+    /**
+     * آپدیت مقدار بر اساس id
+     */
+    public function updateValueById(int $id, string $value): bool
+    {
+        $sql = "UPDATE " . static::$table . " SET value = ?, updated_at = NOW() WHERE id = ?";
+        $stmt = $this->db->query($sql, [$value, $id]);
+        
+        $this->clearCache();
+        
+        if ($stmt instanceof \PDOStatement) {
+            return $stmt->rowCount() >= 0;
+        }
+        return (bool)$stmt;
+    }
 }

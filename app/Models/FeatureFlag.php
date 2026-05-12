@@ -5,6 +5,8 @@ namespace App\Models;
 use Core\Model;
 use Core\Database;
 use Core\Request;
+use App\Events\FeatureFlagChanged;
+use App\Services\Notification\NotificationService;
 
 /**
  * FeatureFlag Model - Consolidated Version با Redis Support و Targeting پیشرفته
@@ -20,15 +22,22 @@ class FeatureFlag extends Model
     private \Core\Cache $cache;
     protected \App\Contracts\LoggerInterface $logger;
     private Request $request;
+    private ?NotificationService $notificationService;
     private bool $useRedis = false;
     
-
+    private const ALLOWED_UPDATE_FIELDS = [
+        'enabled', 'description', 'enabled_percentage',
+        'enabled_for_roles', 'enabled_for_users', 'metadata',
+        'enabled_from', 'enabled_until', 'depends_on',
+        'environments', 'priority', 'tags',
+    ];
     
     public function __construct(
         ?Database $db = null, 
         ?\App\Contracts\LoggerInterface $logger = null, 
         ?\Core\Cache $cache = null, 
-        ?Request $request = null
+        ?Request $request = null,
+        ?NotificationService $notificationService = null
     )
     {
         parent::__construct($db);
@@ -40,6 +49,7 @@ class FeatureFlag extends Model
             public function critical(string $event, array $context = []): void {}
         };
         $this->request = $request ?? new Request();
+        $this->notificationService = $notificationService;
 
         // Initialize Cache (with Redis support if available)
         $this->cache = $cache ?? \Core\Cache::getInstance();
@@ -120,15 +130,8 @@ class FeatureFlag extends Model
             $this->cache->delete('ff:all_features');
         }
         
-        // Clear Database cache safely using DELETE within a Transaction
-        try {
-            $this->db->beginTransaction();
-            $this->db->query("DELETE FROM feature_flag_cache");
-            $this->db->commit();
-        } catch (\Throwable $e) {
-            $this->db->rollback();
-            throw $e;
-        }
+        // Clear Database cache safely using DELETE
+        $this->db->query("DELETE FROM feature_flag_cache");
     }
 
     /**
@@ -258,7 +261,7 @@ class FeatureFlag extends Model
             return true;
         }
         
-        $currentEnv = getenv('APP_ENV') ?: 'production';
+        $currentEnv = env('APP_ENV', 'production');
         
         return in_array($currentEnv, $environments, true);
     }
@@ -467,6 +470,14 @@ class FeatureFlag extends Model
         
         if ($result) {
             $this->clearCache();
+            
+            $this->dispatchEvent(new FeatureFlagChanged(
+                $name,
+                'toggled',
+                $oldValues,
+                ['enabled' => $newStatus],
+                $this->request->getUser()?->id ?? 0
+            ));
         }
         
         return (bool)$result;
@@ -491,6 +502,22 @@ class FeatureFlag extends Model
         $params = [];
         
         foreach ($data as $key => $value) {
+            if (!in_array($key, self::ALLOWED_UPDATE_FIELDS, true)) {
+                throw new \InvalidArgumentException("Invalid field for update: $key");
+            }
+            
+            if (in_array($key, ['enabled_for_roles', 'enabled_for_users', 'metadata', 'depends_on', 'environments', 'tags'])) {
+                $value = json_encode($value);
+            }
+            
+            if ($key === 'enabled_percentage') {
+                $value = max(0, min(100, (int)$value));
+            }
+            
+            if ($key === 'enabled') {
+                $value = $value ? 1 : 0;
+            }
+            
             $fields[] = "$key = ?";
             $params[] = $value;
         }
@@ -508,6 +535,14 @@ class FeatureFlag extends Model
         
         if ($result) {
             $this->clearCache();
+            
+            $this->dispatchEvent(new FeatureFlagChanged(
+                $name,
+                'updated',
+                $oldValues,
+                $data,
+                $this->request->getUser()?->id ?? 0
+            ));
         }
         
         return (bool)$result;
@@ -515,7 +550,38 @@ class FeatureFlag extends Model
     
     public function create(array $data): bool
     {
-
+        $required = ['name', 'description'];
+        foreach ($required as $field) {
+            if (empty($data[$field])) {
+                throw new \InvalidArgumentException("Field '$field' is required");
+            }
+        }
+        
+        if ($this->findByName($data['name'])) {
+            throw new \InvalidArgumentException("Feature '{$data['name']}' already exists");
+        }
+        
+        $defaults = [
+            'enabled' => false,
+            'enabled_percentage' => 100,
+            'enabled_for_roles' => null,
+            'enabled_for_users' => null,
+            'metadata' => null,
+            'enabled_from' => null,
+            'enabled_until' => null,
+            'depends_on' => null,
+            'environments' => null,
+            'priority' => 0,
+            'tags' => null,
+        ];
+        
+        $data = array_merge($defaults, $data);
+        
+        foreach (['enabled_for_roles', 'enabled_for_users', 'metadata', 'depends_on', 'environments', 'tags'] as $field) {
+            if (is_array($data[$field])) {
+                $data[$field] = json_encode($data[$field]);
+            }
+        }
         
         $sql = "INSERT INTO feature_flags 
                 (name, description, enabled, enabled_percentage, enabled_for_roles, enabled_for_users, 
@@ -541,6 +607,14 @@ class FeatureFlag extends Model
         
         if ($result) {
             $this->clearCache();
+            
+            $this->dispatchEvent(new FeatureFlagChanged(
+                $data['name'],
+                'created',
+                [],
+                $data,
+                $this->request->getUser()?->id ?? 0
+            ));
         }
         
         return (bool)$result;
@@ -561,12 +635,39 @@ class FeatureFlag extends Model
         
         if ($result) {
             $this->clearCache();
+            
+            $this->dispatchEvent(new FeatureFlagChanged(
+                $name,
+                'deleted',
+                $oldValues,
+                [],
+                $this->request->getUser()?->id ?? 0
+            ));
         }
         
         return (bool)$result;
     }
     
-
+    private function dispatchEvent(FeatureFlagChanged $event): void
+    {
+        try {
+            // M35: Only use injected NotificationService, no Container fallback
+            if (!$this->notificationService) {
+                $this->logger->warning('feature_flag.notification_service_not_available', [
+                    'event' => $event->featureName,
+                ]);
+                return;
+            }
+            
+            $listener = new \App\Listeners\LogFeatureFlagChange($this->db, $this->logger, $this->notificationService);
+            $listener->handle($event);
+        } catch (\Exception $e) {
+            $this->logger->error('feature_flag.event_dispatch_failed', [
+                'channel' => 'feature_flag',
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
     
     public function getStats(): array
     {

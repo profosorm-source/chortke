@@ -583,4 +583,10 @@ class VelocityAndScoreModel extends Model
         
         return $stmt instanceof \PDOStatement ? $stmt->rowCount() >= 0 : (bool) $stmt;
     }
+
+    public function getUserTimezone(int $userId): string
+    {
+        $row = $this->db->fetch("SELECT timezone FROM users WHERE id = ? LIMIT 1", [$userId]);
+        return (string)($row->timezone ?? 'Asia/Tehran');
+    }
 }
