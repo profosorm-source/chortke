@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\DirectMessage;
 use Core\Redis;
+use App\Services\SettingService;
 
 use App\Contracts\LoggerInterface;
 /**
@@ -24,6 +25,7 @@ class DirectMessageService extends \App\Services\BaseService
 {
     private DirectMessage $directMessageModel;
     private Redis $redis;
+    private SettingService $settingService;
 
     // محدودیت‌های سرویس
     private const MAX_MESSAGE_LENGTH = 5000;
@@ -37,11 +39,12 @@ class DirectMessageService extends \App\Services\BaseService
     private const TYPING_PREFIX = 'typing:';
     private const UNREAD_PREFIX = 'unread:';
 
-    public function __construct(DirectMessage $directMessageModel, LoggerInterface $logger, Redis $redis)
+    public function __construct(DirectMessage $directMessageModel, LoggerInterface $logger, Redis $redis, SettingService $settingService)
     {
         parent::__construct($logger);
         $this->directMessageModel = $directMessageModel;
         $this->redis = $redis;
+        $this->settingService = $settingService;
     }
 
     /**
@@ -60,8 +63,9 @@ class DirectMessageService extends \App\Services\BaseService
                 return ['error' => 'پیام نمی‌تواند خالی باشد'];
             }
 
-            if (strlen($message) > self::MAX_MESSAGE_LENGTH) {
-                return ['error' => sprintf('پیام نباید بیش از %d کاراکتر باشد', self::MAX_MESSAGE_LENGTH)];
+            $maxLength = (int)$this->settingService->get('dm_max_message_length', self::MAX_MESSAGE_LENGTH);
+            if (mb_strlen($message) > $maxLength) {
+                return ['error' => sprintf('پیام نباید بیش از %d کاراکتر باشد', $maxLength)];
             }
 
             if ($senderId === $recipientId) {
@@ -307,7 +311,8 @@ class DirectMessageService extends \App\Services\BaseService
         $key = 'rate_limit:messages:' . $userId;
         $currentCount = (int)($this->redis->get($key) ?? 0);
 
-        if ($currentCount >= 10) { // 10 پیام در دقیقه
+        $limit = (int)$this->settingService->get('dm_rate_limit_per_min', 10);
+        if ($currentCount >= $limit) { // دینامیک پیام در دقیقه
             return false;
         }
 
