@@ -9,6 +9,7 @@ use ErrorException;
 use Core\Exceptions\NotFoundException;
 use Core\Exceptions\UnauthorizedException;
 use Core\Exceptions\ValidationException;
+use Core\Exceptions\SecurityException;
 
 class ExceptionHandler
 {
@@ -672,6 +673,12 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 $contract = \App\Services\ErrorContract::unauthorized(
                     $exception->getMessage() ?: 'احراز هویت لازم است'
                 );
+            } elseif ($exception instanceof \Core\Exceptions\SecurityException) {
+                // ✅ Fix L1: هندل کردن SecurityException برای CSRF و سایر تهدیدات امنیتی
+                $contract = \App\Services\ErrorContract::internalError(
+                    $exception->getMessage() ?: 'بررسی امنیتی ناموفق'
+                );
+                http_response_code(403);
             } elseif ($exception instanceof \Core\Exceptions\NotFoundException) {
                 $contract = \App\Services\ErrorContract::notFound(
                     $exception->getMessage() ?: 'منبع یافت نشد'
@@ -701,6 +708,10 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
             } elseif ($exception instanceof \Core\Exceptions\UnauthorizedException) {
                 $statusCode = 401;
                 $message = $exception->getMessage() ?: 'احراز هویت لازم است';
+            } elseif ($exception instanceof \Core\Exceptions\SecurityException) {
+                // ✅ Fix L1: هندل SecurityException در fallback
+                $statusCode = 403;
+                $message = $exception->getMessage() ?: 'بررسی امنیتی ناموفق';
             } elseif ($exception instanceof \Core\Exceptions\NotFoundException) {
                 $statusCode = 404;
                 $message = $exception->getMessage() ?: 'آدرس یا منبع یافت نشد';

@@ -42,6 +42,14 @@ class UnauthorizedException extends AppException
     }
 }
 
+class SecurityException extends AppException
+{
+    public function __construct(string $message = 'Security validation failed', int $code = 403)
+    {
+        parent::__construct($message, $code);
+    }
+}
+
 class BusinessException extends AppException
 {
 }

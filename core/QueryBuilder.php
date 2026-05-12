@@ -87,6 +87,22 @@ class QueryBuilder
 
     /**
      * انتخاب به صورت Raw
+     * 
+     * ⚠️ Fix M5: مستندسازی سختگیرانه برای selectRaw
+     * 
+     * این متد خطرناک است و باید **فقط برای موارد خاصی** استفاده شود.
+     * 
+     * ✅ استفاده صحیح:
+     * $builder->selectRaw('COUNT(*) as total')  // توابع aggregate
+     * $builder->selectRaw('YEAR(created_at) as year')  // توابع تاریخی
+     * $builder->selectRaw('CONCAT(first_name, " ", last_name) as full_name')  // محاسبات ستون‌ها
+     * 
+     * ❌ استفاده نادرست (خطرناک):
+     * $builder->selectRaw($userInput)  // هرگز از input کاربر استفاده نکنید!
+     * $builder->selectRaw('* FROM users; DROP TABLE users;--')  // SQL Injection
+     * 
+     * @param string $expression فقط از مقادیر hard-coded استفاده کنید
+     * @return $this
      */
     public function selectRaw($expression)
     {
@@ -98,6 +114,24 @@ class QueryBuilder
 
     /**
      * شرط WHERE به صورت Raw
+     * 
+     * ⚠️ Fix M5: مستندسازی سختگیرانه برای whereRaw
+     * 
+     * این متد ریسک SQL Injection ایجاد می‌کند اگر از input کاربر استفاده کنید!
+     * 
+     * ✅ استفاده صحیح:
+     * $builder->whereRaw('YEAR(created_at) = ?', [2024])  // توابع تاریخی
+     * $builder->whereRaw('amount > salary * 1.5')  // مقایسه‌های پیچیده
+     * $builder->whereRaw('JSON_EXTRACT(data, "$.role") = ?', ['admin'])  // JSON queries
+     * 
+     * ❌ استفاده نادرست (خطرناک):
+     * $builder->whereRaw("name = '" . $userName . "'")  // SQL Injection!
+     * $builder->whereRaw("id = $userId OR 1=1")  // تاثیر منطق
+     * $builder->whereRaw($userProvidedFilter)  // هیچگاه نپذیرید!
+     * 
+     * @param string $sql فقط از SQL hard-coded استفاده کنید
+     * @param array $bindings placeholder مقادیر برای ایمن‌سازی
+     * @return $this
      */
     public function whereRaw($sql, array $bindings = [])
     {
@@ -112,6 +146,22 @@ class QueryBuilder
 
     /**
      * مرتب‌سازی به صورت Raw
+     * 
+     * ⚠️ Fix M5: مستندسازی سختگیرانه برای orderByRaw
+     * 
+     * این متد نیز ریسک SQL Injection دارد.
+     * 
+     * ✅ استفاده صحیح:
+     * $builder->orderByRaw('RAND()')  // ترتیب تصادفی
+     * $builder->orderByRaw('FIELD(status, "pending", "active", "completed")')  // ترتیب سفارشی
+     * $builder->orderByRaw('ABS(amount) DESC')  // ترتیب محاسبه‌شده
+     * 
+     * ❌ استفاده نادرست:
+     * $builder->orderByRaw($userInput)  // خطرناک!
+     * $builder->orderByRaw("id; DROP TABLE users;--")  // SQL Injection
+     * 
+     * @param string $sql فقط از SQL hard-coded استفاده کنید
+     * @return $this
      */
     public function orderByRaw($sql)
     {

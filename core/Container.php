@@ -333,6 +333,70 @@ class Container
         return isset($this->bindings[$abstract]) || array_key_exists($abstract, $this->singletons);
     }
 
+    /**
+     * اجرای یک Closure یا Callable با DI خودکار
+     * 
+     * ✅ Fix L2: پشتیبانی DI برای Closureها در روت‌ها
+     * 
+     * @param callable $callback
+     * @param array $params پارامترهای اضافی برای پاس کردن
+     * @return mixed
+     */
+    public function call(callable $callback, array $params = []): mixed
+    {
+        if (!($callback instanceof \Closure)) {
+            // اگر غیر Closure است، فقط اجرا کن
+            return $callback(...$params);
+        }
+
+        // برای Closure: reflection برای دریافت پارامترهای type-hint شده
+        $reflectionFunc = new \ReflectionFunction($callback);
+        $parameters = $reflectionFunc->getParameters();
+        
+        $resolvedArgs = [];
+        $paramIndex = 0;
+
+        foreach ($parameters as $param) {
+            $type = $param->getType();
+
+            // اگر مطابقت دارد با route params
+            if (isset($params[$param->getName()])) {
+                $resolvedArgs[] = $params[$param->getName()];
+                continue;
+            }
+
+            // اگر type-hint دارد، سعی کن DI بکن
+            if ($type instanceof \ReflectionNamedType && !$type->isBuiltin()) {
+                try {
+                    $resolvedArgs[] = $this->make($type->getName());
+                    continue;
+                } catch (\RuntimeException $e) {
+                    // اگر نتوانست resolve کند
+                    if ($param->allowsNull()) {
+                        $resolvedArgs[] = null;
+                        continue;
+                    }
+                    throw $e;
+                }
+            }
+
+            // اگر route param است
+            if ($paramIndex < count($params)) {
+                $resolvedArgs[] = array_values($params)[$paramIndex++];
+            } elseif ($param->isDefaultValueAvailable()) {
+                $resolvedArgs[] = $param->getDefaultValue();
+            } elseif ($param->allowsNull()) {
+                $resolvedArgs[] = null;
+            } else {
+                throw new \RuntimeException(
+                    "[Container] Cannot resolve parameter '\${$param->getName()}' in closure"
+                );
+            }
+        }
+
+        return $callback(...$resolvedArgs);
+    }
+
     public function forget(string $abstract): void
     {
         unset($this->bindings[$abstract], $this->singletons[$abstract]);

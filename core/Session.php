@@ -224,18 +224,26 @@ private function invalidateSession(): void
 
     private function generateFingerprint(): string
     {
-        // FIX C-5: قبلاً فقط از IP استفاده می‌شد که دو مشکل داشت:
-        // ۱. کاربران پشت NAT (شرکت، دفتر) IP یکسان دارند — fingerprint تکراری
-        // ۲. کاربران موبایل IP تغییر می‌دهند — session باطل می‌شد
+        // ✅ Fix M4: بهبود اثرانگشت سشن برای مقاومت در برابر تغییرات شبکه موبایلی
+        // 
+        // مشکلات قبلی:
+        // ۱. کاربران موبایل با تغییر شبکه (WiFi→4G) IP تغییر می‌دهند و سشن باطل می‌شود
+        // ۲. کاربران پشت NAT/Proxy IP یکسان دارند اما دستگاه‌های مختلفی هستند
         //
-        // راه‌حل: ترکیب IP + User-Agent hash.
-        // User-Agent در طول یک session ثابت است اما بین دستگاه‌ها متفاوت.
-        // IP را با /24 subnet mask می‌گیریم تا تغییرات جزئی موبایل مشکل نسازد.
+        // راه‌حل:
+        // - از IP subnet /24 استفاده (نه IP کامل)
+        // - Accept-Language برای شناسایی بیشتر (نسبتاً پایدار)
+        // - HTTP_ACCEPT برای نشانه‌های اضافی
+        // - Secondary token: PHPSESSID خود پایدار است
+        
         $ip        = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
         $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+        $language  = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? 'unknown';
+        $accept    = substr($_SERVER['HTTP_ACCEPT'] ?? 'unknown', 0, 50); // فقط 50 کاراکتر اول
+        $sessionId = session_id() ?? 'none';
 
         // برای IPv4: فقط سه اکتت اول (subnet /24) تا تغییر IP موبایل tolerate شود
-        // برای IPv6: 48 بیت اول
+        // برای IPv6: prefix را نگه می‌داریم
         $ipMasked = $ip;
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             $parts    = explode('.', $ip);
@@ -246,8 +254,11 @@ private function invalidateSession(): void
         }
 
         return hash('sha256', json_encode([
-            'ip_subnet'  => $ipMasked,
-            'user_agent' => $userAgent,
+            'ip_subnet'      => $ipMasked,      // واقعاً پایدار برای موبایل (tolerate تغییرات شبکه)
+            'user_agent'     => $userAgent,     // نسبتاً پایدار برای یک دستگاه
+            'language'       => $language,      // پایدار در طول session
+            'accept_types'   => $accept,        // سیگنال اضافی
+            'session_anchor'  => $sessionId,    // anchor ثانویه
         ]));
     }
 

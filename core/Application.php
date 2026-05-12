@@ -13,6 +13,8 @@ class Application
     public Response  $response;
     public Session   $session;
     public array $config;
+    private ?object $cachedUser = null;
+    private bool $userResolved = false;
 
     private function __construct()
     {
@@ -108,22 +110,36 @@ class Application
         $c->bind(\App\Models\User::class);
     }
     /**
-     * دریافت کاربر لاگین‌شده
+     * دریافت کاربر لاگین‌شده (کش‌شده در هر request)
      *
-     * از Container → User Model می‌خواند (نه مستقیم از DB)
+     * ✅ Fix M1: کش کردن شیء کاربر پس از اولین بازیابی
+     * - اولین فراخوانی: کوئری دیتابیس
+     * - فراخوانی‌های بعدی: از حافظه موضعی
+     * - این عملکرد را در صفحات پیچیده بهبود می‌بخشد
      */
     public function user(): ?object
     {
+        // اگر قبلاً بررسی شده، همان نتیجه‌ی ذخیره‌شده را برگردان
+        if ($this->userResolved) {
+            return $this->cachedUser;
+        }
+
         $userId = $this->session->get('user_id');
         if (!$userId) {
+            $this->userResolved = true;
+            $this->cachedUser = null;
             return null;
         }
+
         try {
             $userModel = $this->container->make(\App\Models\User::class);
-            return $userModel->find((int) $userId);
+            $this->cachedUser = $userModel->find((int) $userId);
         } catch (\Throwable $e) {
-    return null;
-}
+            $this->cachedUser = null;
+        }
+
+        $this->userResolved = true;
+        return $this->cachedUser;
     }
 
     public static function getInstance(): self

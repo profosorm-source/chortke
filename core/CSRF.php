@@ -66,15 +66,12 @@ class CSRF
                 }
             }
 
-            if (function_exists('is_ajax') && is_ajax()) {
-                http_response_code(403);
-                header('Content-Type: application/json; charset=utf-8');
-                echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
-            } else {
-                http_response_code(403);
-                echo 'CSRF token validation failed';
-            }
-            exit;
+            // ✅ Fix L1: پرتاب SecurityException به جای exit مستقیم
+            // این امکان می‌دهد ExceptionHandler بتواند پاسخ متناسب را هندل کند
+            throw new \Core\Exceptions\SecurityException(
+                'CSRF token validation failed',
+                403
+            );
         }
     }
 

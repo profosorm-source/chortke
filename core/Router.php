@@ -244,8 +244,8 @@ class Router
     {
         // ── Closure action ───────────────────────────────────────
         if ($action instanceof \Closure) {
-            $args = array_values($params);
-            return call_user_func_array($action, $args);
+            // ✅ Fix L2: اجرای Closure با DI خودکار از طریق Container::call
+            return $this->container->call($action, $params);
         }
 
         // ── [ControllerClass, 'method'] ──────────────────────────
