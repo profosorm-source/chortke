@@ -10,6 +10,7 @@ use App\Models\Transaction;
 use Core\Database;
 use App\Services\AuditTrail;
 use App\Services\LedgerService;
+use App\Services\SettingService;
 use App\Contracts\WalletServiceInterface;
 
 class WalletService extends \App\Services\BaseService implements WalletServiceInterface
@@ -25,6 +26,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     private ?LedgerService $ledgerService = null;
     private AuditTrail $auditTrail;
     private DistributedLockService $lockService;
+    private SettingService $settingService;
 
     public function __construct(
         Database $db,
@@ -34,7 +36,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         LoggerInterface $logger,
         AuditTrail $auditTrail,
         LedgerService $ledgerService,
-        DistributedLockService $lockService
+        DistributedLockService $lockService,
+        SettingService $settingService
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -44,6 +47,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $this->auditTrail = $auditTrail;
         $this->ledgerService = $ledgerService;
         $this->lockService = $lockService;
+        $this->settingService = $settingService;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -129,7 +133,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             throw new \InvalidArgumentException('مبلغ باید بیشتر از صفر باشد');
         }
 
-        $minAmount = ($currency === 'usdt') ? 1 : 1000;
+        $minAmount = ($currency === 'usdt') 
+            ? (float)$this->settingService->get('min_deposit_usdt', 1.0) 
+            : (float)$this->settingService->get('min_deposit_irt', 1000.0);
         if ($amount < $minAmount) {
             throw new \InvalidArgumentException("حداقل مبلغ واریز {$minAmount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " است");
         }
@@ -351,7 +357,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             throw new \InvalidArgumentException('مبلغ باید بیشتر از صفر باشد');
         }
 
-        $minAmount = ($currency === 'usdt') ? 5 : 10000;
+        $minAmount = ($currency === 'usdt') 
+            ? (float)$this->settingService->get('min_withdraw_usdt', 5.0) 
+            : (float)$this->settingService->get('min_withdraw_irt', 10000.0);
         if ($amount < $minAmount) {
             throw new \InvalidArgumentException("حداقل مبلغ برداشت {$minAmount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " است");
         }
@@ -792,7 +800,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             return $result;
         }
 
-        $minWithdrawal = ($currency === 'usdt') ? 5.0 : 10000.0;
+        $minWithdrawal = ($currency === 'usdt') 
+            ? (float)$this->settingService->get('min_withdraw_usdt', 5.0) 
+            : (float)$this->settingService->get('min_withdraw_irt', 10000.0);
         if (bccomp((string)$amount, (string)$minWithdrawal, 2) < 0) {
             $result['message'] = 'حداقل مبلغ برداشت ' . number_format($minWithdrawal) . ' ' . ($currency === 'usdt' ? 'USDT' : 'تومان') . ' است';
             return $result;

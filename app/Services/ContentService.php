@@ -628,7 +628,7 @@ EOT;
             'tax_percent' => (float)$this->settingService->get('content_tax_percent', 9),
             'min_months' => ContentSubmission::MIN_MONTHS_FOR_REVENUE,
             'allowed_platforms' => ContentSubmission::ALLOWED_PLATFORMS,
-            'max_pending' => self::MAX_PENDING_SUBMISSIONS,
+            'max_pending' => (int)$this->settingService->get('content_max_pending_submissions', 1),
         ];
     }
 
@@ -642,10 +642,11 @@ EOT;
      */
     private function hasMaxPendingSubmissions(int $userId): bool
     {
+        $limit = (int)$this->settingService->get('content_max_pending_submissions', 1);
         return $this->submissionModel->countByUser(
             $userId,
             ContentSubmission::STATUS_PENDING
-        ) >= self::MAX_PENDING_SUBMISSIONS;
+        ) >= $limit;
     }
 
     /**
@@ -840,20 +841,24 @@ EOT;
         $baseUserPercent = 100 - $siteSharePercent;
 
         // Professional tier
+        $profBonus = (float)$this->settingService->get('content_professional_bonus_percent', 10);
+        $profMax   = (float)$this->settingService->get('content_professional_max_percent', 80);
         if ($activeMonths >= self::PROFESSIONAL_TIER_MONTHS && 
             $totalSubmissions >= self::PROFESSIONAL_TIER_SUBMISSIONS) {
             return min(
-                $baseUserPercent + self::PROFESSIONAL_BONUS_PERCENT,
-                self::PROFESSIONAL_MAX_PERCENT
+                $baseUserPercent + $profBonus,
+                $profMax
             );
         }
 
         // Active tier
+        $actBonus = (float)$this->settingService->get('content_active_bonus_percent', 5);
+        $actMax   = (float)$this->settingService->get('content_active_max_percent', 75);
         if ($activeMonths >= self::ACTIVE_TIER_MONTHS && 
             $totalSubmissions >= self::ACTIVE_TIER_SUBMISSIONS) {
             return min(
-                $baseUserPercent + self::ACTIVE_BONUS_PERCENT,
-                self::ACTIVE_MAX_PERCENT
+                $baseUserPercent + $actBonus,
+                $actMax
             );
         }
 

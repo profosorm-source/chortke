@@ -12,14 +12,14 @@ use App\Services\AntiFraud\SeoFraudDetector;
 use App\Services\WalletService;
 use App\Services\Shared\ReferralService;
 use Core\Database;
+use App\Services\SettingService;
 
 use App\Contracts\LoggerInterface;
 use App\Models\User;
 
 class SeoService extends \App\Services\BaseService
 {
-    public const MAX_TASKS_PER_HOUR = 5;
-    public const MAX_IP_TASKS_PER_HOUR = 10;
+    private SettingService $settingService;
     private Ads $adModel;
     private SeoExecution $executionModel;
     private UserScoreService $scoreService;
@@ -42,9 +42,11 @@ class SeoService extends \App\Services\BaseService
         Database $db,
         \App\Services\Shared\RatingService $ratingService,
         LoggerInterface $logger,
-        User $userModel
+        User $userModel,
+        SettingService $settingService
     ) {
         parent::__construct($logger);
+        $this->settingService = $settingService;
         $this->adModel = $adModel;
         $this->executionModel = $executionModel;
         $this->scoreService = $scoreService;
@@ -95,16 +97,18 @@ class SeoService extends \App\Services\BaseService
         }
 
         // بررسی محدودیت ساعتی
+        $hourlyLimit = (int)$this->settingService->get('seo_max_tasks_per_hour', 5);
         $hourlyCount = $this->executionModel->countByUserLastHour($userId);
-        if ($hourlyCount >= self::MAX_TASKS_PER_HOUR) {
+        if ($hourlyCount >= $hourlyLimit) {
             $this->db->rollBack();
-            return ['success' => false, 'message' => 'حداکثر ' . self::MAX_TASKS_PER_HOUR . ' تسک در ساعت مجاز است. لطفاً کمی صبر کنید'];
+            return ['success' => false, 'message' => "حداکثر {$hourlyLimit} تسک در ساعت مجاز است. لطفاً کمی صبر کنید"];
         }
 
         // بررسی IP
         $ip = get_client_ip();
+        $ipLimit = (int)$this->settingService->get('seo_max_ip_tasks_per_hour', 10);
         $ipHourly = $this->executionModel->countByIPLastHour($ip);
-        if ($ipHourly >= self::MAX_IP_TASKS_PER_HOUR) {
+        if ($ipHourly >= $ipLimit) {
             $this->db->rollBack();
             return ['success' => false, 'message' => 'محدودیت IP. لطفاً بعداً تلاش کنید'];
         }

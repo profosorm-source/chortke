@@ -6,6 +6,7 @@ namespace App\Services;
 use Core\Database;
 
 use App\Contracts\LoggerInterface;
+use App\Services\SettingService;
 /**
  * UploadService — آپلود کاملاً امن (فقط تصویر)
  *
@@ -98,10 +99,12 @@ class UploadService extends \App\Services\BaseService
     private string $storageRoot;
     private string $publicRoot;
     private string $captchaRoot;
+    private SettingService $settingService;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, SettingService $settingService)
     {
         parent::__construct($logger);
+        $this->settingService = $settingService;
         $root = realpath(__DIR__ . '/../../') ?: (__DIR__ . '/../../');
         $root = rtrim($root, '/\\');
         $this->storageRoot = $root . '/storage/uploads/';
@@ -454,8 +457,11 @@ class UploadService extends \App\Services\BaseService
      */
     private function resolveMaxBytes(?int $requested): int
     {
+        $defaultMax = (int)$this->settingService->get('upload_default_max_bytes', self::DEFAULT_MAX_BYTES);
+        $absoluteMax = (int)$this->settingService->get('upload_absolute_max_bytes', self::ABSOLUTE_MAX_BYTES);
+
         if ($requested === null || $requested <= 0) {
-            return self::DEFAULT_MAX_BYTES;
+            return $defaultMax;
         }
 
         // اصلاح خطای رایج: upload($file, 'folder', [...], 2) به جای 2*1024*1024
@@ -463,7 +469,7 @@ class UploadService extends \App\Services\BaseService
             $requested = $requested * 1024 * 1024;
         }
 
-        return min($requested, self::ABSOLUTE_MAX_BYTES);
+        return min($requested, $absoluteMax);
     }
 
     /**
