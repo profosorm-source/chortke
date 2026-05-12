@@ -140,23 +140,13 @@ abstract class BaseController
 
     protected function json(bool $success, string $message = '', array $data = [], int $code = 200): void
     {
-        http_response_code($code);
-        if (!headers_sent()) {
-            header('Content-Type: application/json; charset=utf-8');
-        }
-        $flags = JSON_UNESCAPED_UNICODE;
-        if (config('app.debug', false)) {
-            $flags |= JSON_PRETTY_PRINT;
-        }
-        echo json_encode([
+        // H10 Fix: تجمیع متد اختصاصی کنترلر در شیء Response مرکزی جهت فعال شدن معماری Exception-based
+        $this->response->json([
             'success' => $success,
             'message' => $message,
             'data'    => $data,
-        ], $flags);
-        if (defined('TESTING') && TESTING === true) {
-            return;
-        }
-        exit;
+        ], $code);
+        // متد بالا اتوماتیک HttpResponseException شلیک کرده و اجرا را متوقف می‌کند.
     }
 
     protected function jsonSuccess(string $message = '', array $data = []): void

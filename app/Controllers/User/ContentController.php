@@ -342,7 +342,8 @@ class ContentController extends BaseUserController
      */
     private function validateCsrfToken(): bool
     {
-        $token = $this->request->header('X-CSRF-TOKEN');
+        // M16 Fix: همسان‌سازی اعتبارسنجی برای پشتیبانی همزمان از هدر استاندارد و هدر کلاینت‌های Axios/Vue
+        $token = $this->request->header('X-CSRF-TOKEN') ?? $this->request->header('X-XSRF-TOKEN');
         
         if (!$token) {
             return false;

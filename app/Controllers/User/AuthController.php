@@ -151,6 +151,29 @@ class AuthController extends BaseController
             }
         }
 
+        $captchaType = $this->loginRiskService->getCaptchaType('register');
+        if ($captchaType !== null) {
+            $captchaToken = trim((string)($_POST['captcha_token'] ?? ''));
+            $captchaResp  = trim((string)($_POST['captcha_response'] ?? ''));
+            $recaptchaResp = trim((string)($_POST['g-recaptcha-response'] ?? ''));
+
+            if ($captchaType === 'recaptcha_v2') {
+                if ($recaptchaResp === '' || !$this->captchaService->verify('', '', $recaptchaResp)) {
+                    $this->loginRiskService->recordFailure('register');
+                    $this->session->setFlash('error', 'کپچا نامعتبر است.');
+                    $this->response->redirect(url('register'));
+                    return;
+                }
+            } else {
+                if ($captchaToken === '' || $captchaResp === '' || !$this->captchaService->verify($captchaToken, $captchaResp)) {
+                    $this->loginRiskService->recordFailure('register');
+                    $this->session->setFlash('error', 'کپچا اشتباه است.');
+                    $this->response->redirect(url('register'));
+                    return;
+                }
+            }
+        }
+
         $data = $this->request->all();
         $errors = $this->authService->validateRegister($data);
         if (!empty($errors)) {

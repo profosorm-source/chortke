@@ -33,7 +33,7 @@ class FeatureFlagApiController extends BaseApiController
             $this->error('Missing API key', 401, 'API_KEY_MISSING');
         }
         
-        $validKey = env('FEATURE_FLAG_API_KEY');
+        $validKey = config('feature_flags.api_key', '');
         
         if (!$validKey || !hash_equals($validKey, $apiKey)) {
             $this->error('Invalid API key', 403, 'INVALID_API_KEY');

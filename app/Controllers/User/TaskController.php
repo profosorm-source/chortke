@@ -139,7 +139,7 @@ class TaskController extends BaseUserController
             return;
         }
 
-        $imagePath     = rtrim(env('UPLOAD_PATH', 'storage/uploads'), '/') . '/' . $proofPath;
+        $imagePath     = rtrim((string)config('upload.path', 'storage/uploads'), '/\\') . '/' . $proofPath;
         $proofMetadata = [];
         if (file_exists($imagePath)) {
             $proofMetadata['image_hash'] = md5_file($imagePath);
