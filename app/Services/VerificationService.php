@@ -8,6 +8,7 @@ use App\Contracts\LoggerInterface;
 use App\Models\InfluencerModel;
 use App\Models\InfluencerVerification;
 use Core\Database;
+use App\Services\SettingService;
 
 /**
  * VerificationService - Influencer verification without external APIs
@@ -25,16 +26,17 @@ class VerificationService extends \App\Services\BaseService
     private InfluencerModel $profileModel;
     private InfluencerVerification $verificationModel;
     private Database $db;
-    private const VERIFICATION_CODE_LENGTH = 8;
-    private const VERIFICATION_VALIDITY_HOURS = 24;
+    private SettingService $settingService;
 
     public function __construct(
         InfluencerModel $profileModel,
         InfluencerVerification $verificationModel,
         Database $db,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        SettingService $settingService
     ) {
         parent::__construct($logger);
+        $this->settingService = $settingService;
         $this->profileModel = $profileModel;
         $this->verificationModel = $verificationModel;
         $this->db = $db;
@@ -68,7 +70,8 @@ class VerificationService extends \App\Services\BaseService
 
             $this->verificationModel->expirePendingForProfile($profileId);
 
-            $expiresAt = date('Y-m-d H:i:s', strtotime('+' . self::VERIFICATION_VALIDITY_HOURS . ' hours'));
+            $hours = (int)$this->settingService->get('verification_otp_validity_hours', 24);
+            $expiresAt = date('Y-m-d H:i:s', strtotime('+' . $hours . ' hours'));
             $this->verificationModel->create($profileId, $code, $expiresAt);
 
             $this->logger->info('verification.code.generated', [
@@ -97,8 +100,11 @@ class VerificationService extends \App\Services\BaseService
     /**
      * Generate random alphanumeric code
      */
-    private function generateRandomCode(int $length = self::VERIFICATION_CODE_LENGTH): string
+    private function generateRandomCode(?int $length = null): string
     {
+        if ($length === null) {
+            $length = (int)$this->settingService->get('verification_otp_length', 8);
+        }
         $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         $code = '';
         

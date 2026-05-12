@@ -10,6 +10,7 @@ use App\Services\AntiFraud\SessionAnomalyService;
 use App\Services\AuditTrail;
 use App\Services\Notification\NotificationService;
 use App\Models\SocialTaskExecutionModel;
+use App\Services\SettingService;
 
 use App\Contracts\LoggerInterface;
 /**
@@ -19,7 +20,7 @@ use App\Contracts\LoggerInterface;
  */
 class SilentAntiFraudService extends \App\Services\BaseService
 {
-    private const RESTRICTION_LEVELS = [
+    private const DEFAULT_RESTRICTION_LEVELS = [
         'high'   => ['task_ratio' => 0.10, 'reward_ratio' => 0.50],
         'medium' => ['task_ratio' => 0.30, 'reward_ratio' => 0.70],
         'low'    => ['task_ratio' => 0.60, 'reward_ratio' => 0.90],
@@ -35,6 +36,7 @@ class SilentAntiFraudService extends \App\Services\BaseService
         private SocialTaskScoringService $scoringService,
         private AuditTrail $auditTrail,
         private NotificationService $notificationService,
+        private SettingService $settingService,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -105,19 +107,24 @@ class SilentAntiFraudService extends \App\Services\BaseService
         $trustScore = $this->trustService->get($userId);
         $riskScore  = (int)($riskResult['risk_score'] ?? 0);
 
-        if ($taskScore >= 70 && $trustScore >= 60 && $riskScore < 30) {
+        $minTaskScore  = (int)$this->settingService->get('antifraud_min_task_score', 70);
+        $minTrustScore = (int)$this->settingService->get('antifraud_min_trust_score', 60);
+        $maxRiskScore  = (int)$this->settingService->get('antifraud_max_risk_score', 30);
+        $softMinScore  = (int)$this->settingService->get('antifraud_soft_min_score', 40);
+
+        if ($taskScore >= $minTaskScore && $trustScore >= $minTrustScore && $riskScore < $maxRiskScore) {
             $decision   = 'approved';
             $payReward  = true;
             $giveScore  = true;
             $flagReview = false;
             $reason     = 'score_trust_risk_all_good';
-        } elseif ($taskScore >= 70) {
+        } elseif ($taskScore >= $minTaskScore) {
             $decision   = 'soft_approved';
             $payReward  = true;
             $giveScore  = true;
             $flagReview = false;
             $reason     = $trustScore < 60 ? 'low_trust' : 'high_risk';
-        } elseif ($taskScore >= 40) {
+        } elseif ($taskScore >= $softMinScore) {
             $decision   = 'soft_approved';
             $payReward  = true;
             $giveScore  = false;
@@ -176,9 +183,11 @@ class SilentAntiFraudService extends \App\Services\BaseService
             $level = 'clean';
         }
 
+        $levels = $this->settingService->get('antifraud_restriction_levels', self::DEFAULT_RESTRICTION_LEVELS);
+
         return array_merge(
             ['level' => $level, 'trust_score' => $trustScore],
-            self::RESTRICTION_LEVELS[$level]
+            $levels[$level] ?? $levels['clean'] ?? self::DEFAULT_RESTRICTION_LEVELS['clean']
         );
     }
 

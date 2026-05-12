@@ -12,6 +12,7 @@ use App\Services\StateMachineService;
 use App\Services\WebSocketService;
 use App\Models\SocialTaskModel;
 use App\Contracts\LoggerInterface;
+use App\Services\SettingService;
 /**
  * SocialTaskService
  *
@@ -23,7 +24,7 @@ class SocialTaskService extends \App\Services\BaseService
     private const EXCLUDED_PLATFORMS_FROM_SOCIAL = ['youtube'];
 
     // زمان انتظار (ثانیه) برای rate limit per task_type
-    private const TASK_EXPECTED_TIME = [
+    private const DEFAULT_TASK_EXPECTED_TIME = [
         'follow'       => 45,
         'like'         => 20,
         'comment'      => 90,
@@ -46,7 +47,8 @@ class SocialTaskService extends \App\Services\BaseService
         private StateMachineService $stateMachine,
         private WebSocketService $webSocket,
         private \App\Services\Shared\RatingService $ratingService,
-        private User $userModel
+        private User $userModel,
+        private SettingService $settingService
     ) {
         parent::__construct($this->logger);
     }
@@ -300,7 +302,8 @@ class SocialTaskService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'محدودیت تعداد تسک در ساعت'];
             }
 
-            $expectedTime = self::TASK_EXPECTED_TIME[$ad->task_type] ?? 60;
+            $expectedTimeMap = $this->settingService->get('social_task_expected_times', self::DEFAULT_TASK_EXPECTED_TIME);
+            $expectedTime = $expectedTimeMap[$ad->task_type] ?? 60;
 
             if ($this->model->decrementAdSlots($adId) < 1) {
                 $this->model->rollBack();

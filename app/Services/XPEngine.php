@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Score;
 use App\Models\UserVacation;
 use Core\Database;
+use App\Services\SettingService;
 
 use App\Contracts\LoggerInterface;
 
@@ -18,13 +19,15 @@ class XPEngine extends BaseService
     private Database $db;
     private Score $scoreModel;
     private UserVacation $vacationModel;
+    private SettingService $settingService;
 
-    public function __construct(Database $db, Score $scoreModel, UserVacation $vacationModel, LoggerInterface $logger)
+    public function __construct(Database $db, Score $scoreModel, UserVacation $vacationModel, LoggerInterface $logger, SettingService $settingService)
     {
         parent::__construct($logger);
         $this->db = $db;
         $this->scoreModel = $scoreModel;
         $this->vacationModel = $vacationModel;
+        $this->settingService = $settingService;
     }
 
     /**
@@ -37,13 +40,13 @@ class XPEngine extends BaseService
     public function awardXP(int $userId, string $module, string $activityType): bool
     {
         // ۱. تعیین میزان امتیاز پایه مصوب برای هر فعالیت
-        $baseXp = match ($module) {
+        $baseXpMap = $this->settingService->get('xp_engine_base_xp', [
             'youtube' => 2.0,
             'custom_tasks' => 1.2,
             'social_tasks' => 1.2,
             'google_search' => 1.1,
-            default => 0.0,
-        };
+        ]);
+        $baseXp = (float)($baseXpMap[$module] ?? 0.0);
 
         if ($baseXp === 0.0) {
             return false;
@@ -102,13 +105,14 @@ class XPEngine extends BaseService
         // تضمین حداقل ۱ دامین برای فعالیت فعلی
         $activeDomains = \max(1, $activeDomains);
 
-        return match ($activeDomains) {
+        $multiplierMap = $this->settingService->get('xp_engine_synergy_multipliers', [
             1 => 1.0,
-            2 => 1.10, // ۱۰٪ بونوس برای ۲ ماژول مختلف در روز
-            3 => 1.25, // ۲۵٪ بونوس برای ۳ ماژول مختلف در روز
-            4 => 1.40, // ۴۰٪ بونوس ویژه فعالیت در هر ۴ ماژول اصلی!
-            default => 1.40,
-        };
+            2 => 1.10,
+            3 => 1.25,
+            4 => 1.40,
+        ]);
+
+        return (float)($multiplierMap[$activeDomains] ?? $multiplierMap[max(array_keys($multiplierMap))] ?? 1.40);
     }
 
     /**
@@ -118,11 +122,13 @@ class XPEngine extends BaseService
     {
         $globalXp = $this->scoreModel->getDomainScore($userId, 'xp_global');
 
-        // فرمول نمایی پیشرفت متعادل مصوب: Required XP = 100 * (Level ^ 1.8)
-        // معادل ریاضی سطح: Level = (GlobalXP / 100) ^ (1 / 1.8)
+        // فرمول نمایی پیشرفت متعادل مصوب
+        $divisor = (float)$this->settingService->get('xp_level_divisor', 100.0);
+        $exponent = (float)$this->settingService->get('xp_level_exponent', 1.8);
+        
         $globalLevel = 1;
-        if ($globalXp > 100) {
-            $globalLevel = (int)\floor(\pow(($globalXp / 100), (1 / 1.8)));
+        if ($globalXp > $divisor) {
+            $globalLevel = (int)\floor(\pow(($globalXp / $divisor), (1 / $exponent)));
         }
         $globalLevel = \max(1, $globalLevel);
 

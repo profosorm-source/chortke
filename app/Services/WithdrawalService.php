@@ -12,7 +12,7 @@ use App\Models\Withdrawal;
 use App\Models\WithdrawalLimit;
 use App\Models\User;
 use App\Models\BankCard;
-use App\Models\Setting;
+use App\Services\SettingService;
 use App\Services\BankCardService;
 use App\Services\KYCService;
 use App\Services\AntiFraud\RiskDecisionService;
@@ -30,7 +30,7 @@ class WithdrawalService extends PaymentBaseService
     private RiskDecisionService      $riskDecisionService;
     private Withdrawal               $model;
     private WithdrawalLimit          $limitModel;
-    private Setting                  $settings;
+    private SettingService           $settings;
     private WalletService            $wallet;
     private NotificationService      $notifier;
     private AuditTrail               $auditTrail;
@@ -38,7 +38,7 @@ class WithdrawalService extends PaymentBaseService
     private StateMachineService      $stateMachine;
     private ReconciliationService    $reconciliation;
 
-    private const PROFILES = [
+    private const PROFILES_DEFAULT = [
         'no_kyc'        => ['daily'=>0,  'weekly'=>0,   'monthly'=>0,   'multiplier'=>0],
         'silver_kyc'    => ['daily'=>1,  'weekly'=>3,   'monthly'=>10,  'multiplier'=>1.0],
         'gold_kyc'      => ['daily'=>3,  'weekly'=>10,  'monthly'=>30,  'multiplier'=>2.0],
@@ -52,7 +52,7 @@ class WithdrawalService extends PaymentBaseService
         NotificationService    $notificationService,
         \App\Models\Withdrawal      $model,
         \App\Models\WithdrawalLimit $limitModel,
-        \App\Models\Setting         $settings,
+        SettingService              $settings,
         \App\Models\BankCard        $bankCardModel,
         \App\Services\BankCardService $bankCardService,
         \App\Services\AntiFraud\RiskDecisionService $riskDecisionService,
@@ -615,7 +615,8 @@ class WithdrawalService extends PaymentBaseService
 
     private function getLimits(string $currency, string $profile): array
     {
-        $p   = self::PROFILES[$profile] ?? self::PROFILES['no_kyc'];
+        $profiles = $this->settings->get('withdrawal_profiles', self::PROFILES_DEFAULT);
+        $p = $profiles[$profile] ?? $profiles['no_kyc'] ?? self::PROFILES_DEFAULT['no_kyc'];
         $cur = strtolower($currency);
 
         $baseMin = (float)$this->settings->get("min_withdrawal_{$cur}", $cur === 'irt' ? 50000 : 10);
