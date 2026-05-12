@@ -35,6 +35,13 @@ class ApiAuthMiddleware
         // ✅ امنیت: استخراج user_id از request و اطمینان از مالکیت توکن
         $requestingUserId = (int)($request->get('user_id') ?? $request->post('user_id') ?? 0);
         
+        // Fix M2: برای مسیرهای حساس، بررسی مالکیت الزامی است
+        if ($this->isSensitivePath($request->uri())) {
+            if ($requestingUserId <= 0) {
+                return $this->errorResponse('برای این عملیات نیاز به شناسه کاربر است', 400, 'MISSING_USER_ID');
+            }
+        }
+        
         $user = $this->validateToken($token, $requestingUserId);
 
         if (!$user) {
@@ -142,6 +149,32 @@ class ApiAuthMiddleware
         $query .= " LIMIT 1";
         
         return $this->db->fetch($query, $params) ?: null;
+    }
+
+    /**
+     * بررسی آیا مسیر جاری حساس است و نیاز به مالکیت مستقیم دارد
+     * 
+     * Fix M2: مسیرهای حساس مانند پرداخت، برداشت و تغییر حساب
+     * باید مالکیت توکن بر اساس user_id اجباری باشد
+     */
+    private function isSensitivePath(string $uri): bool
+    {
+        $sensitivePaths = [
+            '/api/payment',
+            '/api/withdrawal',
+            '/api/wallet',
+            '/api/account/settings',
+            '/api/account/password',
+            '/api/profile/update',
+        ];
+
+        foreach ($sensitivePaths as $path) {
+            if (str_starts_with($uri, $path)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function errorResponse(string $message, int $code, string $errorType): Response

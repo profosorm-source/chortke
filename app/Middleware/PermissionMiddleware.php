@@ -109,14 +109,9 @@ class PermissionMiddleware extends BaseMiddleware
     public static function require(string $permission): void
     {
         if (!self::check($permission)) {
-            $response = new Response();
-            if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
-                $response->json(['success' => false, 'message' => 'دسترسی غیرمجاز'], 403)->send();
-            } else {
-                http_response_code(403);
-                view('errors/403');
-            }
-            exit;
+            // ✅ Fix L1: پرتاب UnauthorizedException به جای exit مستقیم
+            // این امکان می‌دهد ExceptionHandler پاسخ متناسب را هندل کند
+            throw new \Core\Exceptions\UnauthorizedException('دسترسی غیرمجاز برای انجام این عملیات');
         }
     }
 

@@ -123,10 +123,15 @@ class RateLimitMiddleware
 
     private function resolveRequestSignature(Request $request): string
     {
+        // Fix M3: استفاده از strtok برای حذف Query String از کلید محدودسازی
+        // این جلوگیری می‌کند از دور زدن فیلتر توسط تغییر پارامترهای URL
+        $uri = $request->uri() ?? '';
+        $cleanUri = strtok($uri, '?') ?: $uri; // فقط path، بدون query parameters
+        
         $userId = $this->session->get('user_id');
         if ($userId) {
-            return 'rl_user_' . $userId . '_' . md5($request->uri());
+            return 'rl_user_' . $userId . '_' . md5($cleanUri);
         }
-        return 'rl_ip_' . md5($_SERVER['REMOTE_ADDR'] ?? 'unknown') . '_' . md5($request->uri());
+        return 'rl_ip_' . md5($_SERVER['REMOTE_ADDR'] ?? 'unknown') . '_' . md5($cleanUri);
     }
 }
