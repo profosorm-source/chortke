@@ -122,6 +122,48 @@ class SettingService extends \App\Services\BaseService
         return $out;
     }
 
+    public function getByCategory(string $category): array
+    {
+        return $this->model->getByCategory($category);
+    }
+
+    public function find(int $id): ?object
+    {
+        return $this->model->find($id);
+    }
+
+    public function findByKey(string $key): ?object
+    {
+        return $this->model->findByKey($key);
+    }
+
+    public function set(string $key, string $value): bool
+    {
+        $ok = $this->model->set($key, $value);
+        if ($ok) {
+            $this->clearCache();
+        }
+        return $ok;
+    }
+
+    public function setMany(array $settings): bool
+    {
+        $ok = $this->model->setMany($settings);
+        if ($ok) {
+            $this->clearCache();
+        }
+        return $ok;
+    }
+
+    public function updateValueById(int $id, string $value): bool
+    {
+        $ok = $this->model->updateValueById($id, $value);
+        if ($ok) {
+            $this->clearCache();
+        }
+        return $ok;
+    }
+
     // ─────────────────────────────────────────────────
     //  Cache Management
     // ─────────────────────────────────────────────────

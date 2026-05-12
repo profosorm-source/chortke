@@ -36,8 +36,8 @@ extends \App\Services\BaseService
     {
         parent::__construct($logger);
         $this->db = $db;
-        $this->slowQueryThreshold = (float)env('SLOW_QUERY_THRESHOLD', 1.0);
-        $this->logSlowQueries = (bool)env('LOG_SLOW_QUERIES', true);
+        $this->slowQueryThreshold = (float)config('logging.performance.slow_query_threshold', 1.0);
+        $this->logSlowQueries = (bool)config('logging.performance.log_slow_queries', true);
     }
 
     // ──────────────────────────────────────────────────────────────────────────

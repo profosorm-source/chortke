@@ -28,7 +28,7 @@ class RedisEmailQueueService extends \App\Services\BaseService
         $this->redis = $this->cache->redis();
         $this->useRedis = $this->cache->driver() === 'redis';
 
-        $prefix = env('REDIS_PREFIX', 'chortke');
+        $prefix = config('redis.prefix', 'chortke');
         $this->queueKey = "{$prefix}:email:queue";
         $this->processingKey = "{$prefix}:email:processing";
         $this->metaPrefix = "{$prefix}:email:meta:";

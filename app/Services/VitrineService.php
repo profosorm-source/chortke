@@ -384,20 +384,22 @@ public function adminRefundListing(int $listingId, int $adminId): array
         if (!$check['ok']) return ['success' => false, 'message' => $check['message']];
 
         $listing = $this->listing->find($listingId);
-        if (!$listing || $listing->status !== VitrineListing::STATUS_ACTIVE) {
+        if (!$listing || $listing->status !== \App\Models\VitrineListing::STATUS_ACTIVE) {
             return ['success' => false, 'message' => 'آگهی فعال نیست.'];
         }
         if ((int) $listing->seller_id === $buyerId) {
             return ['success' => false, 'message' => 'نمی‌توانید آگهی خود را بخرید.'];
         }
 
-        // قیمت نهایی: اگر قیمت پیشنهادی پذیرفته‌شده وجود داشت، آن را اعمال کن
         $finalPrice = $listing->offer_price_usdt ?? $listing->price_usdt;
 
         $this->db->beginTransaction();
         try {
-            $debit = $this->wallet->debit($buyerId, $finalPrice, 'usdt', 'vitrine_escrow', "اسکرو ویترین #{$listingId}");
-            if (!$debit['success']) {
+            $debit = $this->wallet->pay($buyerId, $finalPrice, 'usdt', [
+                'type' => 'vitrine_escrow',
+                'description' => "اسکرو ویترین #{$listingId}"
+            ]);
+            if (empty($debit['success'])) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => $debit['message'] ?? 'موجودی کافی نیست.'];
             }
@@ -405,14 +407,14 @@ public function adminRefundListing(int $listingId, int $adminId): array
             $escrowDays  = (int) $this->settings->get('vitrine_escrow_days', '3');
             $deadline    = date('Y-m-d H:i:s', strtotime("+{$escrowDays} days"));
 
-            $ok = $this->listing->updateStatus($listingId, VitrineListing::STATUS_IN_ESCROW, [
+            $ok = $this->listing->updateStatus($listingId, \App\Models\VitrineListing::STATUS_IN_ESCROW, [
                 'buyer_id'         => $buyerId,
                 'escrow_locked_at' => date('Y-m-d H:i:s'),
                 'escrow_deadline'  => $deadline,
             ]);
             if (!$ok) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در به‌روزرسانی وضعیت.'];
+                return ['success' => false, 'message' => 'خطا در آپدیت وضعیت.'];
             }
 
             $this->db->commit();
@@ -422,37 +424,22 @@ public function adminRefundListing(int $listingId, int $adminId): array
             return ['success' => false, 'message' => 'خطای سیستمی.'];
         }
 
-        // اعلان به فروشنده
         $this->notif->send(
             (int) $listing->seller_id,
-            Notification::TYPE_INFO,
-            'پرداخت انجام شد — اطلاعات را ارسال کنید',
-            "خریدار مبلغ " . number_format($finalPrice, 2) . " USDT برای آگهی «{$listing->title}» پرداخت کرد. اطلاعات دسترسی را در ۷۲ ساعت ارسال کنید.",
-            ['listing_id' => $listingId],
-            url('/vitrine/' . $listingId),
-            'ارسال اطلاعات',
-            'urgent'
+            \App\Models\Notification::TYPE_INFO,
+            "پرداخت انجام شد",
+            "خریدار مبلغ را پرداخت کرد. لطفا کالا/خدمات را تحویل دهید تا وجه پس از تایید آزاد شود.",
+            ['action_url' => url("/user/vitrine/{$listingId}")]
         );
 
-        $this->auditTrail->record('vitrine.escrow_locked', $buyerId, [
+        $this->auditTrail->record('vitrine.escrow.locked', $buyerId, [
             'listing_id' => $listingId,
-            'amount'     => $finalPrice,
-            'deadline'   => $deadline,
-        ]);
-        $this->logger->activity('vitrine.escrow_locked', "پرداخت escrow ویترین انجام شد — مبلغ: {$finalPrice} USDT", $buyerId, ['listing_id' => $listingId, 'amount' => $finalPrice] ?? []);
-        $this->logger->info('vitrine.escrow_locked', [
-            'listing_id' => $listingId,
-            'buyer_id'   => $buyerId,
             'amount'     => $finalPrice,
             'deadline'   => $deadline,
         ]);
 
         return ['success' => true, 'deadline' => $deadline, 'amount' => $finalPrice];
     }
-
-    /**
-     * تایید دریافت توسط خریدار → آزادسازی وجه به فروشنده
-     */
     public function confirmDelivery(int $buyerId, int $listingId): array
     {
         $listing = $this->listing->find($listingId);
@@ -474,20 +461,35 @@ public function adminRefundListing(int $listingId, int $adminId): array
 
         $this->db->beginTransaction();
         try {
-            $credit = $this->wallet->credit(
+            $credit = $this->wallet->deposit(
                 (int) $listing->seller_id,
                 $net,
                 'usdt',
-                'vitrine_sale',
-                "درآمد ویترین #{$listing->id}"
+                [
+                    'type' => 'vitrine_sale',
+                    'description' => "درآمد ویترین #{$listing->id}"
+                ]
             );
-            if (!$credit['success']) {
+            if (empty($credit['success'])) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'خطا در پرداخت به فروشنده.'];
             }
+            
+            // پورسانت ریفرال (معرف فروشنده محصول)
+            $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById((int)$listing->seller_id);
+            if ($userRecord && !empty($userRecord->referred_by)) {
+                $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
+                if ($referralService) {
+                    $referralService->processCommission((int)$userRecord->referred_by, $net, 'usdt', [
+                        'action' => 'vitrine_sale_reward',
+                        'seller_id' => $listing->seller_id,
+                        'listing_id' => $listing->id
+                    ]);
+                }
+            }
 
             $extra = ['auto_confirmed' => ($reason === 'auto_cron') ? 1 : 0];
-            $ok    = $this->listing->updateStatus((int) $listing->id, VitrineListing::STATUS_SOLD, $extra);
+            $ok    = $this->listing->updateStatus((int) $listing->id, \App\Models\VitrineListing::STATUS_SOLD, $extra);
             if (!$ok) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'خطا در آپدیت وضعیت.'];
@@ -500,68 +502,22 @@ public function adminRefundListing(int $listingId, int $adminId): array
             return ['success' => false, 'message' => 'خطای سیستمی.'];
         }
 
-        // اعلان به فروشنده
         $this->notif->send(
             (int) $listing->seller_id,
-            Notification::TYPE_INFO,
-            'وجه به حساب شما واریز شد',
-            "مبلغ " . number_format($net, 2) . " USDT (پس از کسر کمیسیون) بابت فروش آگهی «{$listing->title}» به کیف پول شما واریز شد.",
-            ['listing_id' => $listing->id, 'amount' => $net],
-            url('/wallet'),
-            'مشاهده کیف پول',
-            'high'
+            \App\Models\Notification::TYPE_SUCCESS,
+            "وجه آزاد شد",
+            "مبلغ {$net} USDT به حساب شما واریز شد.",
+            ['action_url' => url("/user/vitrine/{$listing->id}")]
         );
 
-        // اعلان به خریدار
-        if ($listing->buyer_id) {
-            $autoText = ($reason === 'auto_cron') ? ' (تایید خودکار پس از پایان مهلت)' : '';
-            $this->notif->send(
-                (int) $listing->buyer_id,
-                Notification::TYPE_INFO,
-                'معامله تکمیل شد' . $autoText,
-                "معامله آگهی «{$listing->title}» با موفقیت تکمیل شد." . $autoText,
-                ['listing_id' => $listing->id],
-                url('/vitrine/my-purchases'),
-                'مشاهده خریدها'
-            );
-        }
-
-        // اعلان به کسانی که این آگهی را watch کرده بودند
-        $watchers = $this->listing->getWatcherIds((int) $listing->id);
-        foreach ($watchers as $watcherId) {
-            if ((int)$watcherId === (int)$listing->seller_id || (int)$watcherId === (int)$listing->buyer_id) continue;
-            $this->notif->send(
-                (int) $watcherId,
-                Notification::TYPE_INFO,
-                'آگهی مورد علاقه شما فروخته شد',
-                "آگهی «{$listing->title}» که آن را نشانه گذاشته بودید فروخته شد.",
-                ['listing_id' => $listing->id],
-                url('/vitrine'),
-                'مشاهده آگهی‌های مشابه'
-            );
-        }
-
-        $this->auditTrail->record('vitrine.funds_released', (int) $listing->seller_id, [
+        $this->auditTrail->record('vitrine.escrow.released', (int)$listing->seller_id, [
             'listing_id' => $listing->id,
-            'net'        => $net,
-            'reason'     => $reason,
-        ]);
-        $this->logger->activity('vitrine.funds_released', "وجه ویترین آزاد شد — {$net} USDT به فروشنده پرداخت شد", (int) $listing->seller_id, ['listing_id' => $listing->id, 'net' => $net, 'reason' => $reason] ?? []);
-        $this->logger->info('vitrine.funds_released', [
-            'listing_id' => $listing->id,
-            'seller_id'  => $listing->seller_id,
-            'buyer_id'   => $listing->buyer_id,
-            'net'        => $net,
+            'amount'     => $net,
             'reason'     => $reason,
         ]);
 
-        return ['success' => true, 'net' => $net];
+        return ['success' => true, 'net_amount' => $net];
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // اختلاف
-    // ─────────────────────────────────────────────────────────────────────────
-
     public function openDispute(int $userId, int $listingId, string $reason): array
     {
         $listing = $this->listing->find($listingId);
@@ -803,4 +759,3 @@ public function adminRefundListing(int $listingId, int $adminId): array
         return $this->listing->searchNative($q, $filters, $limit, $offset, $sortCol, $sortDir);
     }
 }
-

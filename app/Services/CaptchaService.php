@@ -4,13 +4,13 @@ namespace App\Services;
 
 use Core\Session;
 use App\Models\CaptchaLog;
-use App\Models\SystemSetting;
+use App\Services\SettingService;
 
 use App\Contracts\LoggerInterface;
 class CaptchaService extends \App\Services\BaseService
 {
     private CaptchaLog $captchaLogModel;
-    private SystemSetting $settingModel;
+    private SettingService $settingService;
     private Session $session;
 
     /** مسیر پوشه captcha نسبت به root پروژه */
@@ -18,13 +18,13 @@ class CaptchaService extends \App\Services\BaseService
 
     public function __construct(
         CaptchaLog $captchaLogModel,
-        SystemSetting $settingModel,
+        SettingService $settingService,
         Session $session,
         \App\Contracts\LoggerInterface $logger
     ) {
         parent::__construct($logger);
         $this->captchaLogModel = $captchaLogModel;
-        $this->settingModel = $settingModel;
+        $this->settingService = $settingService;
         $this->session      = $session;
     }
 
@@ -38,7 +38,7 @@ class CaptchaService extends \App\Services\BaseService
     public function generate(string $type = null): array
     {
         if (!$type) {
-            $type = (string) $this->settingModel->get('captcha_type', 'math');
+            $type = (string) $this->settingService->get('captcha_type', 'math');
         }
 
         switch ($type) {
@@ -92,7 +92,7 @@ class CaptchaService extends \App\Services\BaseService
         }
 
         // ── بررسی انقضا
-        $expireMinutes = (int) $this->settingModel->get('captcha_expire_minutes', 5);
+        $expireMinutes = (int) $this->settingService->get('captcha_expire_minutes', 5);
         if ((time() - $createdAt) / 60 > $expireMinutes) {
             $this->deleteImageFile($captchaData);
             $this->session->delete($key);
@@ -100,7 +100,7 @@ class CaptchaService extends \App\Services\BaseService
         }
 
         // ── بررسی حداکثر تلاش
-        $maxAttempts = (int) $this->settingModel->get('captcha_max_attempts', 3);
+        $maxAttempts = (int) $this->settingService->get('captcha_max_attempts', 3);
         if ($attempts >= $maxAttempts) {
             $this->deleteImageFile($captchaData);
             $this->session->delete($key);
@@ -122,7 +122,7 @@ class CaptchaService extends \App\Services\BaseService
      */
     public function isEnabled(): bool
     {
-        return (bool) $this->settingModel->get('captcha_enabled', true);
+        return (bool) $this->settingService->get('captcha_enabled', true);
     }
 
     /**
@@ -253,8 +253,8 @@ class CaptchaService extends \App\Services\BaseService
     
     private function verifyBehavioral(string $token, string $behavioralState): bool
     {
-        $minSeconds      = (int) $this->settingModel->get('behavioral_min_seconds', 4);
-        $minInteractions = (int) $this->settingModel->get('behavioral_min_interactions', 5);
+        $minSeconds      = (int) $this->settingService->get('behavioral_min_seconds', 4);
+        $minInteractions = (int) $this->settingService->get('behavioral_min_interactions', 5);
 
         // parse کردن token اصلی
         $tokenData = $this->parseBehavioralToken($token);
@@ -270,7 +270,7 @@ class CaptchaService extends \App\Services\BaseService
         }
 
         // انقضا (5 دقیقه)
-        $expireMinutes = (int) $this->settingModel->get('captcha_expire_minutes', 5);
+        $expireMinutes = (int) $this->settingService->get('captcha_expire_minutes', 5);
         if ((time() - $createdAt) / 60 > $expireMinutes) {
             return false;
         }
@@ -391,7 +391,7 @@ class CaptchaService extends \App\Services\BaseService
 
     private function verifyRecaptcha(string $response): bool
     {
-        $secretKey = trim((string) $this->settingModel->get('recaptcha_secret_key', ''));
+        $secretKey = trim((string) $this->settingService->get('recaptcha_secret_key', ''));
 
         if ($secretKey === '') {
             return false;
@@ -428,7 +428,7 @@ class CaptchaService extends \App\Services\BaseService
 
         // reCAPTCHA v3 — بررسی Score
         if (array_key_exists('score', $result)) {
-            $threshold = (float) $this->settingModel->get('recaptcha_v3_threshold', 0.5);
+            $threshold = (float) $this->settingService->get('recaptcha_v3_threshold', 0.5);
             $success   = !empty($result['success']) && ((float)$result['score']) >= $threshold;
             $this->logAttempt(null, 'recaptcha_v3', 'auto', $response, $success, (float)$result['score']);
             return $success;
@@ -553,7 +553,7 @@ class CaptchaService extends \App\Services\BaseService
 
     private function getRecaptchaSiteKey(): string
     {
-        $key = trim((string) $this->settingModel->get('recaptcha_site_key', ''));
+        $key = trim((string) $this->settingService->get('recaptcha_site_key', ''));
 
         if ($key === '') {
             $key = trim((string) config('captcha.recaptcha_site_key', ''));

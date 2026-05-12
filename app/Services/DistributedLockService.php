@@ -295,7 +295,7 @@ LUA;
      */
     private function getLockKey(string $resource): string
     {
-        $prefix = env('REDIS_PREFIX', 'chortke');
+        $prefix = config('redis.prefix', 'chortke');
         return $prefix . ':lock:' . $resource;
     }
     

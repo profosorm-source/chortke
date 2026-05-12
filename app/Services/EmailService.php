@@ -69,13 +69,13 @@ class EmailService extends \App\Services\BaseService
     {
         $s = $this->settingModel;
 
-        $this->smtpHost       = (string) $this->resolve($s->get('smtp_host'),       env('MAIL_HOST',         '127.0.0.1'));
-        $this->smtpPort       = (int) $this->resolve($s->get('smtp_port'), env('MAIL_PORT',         1025));
-        $this->smtpUsername   = (string) $this->resolve($s->get('smtp_username'),   env('MAIL_USERNAME',     ''));
-        $this->smtpPassword   = (string) $this->resolve($s->get('smtp_password'),   env('MAIL_PASSWORD',     ''));
-        $this->smtpEncryption = (string) $this->resolve($s->get('smtp_encryption'), env('MAIL_ENCRYPTION',   ''));
-        $this->fromEmail      = (string) $this->resolve($s->get('smtp_from_email'), env('MAIL_FROM_ADDRESS', 'noreply@example.com'));
-        $this->fromName       = (string) $this->resolve($s->get('smtp_from_name'),  env('MAIL_FROM_NAME',    'سایت'));
+        $this->smtpHost       = (string) $this->resolve($s->get('smtp_host'),       config('mail.host',         '127.0.0.1'));
+        $this->smtpPort       = (int) $this->resolve($s->get('smtp_port'), config('mail.port',         1025));
+        $this->smtpUsername   = (string) $this->resolve($s->get('smtp_username'),   config('mail.username',     ''));
+        $this->smtpPassword   = (string) $this->resolve($s->get('smtp_password'),   config('mail.password',     ''));
+        $this->smtpEncryption = (string) $this->resolve($s->get('smtp_encryption'), config('mail.encryption',   ''));
+        $this->fromEmail      = (string) $this->resolve($s->get('smtp_from_email'), config('mail.from.address', 'noreply@example.com'));
+        $this->fromName       = (string) $this->resolve($s->get('smtp_from_name'),  config('mail.from.name',    'سایت'));
     }
 
     /** اگه DB مقدار داشت همون، وگرنه ENV */
@@ -455,7 +455,7 @@ class EmailService extends \App\Services\BaseService
                     $mail->Username = $this->smtpUsername;
                     $mail->Password = $this->smtpPassword;
                 }
-                $isProd = (env('APP_ENV', 'production') === 'production');
+                $isProd = (config('app.env', 'production') === 'production');
                 $mail->SMTPOptions = [
                     'ssl' => [
                         'verify_peer'       => $isProd,
@@ -534,8 +534,8 @@ class EmailService extends \App\Services\BaseService
 
     private function getDefaultTemplate(array $vars): string
     {
-        $siteName    = env('APP_NAME', 'چرتکه');
-        $siteUrl     = env('APP_URL', 'http://localhost');
+        $siteName    = config('app.name', 'چرتکه');
+        $siteUrl     = config('app.url', 'http://localhost');
         $bodyContent = $vars['content'] ?? 'محتوای ایمیل';
 
         return <<<HTML

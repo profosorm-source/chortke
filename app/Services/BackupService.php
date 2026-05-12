@@ -44,11 +44,12 @@ class BackupService extends \App\Services\BaseService
             $filename = "backup_{$timestamp}.sql";
             $filepath = $this->backupDir . '/' . $filename;
 
-            // دریافت نام دیتابیس از تنظیمات
-            $dbName = env('DB_DATABASE', 'chortke');
-            $dbUser = env('DB_USERNAME', 'root');
-            $dbPass = env('DB_PASSWORD', '');
-            $dbHost = env('DB_HOST', 'localhost');
+            // دریافت اطلاعات کامل دیتابیس از لایه پیکربندی مرکزی
+            $dbConfig = config('database');
+            $dbName = $dbConfig['name'] ?? 'chortke';
+            $dbUser = $dbConfig['user'] ?? 'root';
+            $dbPass = $dbConfig['pass'] ?? '';
+            $dbHost = $dbConfig['host'] ?? 'localhost';
 
             // ساخت فایل موقت تنظیمات جهت مخفی‌سازی پسورد دیتابیس
             $cnfFile = tempnam(sys_get_temp_dir(), 'mycnf_');
@@ -223,11 +224,12 @@ class BackupService extends \App\Services\BaseService
                 throw new \Exception('Backup file not found');
             }
 
-            // دریافت تنظیمات دیتابیس
-            $dbName = env('DB_DATABASE', 'chortke');
-            $dbUser = env('DB_USERNAME', 'root');
-            $dbPass = env('DB_PASSWORD', '');
-            $dbHost = env('DB_HOST', 'localhost');
+            // دریافت تنظیمات دیتابیس از لایه مرکزی
+            $dbConfig = config('database');
+            $dbName = $dbConfig['name'] ?? 'chortke';
+            $dbUser = $dbConfig['user'] ?? 'root';
+            $dbPass = $dbConfig['pass'] ?? '';
+            $dbHost = $dbConfig['host'] ?? 'localhost';
 
             // ساخت فایل موقت تنظیمات جهت مخفی‌سازی پسورد دیتابیس
             $cnfFile = tempnam(sys_get_temp_dir(), 'mycnf_');

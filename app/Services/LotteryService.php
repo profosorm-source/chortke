@@ -92,7 +92,7 @@ class LotteryService extends \App\Services\BaseService
                 'prize_amount' => max(0, (float)($data['prize_amount'] ?? 0)),
                 'currency' => in_array($data['currency'] ?? 'irt', ['irt', 'usdt']) ? $data['currency'] : 'irt',
                 'ticket_price' => max(0, (float)($data['entry_fee'] ?? 0)),
-                'max_tickets' => (int)feature_value('lottery', 'max_participants', 10000),
+                'max_tickets' => (int)feature_config('lottery', 'max_participants', 10000),
                 'status' => LotteryRound::STATUS_ACTIVE,
             ]);
 

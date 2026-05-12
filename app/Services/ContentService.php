@@ -473,26 +473,27 @@ EOT;
     public function payRevenue(int $revenueId, int $adminId): array
     {
         try {
-            $revenue = $this->revenueModel->findWithDetails($revenueId);
+            $this->db->beginTransaction();
+            $revenue = $this->db->query("SELECT * FROM content_revenues WHERE id = ? FOR UPDATE", [$revenueId])->fetch(\PDO::FETCH_OBJ);
             
             if (!$revenue) {
+                $this->db->rollBack();
                 return $this->errorResponse('رکورد درآمد یافت نشد.');
             }
 
-            if ($revenue->status !== ContentRevenue::STATUS_APPROVED) {
+            if ($revenue->status !== \App\Models\ContentRevenue::STATUS_APPROVED) {
+                $this->db->rollBack();
                 return $this->errorResponse('فقط درآمدهای تأیید شده قابل پرداخت هستند.');
             }
 
-            // Determine currency
             $currency = $revenue->currency === 'usdt' ? 'usdt' : 'irt';
 
-            // Deposit to wallet
             $depositResult = $this->walletService->deposit(
                 $revenue->user_id,
                 $revenue->net_user_amount,
                 $currency,
-                'content_revenue',
                 [
+                    'type' => 'content_revenue',
                     'revenue_id' => $revenueId,
                     'submission_id' => $revenue->submission_id,
                     'period' => $revenue->period,
@@ -504,66 +505,60 @@ EOT;
                 ]
             );
 
-            if (!$depositResult['success']) {
+            if (empty($depositResult['success'])) {
+                $this->db->rollBack();
                 return $this->errorResponse(
                     'خطا در واریز به کیف پول: ' . ($depositResult['message'] ?? '')
                 );
             }
 
-            // Update revenue status
             $this->revenueModel->update($revenueId, [
-                'status' => ContentRevenue::STATUS_PAID,
-                'paid_at' => date('Y-m-d H:i:s'),
-                'paid_by' => $adminId,
+                'status'         => \App\Models\ContentRevenue::STATUS_PAID,
+                'paid_at'        => date('Y-m-d H:i:s'),
                 'transaction_id' => $depositResult['transaction_id'] ?? null,
+                'paid_by_admin'  => $adminId,
             ]);
-
-            // Send notification
-            $amount = number_format($revenue->net_user_amount);
-            $currencyLabel = $currency === 'usdt' ? 'تتر' : 'تومان';
             
-            $this->sendNotification(
-                $revenue->user_id,
-                'درآمد محتوا واریز شد',
+            // پورسانت ریفرال تولید محتوا
+            $userRecord = \App\Core\Container::getInstance()->get(\App\Models\User::class)->findById($revenue->user_id);
+            if ($userRecord && !empty($userRecord->referred_by)) {
+                $referralService = \App\Core\Container::getInstance()->get(\App\Services\Shared\ReferralService::class);
+                if ($referralService) {
+                    $referralService->processCommission((int)$userRecord->referred_by, (float)$revenue->net_user_amount, $currency, [
+                        'action' => 'content_revenue_reward',
+                        'creator_id' => $revenue->user_id,
+                        'revenue_id' => $revenueId
+                    ]);
+                }
+            }
+            
+            $this->db->commit();
+
+            $this->clearUserCache((int)$revenue->user_id);
+
+            $this->notificationService->send(
+                (int)$revenue->user_id,
+                \App\Models\Notification::TYPE_SUCCESS,
+                'پرداخت درآمد محتوا',
                 sprintf(
-                    'مبلغ %s %s بابت درآمد دوره %s به کیف پول شما واریز شد.',
-                    $amount,
-                    $currencyLabel,
+                    'درآمد شما به مبلغ %s %s بابت دوره %s به کیف پول واریز شد.',
+                    number_format((float)$revenue->net_user_amount, $currency === 'usdt' ? 2 : 0),
+                    $currency === 'usdt' ? 'USDT' : 'تومان',
                     $revenue->period
                 ),
-                'content_payment'
+                ['action_url' => url("/user/content/revenues")]
             );
 
-            $this->logInfo(
-                'content_payment',
-                ['message' => "Admin {$adminId} paid revenue #{$revenueId} = {$revenue->net_user_amount} {$currency}"]
-            );
-            
-            $this->clearUserCache($revenue->user_id);
-
-            return $this->successResponse("مبلغ {$amount} {$currencyLabel} با موفقیت واریز شد.");
-            
-        } catch (\Throwable $e) {
-            $this->logError('content.pay_revenue.failed', [
+            return $this->successResponse('درآمد با موفقیت پرداخت شد.');
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            $this->logError('content.revenue.pay_failed', [
                 'revenue_id' => $revenueId,
-                'admin_id'   => $adminId,
-                'error'      => $e->getMessage(),
-                'exception'  => \get_class($e),
-                'file'       => $e->getFile(),
-                'line'       => $e->getLine(),
+                'error'      => $e->getMessage()
             ]);
-            return $this->errorResponse('خطا در پرداخت درآمد.');
+            return $this->errorResponse('خطای سیستمی.');
         }
     }
-
-    /**
-     * تعلیق محتوا (ادمین)
-     * 
-     * @param int $submissionId
-     * @param int $adminId
-     * @param string $reason
-     * @return array
-     */
     public function suspendSubmission(int $submissionId, int $adminId, string $reason): array
     {
         try {

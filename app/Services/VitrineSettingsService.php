@@ -44,15 +44,15 @@ class VitrineSettingsService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
+            $settingsToUpdate = [];
             foreach ($fields as $key) {
-                if (array_key_exists($key, $data)) {
-                    $value = $data[$key];
-                    if ($value !== null) {
-                        $this->db->prepare(
-                            "UPDATE system_settings SET value = ? WHERE `key` = ?"
-                        )->execute([$value, $key]);
-                    }
+                if (array_key_exists($key, $data) && $data[$key] !== null) {
+                    $settingsToUpdate[$key] = (string)$data[$key];
                 }
+            }
+
+            if (!empty($settingsToUpdate)) {
+                $this->settingService->setMany($settingsToUpdate);
             }
 
             // Feature Flag ویترین

@@ -92,7 +92,7 @@ class CacheAdminServiceextends \App\Services\BaseService
     {
         try {
             $redis  = $this->cache->redis();
-            $prefix = env('REDIS_PREFIX', 'chortke') . ':';
+            $prefix = config('redis.prefix', 'chortke') . ':';
 
             $info   = $redis->info();
             // استفاده از SCAN به‌جای KEYS برای جلوگیری از blocking در مقیاس بزرگ
