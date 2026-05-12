@@ -16,10 +16,12 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
     private ?string $apiUrl;
     private ?string $apiToken;
     private LoggerInterface $logger;
+    private \Core\Database $db;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, \Core\Database $db)
     {
         $this->logger   = $logger;
+        $this->db       = $db;
         // این تنظیمات از فایل .env خوانده می‌شوند.
         $this->apiUrl   = config('services.deepface.api_url');
         $this->apiToken = config('services.deepface.api_token');

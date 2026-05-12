@@ -216,7 +216,8 @@ class SessionService extends \App\Services\BaseService
 
         // Velocity check
         $actionCount = $this->model->getActionCount($userId, 1);
-        if ($actionCount > self::MAX_ACTIONS_PER_MINUTE) {
+        $maxActions = $this->policy->getInt('fraud', 'session.max_actions_per_minute', self::MAX_ACTIONS_PER_MINUTE);
+        if ($actionCount > $maxActions) {
             $score += $this->policy->getInt('fraud', 'session.velocity_points', 25);
             $anomalies[] = "{$actionCount} اقدام در 1 دقیقه (سرعت غیرطبیعی)";
         }

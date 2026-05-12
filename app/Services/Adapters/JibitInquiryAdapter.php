@@ -16,10 +16,12 @@ class JibitInquiryAdapter implements BankInquiryAdapter
     private ?string $apiSecret;
     private string $baseUrl = 'https://api.jibit.ir/v1/';
     private LoggerInterface $logger;
+    private \Core\Cache $cache;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, \Core\Cache $cache)
     {
         $this->logger = $logger;
+        $this->cache  = $cache;
         // دریافت متغیرهای اتصال از .env
         $this->apiKey = config('services.jibit.api_key');
         $this->apiSecret = config('services.jibit.api_secret');

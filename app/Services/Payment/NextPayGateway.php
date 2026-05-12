@@ -25,13 +25,16 @@ class NextPayGateway extends BasePaymentGateway
 {
     private \App\Models\PaymentGateway $paymentGatewayModel;
     private ?object $config;
+    private \App\Services\SettingService $settingService;
 
     public function __construct(
-        \App\Models\PaymentGateway $paymentGatewayModel,
-        LoggerInterface            $logger
+        \App\Models\PaymentGateway   $paymentGatewayModel,
+        LoggerInterface              $logger,
+        \App\Services\SettingService $settingService
     ) {
         parent::__construct($logger);
         $this->paymentGatewayModel = $paymentGatewayModel;
+        $this->settingService      = $settingService;
         $this->config = $paymentGatewayModel->getActiveGateway('nextpay');
     }
 
