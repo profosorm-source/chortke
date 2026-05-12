@@ -2,7 +2,7 @@
 // Chortke Health Check Endpoint with Sentry Integration
 header('Content-Type: application/json');
 
-require_once __DIR__ . '/../helpers/config_helper.php';
+require_once __DIR__ . '/../bootstrap/app.php';
 
 // Access protection logic
 $allowedIps = array_filter(array_map('trim', explode(',', env('HEALTH_ALLOWED_IPS', '127.0.0.1,::1'))));
@@ -20,8 +20,7 @@ if (!$isIpAllowed && !$isTokenValid) {
     exit;
 }
 
-require_once __DIR__ . '/../core/Database.php';
-require_once __DIR__ . '/../core/Cache.php';
+
 
 $checks = [];
 $status = 'healthy';
@@ -74,7 +73,8 @@ $checks['system'] = [
 
 $response = [
     'status' => $status,
-    'timestamp' => date('c')
+    'timestamp' => date('c'),
+    'checks' => $checks
 ];
 
 http_response_code($status === 'healthy' ? 200 : 503);
