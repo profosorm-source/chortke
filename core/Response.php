@@ -34,6 +34,14 @@ class Response
         'content-security-policy',
         'referrer-policy',
         'permissions-policy',
+        'cross-origin-opener-policy',
+        'cross-origin-resource-policy',
+        'vary',
+        'access-control-allow-credentials',
+        'access-control-allow-methods',
+        'access-control-allow-headers',
+        'access-control-max-age',
+        'server',
     ];
 
     public function setStatusCode(int $code): void
@@ -169,7 +177,7 @@ class Response
         }
         
         // ✅ Allow URLs from same domain only
-        $baseUrl = parse_url(env('APP_URL', 'http://localhost'));
+        $baseUrl = parse_url(config('app.url', 'http://localhost'));
         $redirectUrl = parse_url($url);
         
         // اگر protocol یا host متفاوت باشد، reject کن

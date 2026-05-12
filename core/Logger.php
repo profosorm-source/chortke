@@ -133,7 +133,7 @@ public function exception(\Throwable $e, string $message = '', array $context = 
     $context['line'] = $e->getLine();
 
     // trace فقط در debug و با سقف طول
-    $isDebug = !empty($_ENV['APP_DEBUG']) && $_ENV['APP_DEBUG'] !== 'false';
+    $isDebug = config('app.debug', false);
     if ($isDebug) {
         $context['trace'] = mb_substr($e->getTraceAsString(), 0, 8000);
     }

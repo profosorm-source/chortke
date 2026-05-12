@@ -90,17 +90,18 @@ private function safeUnserialize($raw)
             return;
         }
 
-        $enabled = env('REDIS_ENABLED', 'true');
-        if (in_array(strtolower((string)$enabled), ['false', '0', 'no', 'off'], true)) {
+        $config = config('redis');
+        $enabled = $config['enabled'] ?? true;
+        if (!$enabled || in_array(strtolower((string)$enabled), ['false', '0', 'no', 'off'], true)) {
             return;
         }
 
-        $host     = env('REDIS_HOST', '127.0.0.1');
-        $port     = (int) env('REDIS_PORT', 6379);
-        $password = env('REDIS_PASSWORD', '');
-        $db       = (int) env('REDIS_DB', 0);
-        $timeout  = (float) env('REDIS_TIMEOUT', 1.5);
-        $this->redisPrefix = env('REDIS_PREFIX', 'chortke') . ':';
+        $host     = $config['host'] ?? '127.0.0.1';
+        $port     = (int)($config['port'] ?? 6379);
+        $password = $config['password'] ?? '';
+        $db       = (int)($config['db'] ?? 0);
+        $timeout  = (float)($config['timeout'] ?? 1.5);
+        $this->redisPrefix = ($config['prefix'] ?? 'chortke') . ':';
 
         try {
             $r = new \Redis();

@@ -95,7 +95,7 @@ LUA;
 
     private function getRedisKey(string $key): string
     {
-        $prefix = env('REDIS_PREFIX', 'chortke');
+        $prefix = config('redis.prefix', 'chortke');
         return $prefix . ':' . $key;
     }
 }

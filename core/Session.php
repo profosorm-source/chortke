@@ -50,7 +50,7 @@ class Session
         session_set_cookie_params([
             'lifetime' => $config['lifetime'],
             'path'     => '/',
-            'domain'   => parse_url(env('APP_URL'), PHP_URL_HOST),
+            'domain'   => parse_url(config('app.url'), PHP_URL_HOST),
             'secure'   => $config['secure'],
             'httponly' => $config['httponly'],
             'samesite' => $config['samesite'],

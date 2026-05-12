@@ -21,17 +21,18 @@ class Redis
             return;
         }
 
-        $enabled = env('REDIS_ENABLED', 'true');
-        if (in_array(strtolower((string)$enabled), ['false', '0', 'no', 'off'], true)) {
+        $config = config('redis');
+        $enabled = $config['enabled'] ?? true;
+        if (!$enabled || in_array(strtolower((string)$enabled), ['false', '0', 'no', 'off'], true)) {
             $this->connected = false;
             return;
         }
 
-        $host     = env('REDIS_HOST', '127.0.0.1');
-        $port     = (int) env('REDIS_PORT', 6379);
-        $timeout  = (float) env('REDIS_TIMEOUT', 1.5);
-        $password = env('REDIS_PASSWORD', '');
-        $db       = (int) env('REDIS_DB', 0);
+        $host     = $config['host'] ?? '127.0.0.1';
+        $port     = (int)($config['port'] ?? 6379);
+        $timeout  = (float)($config['timeout'] ?? 1.5);
+        $password = $config['password'] ?? '';
+        $db       = (int)($config['db'] ?? 0);
 
         try {
             $redis = new \Redis();

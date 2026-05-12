@@ -42,16 +42,17 @@ class Application
        try {
     $this->db = Database::getInstance();
 } catch (\Throwable $e) {
-    if (function_exists('logger')) {
     try {
-        logger()->critical('bootstrap.db_connection.failed', [
-            'channel' => 'bootstrap',
-            'error' => $e->getMessage(),
-        ]);
-    } catch (\Throwable $ignore) {
-        // startup-safe
-    }
-}
+        // ذخیره در صف اضطراری سنتری بدون نیاز به ارتباط زنده با دیتابیس
+        $emergencyFile = dirname(__DIR__) . '/storage/logs/sentry_emergency.jsonl';
+        $logData = [
+            'timestamp' => time(),
+            'message' => $e->getMessage(),
+            'trace' => mb_substr($e->getTraceAsString(), 0, 2000),
+            'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+        ];
+        @file_put_contents($emergencyFile, json_encode($logData) . "\n", FILE_APPEND);
+    } catch (\Throwable $ignore) {}
 
     // خطای عمومی به ExceptionHandler منتقل می‌شود (بدون نشت جزئیات به کاربر)
     throw new \RuntimeException('System bootstrap failed', 0, $e);
@@ -61,7 +62,7 @@ class Application
         $this->registerCoreBindings();
 
         // ── ۷. Maintenance Mode ──────────────────────────────────
-        if (env('MAINTENANCE_MODE') === 'true' || env('MAINTENANCE_MODE') === true) {
+        if (config('maintenance.enabled', false) === true) {
             if (!$this->session->get('is_admin')) {
                 http_response_code(503);
                 $view = __DIR__ . '/../views/errors/503.php';
@@ -109,7 +110,7 @@ class Application
         // ── App-level singletons — یک بار در طول request ────────
         // هر Controller که AuthService یا User نیاز دارد،
         // همین instance را دریافت می\u200cکند (نه instance جدید)
-        $c->singleton(\App\Services\AuthService::class);
+        $c->singleton(\App\Services\Auth\AuthService::class);
         $c->singleton(\App\Models\User::class);
     }
     /**

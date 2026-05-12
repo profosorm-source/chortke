@@ -43,7 +43,7 @@ if (!function_exists('secure_hash')) {
     {
         $allowedAlgos = ['sha256', 'sha384', 'sha512', 'blake2b'];
         if (!in_array($algo, $allowedAlgos, true)) $algo = 'sha256';
-        return hash_hmac($algo, $data, (string)env('APP_KEY', ''));
+        return hash_hmac($algo, $data, (string)config('app.key', ''));
     }
 }
 
@@ -112,8 +112,7 @@ if (!function_exists('get_client_ip')) {
     function get_client_ip(): string
     {
         $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
-        $trustedProxiesEnv = env('TRUSTED_PROXIES', '');
-        $trustedProxies = array_filter(array_map('trim', explode(',', $trustedProxiesEnv)));
+        $trustedProxies = (array)config('app.trusted_proxies', []);
 
         if (empty($trustedProxies) || !in_array($remoteAddr, $trustedProxies, true)) {
             return filter_var($remoteAddr, FILTER_VALIDATE_IP) ? $remoteAddr : '0.0.0.0';

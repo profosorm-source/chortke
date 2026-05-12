@@ -13,13 +13,8 @@ if (!function_exists('url')) {
             throw new \InvalidArgumentException('url() accepts relative paths only');
         }
 
-        // ۱. اولویت با APP_URL تنظیم شده در .env است
-        $baseUrl = env('APP_URL');
-        
-        if (!$baseUrl) {
-            // ۲. اگر تنظیم نشده بود، از تنظیمات دیتابیس بگیر
-            $baseUrl = config('app.url') ?: setting('site_url');
-        }
+        // ۱. اولویت با APP_URL تنظیم شده در config است
+        $baseUrl = config('app.url') ?: setting('site_url');
 
         if (!$baseUrl) {
             // ۳. در نهایت اگر هیچ‌کدام نبود، از SERVER تشخیص بده (Sanitized)
@@ -57,7 +52,7 @@ if (!function_exists('redirect')) {
         }
 
         if (strpos($path, 'http://') === 0 || strpos($path, 'https://') === 0) {
-            $appUrl  = env('APP_URL', '');
+            $appUrl  = config('app.url', '');
             $appHost = parse_url($appUrl, PHP_URL_HOST) ?? '';
             $pathHost = parse_url($path, PHP_URL_HOST) ?? '';
             $isSameHost = ($pathHost === $appHost) || ($appHost && str_ends_with($pathHost, '.' . $appHost));
@@ -80,7 +75,7 @@ if (!function_exists('back')) {
     function back(): never
     {
         $referer = $_SERVER['HTTP_REFERER'] ?? '';
-        $appHost = parse_url(env('APP_URL', ''), PHP_URL_HOST);
+        $appHost = parse_url(config('app.url', ''), PHP_URL_HOST);
         $refHost = parse_url($referer, PHP_URL_HOST);
         
         if ($refHost === $appHost) {

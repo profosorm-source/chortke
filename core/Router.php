@@ -154,38 +154,52 @@ class Router
             }
         }
 
-        $method = $this->request->method();
-        $uri    = $this->normalizeUri($_SERVER['REQUEST_URI'] ?? '/');
+        // ── Global Middleware Stack ─────────────────────────────────────
+        // این میدل‌ویرها برای تمامی درخواست‌ها (حتی صفحات ۴۰۴) اجرا می‌شوند
+        $globalMiddlewares = [
+            \App\Middleware\CorsMiddleware::class,
+            \App\Middleware\HttpsMiddleware::class,
+            \App\Middleware\SecurityHeadersMiddleware::class
+        ];
 
-        foreach ($this->routes[$method] ?? [] as $routeData) {
-            $params = $this->matchRoute($routeData['uri'], $uri);
+        // اجرای حلقه اصلی مسیریابی از میان Pipeline سراسری
+        $response = (new Pipeline($this->container))
+            ->send($this->request)
+            ->through($globalMiddlewares)
+            ->then(function ($request) {
+                
+                $method = $request->method();
+                $uri    = $this->normalizeUri($_SERVER['REQUEST_URI'] ?? '/');
 
-            if ($params === false) {
-                continue;
-            }
+                // ① جستجوی مسیر منطبق (Route Matching)
+                foreach ($this->routes[$method] ?? [] as $routeData) {
+                    $params = $this->matchRoute($routeData['uri'], $uri);
 
-            // ① تزریق route params به Request
-            $this->request->setParams($params);
-            $GLOBALS['_route_params'] = $params;
+                    if ($params === false) {
+                        continue;
+                    }
 
-            // ② آماده‌سازی Middlewareها
-            $middlewares = $routeData['route']->getMiddleware();
+                    $request->setParams($params);
+                    $GLOBALS['_route_params'] = $params;
 
-            // ③ اجرای Pipeline
-            $response = (new Pipeline($this->container))
-                ->send($this->request)
-                ->through($middlewares)
-                ->then(function ($request) use ($routeData, $params) {
-                    // مقصد نهایی: اجرای Controller Action
-                    return $this->executeAction($routeData['route']->getAction(), $params);
-                });
+                    // ② اجرای پایپ‌لاین اختصاصی روت
+                    $middlewares = $routeData['route']->getMiddleware();
 
-            // ④ ارسال پاسخ نهایی (اگر Response باشد)
-            $this->handleResult($response);
-            return;
-        }
+                    return (new Pipeline($this->container))
+                        ->send($request)
+                        ->through($middlewares)
+                        ->then(function ($req) use ($routeData, $params) {
+                            // مقصد نهایی: اجرای Action کنترلر
+                            return $this->executeAction($routeData['route']->getAction(), $params);
+                        });
+                }
 
-        $this->handleNotFound($uri, $method);
+                // ③ در صورت عدم یافتن مسیر، خروجی ۴۰۴ استاندارد برگردانده می‌شود
+                return $this->generateNotFoundResponse($uri, $method);
+            });
+
+        // ④ نهایی‌سازی و تحویل پاسخ نهایی به خروجی
+        $this->handleResult($response);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -315,10 +329,16 @@ class Router
     // 404 Handler
     // ─────────────────────────────────────────────────────────────
 
-    private function handleNotFound(string $uri, string $method): void
+    /**
+     * ایجاد پاسخ استاندارد ۴۰۴ بدون قطع اجرای سیستم
+     */
+    private function generateNotFoundResponse(string $uri, string $method): Response
     {
-        http_response_code(404);
+        $response = new Response();
+        $response->status(404);
 
+        ob_start();
+        
         if (config('app.debug') && config('app.env') === 'local') {
             echo "<!DOCTYPE html><html lang='fa' dir='rtl'><head><meta charset='UTF-8'>";
             echo "<title>404 - صفحه یافت نشد</title>";
@@ -336,10 +356,15 @@ class Router
             echo "</ul></div></body></html>";
         } else {
             $view = __DIR__ . '/../views/errors/404.php';
-            file_exists($view) ? require $view : print '404 - Not Found';
+            if (file_exists($view)) {
+                require $view;
+            } else {
+                echo '404 - Not Found';
+            }
         }
 
-        exit;
+        $response->setContent(ob_get_clean());
+        return $response;
     }
 
     // ─────────────────────────────────────────────────────────────

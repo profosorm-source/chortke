@@ -11,7 +11,7 @@ class PathResolver
     private function __construct()
     {
         // تشخیص Base URL از تنظیمات (Canonical)
-        $this->baseUrl = rtrim(env('APP_URL', 'http://localhost'), '/');
+        $this->baseUrl = rtrim(config('app.url', 'http://localhost'), '/');
         
         // تشخیص مسیر پروژه (فیزیکی)
         $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';

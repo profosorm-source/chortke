@@ -293,21 +293,9 @@ $container->singleton(\App\Models\SocialTaskAnalyticsModel::class, function($c) 
     return new \App\Models\SocialTaskAnalyticsModel($c->make(\Core\Database::class));
 });
 
-$container->singleton(\App\Services\SocialTask\SocialTaskScoringService::class, function($c) {
-    return new \App\Services\SocialTask\SocialTaskScoringService();
-});
 
-$container->singleton(\App\Services\Shared\ScoreService::class, function($c) {
-    return new \App\Services\Shared\ScoreService(
-        $c->make(\Core\Database::class),
-        $c->make(\Core\Logger::class),
-        $c->make(\App\Models\Score::class),
-        $c->make(\App\Models\User::class),
-        $c->make(\App\Models\SocialTaskAnalyticsModel::class),
-        $c->make(\App\Services\User\UserScoreService::class),
-        $c->make(\App\Services\InfluencerReputationService::class)
-    );
-});
+
+
 
 $container->singleton(\App\Services\SocialTask\BehaviorAnalysisService::class, function($c) {
     return new \App\Services\SocialTask\BehaviorAnalysisService(
@@ -322,13 +310,7 @@ $container->singleton(\App\Services\SocialTask\CameraVerificationService::class,
     );
 });
 
-$container->singleton(\App\Services\SocialTask\RatingService::class, function($c) {
-    return new \App\Services\SocialTask\RatingService(
-        $c->make(\App\Services\Shared\RatingService::class),
-        $c->make(\App\Models\SocialTaskModel::class),
-        $c->make(\App\Services\Shared\ScoreService::class)
-    );
-});
+
 
 $container->singleton(\App\Services\SocialTask\SocialTaskService::class);
 
@@ -366,16 +348,10 @@ $container->singleton(Session::class, function() {
     return Session::getInstance();
 });
 
-$container->singleton(Database::class, function() {
-    return Database::getInstance();
-});
 
 
-$container->singleton(\App\Services\AntiFraud\RiskPolicyService::class, function($c) {
-    return new \App\Services\AntiFraud\RiskPolicyService(
-        $c->make(\Core\Database::class)
-    );
-});
+
+
 
 $container->singleton(\App\Services\EscrowService::class, function($c) {
     return new \App\Services\EscrowService(
@@ -402,9 +378,7 @@ $container->singleton(\App\Services\StateMachineService::class, function($c) {
 
 // RealTimeService retired. WebSocketService automatically handles active loads.
 
-$container->singleton(App\Models\CustomTaskAnalytics::class, function($c) {
-    return new App\Models\CustomTaskAnalytics($c->make(Database::class));
-});
+
 
 $container->singleton(App\Models\AdvancedAnalytics::class, function($c) {
     return new App\Models\AdvancedAnalytics($c->make(Database::class));
@@ -444,12 +418,7 @@ $container->singleton(\App\Models\User::class, function($c) {
     return new \App\Models\User($c->make(\Core\Database::class));
 });
 
-$container->singleton(\App\Services\User\UserService::class, function($c) {
-    return new \App\Services\User\UserService(
-        $c->make(\App\Models\User::class),
-        $c->make(\Core\Logger::class)
-    );
-});
+
 
 $container->singleton(\App\Services\User\ProfileService::class, function($c) {
     return new \App\Services\User\ProfileService(
@@ -459,14 +428,7 @@ $container->singleton(\App\Services\User\ProfileService::class, function($c) {
     );
 });
 
-$container->singleton(\App\Services\Auth\SessionService::class, function($c) {
-    return new \App\Services\Auth\SessionService(
-        $c->make(\App\Models\SecurityModel::class),
-        $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
-        $c->make(\App\Services\DistributedLockService::class),
-        $c->make(\Core\Logger::class)
-    );
-});
+
 
 $container->singleton(\App\Services\Auth\TwoFactorService::class, function($c) {
     return new \App\Services\Auth\TwoFactorService(
@@ -541,12 +503,7 @@ $container->singleton(\App\Services\RedisEmailQueueService::class, function($c) 
     );
 });
 
-// ─── Log Rotation Service ─────────────────────────────────
-$container->singleton(\App\Services\LogRotationService::class, function($c) {
-    return new \App\Services\LogRotationService(
-        $c->make(Database::class)
-    );
-});
+
 
 $container->singleton(\App\Services\EmailService::class, function($c) {
     return new \App\Services\EmailService(
@@ -686,12 +643,7 @@ $container->singleton(\App\Models\FraudAnalyticsModel::class, function($c) {
 
 
 
-$container->singleton(\App\Services\AntiFraud\SessionAnomalyService::class, function($c) {
-    return new \App\Services\AntiFraud\SessionAnomalyService(
-        $c->make(\App\Models\SecurityModel::class),
-        $c->make(\App\Services\AntiFraud\RiskPolicyService::class)
-    );
-});
+
 
 $container->singleton(\App\Services\AntiFraud\GeoIPService::class, function($c) {
     return new \App\Services\AntiFraud\GeoIPService(
@@ -703,11 +655,7 @@ $container->singleton(\App\Services\AntiFraud\GeoIPService::class, function($c) 
     );
 });
 
-$container->singleton(\App\Services\AntiFraud\BrowserFingerprintService::class, function($c) {
-    return new \App\Services\AntiFraud\BrowserFingerprintService(
-        $c->make(\App\Models\IpAndDeviceModel::class)
-    );
-});
+
 
 $container->singleton('oauth_config', function() {
     return [
@@ -920,25 +868,9 @@ $container->singleton(\App\Controllers\Admin\BankCardController::class, function
 $container->singleton(WithdrawalService::class);
 
 
-$container->singleton(\App\Services\Shared\ScoreService::class, function($c) {
-    return new \App\Services\Shared\ScoreService(
-        $c->make(Database::class),
-        $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Models\Score::class),
-        $c->make(\App\Models\User::class),
-        $c->make(\App\Models\SocialTaskAnalyticsModel::class),
-        $c->make(\App\Services\User\UserScoreService::class),
-        $c->make(\App\Services\InfluencerReputationService::class)
-    );
-});
 
-$container->singleton(\App\Services\AntiFraud\RiskDecisionService::class, function($c) {
-    return new \App\Services\AntiFraud\RiskDecisionService(
-        $c->make(Database::class),
-        $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
-        $c->make(\App\Services\Shared\ScoreService::class)
-    );
-});
+
+
 
 $container->singleton(InfluencerService::class, function($c) {
     return new InfluencerService(
@@ -1032,29 +964,21 @@ $container->singleton(\App\Services\User\UserDashboardService::class, function($
 
 
 // ─── Auto-generated Model Bindings ─────────────────────────────────────
-$container->singleton(App\Models\AdTask::class, function($c) {
-    return new App\Models\AdTask($c->make(Database::class));
-});
+
 
 $container->singleton(App\Models\BankCard::class, function($c) {
     return new App\Models\BankCard($c->make(Database::class));
 });
 
-$container->singleton(App\Models\Ads::class, function($c) {
-    return new App\Models\Ads($c->make(Database::class));
-});
+
 
 $container->singleton(App\Models\BannerPlacement::class, function($c) {
     return new App\Models\BannerPlacement($c->make(Database::class));
 });
 
-$container->singleton(App\Models\BugReport::class, function($c) {
-    return new App\Models\BugReport($c->make(Database::class));
-});
 
-$container->singleton(App\Models\BugReportComment::class, function($c) {
-    return new App\Models\BugReportComment($c->make(Database::class));
-});
+
+
 
 $container->singleton(App\Models\ContentAgreement::class, function($c) {
     return new App\Models\ContentAgreement($c->make(Database::class));
@@ -1105,9 +1029,7 @@ $container->singleton(App\Models\CronJob::class, function($c) {
     return new App\Models\CronJob($c->make(Database::class));
 });
 
-$container->singleton(App\Models\InfluencerModel::class, function($c) {
-    return new App\Models\InfluencerModel($c->make(Database::class));
-});
+
 
 $container->singleton(App\Models\InvestmentProfit::class, function($c) {
     return new App\Models\InvestmentProfit($c->make(Database::class));
@@ -1129,9 +1051,7 @@ $container->singleton(App\Models\FileAccess::class, function($c) {
     return new App\Models\FileAccess($c->make(Database::class));
 });
 
-$container->singleton(App\Models\Escrow::class, function($c) {
-    return new App\Models\Escrow($c->make(Database::class));
-});
+
 
 $container->singleton(App\Models\LotteryDailyNumber::class, function($c) {
     return new App\Models\LotteryDailyNumber($c->make(Database::class));
@@ -1162,21 +1082,15 @@ $container->singleton(App\Models\SEOExecution::class, function($c) {
     return new App\Models\SEOExecution($c->make(Database::class));
 });
 
-$container->singleton(App\Models\SEOKeyword::class, function($c) {
-    return new App\Models\SEOKeyword($c->make(Database::class));
-});
+
 
 $container->singleton(App\Models\StoryOrder::class, function($c) {
     return new App\Models\StoryOrder($c->make(Database::class));
 });
 
-$container->singleton(App\Models\TaskDispute::class, function($c) {
-    return new App\Models\TaskDispute($c->make(Database::class));
-});
 
-$container->singleton(App\Models\TaskRecheck::class, function($c) {
-    return new App\Models\TaskRecheck($c->make(Database::class));
-});
+
+
 
 $container->singleton(App\Models\Ticket::class, function($c) {
     return new App\Models\Ticket($c->make(Database::class));
@@ -1194,9 +1108,7 @@ $container->singleton(App\Models\TradingRecord::class, function($c) {
     return new App\Models\TradingRecord($c->make(Database::class));
 });
 
-$container->singleton(App\Models\UserBankCard::class, function($c) {
-    return new App\Models\UserBankCard($c->make(Database::class));
-});
+
 
 $container->singleton(App\Models\Withdrawal::class, function($c) {
     return new App\Models\Withdrawal($c->make(Database::class));
@@ -1247,11 +1159,7 @@ $container->singleton(\App\Models\LedgerEntry::class, function($c) {
     return new \App\Models\LedgerEntry($c->make(Database::class));
 });
 
-$container->singleton(App\Services\AdvertiserDashboardService::class, function($c) {
-    return new App\Services\AdvertiserDashboardService(
-        $c->make(Database::class)
-    );
-});
+
 
 $container->singleton(App\Services\BankCardService::class);
 
@@ -1309,11 +1217,7 @@ $container->singleton(\App\Controllers\Admin\ScoreManagementController::class, f
     );
 });
 
-$container->singleton(\App\Controllers\Admin\AppealAdminController::class, function($c) {
-    return new \App\Controllers\Admin\AppealAdminController(
-        $c->make(\App\Services\Shared\DisputeService::class)
-    );
-});
+
 
 $container->singleton(\App\Controllers\Admin\SeoAdController::class, function($c) {
     return new \App\Controllers\Admin\SeoAdController(
@@ -1323,12 +1227,7 @@ $container->singleton(\App\Controllers\Admin\SeoAdController::class, function($c
     );
 });
 
-$container->singleton(\App\Controllers\User\AppealController::class, function($c) {
-    return new \App\Controllers\User\AppealController(
-        $c->make(\App\Services\Shared\DisputeService::class),
-        $c->make(\App\Services\UploadService::class)
-    );
-});
+
 
 $container->singleton(\App\Services\DirectMessageService::class, function($c) {
     return new \App\Services\DirectMessageService(
@@ -1372,19 +1271,9 @@ $container->singleton(\App\Controllers\Admin\AdminAnalyticsController::class, fu
     );
 });
 
-$container->singleton(App\Services\SEOExecutionService::class, function($c) {
-    return new App\Services\SEOExecutionService(
-        $c->make(Database::class),
-        $c->make(\App\Models\SEOExecution::class)
-    );
-});
 
-$container->singleton(App\Services\SEOKeywordService::class, function($c) {
-    return new App\Services\SEOKeywordService(
-        $c->make(Database::class),
-        $c->make(\App\Models\SEOKeyword::class)
-    );
-});
+
+
 
 $container->singleton(\App\Services\Auth\SessionService::class, function($c) {
     return new \App\Services\Auth\SessionService(
@@ -1420,14 +1309,7 @@ $container->singleton(\App\Services\User\UserService::class, function($c) {
     );
 });
 
-$container->singleton(\App\Services\UserSettingsService::class, function($c) {
-    return new \App\Services\UserSettingsService(
-        $c->make(\Core\Database::class),
-        $c->make(\Core\Logger::class),
-        $c->make(\App\Models\User::class),
-        $c->make(\Core\Cache::class)
-    );
-});
+
 
 $container->singleton(\App\Controllers\User\SettingsController::class, function($c) {
     return new \App\Controllers\User\SettingsController(
@@ -1670,14 +1552,7 @@ $container->make('event.bootstrap');
 $container->singleton(\App\Services\AdminDashboard\DashboardQueryService::class);
 
 // ─── AdminDashboardService ────────────────────────────────────────────────────
-$container->singleton(\App\Services\AdminDashboardService::class, function($c) {
-    return new \App\Services\AdminDashboardService(
-        $c->make(\App\Models\User::class),
-        $c->make(Logger::class),
-        $c->make(\App\Services\AdminDashboard\DashboardQueryService::class),
-        $c->make(\App\Services\AdminDashboard\SystemMonitoringService::class)
-    );
-});
+
 
 // ─── BulkOperationsService ────────────────────────────────────────────────────
 $container->singleton(\App\Services\BulkOperationsService::class, function($c) {
@@ -1786,9 +1661,7 @@ $container->singleton(\App\Controllers\PaymentController::class, function($c) {
     );
 });
 
-$container->singleton(\Core\Database::class, function () {
-    return \Core\Database::getInstance();
-});
+
 
 // ─── Phase 3 Services ─────────────────────────────────────────────────────
 // ✅ Real-time, Caching, Verification, Performance Optimization
@@ -1876,14 +1749,7 @@ $container->singleton(\App\Services\DataExportService::class, function($c) {
     );
 });
 
-$container->singleton(\App\Services\AccountDeletionService::class, function($c) {
-    return new \App\Services\AccountDeletionService(
-        $c->make(\App\Models\User::class),
-        $c->make(\App\Models\AccountDeletionLog::class),
-        $c->make(\Core\Database::class),
-        $c->make(\Core\Logger::class)
-    );
-});
+
 
 $container->singleton(\App\Controllers\Admin\AccountDeletionManagementController::class, function($c) {
     return new \App\Controllers\Admin\AccountDeletionManagementController(
