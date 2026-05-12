@@ -1,14 +1,5 @@
 <?php
-$siteKey = trim((string)config('captcha.recaptcha_site_key', ''));
-if ($siteKey === '') {
-    try {
-        $container = \Core\Container::getInstance();
-        $settingModel = $container->make(\App\Models\SystemSetting::class);
-        $siteKey = trim((string)$settingModel->get('recaptcha_site_key', ''));
-    } catch (\Throwable $e) {
-        $siteKey = '';
-    }
-}
+$siteKey = (string)setting('recaptcha_site_key', config('captcha.recaptcha_site_key', ''));
 ?>
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">

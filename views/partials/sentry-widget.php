@@ -10,12 +10,18 @@ use Core\Database;
 
 try {
     $db = Database::getInstance();
-    $sentryDashboard = new DashboardService($db);
-    $sentryHealth = $sentryDashboard->calculateHealthScore();
-    $sentryStats = $sentryDashboard->getErrorStatistics();
+    $sentryModel = new \App\Models\SentryModel($db);
+    $sentryDashboard = new DashboardService($sentryModel);
+    
+    // M29 Fix: واکشی یکپارچه از بافر کش ۵ دقیقه‌ای جهت حذف صددرصدی تاخیر در رندر داشبورد اصلی
+    $overview = $sentryDashboard->getOverview();
+    $sentryHealth = $overview['health_score'] ?? ['score' => 0, 'grade' => 'F', 'status' => 'unknown'];
+    $sentryStats  = $overview['error_stats']  ?? ['total_issues' => 0, 'total_events' => 0];
+    $cronStatus   = $overview['cron_status']   ?? ['status' => 'unknown'];
 } catch (\Throwable $e) {
     $sentryHealth = ['score' => 0, 'grade' => 'F', 'status' => 'unknown'];
-    $sentryStats = ['total_issues' => 0, 'total_events' => 0];
+    $sentryStats  = ['total_issues' => 0, 'total_events' => 0];
+    $cronStatus   = ['status' => 'unknown'];
 }
 ?>
 
@@ -27,8 +33,19 @@ try {
     margin-bottom: 20px;
 ">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-        <h3 style="margin: 0; font-size: 1.1rem; color: #2d3748;">
+        <h3 style="margin: 0; font-size: 1.1rem; color: #2d3748; display: flex; align-items: center; gap: 8px;">
             🛡️ سلامت سیستم
+            <?php
+                // M28 Fix: نمایش هوشمند نبض زنده کرون‌جاب سرور با استفاده از چراغ LED داینامیک
+                $cronColor = match($cronStatus['status'] ?? 'unknown') {
+                    'healthy'  => '#10b981',
+                    'warning'  => '#f59e0b',
+                    'critical' => '#ef4444',
+                    default    => '#94a3b8'
+                };
+                $cronLabel = 'کرون‌جاب: ' . ($cronStatus['message'] ?? 'نامعلوم');
+            ?>
+            <span title="<?= e($cronLabel) ?>" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: <?= $cronColor ?>; box-shadow: 0 0 6px <?= $cronColor ?>; cursor: help;"></span>
         </h3>
         <a href="/admin/sentry" style="
             color: #667eea;
