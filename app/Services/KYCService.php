@@ -412,5 +412,38 @@ class KYCService extends \App\Services\BaseService
     {
         return $this->kycModel->find($id);
     }
+
+    /**
+     * ✅ دریافت آمار وضعیت‌ها با یک کوئری GROUP BY
+     * به جای 4 کوئری جداگانه
+     */
+    public function getStatsByStatus(): array
+    {
+        $stats = $this->db->connection()
+            ->table('kyc_verifications')
+            ->selectRaw('status, COUNT(*) as count')
+            ->whereNull('deleted_at')
+            ->groupBy('status')
+            ->get();
+
+        $result = [
+            'pending' => 0,
+            'under_review' => 0,
+            'verified' => 0,
+            'rejected' => 0,
+        ];
+
+        if (is_array($stats)) {
+            foreach ($stats as $stat) {
+                $status = $stat['status'] ?? ($stat->status ?? null);
+                $count = $stat['count'] ?? ($stat->count ?? 0);
+                if (isset($result[$status])) {
+                    $result[$status] = (int)$count;
+                }
+            }
+        }
+
+        return $result;
+    }
 }
 
