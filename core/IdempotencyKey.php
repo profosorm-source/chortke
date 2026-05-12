@@ -26,9 +26,10 @@ class IdempotencyKey
     private const CLEANUP_DAYS = 7;
     private const MAX_RETRIES = 3;
 
-    public function __construct()
+    public function __construct(?Database $db = null)
     {
-        $this->db = Database::getInstance();
+        // H19 Fix: استفاده از Dependency Injection
+        $this->db = $db ?? Container::getInstance()->make(Database::class);
     }
 
     public static function generate(?string $seed = null): string
@@ -208,7 +209,7 @@ class IdempotencyKey
         }
     }
 
-    private function logEvent(string $event, array $context = [], string $level = 'info'): void
+    protected function logEvent(string $event, array $context = [], string $level = 'info'): void
 {
     if (function_exists('logger')) {
         $payload = array_merge(['channel' => 'idempotency'], $context);
@@ -262,26 +263,23 @@ logger()->info($event, $payload);
      * @param int|null $userId
      * @return bool
      */
-    public function complete(string $key, $result, ?int $userId = null): bool
+    public function complete(string $key, $result, int $userId): bool
     {
         try {
+            // H18 Fix: اجباری شدن user_id در تمام کوئری‌ها برای جلوگیری از اورراید شدن کلیدهای سایر کاربران
             $sql = "UPDATE {$this->table} 
                     SET `status` = 'completed',
                         `result` = :result,
                         `completed_at` = NOW()
-                    WHERE `key` = :key";
+                    WHERE `key` = :key AND `user_id` = :user_id";
             
             $params = [
                 'key' => $key,
+                'user_id' => $userId,
                 'result' => is_array($result) || is_object($result) 
                     ? json_encode($result, JSON_UNESCAPED_UNICODE) 
                     : $result
             ];
-            
-            if ($userId !== null) {
-                $sql .= " AND `user_id` = :user_id";
-                $params['user_id'] = $userId;
-            }
             
             $stmt = $this->db->prepare($sql);
             $success = $stmt->execute($params);
@@ -311,26 +309,23 @@ logger()->info($event, $payload);
      * @param int|null $userId
      * @return bool
      */
-    public function fail(string $key, $error, ?int $userId = null): bool
+    public function fail(string $key, $error, int $userId): bool
     {
         try {
             $errorData = is_array($error) ? $error : ['error' => $error];
             
+            // H18 Fix: اجباری شدن user_id
             $sql = "UPDATE {$this->table} 
                     SET `status` = 'failed',
                         `result` = :result,
                         `completed_at` = NOW()
-                    WHERE `key` = :key";
+                    WHERE `key` = :key AND `user_id` = :user_id";
             
             $params = [
                 'key' => $key,
+                'user_id' => $userId,
                 'result' => json_encode($errorData, JSON_UNESCAPED_UNICODE)
             ];
-            
-            if ($userId !== null) {
-                $sql .= " AND `user_id` = :user_id";
-                $params['user_id'] = $userId;
-            }
             
             $stmt = $this->db->prepare($sql);
             $success = $stmt->execute($params);
@@ -414,10 +409,11 @@ logger()->info($event, $payload);
      */
     public static function wrap(string $key, int $userId, string $action, callable $callback, ?array $requestData = null)
     {
-        $service = new self();
+        // H19 Fix: استفاده از Container برای Resolve شدن وابستگی‌ها در Wrapperهای استاتیک
+        $service = Container::getInstance()->make(self::class);
         $logId = uniqid('WRAP_', true);
         
-       $this->logEvent('idempotency.wrap.started', [
+        $service->logEvent('idempotency.wrap.started', [
     'log_id' => $logId,
     'key' => $key,
     'user_id' => $userId,
@@ -427,7 +423,7 @@ logger()->info($event, $payload);
         $check = $service->check($key, $userId, $action, $requestData);
         
         if ($check['is_duplicate']) {
-            $this->logEvent('idempotency.wrap.duplicate_returned', [
+            $service->logEvent('idempotency.wrap.duplicate_returned', [
     'log_id' => $logId,
     'key' => $key,
 ], 'warning');
@@ -436,7 +432,7 @@ logger()->info($event, $payload);
         
         try {
             // اجرای عملیات
-            $this->logEvent('idempotency.wrap.callback.executing', [
+            $service->logEvent('idempotency.wrap.callback.executing', [
     'log_id' => $logId,
     'key' => $key,
 ]);
@@ -445,7 +441,7 @@ logger()->info($event, $payload);
             // ذخیره نتیجه موفق
             $service->complete($key, $result, $userId);
             
-            $this->logEvent('idempotency.wrap.callback.success', [
+            $service->logEvent('idempotency.wrap.callback.success', [
     'log_id' => $logId,
     'key' => $key,
 ]);

@@ -11,6 +11,8 @@ class Blueprint
     private $table;
     private $columns = [];
     private $indexes = [];
+    private $commands = [];       // H25 Fix: صف نگهدارنده دستورات ساختاری اختصاصی مانند DROP و RENAME
+    private $modifications = []; // H25 Fix: علامت‌گذار برای ستون‌هایی که به جای ADD باید MODIFY شوند
 
     public function __construct($table)
     {
@@ -206,6 +208,54 @@ class Blueprint
     }
 
     /**
+     * H25 Fix: حذف ستون در حالت Alter
+     */
+    public function dropColumn($name)
+    {
+        $this->commands[] = "DROP COLUMN `{$name}`";
+        return $this;
+    }
+
+    /**
+     * H25 Fix: تغییر نام ستون در حالت Alter
+     */
+    public function renameColumn($from, $to)
+    {
+        $this->commands[] = "RENAME COLUMN `{$from}` TO `{$to}`";
+        return $this;
+    }
+
+    /**
+     * H25 Fix: ویرایش ساختار ستون فعلی (تبدیل ADD به MODIFY COLUMN)
+     */
+    public function change()
+    {
+        $lastIndex = count($this->columns) - 1;
+        if ($lastIndex >= 0) {
+            $this->modifications[$lastIndex] = 'MODIFY COLUMN';
+        }
+        return $this;
+    }
+
+    /**
+     * H25 Fix: حذف ایندکس در حالت Alter
+     */
+    public function dropIndex($indexName)
+    {
+        $this->commands[] = "DROP INDEX `{$indexName}`";
+        return $this;
+    }
+
+    /**
+     * H25 Fix: تعریف کلید خارجی به شکل استاندارد
+     */
+    public function foreign($column, $references, $on, $onDelete = 'CASCADE', $onUpdate = 'RESTRICT')
+    {
+        $this->commands[] = "ADD CONSTRAINT `fk_{$this->table}_{$column}` FOREIGN KEY (`{$column}`) REFERENCES `{$on}` (`{$references}`) ON DELETE {$onDelete} ON UPDATE {$onUpdate}";
+        return $this;
+    }
+
+    /**
      * تبدیل به SQL
      */
     public function toSql($type = 'create')
@@ -224,8 +274,30 @@ class Blueprint
         }
         
         if ($type === 'alter') {
+            $statements = [];
+            
+            // ۱. پردازش ستون‌ها با در نظر گرفتن فلگ MODIFY
+            foreach ($this->columns as $index => $columnSql) {
+                $prefix = isset($this->modifications[$index]) ? $this->modifications[$index] : 'ADD COLUMN';
+                $statements[] = "{$prefix} {$columnSql}";
+            }
+            
+            // ۲. پردازش ایندکس‌های اضافه شده
+            foreach ($this->indexes as $indexSql) {
+                $statements[] = "ADD " . $indexSql;
+            }
+            
+            // ۳. الحاق دستورات اختصاصی (DROP, RENAME, FOREIGN)
+            foreach ($this->commands as $cmdSql) {
+                $statements[] = $cmdSql;
+            }
+            
+            if (empty($statements)) {
+                throw new \Exception("No columns or commands defined for alteration on table '{$this->table}'");
+            }
+
             $sql = "ALTER TABLE `{$this->table}`\n";
-            $sql .= "  ADD COLUMN " . implode(",\n  ADD COLUMN ", $this->columns);
+            $sql .= "  " . implode(",\n  ", $statements);
             
             return $sql;
         }

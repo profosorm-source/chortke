@@ -11,10 +11,21 @@ class Schema
     private static $db;
 
     /**
+     * H24 Fix: ولیدیشن نام جدول برای محافظت کامل در برابر SQL Injectionهای پویا
+     */
+    private static function validateTable(string $table): void
+    {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $table)) {
+            throw new \InvalidArgumentException("نام جدول نامعتبر است ({$table}). استفاده از کاراکترهای خاص مجاز نیست.");
+        }
+    }
+
+    /**
      * ایجاد جدول
      */
     public static function create($table, callable $callback)
     {
+        self::validateTable($table);
         self::$db = Database::getInstance();
         
         $blueprint = new Blueprint($table);
@@ -46,6 +57,7 @@ class Schema
      */
     public static function hasTable($table)
     {
+        self::validateTable($table);
         self::$db = Database::getInstance();
         
         $sql = "SHOW TABLES LIKE ?";
@@ -59,9 +71,11 @@ class Schema
      */
     public static function drop($table)
     {
+        self::validateTable($table);
         self::$db = Database::getInstance();
         
-        $sql = "DROP TABLE IF EXISTS {$table}";
+        // H24 Fix: بستن نام جدول در Backtick جهت فراردهی امن از کاراکترهای رزرو شده
+        $sql = "DROP TABLE IF EXISTS `{$table}`";
         
         try {
             self::$db->query($sql);
@@ -87,6 +101,7 @@ class Schema
      */
     public static function table($table, callable $callback)
     {
+        self::validateTable($table);
         self::$db = Database::getInstance();
         
         $blueprint = new Blueprint($table);

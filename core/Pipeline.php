@@ -83,15 +83,27 @@ class Pipeline
                     $pipe = $this->container->make($pipe);
                 }
 
+                // H10 Ultimate Fix: بستن زنجیره استثناهای پاسخ به صورت پله‌ای به عقب
+                // ایجاد یک Wrapper برای استک بعدی، تا در صورت بروز هرگونه Exception در لایه‌های درونی‌تر
+                // به شیء خروجی معتبر تبدیل شده و وارد فاز After-Middleware این لایه شود.
+                $wrappedStack = function ($req) use ($stack) {
+                    try {
+                        return $stack($req);
+                    } catch (\Core\Exceptions\HttpResponseException $e) {
+                        return $e->getResponse();
+                    }
+                };
+
+                // H20 Fix: اولویت دادن به متد صریح handle بر روی متد جادویی invoke
+                if (method_exists($pipe, 'handle')) {
+                    return $pipe->handle($passable, $wrappedStack, ...$parameters);
+                }
+
                 if (is_callable($pipe)) {
-                    return $pipe($passable, $stack, ...$parameters);
+                    return $pipe($passable, $wrappedStack, ...$parameters);
                 }
 
-                if (!method_exists($pipe, 'handle')) {
-                    throw new \RuntimeException("Middleware " . get_class($pipe) . " must have a handle() method.");
-                }
-
-                return $pipe->handle($passable, $stack, ...$parameters);
+                throw new \RuntimeException("Middleware " . (is_object($pipe) ? get_class($pipe) : gettype($pipe)) . " must have a handle() method.");
             };
         };
     }

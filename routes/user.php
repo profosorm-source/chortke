@@ -8,6 +8,7 @@ use App\Middleware\AuthMiddleware;
 use App\Middleware\AdvancedFraudMiddleware;
 use App\Middleware\CSRFMiddleware;
 use App\Middleware\RateLimitMiddleware;
+use App\Middleware\RequireFeature;
 use App\Controllers\User\DashboardController    as UserDashboardController;
 use App\Controllers\User\ProfileController;
 use App\Controllers\User\SettingsController;
@@ -188,9 +189,9 @@ $r->post('/investment/withdraw',       [UserInvestmentController::class, 'withdr
 $r->get('/investment/profit-history',  [UserInvestmentController::class, 'profitHistory'], $auth);
 
 // ── قرعه‌کشی ──────────────────────────────────────────────────────────────
-$r->get('/lottery',       [UserLotteryController::class, 'index'], $auth);
-$r->post('/lottery/join', [UserLotteryController::class, 'join'],  $authCSRF);
-$r->post('/lottery/vote', [UserLotteryController::class, 'vote'],  $authCSRF);
+$r->get('/lottery',       [UserLotteryController::class, 'index'], array_merge($auth, [RequireFeature::class . ':lottery']));
+$r->post('/lottery/join', [UserLotteryController::class, 'join'],  array_merge($authCSRF, [RequireFeature::class . ':lottery']));
+$r->post('/lottery/vote', [UserLotteryController::class, 'vote'],  array_merge($authCSRF, [RequireFeature::class . ':lottery']));
 
 // ── زیرمجموعه‌گیری ────────────────────────────────────────────────────────
 $r->get('/referral',                [UserReferralController::class, 'index'],        $auth);

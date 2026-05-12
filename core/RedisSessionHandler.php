@@ -13,6 +13,7 @@ class RedisSessionHandler implements \SessionHandlerInterface
 {
     private ?\Redis $redis = null;
     private bool $useRedis = false;
+    private static bool $hasFailed = false; // H13 Fix: جلوگیری از تلاش مجدد در طول کل حیات این پروسس (مخصوصاً در CLI)
     private string $prefix = 'chortke:session:';
     private int $ttl = 7200; // 2 hours default
     private string $savePath = '';
@@ -25,6 +26,12 @@ class RedisSessionHandler implements \SessionHandlerInterface
 
     private function tryConnectRedis(): void
     {
+        // H13 Fix: اگر قبلاً فیل شده، مستقیماً برو روی فایل
+        if (self::$hasFailed) {
+            $this->useRedis = false;
+            return;
+        }
+
         // استفاده از تنظیمات مشترک Cache
         $cache = \Core\Cache::getInstance();
 
@@ -184,6 +191,8 @@ class RedisSessionHandler implements \SessionHandlerInterface
 
     private function fallbackToFile(\Throwable $e): void
     {
+        self::$hasFailed = true; // ثبت وضعیت خرابی سیستمی برای بقیه درخواست یا لوپ
+        
         if ($this->useRedis) {
             $this->useRedis = false;
             $this->redis = null;

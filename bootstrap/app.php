@@ -54,9 +54,28 @@ if (!defined('BASE_PATH')) {
     define('BASE_PATH', dirname(__DIR__));
 }
 
-// Autoloader — vendor/autoload.php + PSR-4 (Core, App)
-require_once BASE_PATH . '/core/Autoloader.php';
-\Core\Autoloader::register();
+// Composer Autoloader — Loads vendor + PSR-4 (Core, App) + Helpers
+$vendorAutoload = BASE_PATH . '/vendor/autoload.php';
+if (!file_exists($vendorAutoload)) {
+    $isCli = (PHP_SAPI === 'cli' || defined('STDIN'));
+    $errorMessage = "Error: vendor/autoload.php was not found. Please run 'composer install' in the project root.";
+    if ($isCli) {
+        fwrite(STDERR, $errorMessage . "\n");
+        exit(1);
+    }
+    http_response_code(500);
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=utf-8');
+    }
+    die(
+        '<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>خطای بسته‌های سیستمی</title>' .
+        '<style>body{font-family:Tahoma,sans-serif;padding:50px;background:#fcfcfc;} .box{background:#fff;border-right:5px solid #e74c3c;padding:30px;box-shadow:0 5px 20px rgba(0,0,0,0.05);border-radius:4px;}</style></head>' .
+        '<body><div class="box"><h2>خطای راه‌اندازی: Composer autoload یافت نشد</h2>' .
+        '<p>بسته‌های PHP سیستم نصب نشده‌اند. لطفاً دستور زیر را اجرا نمایید:</p>' .
+        '<pre style="background:#f5f5f5;padding:15px;border-radius:4px;color:#c0392b;font-weight:bold;">composer install</pre></div></body></html>'
+    );
+}
+require_once $vendorAutoload;
 
 // ── Hardened Security Defaults (Entry Safeguard) ───────────────
 error_reporting(0);
@@ -399,7 +418,7 @@ $container->singleton(\App\Services\EmailService::class, function($c) {
         $c->make(\Core\Logger::class),
         $c->make(\App\Models\EmailQueue::class),
         $c->make(\App\Models\NotificationPreference::class),
-        $c->make(\App\Models\Setting::class),
+        $c->make(\App\Services\SettingService::class),
         $c->make(\App\Models\User::class),
         $c->make(\Core\Queue::class),
         $c->make(\App\Services\RedisEmailQueueService::class)
@@ -417,6 +436,7 @@ $container->singleton(\App\Services\Notification\NotificationService::class, fun
         $c->make(\App\Services\Notification\NotificationPreferenceService::class),
         $c->make(\App\Services\Notification\NotificationTracker::class),
         $c->make(\App\Services\Notification\NotificationAnalyticsService::class),
+        $c->make(\App\Services\SettingService::class),
         $c->make(\App\Services\EmailService::class)
     );
 });
@@ -584,7 +604,8 @@ $container->singleton(\App\Services\XPEngine::class, function($c) {
         $c->make(\Core\Database::class),
         $c->make(\App\Models\Score::class),
         $c->make(\App\Models\UserVacation::class),
-        $c->make(\Core\Logger::class)
+        $c->make(\Core\Logger::class),
+        $c->make(\App\Services\SettingService::class)
     );
 });
 $container->singleton(App\Services\UserLevelService::class, \App\Services\User\UserLevelService::class);
@@ -884,8 +905,8 @@ $container->singleton(App\Models\Page::class, function($c) {
 });
 
 
-$container->singleton(App\Models\SEOExecution::class, function($c) {
-    return new App\Models\SEOExecution($c->make(Database::class));
+$container->singleton(App\Models\SeoExecution::class, function($c) {
+    return new App\Models\SeoExecution($c->make(Database::class));
 });
 
 
@@ -935,6 +956,10 @@ $container->singleton(\App\Models\InfluencerModel::class, function($c) {
 
 $container->singleton(\App\Models\InfluencerReputation::class, function($c) {
     return new \App\Models\InfluencerReputation($c->make(Database::class));
+});
+
+$container->singleton(\App\Models\InfluencerVerification::class, function($c) {
+    return new \App\Models\InfluencerVerification($c->make(Database::class));
 });
 
 $container->singleton(\App\Models\Score::class, function($c) {
@@ -1337,6 +1362,7 @@ $container->singleton(\App\Services\SocialTask\SilentAntiFraudService::class, fu
         $c->make(\App\Services\SocialTask\SocialTaskScoringService::class),
         $c->make(\App\Services\AuditTrail::class),
         $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Services\SettingService::class),
         $c->make(\App\Contracts\LoggerInterface::class)  // ✅ Logger اضافه شد
     );
 });
@@ -1368,8 +1394,11 @@ $container->singleton(\App\Services\WebSocketService::class, function($c) {
 
 $container->singleton(\App\Services\VerificationService::class, function($c) {
     return new \App\Services\VerificationService(
+        $c->make(\App\Models\InfluencerModel::class),
+        $c->make(\App\Models\InfluencerVerification::class),
         $c->make(\Core\Database::class),
-        $c->make(\Core\Logger::class)
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\SettingService::class)
     );
 });
 
@@ -1646,6 +1675,517 @@ $container->singleton(\App\Services\Shared\PolicyService::class, function($c) {
 
 
 // See: SERVICES_AUDIT_INCOMPLETE.md for details
+
+// --- MISSING SERVICES AUTO-REGISTERED ---
+// Missing bindings to append to bootstrap/app.php
+
+$container->singleton(\App\Services\ApiTokenService::class, function($c) {
+    return new \App\Services\ApiTokenService(
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Models\ApiToken::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\Core\RateLimiter::class)
+    );
+});
+
+$container->singleton(\App\Services\BannerService::class, function($c) {
+    return new \App\Services\BannerService(
+        $c->make(\App\Models\Ads::class),
+        $c->make(\App\Models\BannerPlacement::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Services\UploadService::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\CacheAdminService::class, function($c) {
+    return new \App\Services\CacheAdminService(
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\CaptchaService::class, function($c) {
+    return new \App\Services\CaptchaService(
+        $c->make(\App\Models\CaptchaLog::class),
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\Core\Session::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\ContactService::class, function($c) {
+    return new \App\Services\ContactService(
+        $c->make(\App\Models\ContactMessage::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\ContentService::class, function($c) {
+    return new \App\Services\ContentService(
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Models\ContentSubmission::class),
+        $c->make(\App\Models\ContentRevenue::class),
+        $c->make(\App\Models\ContentAgreement::class),
+        $c->make(\Core\TransactionWrapper::class),
+        $c->make(\Core\EventDispatcher::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Services\SettingService::class)
+    );
+});
+
+$container->singleton(\App\Services\CurrencyService::class, function($c) {
+    return new \App\Services\CurrencyService(
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Request::class)
+    );
+});
+
+$container->singleton(\App\Services\FeatureFlagViewHelper::class, function($c) {
+    return new \App\Services\FeatureFlagViewHelper(
+        $c->make(\App\Services\FeatureFlagService::class)
+    );
+});
+
+$container->singleton(\App\Services\FileAccessService::class, function($c) {
+    return new \App\Services\FileAccessService(
+        $c->make(\App\Models\FileAccess::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\InfluencerService::class, function($c) {
+    return new \App\Services\InfluencerService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Services\ReferralCommissionService::class),
+        $c->make(\App\Services\AuditTrail::class),
+        $c->make(\App\Models\InfluencerModel::class),
+        $c->make(\App\Models\StoryOrder::class),
+        $c->make(\App\Services\InfluencerReputationService::class),
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\App\Services\Shared\RatingService::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\XPEngine::class)
+    );
+});
+
+$container->singleton(\App\Services\KYCService::class, function($c) {
+    return new \App\Services\KYCService(
+        $c->make(\App\Models\KYCVerification::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\UploadService::class),
+        $c->make(\App\Services\AuditTrail::class),
+        $c->make(\App\Services\Adapters\KycFaceVerificationAdapter::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\Notification\NotificationService::class)
+    );
+});
+
+$container->singleton(\App\Services\LedgerService::class, function($c) {
+    return new \App\Services\LedgerService(
+        $c->make(\App\Models\LedgerEntry::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\LotteryService::class, function($c) {
+    return new \App\Services\LotteryService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Models\LotteryRound::class),
+        $c->make(\App\Models\LotteryParticipation::class),
+        $c->make(\App\Models\LotteryDailyNumber::class),
+        $c->make(\App\Models\LotteryVote::class),
+        $c->make(\App\Models\LotteryChanceLog::class),
+        $c->make(\App\Services\FeatureFlagService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\ManualDepositService::class, function($c) {
+    return new \App\Services\ManualDepositService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Models\ManualDeposit::class),
+        $c->make(\App\Models\BankCard::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\App\Services\AuditTrail::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\ReconciliationService::class)
+    );
+});
+
+$container->singleton(\App\Services\MessageModerationService::class, function($c) {
+    return new \App\Services\MessageModerationService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Models\InteractionModel::class),
+        $c->make(\App\Models\MessageModerationModel::class)
+    );
+});
+
+$container->singleton(\App\Services\MigrationManager::class, function($c) {
+    return new \App\Services\MigrationManager(
+        $c->make(\Core\Database::class)
+    );
+});
+
+$container->singleton(\App\Services\PredictionService::class, function($c) {
+    return new \App\Services\PredictionService(
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Services\private::class)
+    );
+});
+
+$container->singleton(\App\Services\ReferralManagementService::class, function($c) {
+    return new \App\Services\ReferralManagementService(
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Services\private::class)
+    );
+});
+
+$container->singleton(\App\Services\RolePolicy::class, function($c) {
+    return new \App\Services\RolePolicy(
+    );
+});
+
+$container->singleton(\App\Services\ScheduledPaymentService::class, function($c) {
+    return new \App\Services\ScheduledPaymentService(
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Services\private::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\private::class)
+    );
+});
+
+$container->singleton(\App\Services\SeoPayoutService::class, function($c) {
+    return new \App\Services\SeoPayoutService(
+        $c->make(\App\Models\Ads::class)
+    );
+});
+
+$container->singleton(\App\Services\SeoService::class, function($c) {
+    return new \App\Services\SeoService(
+        $c->make(\App\Models\Ads::class),
+        $c->make(\App\Models\SeoExecution::class),
+        $c->make(\App\Services\User\UserScoreService::class),
+        $c->make(\App\Services\SeoPayoutService::class),
+        $c->make(\App\Services\AntiFraud\SeoFraudDetector::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Services\Shared\ReferralService::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\Shared\RatingService::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\App\Services\SettingService::class)
+    );
+});
+
+$container->singleton(\App\Services\TicketService::class, function($c) {
+    return new \App\Services\TicketService(
+        $c->make(\App\Models\Ticket::class),
+        $c->make(\App\Models\TicketMessage::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\Notification\NotificationService::class)
+    );
+});
+
+$container->singleton(\App\Services\UploadService::class, function($c) {
+    return new \App\Services\UploadService(
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\SettingService::class)
+    );
+});
+
+$container->singleton(\App\Services\VitrineSettingsService::class, function($c) {
+    return new \App\Services\VitrineSettingsService(
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Models\FeatureFlag::class),
+        $c->make(\App\Services\SettingService::class)
+    );
+});
+
+$container->singleton(\App\Services\WithdrawalService::class, function($c) {
+    return new \App\Services\WithdrawalService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Models\Withdrawal::class),
+        $c->make(\App\Models\WithdrawalLimit::class),
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\App\Models\BankCard::class),
+        $c->make(\App\Services\BankCardService::class),
+        $c->make(\App\Services\AntiFraud\RiskDecisionService::class),
+        $c->make(\App\Services\KYCService::class),
+        $c->make(\App\Models\Transaction::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\App\Services\AuditTrail::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\PerformanceOptimizationService::class),
+        $c->make(\App\Services\StateMachineService::class),
+        $c->make(\App\Services\ReconciliationService::class)
+    );
+});
+
+$container->singleton(\App\Services\Adapters\CryptoExplorerAdapter::class, function($c) {
+    return new \App\Services\Adapters\CryptoExplorerAdapter(
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Adapters\DeepFaceKycAdapter::class, function($c) {
+    return new \App\Services\Adapters\DeepFaceKycAdapter(
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Database::class)
+    );
+});
+
+$container->singleton(\App\Services\Adapters\JibitInquiryAdapter::class, function($c) {
+    return new \App\Services\Adapters\JibitInquiryAdapter(
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Cache::class)
+    );
+});
+
+$container->singleton(\App\Services\AdminDashboard\AdminDashboardService::class, function($c) {
+    return new \App\Services\AdminDashboard\AdminDashboardService(
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\AdminDashboard\DashboardQueryService::class),
+        $c->make(\App\Services\AdminDashboard\SystemMonitoringService::class)
+    );
+});
+
+$container->singleton(\App\Services\AdminDashboard\SystemMonitoringService::class, function($c) {
+    return new \App\Services\AdminDashboard\SystemMonitoringService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Analytics\AnalyticsDataRepository::class, function($c) {
+    return new \App\Services\Analytics\AnalyticsDataRepository(
+        $c->make(\App\Services\Analytics\private::class),
+        $c->make(\App\Services\Analytics\private::class),
+        $c->make(\App\Services\Analytics\private::class),
+        $c->make(\App\Services\Analytics\private::class),
+        $c->make(\App\Services\Analytics\private::class),
+        $c->make(\App\Services\Analytics\private::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\Analytics\int::class)
+    );
+});
+
+$container->singleton(\App\Services\Analytics\AnalyticsExporter::class, function($c) {
+    return new \App\Services\Analytics\AnalyticsExporter(
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\AntiFraud\RateLimitingService::class, function($c) {
+    return new \App\Services\AntiFraud\RateLimitingService(
+        $c->make(\App\Policies\RateLimitPolicy::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Auth\LoginRiskService::class, function($c) {
+    return new \App\Services\Auth\LoginRiskService(
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Cache\CacheManager::class, function($c) {
+    return new \App\Services\Cache\CacheManager(
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Notification\NotificationAnalyticsService::class, function($c) {
+    return new \App\Services\Notification\NotificationAnalyticsService(
+        $c->make(\App\Services\Notification\private::class),
+        $c->make(\App\Services\Notification\private::class),
+        $c->make(\App\Services\Notification\protected::class)
+    );
+});
+
+$container->singleton(\App\Services\Notification\NotificationPreferenceService::class, function($c) {
+    return new \App\Services\Notification\NotificationPreferenceService(
+        $c->make(\App\Services\Notification\private::class),
+        $c->make(\App\Services\Notification\protected::class)
+    );
+});
+
+$container->singleton(\App\Services\Notification\NotificationTemplateService::class, function($c) {
+    return new \App\Services\Notification\NotificationTemplateService(
+        $c->make(\App\Services\Notification\private::class),
+        $c->make(\App\Services\Notification\private::class),
+        $c->make(\App\Services\Notification\protected::class)
+    );
+});
+
+$container->singleton(\App\Services\Notification\NotificationTracker::class, function($c) {
+    return new \App\Services\Notification\NotificationTracker(
+        $c->make(\App\Services\Notification\private::class),
+        $c->make(\App\Services\Notification\private::class),
+        $c->make(\App\Services\Notification\protected::class)
+    );
+});
+
+$container->singleton(\App\Services\Notification\SmsNotificationService::class, function($c) {
+    return new \App\Services\Notification\SmsNotificationService(
+        $c->make(\App\Services\Notification\private::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Payment\DgPayGateway::class, function($c) {
+    return new \App\Services\Payment\DgPayGateway(
+        $c->make(\App\Models\PaymentGateway::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\SettingService::class)
+    );
+});
+
+$container->singleton(\App\Services\Payment\IDPayGateway::class, function($c) {
+    return new \App\Services\Payment\IDPayGateway(
+        $c->make(\App\Models\PaymentGateway::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\SettingService::class)
+    );
+});
+
+$container->singleton(\App\Services\Payment\NextPayGateway::class, function($c) {
+    return new \App\Services\Payment\NextPayGateway(
+        $c->make(\App\Models\PaymentGateway::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\SettingService::class)
+    );
+});
+
+$container->singleton(\App\Services\Payment\ZarinPalGateway::class, function($c) {
+    return new \App\Services\Payment\ZarinPalGateway(
+        $c->make(\App\Models\PaymentGateway::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\SettingService::class)
+    );
+});
+
+$container->singleton(\App\Services\Sentry\Alerting\AlertRulesEngine::class, function($c) {
+    return new \App\Services\Sentry\Alerting\AlertRulesEngine(
+        $c->make(\App\Services\Sentry\Alerting\private::class),
+        $c->make(\App\Services\Sentry\Alerting\private::class),
+        $c->make(\App\Services\Sentry\Alerting\private::class)
+    );
+});
+
+$container->singleton(\App\Services\Sentry\Alerting\EscalationManager::class, function($c) {
+    return new \App\Services\Sentry\Alerting\EscalationManager(
+        $c->make(\App\Services\Sentry\Alerting\private::class),
+        $c->make(\App\Services\Sentry\Alerting\private::class),
+        $c->make(\App\Services\Sentry\Alerting\private::class)
+    );
+});
+
+$container->singleton(\App\Services\Sentry\Analytics\DashboardService::class, function($c) {
+    return new \App\Services\Sentry\Analytics\DashboardService(
+        $c->make(\App\Services\Sentry\Analytics\private::class)
+    );
+});
+
+$container->singleton(\App\Services\Sentry\Analytics\TrendAnalyzer::class, function($c) {
+    return new \App\Services\Sentry\Analytics\TrendAnalyzer(
+        $c->make(\App\Services\Sentry\Analytics\private::class)
+    );
+});
+
+$container->singleton(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class, function($c) {
+    return new \App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor(
+        $c->make(\App\Services\Sentry\ErrorMonitoring\private::class),
+        $c->make(\App\Services\Sentry\ErrorMonitoring\private::class),
+        $c->make(\App\Services\Sentry\ErrorMonitoring\private::class),
+        $c->make(\App\Services\Sentry\ErrorMonitoring\private::class),
+        $c->make(\App\Services\Sentry\ErrorMonitoring\array::class)
+    );
+});
+
+$container->singleton(\App\Services\Sentry\PerformanceMonitoring\SentryPerformanceMonitor::class, function($c) {
+    return new \App\Services\Sentry\PerformanceMonitoring\SentryPerformanceMonitor(
+        $c->make(\App\Services\Sentry\PerformanceMonitoring\private::class),
+        $c->make(\App\Services\Sentry\PerformanceMonitoring\private::class),
+        $c->make(\App\Services\Sentry\PerformanceMonitoring\private::class),
+        $c->make(\App\Services\Sentry\PerformanceMonitoring\array::class)
+    );
+});
+
+$container->singleton(\App\Services\Sentry\Utils\BreadcrumbCollector::class, function($c) {
+    return new \App\Services\Sentry\Utils\BreadcrumbCollector(
+    );
+});
+
+$container->singleton(\App\Services\Sentry\Utils\ContextEnricher::class, function($c) {
+    return new \App\Services\Sentry\Utils\ContextEnricher(
+    );
+});
+
+$container->singleton(\App\Services\Sentry\Utils\StackTraceAnalyzer::class, function($c) {
+    return new \App\Services\Sentry\Utils\StackTraceAnalyzer(
+    );
+});
+
+$container->singleton(\App\Services\Shared\ScoreEventService::class, function($c) {
+    return new \App\Services\Shared\ScoreEventService(
+        $c->make(\App\Models\Score::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Shared\TrustScoreService::class, function($c) {
+    return new \App\Services\Shared\TrustScoreService(
+        $c->make(\App\Models\Score::class),
+        $c->make(\App\Models\SocialTaskAnalyticsModel::class),
+        $c->make(\App\Services\Shared\ScoreEventService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\User\AccountDeletionService::class, function($c) {
+    return new \App\Services\User\AccountDeletionService(
+        $c->make(\App\Models\User::class),
+        $c->make(\App\Models\AccountDeletionLog::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\CustomTaskService::class)
+    );
+});
+
+$container->singleton(\App\Services\User\UserSettingsService::class, function($c) {
+    return new \App\Services\User\UserSettingsService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\Core\Cache::class)
+    );
+});
+
 
 // Application — باید آخرین خط باشد
 $app = Application::getInstance();

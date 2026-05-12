@@ -35,7 +35,8 @@ class Request
 
     public function getUser(): ?object
     {
-        return $this->user;
+        // M12 Fix: حذف ابهام و ایجاد مستعار (Alias) تمیز برای سازگاری ۱۰۰ درصدی با سایر بخش‌های نرم‌افزار
+        return $this->user();
     }
 
     public function __construct()
@@ -51,14 +52,8 @@ class Request
         // parseBody() و json() از این مقدار کش‌شده استفاده می‌کنند.
         $this->rawInput = file_get_contents('php://input') ?: '';
 
+        // M11 Fix: انتقال کدهای سنگین و تکراری پارس بادی به متد parseBody جهت بارگذاری کاملاً Lazy (تنبل)
         $this->body = $_POST;
-
-        if ($this->isJson()) {
-            $data = json_decode($this->rawInput, true);
-            if (is_array($data)) {
-                $this->body = $data;
-            }
-        }
     }
 
 public function isJson(): bool
@@ -89,7 +84,21 @@ public function isJson(): bool
      */
     public function ip(): string
     {
-        return $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        
+        // H8 Fix: اگر فرستنده جزو پروکسی‌های معتبر بود، از X-Forwarded-For استفاده کن
+        $trustedProxies = config('trusted_proxies', ['127.0.0.1']);
+        
+        if (in_array($clientIp, $trustedProxies, true) && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            $forwarded = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+            // آخرین آی‌پی غیرجعلی که مستقیماً توسط لودبالانسر ما ثبت شده است
+            $resolvedIp = trim(end($forwarded));
+            if ($resolvedIp !== '') {
+                $clientIp = $resolvedIp;
+            }
+        }
+
+        return $clientIp;
     }
 	 /**
      * دریافت User-Agent
@@ -170,13 +179,12 @@ public function body(?string $key = null, $default = null)
  */
 private function parseBody(): array
 {
-    // FIX C-6: از rawInput کش‌شده در constructor استفاده می‌کنیم
-    // نه از file_get_contents('php://input') که بار دوم خالی برمی‌گردد.
+    // M11 Fix: پارس کردن داده‌های بدنه (JSON/Form) دقیقاً در اولین زمان نیاز و کش کردن آن برای ریکوئست‌های بعدی
     if ($this->parsedBody !== null) {
         return $this->parsedBody;
     }
 
-    if ($this->isJson()) {
+    if ($this->isJson() && !empty($this->rawInput)) {
         $data = json_decode($this->rawInput, true);
         if (is_array($data)) {
             $this->parsedBody = array_merge($this->body, $data);
@@ -193,11 +201,13 @@ private function parseBody(): array
      */
     public function input($key = null, $default = null)
     {
+        // M11 Fix: ارجاع متد به لایه تنبل پارس بادی جهت دسترسی سریع و ایمن
+        $data = $this->parseBody();
         if ($key === null) {
-            return $this->body;
+            return $data;
         }
         
-        return $this->body[$key] ?? $default;
+        return $data[$key] ?? $default;
     }
 
     /**
@@ -205,7 +215,8 @@ private function parseBody(): array
      */
     public function all()
     {
-        return array_merge($this->query, $this->body);
+        // M11 Fix: ترکیب داده‌های Query و Body پارس‌شده به صورت کاملاً Lazy
+        return array_merge($this->query, $this->parseBody());
     }
 
     /**
@@ -336,9 +347,9 @@ private function parseBody(): array
      */
     public function validate(array $rules): array
     {
-        $validator = new Validator();
-        $isValid = $validator->validate($this->all(), $rules);
+        // Fix: سینک کردن صدا زدن متد با ساختار صحیح و اصلاح‌شده کلاس Validator
+        $validator = new Validator($this->all(), $rules);
         
-        return $isValid ? [] : $validator->getErrors();
+        return $validator->fails() ? $validator->errors() : [];
     }
 }

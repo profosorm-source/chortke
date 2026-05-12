@@ -82,4 +82,7 @@ return [
         'auto_kyc_verification' => false,
         'gamification' => false,
     ],
+
+    // کلید امنیتی دسترسی به API سوئیچ‌ها
+    'api_key' => env('FEATURE_FLAG_API_KEY', ''),
 ];

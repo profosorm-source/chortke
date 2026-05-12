@@ -13,6 +13,7 @@
             "App\\": "app/"
         },
         "files": [
+            "core/Exceptions.php",
             "helpers/functions.php",
             "helpers/csrf_helper.php",
             "helpers/security.php",

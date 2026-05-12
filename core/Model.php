@@ -262,6 +262,44 @@ abstract class Model
         return $totalAffected;
     }
     
+    public function paginate(int $perPage = 15, string $pageName = 'page', ?int $page = null): array
+    {
+        return $this->db->table(static::$table)->paginate($perPage, $pageName, $page);
+    }
+
+    public function firstOrCreate(array $attributes, array $values = []): object
+    {
+        $query = $this->db->table(static::$table);
+        foreach ($attributes as $key => $value) {
+            $query->where($key, '=', $value);
+        }
+        $instance = $query->first();
+
+        if ($instance) {
+            return $instance;
+        }
+
+        $id = $this->create(array_merge($attributes, $values));
+        return $this->find((int)$id);
+    }
+
+    public function updateOrCreate(array $attributes, array $values = []): object
+    {
+        $query = $this->db->table(static::$table);
+        foreach ($attributes as $key => $value) {
+            $query->where($key, '=', $value);
+        }
+        $instance = $query->first();
+
+        if ($instance) {
+            $this->update((int)$instance->id, $values);
+            return $this->find((int)$instance->id);
+        }
+
+        $id = $this->create(array_merge($attributes, $values));
+        return $this->find((int)$id);
+    }
+
     /**
      * Validate integer ID
      */

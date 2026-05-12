@@ -132,11 +132,11 @@ public function exception(\Throwable $e, string $message = '', array $context = 
     $context['file'] = $e->getFile();
     $context['line'] = $e->getLine();
 
-    // trace فقط در debug و با سقف طول
-    $isDebug = config('app.debug', false);
-    if ($isDebug) {
-        $context['trace'] = mb_substr($e->getTraceAsString(), 0, 8000);
-    }
+    // M25 Fix: ثبت ردپا (Trace) خطاها حتی در پروداکشن جهت دیباگ اصولی حوادث در اولین فرصت
+    // اما در حالت عملیاتی طول کمتری (مثلاً ۲۵۰۰ کاراکتر) را ذخیره می‌کنیم تا دیتابیس سنگین نشود
+    $isDebug = (bool) config('app.debug', false);
+    $traceLimit = $isDebug ? 8000 : 2500;
+    $context['trace'] = mb_substr($e->getTraceAsString(), 0, $traceLimit);
 
     $this->error($message ?: $e->getMessage(), $context);
 }

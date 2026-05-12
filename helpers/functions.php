@@ -41,6 +41,17 @@ if (!function_exists('cache')) {
         return \Core\Cache::getInstance();
     }
 }
+
+if (!function_exists('session')) {
+    /**
+     * دسترسی سریع به Session singleton
+     */
+    function session(): \Core\Session
+    {
+        return \Core\Session::getInstance();
+    }
+}
+
 if (!function_exists('env')) {
     function env(string $key, mixed $default = null): mixed
     {

@@ -35,6 +35,32 @@ class ExceptionHandler
     @file_put_contents(__DIR__ . '/../storage/logs/_exception_fallback.log', $line, FILE_APPEND | LOCK_EX);
 }
 
+    /**
+     * M27 Fix: ذخیره‌سازی نهایی اطلاعات بحرانی درون صف اضطراری آفلاین سنتری شخصی (jsonl)
+     * این فایل بعداً در اولین ورود مدیر توسط داشبورد همگام‌سازی و از دیسک حذف می‌شود
+     */
+    private static function logToEmergencySentry(string $message, ?string $trace = null, string $level = 'ERROR'): void
+    {
+        try {
+            $emergencyData = [
+                'message'   => '🔴 ' . $level . ': ' . $message,
+                'ip'        => $_SERVER['REMOTE_ADDR'] ?? 'offline_cli',
+                'timestamp' => time(),
+                'trace'     => $trace ?? 'N/A'
+            ];
+            
+            // استفاده هوشمند و امن از مسیردهی‌ها
+            $logPath = function_exists('config') 
+                ? config('paths.storage', __DIR__ . '/../storage') . '/logs/sentry_emergency.jsonl'
+                : __DIR__ . '/../storage/logs/sentry_emergency.jsonl';
+
+            $line = json_encode($emergencyData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL;
+            @file_put_contents($logPath, $line, FILE_APPEND | LOCK_EX);
+        } catch (\Throwable) {
+            // در بدترین شرایط قفل سیستم، جلوی توقف فرآیند PHP را می‌گیرد
+        }
+    }
+
 
 private static function latestDbFailureContext(): ?array
 {
@@ -95,6 +121,14 @@ private static function latestDbFailureContext(): ?array
         self::fallbackLog('exception.recursive.detected', [
             'message' => $exception->getMessage(),
         ]);
+        
+        // M27 Fix: ثبت بلادرنگ خطای تودرتو و بازگشتی درون صف اضطراری جهت جلوگیری از هدر رفت دیباگ
+        self::logToEmergencySentry(
+            'Recursive Exception Detected: ' . $exception->getMessage(),
+            $exception->getTraceAsString(),
+            'CRITICAL_RECURSIVE'
+        );
+        
         http_response_code(500);
         die('critical system error');
     }
@@ -151,6 +185,14 @@ private static function latestDbFailureContext(): ?array
         self::fallbackLog('exception.handler.failed', [
             'message' => $e->getMessage(),
         ]);
+        
+        // M27 Fix: نجات و ثبت اطلاعات آخرین نفس درایو در صف اضطراری آفلاین در زمان فروپاشی هندلر
+        self::logToEmergencySentry(
+            'Handler Collapse Catch: ' . $e->getMessage(),
+            $e->getTraceAsString(),
+            'HANDLER_COLLAPSE'
+        );
+        
         http_response_code(500);
         die('system error');
     } finally {
@@ -447,6 +489,15 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
      */
     private static function logFatalError(array $error): void
     {
+        // M27 Fix: استفاده مستقیم از هلپر متمرکز و امن جهت ثبت خطا درون سیستم شخصی سنتری
+        $traceInfo = '⚠️ File: ' . ($error['file'] ?? 'Unknown') . ' | Line: ' . ($error['line'] ?? '0') . ' | Type: ' . ($error['type'] ?? 'Fatal');
+        self::logToEmergencySentry(
+            'FATAL SHUTDOWN: ' . ($error['message'] ?? 'Unknown fatal shutdown event'),
+            $traceInfo,
+            'FATAL'
+        );
+
+        // تلاش ثانویه برای درج بلادرنگ در دیتابیس (در صورت برقراری ارتباط)
         try {
             $db = Database::getInstance();
             
@@ -467,7 +518,7 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 ]
             );
         } catch (\Throwable $e) {
-            // Silent
+            // خطا در دیتابیس اهمیتی ندارد چون نسخه فیزیکی در jsonl بالاتر ذخیره شد و در داشبورد بازیابی می‌شود
         }
     }
 
@@ -534,7 +585,15 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
             <h1>خطای سیستم</h1>
             <div class="message">
                 <strong><?= e(get_class($exception)) ?>:</strong><br>
-                <?= e($exception->getMessage()) ?>
+                <?php
+                    // M26 Fix: تبدیل کاملاً امن تمام لینک‌های متنی موجود در متن خطا به لینک‌های فعال و قابل کلیک در صفحه دیباگ
+                    $escapedMsg = e($exception->getMessage());
+                    echo preg_replace(
+                        '/https?:\/\/[^\s<"\']+/', 
+                        '<a href="$0" target="_blank" style="color:#e53935; font-weight:bold; text-decoration:underline;">$0</a>', 
+                        $escapedMsg
+                    );
+                ?>
             </div>
             <div class="meta">
                 <strong>فایل:</strong> <?= e($exception->getFile()) ?><br>
@@ -600,30 +659,68 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
      */
     private static function renderJsonError(\Throwable $exception): void
     {
-        $contract = \App\Services\ErrorContract::internalError('خطای سیستمی');
+        // H26 Fix: پیاده‌سازی تور نجات سراسری برای جلوگیری از کرش‌های بازگشتی (Circular Crash Loop)
+        try {
+            $contract = \App\Services\ErrorContract::internalError('خطای سیستمی');
 
-        if ($exception instanceof \Core\Exceptions\ValidationException) {
-            $contract = \App\Services\ErrorContract::validation(
-                'داده‌های ورودی نامعتبر',
-                $exception->getErrors()
-            );
-        } elseif ($exception instanceof \Core\Exceptions\UnauthorizedException) {
-            $contract = \App\Services\ErrorContract::unauthorized(
-                $exception->getMessage() ?: 'احراز هویت لازم است'
-            );
-        } elseif ($exception instanceof \Core\Exceptions\NotFoundException) {
-            $contract = \App\Services\ErrorContract::notFound(
-                $exception->getMessage() ?: 'منبع یافت نشد'
-            );
-        } elseif ($exception instanceof \Core\Exceptions\BusinessException) {
-            $contract = \App\Services\ErrorContract::internalError(
-                $exception->getMessage() ?: 'خطای بیزینسی'
-            );
+            if ($exception instanceof \Core\Exceptions\ValidationException) {
+                $contract = \App\Services\ErrorContract::validation(
+                    'داده‌های ورودی نامعتبر',
+                    $exception->getErrors()
+                );
+            } elseif ($exception instanceof \Core\Exceptions\UnauthorizedException) {
+                $contract = \App\Services\ErrorContract::unauthorized(
+                    $exception->getMessage() ?: 'احراز هویت لازم است'
+                );
+            } elseif ($exception instanceof \Core\Exceptions\NotFoundException) {
+                $contract = \App\Services\ErrorContract::notFound(
+                    $exception->getMessage() ?: 'منبع یافت نشد'
+                );
+            } elseif ($exception instanceof \Core\Exceptions\BusinessException) {
+                $contract = \App\Services\ErrorContract::internalError(
+                    $exception->getMessage() ?: 'خطای بیزینسی'
+                );
+            }
+
+            http_response_code($contract->getStatusCode());
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode($contract->toArray(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            exit;
+
+        } catch (\Throwable $fallbackException) {
+            // تور نجات نهایی در صورتی که ErrorContract یا ماژول‌های خارجی دچار شکست شوند:
+            // ساخت خروجی JSON خام بدون هیچ‌گونه وابستگی کلاسی برای تضمین پایداری
+            $statusCode = 500;
+            $message = 'خطای ناشناخته سیستمی';
+            $errors = [];
+
+            if ($exception instanceof \Core\Exceptions\ValidationException) {
+                $statusCode = 422;
+                $message = 'اعتبارسنجی داده‌ها شکست خورد';
+                $errors = $exception->getErrors();
+            } elseif ($exception instanceof \Core\Exceptions\UnauthorizedException) {
+                $statusCode = 401;
+                $message = $exception->getMessage() ?: 'احراز هویت لازم است';
+            } elseif ($exception instanceof \Core\Exceptions\NotFoundException) {
+                $statusCode = 404;
+                $message = $exception->getMessage() ?: 'آدرس یا منبع یافت نشد';
+            } else {
+                $message = $exception->getMessage() ?: 'خطای سیستمی در حین پردازش رخ داد';
+            }
+
+            http_response_code($statusCode);
+            if (!headers_sent()) {
+                header('Content-Type: application/json; charset=utf-8');
+            }
+
+            echo json_encode([
+                'success' => false,
+                'message' => $message,
+                'errors'  => $errors,
+                'code'    => $statusCode
+            ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            
+            exit;
         }
-
-        http_response_code($contract->getStatusCode());
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($contract->toArray(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-        exit;
     }
 }

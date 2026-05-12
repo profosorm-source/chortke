@@ -7,11 +7,29 @@ class Route
     private string $uri;
     private $action; // ✅ بدون Type Declaration
     private array $middleware = [];
+    private ?string $name = null;
 
     public function __construct(string $uri, $action)
     {
         $this->uri = $uri;
         $this->action = $action;
+    }
+
+    /**
+     * اختصاص نام به Route
+     */
+    public function name(string $name): self
+    {
+        $this->name = $name;
+        return $this;
+    }
+
+    /**
+     * دریافت نام Route
+     */
+    public function getName(): ?string
+    {
+        return $this->name;
     }
 
     /**

@@ -23,25 +23,21 @@ class FixedWindowStrategy implements RateLimitStrategy
     private Cache $cache;
     private string $prefix = 'rl:fw:';
 
-    public function __construct()
+    public function __construct(?Cache $cache = null)
     {
-        $this->cache = Cache::getInstance();
+        // H21 Fix: استفاده از Dependency Injection به جای فراخوانی مستقیم Singleton
+        $this->cache = $cache ?? \Core\Container::getInstance()->make(Cache::class);
     }
 
     public function attempt(string $key, int $maxAttempts, int $decayMinutes): bool
     {
         $cacheKey = $this->prefix . $key;
-        $attempts = $this->getAttempts($key);
+        $ttlSeconds = $decayMinutes * 60;
 
-        if ($attempts >= $maxAttempts) {
-            return false;
-        }
-
-        // فقط در Redis می‌توانیم atomic increment داشته باشیم
+        // M21 Fix: ادغام کل فرآیند ارزیابی و افزایش ترافیک در یک مرحله واحد و کاملاً اتمیک (Atomic)
         if ($this->cache->driver() === 'redis') {
             $redis = $this->cache->redis();
             $rKey = $this->getRedisKey($cacheKey);
-            $ttl = $decayMinutes * 60;
 
             $script = <<<'LUA'
 local current = redis.call('INCR', KEYS[1])
@@ -54,18 +50,17 @@ end
 return 1
 LUA;
 
-            $allowed = (int) $redis->eval($script, [$rKey, $ttl, $maxAttempts], 1);
+            $allowed = (int) $redis->eval($script, [$rKey, $ttlSeconds, $maxAttempts], 1);
             return $allowed === 1;
         }
 
-        // File fallback
-        $current = (int) $this->cache->get($cacheKey, 0);
-        if ($current >= $maxAttempts) {
+        // M21 Fix: برای درایور فایل از متد بازنویسی‌شده و امن `increment` مجهز به قفل اتمیک flock استفاده می‌شود
+        $current = $this->cache->increment($cacheKey, 1, $ttlSeconds);
+        
+        if ($current === false || $current > $maxAttempts) {
             return false;
         }
 
-        $next = $current + 1;
-        $this->cache->put($cacheKey, $next, $decayMinutes);
         return true;
     }
 

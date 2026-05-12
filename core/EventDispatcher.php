@@ -21,18 +21,23 @@ class EventDispatcher
      * دریافت Instance (Singleton)
      * Queue را از Container تزریق شده دریافت می‌کند
      */
-    public static function getInstance()
+    /**
+     * دریافت Instance (Singleton)
+     * M22 Fix: واگذاری و تکیه صددرصدی به Container رسمی پروژه برای تزریق وابستگی‌ها (Pure DI)
+     */
+    public static function getInstance(): self
     {
         if (self::$instance === null) {
-            // Container Dependency Injection: Queue خودکار resolve می‌شود
             $container = Container::getInstance();
-            if (!$container->has(Queue::class)) {
-                $container->singleton(Queue::class, function($c) {
-                    return new Queue();
-                });
+            
+            if ($container->has(self::class)) {
+                self::$instance = $container->make(self::class);
+            } else {
+                // ساخت داینامیک با کانتینر و ثبت به عنوان تک‌عضو (Singleton) سراسری
+                $instance = $container->make(self::class);
+                $container->instance(self::class, $instance);
+                self::$instance = $instance;
             }
-            $queue = $container->get(Queue::class);
-            self::$instance = new self($queue);
         }
         
         return self::$instance;
@@ -91,17 +96,19 @@ class EventDispatcher
             }
         }
         
-        // لاگ رویداد
-$data = $event->getData();
-$encoded = json_encode($data, JSON_UNESCAPED_UNICODE);
-$preview = $encoded !== false ? mb_substr($encoded, 0, 2000) : null;
-
-if (function_exists('logger')) {
+        // M23 Fix: سانسور هوشمند و ایمن سازی اطلاعات حساس قبل از تبدیل به JSON جهت ثبت در لاگ سیستم
+        $rawPayload = $event->getData();
+        $maskedPayload = is_array($rawPayload) ? $this->maskSensitiveData($rawPayload) : $rawPayload;
+        
+        $encoded = json_encode($maskedPayload, JSON_UNESCAPED_UNICODE);
+        $preview = $encoded !== false ? mb_substr($encoded, 0, 2000) : null;
+        
+        if (function_exists('logger')) {
             logger()->info('event.dispatched', [
-                'channel' => 'event',
-                'event_name' => $eventName,
+                'channel'      => 'event',
+                'event_name'   => $eventName,
                 'data_preview' => $preview,
-                'data_size' => $encoded !== false ? strlen($encoded) : null,
+                'data_size'    => $encoded !== false ? strlen($encoded) : null,
             ]);
         }
     }
@@ -195,6 +202,37 @@ if (function_exists('logger')) {
     public function __wakeup()
     {
         throw new \Exception("Cannot unserialize singleton");
+    }
+
+    /**
+     * M23 Fix: شناسایی و سانسور کردن اطلاعات حساس به صورت بازگشتی جهت امنیت در فایل لاگ
+     */
+    private function maskSensitiveData(array $data): array
+    {
+        $sensitivePatterns = ['password', 'pwd', 'token', 'cvv', 'secret', 'card', 'pin', 'pan', 'key', 'auth', 'credential', 'ssn'];
+        $result = [];
+        
+        foreach ($data as $key => $value) {
+            $isSensitive = false;
+            $keyStr = (string)$key;
+            
+            foreach ($sensitivePatterns as $pattern) {
+                if (stripos($keyStr, $pattern) !== false) {
+                    $isSensitive = true;
+                    break;
+                }
+            }
+            
+            if ($isSensitive) {
+                $result[$key] = '******** (masked)';
+            } elseif (is_array($value)) {
+                $result[$key] = $this->maskSensitiveData($value);
+            } else {
+                $result[$key] = $value;
+            }
+        }
+        
+        return $result;
     }
 }
 

@@ -9,6 +9,7 @@ class Session
     private bool $started = false;
     private bool $isStarting = false;
     private string $fingerprint;
+    private ?array $oldInputCache = null;
 
     private function __construct() {}
 
@@ -47,10 +48,14 @@ class Session
 
         session_name($config['name']);
 
+        // H12 Fix: جلوگیری از ست شدن نامعتبر دامین در localhost و محافظت در برابر پارس نادرست
+        $host = parse_url(config('app.url', ''), PHP_URL_HOST);
+        $cookieDomain = $host && $host !== 'localhost' ? $host : '';
+
         session_set_cookie_params([
             'lifetime' => $config['lifetime'],
             'path'     => '/',
-            'domain'   => parse_url(config('app.url'), PHP_URL_HOST),
+            'domain'   => $cookieDomain,
             'secure'   => $config['secure'],
             'httponly' => $config['httponly'],
             'samesite' => $config['samesite'],
@@ -138,6 +143,39 @@ public function delete(string $key): void
         }
     }
 
+    /**
+     * فلاش کردن خودکار ورودی‌های فعلی POST به درخواست بعدی (بدون مقادیر حساس)
+     */
+    public function flashOld(): void
+    {
+        $this->ensureStarted();
+        $data = $_POST;
+        
+        // ایمن‌سازی: حذف پسوردها و توکن CSRF جهت افزایش امنیت
+        unset($data['_token'], $data['csrf_token'], $data['password'], $data['password_confirmation'], $data['old_password']);
+        
+        $this->setFlash('old', $data);
+    }
+
+    /**
+     * دریافت هوشمند و کش‌شده‌ی ورودی‌های قدیمی
+     */
+    public function getOld(string $key, $default = null)
+    {
+        if ($this->oldInputCache === null) {
+            $this->ensureStarted();
+            // استخراج یک‌بار برای همیشه در طول عمر پردازش و کش موضعی (Atomic cache)
+            if (isset($_SESSION['__flash']['old'])) {
+                $this->oldInputCache = $_SESSION['__flash']['old'];
+                unset($_SESSION['__flash']['old']);
+            } else {
+                $this->oldInputCache = [];
+            }
+        }
+
+        return $this->oldInputCache[$key] ?? $default;
+    }
+
 
 private function invalidateSession(): void
 {
@@ -219,7 +257,10 @@ private function invalidateSession(): void
 
     public function regenerate(): void
     {
+        // M15 Fix: تضمین فعالیت سشن و بازنویسی اثرانگشت امنیتی به صورت همزمان با تغییر شناسه کاربری
+        $this->ensureStarted();
         session_regenerate_id(true);
+        $_SESSION['_fingerprint'] = $this->generateFingerprint();
     }
 
     public function destroy(): void

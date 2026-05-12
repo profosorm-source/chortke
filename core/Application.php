@@ -12,7 +12,6 @@ class Application
     public Request   $request;
     public Response  $response;
     public Session   $session;
-    public ExceptionHandler $exceptionHandler;
     public array $config;
 
     private function __construct()
@@ -29,7 +28,6 @@ class Application
 
         // ── ۳. ExceptionHandler — فقط یک‌بار در کل lifecycle ────
         //    index.php دیگر ExceptionHandler::register() صدا نمی‌زند
-        $this->exceptionHandler = new ExceptionHandler();
         ExceptionHandler::register();
 
         // ── ۴. Core Objects ──────────────────────────────────────
@@ -43,8 +41,8 @@ class Application
     $this->db = Database::getInstance();
 } catch (\Throwable $e) {
     try {
-        // ذخیره در صف اضطراری سنتری بدون نیاز به ارتباط زنده با دیتابیس
-        $emergencyFile = dirname(__DIR__) . '/storage/logs/sentry_emergency.jsonl';
+        // M2 Fix: استفاده از هلپر داینامیک base_path برای دسترسی پویا به دایرکتوری لاگ‌ها
+        $emergencyFile = base_path('storage/logs/sentry_emergency.jsonl');
         $logData = [
             'timestamp' => time(),
             'message' => $e->getMessage(),
@@ -62,16 +60,7 @@ class Application
         $this->registerCoreBindings();
 
         // ── ۷. Maintenance Mode ──────────────────────────────────
-        if (config('maintenance.enabled', false) === true) {
-            if (!$this->session->get('is_admin')) {
-                http_response_code(503);
-                $view = __DIR__ . '/../views/errors/503.php';
-                file_exists($view)
-                    ? require $view
-                    : require __DIR__ . '/../views/errors/maintenance.php';
-                exit;
-            }
-        }
+        // انتقال به لایه میدلور برای مدیریت هوشمند و داینامیک
     }
 
     /**
@@ -92,6 +81,11 @@ class Application
         $c->instance(Database::class,    $this->db);
         $c->instance(Router::class,      $this->router);
 
+        // ── Cache bound to singleton ──
+        $c->singleton(\Core\Cache::class, function() {
+            return \Core\Cache::getInstance();
+        });
+
         // ── Core fallback logger — available during early bootstrap
         $c->singleton(\App\Contracts\LoggerInterface::class, function($c) {
             $db = $c->make(Database::class);
@@ -111,7 +105,7 @@ class Application
         // هر Controller که AuthService یا User نیاز دارد،
         // همین instance را دریافت می\u200cکند (نه instance جدید)
         $c->singleton(\App\Services\Auth\AuthService::class);
-        $c->singleton(\App\Models\User::class);
+        $c->bind(\App\Models\User::class);
     }
     /**
      * دریافت کاربر لاگین‌شده
@@ -144,7 +138,7 @@ class Application
     
     public function __wakeup()
     {
-        throw new \Exception("Cannot unserialize singleton");
+        throw new \RuntimeException("Cannot unserialize singleton");
     }
 
     public function run(): void

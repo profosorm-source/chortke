@@ -63,4 +63,11 @@ return [
         'deposit' => true,
         'withdrawal' => true,
     ],
+    // تنظیمات پایش عملکرد و کوئری‌های کند
+    'performance' => [
+        'log_performance' => filter_var(env('LOG_PERFORMANCE', true), FILTER_VALIDATE_BOOLEAN),
+        'performance_threshold_ms' => (float)env('LOG_PERFORMANCE_THRESHOLD', 500),
+        'slow_query_threshold' => (float)env('SLOW_QUERY_THRESHOLD', 1.0), // ثانیه
+        'log_slow_queries' => (bool)env('LOG_SLOW_QUERIES', true),
+    ],
 ];

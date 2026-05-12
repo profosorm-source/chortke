@@ -9,10 +9,15 @@ class Validator
     private array $rules = [];
     private array $errors = [];
 
-    public function __construct(array $data, array $rules = [])
+    private ?Database $db = null;
+
+    public function __construct(array $data, array $rules = [], ?Database $db = null)
     {
         $this->data = $data;
         $this->rules = [];
+        
+        // H17 Fix: تزریق دیتابیس از طریق DI به جای فراخوانی مستقیم Singleton در لایه Core
+        $this->db = $db ?? Container::getInstance()->make(Database::class);
 
         if (!empty($rules)) {
             $this->validate($rules);
@@ -230,7 +235,7 @@ class Validator
 
             // ✅ جدید: persian
             case 'persian':
-                if ($value !== null && $value !== '' && !\preg_match('/^[\u0600-\u06FF\s]+$/u', (string)$value)) {
+                if ($value !== null && $value !== '' && !\preg_match('/^[\x{0600}-\x{06FF}\s]+$/u', (string)$value)) {
                     $this->addError($field, 'فقط حروف فارسی مجاز است');
                 }
                 break;
@@ -266,21 +271,27 @@ class Validator
         }
     }
 
-    private function isUnique(?string $param, mixed $value, string $field): bool
+    private function isUnique(?string $param, mixed $value): bool
     {
         if ($param === null) return true;
 
         try {
             [$table, $column] = \explode('.', $param, 2);
-            $db = Database::getInstance();
-            $result = $db->query(
+            
+            // H16 Fix: ولیدیت سختگیرانه نام جدول و ستون برای جلوگیری از Table Injection
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $table) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $column)) {
+                throw new \InvalidArgumentException("[Validator] Invalid table or column specified in unique rule.");
+            }
+
+            // H17: استفاده از اینجکشن دیتابیس
+            $result = $this->db->query(
                 "SELECT COUNT(*) as count FROM `{$table}` WHERE `{$column}` = ?",
                 [$value]
             )->fetch();
 
             return ($result->count ?? 0) === 0;
         } catch (\Throwable $e) {
-            return true; // Assume valid if DB check fails
+            return true; // Assume valid if DB check fails (avoid blocking user on query error)
         }
     }
 
@@ -290,8 +301,14 @@ class Validator
 
         try {
             [$table, $column] = \explode('.', $param, 2);
-            $db = Database::getInstance();
-            $result = $db->query(
+            
+            // H16 Fix: حفاظت از تزریق SQL در قوانین دیتابیسی
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $table) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $column)) {
+                throw new \InvalidArgumentException("[Validator] Invalid table or column specified in exists rule.");
+            }
+
+            // H17: استفاده از دیتابیس تزریق شده
+            $result = $this->db->query(
                 "SELECT COUNT(*) as count FROM `{$table}` WHERE `{$column}` = ?",
                 [$value]
             )->fetch();

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Core;
+namespace Core\Exceptions;
 
 use RuntimeException;
 
@@ -44,4 +44,20 @@ class UnauthorizedException extends AppException
 
 class BusinessException extends AppException
 {
+}
+
+class HttpResponseException extends AppException
+{
+    private $response;
+
+    public function __construct($response, string $message = "HTTP Response Terminated", int $code = 0)
+    {
+        parent::__construct($message, $code);
+        $this->response = $response;
+    }
+
+    public function getResponse()
+    {
+        return $this->response;
+    }
 }

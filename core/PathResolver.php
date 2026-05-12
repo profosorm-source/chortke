@@ -8,6 +8,10 @@ class PathResolver
     private string $baseUrl;
     private string $basePath;
     
+    // M30 Fix: کش داخلی جهت جلوگیری از پردازش‌ها و پرداخته‌کاری‌های تکراری آدرس‌ها در چرخه‌های طولانی فرانت‌اند
+    private array $urlCache = [];
+    private array $assetCache = [];
+    
     private function __construct()
     {
         // تشخیص Base URL از تنظیمات (Canonical)
@@ -33,8 +37,14 @@ class PathResolver
      */
     public function url(string $path = ''): string
     {
-        $path = ltrim($path, '/');
-        return $this->baseUrl . ($path ? '/' . $path : '');
+        if (isset($this->urlCache[$path])) {
+            return $this->urlCache[$path];
+        }
+
+        $trimmed = ltrim($path, '/');
+        $result = $this->baseUrl . ($trimmed ? '/' . $trimmed : '');
+        
+        return $this->urlCache[$path] = $result;
     }
     
     /**
@@ -42,8 +52,14 @@ class PathResolver
      */
     public function asset(string $path = ''): string
     {
-        $path = ltrim($path, '/');
-        return $this->baseUrl . '/assets/' . $path;
+        if (isset($this->assetCache[$path])) {
+            return $this->assetCache[$path];
+        }
+
+        $trimmed = ltrim($path, '/');
+        $result = $this->baseUrl . '/assets/' . $trimmed;
+
+        return $this->assetCache[$path] = $result;
     }
     
     /**

@@ -41,7 +41,16 @@ class QueryBuilder
      */
     private function validateColumnName($column)
     {
-        if (!preg_match('/^[a-zA-Z0-9_.*\'"()]+(?:\s+(?:as\s+)?[a-zA-Z0-9_]+)?$/i', $column)) {
+        $column = trim((string)$column);
+        if ($column === '*') {
+            return $column;
+        }
+
+        // فرمت مجاز: شناسه، شناسه.شناسه یا شناسه.*، به همراه نام مستعار (AS alias) به صورت اختیاری
+        // این الگو از عبور کراکترهایی مثل پرانتز، تک‌کتیشن و سایر علائم خطرناک در متد استاندارد select جلوگیری می‌کند.
+        $pattern = '/^[a-zA-Z_][a-zA-Z0-9_]*(\.(\*|[a-zA-Z_][a-zA-Z0-9_]*))?(\s+as\s+[a-zA-Z_][a-zA-Z0-9_]*)?$/i';
+        
+        if (!preg_match($pattern, $column)) {
             throw new \InvalidArgumentException("نام ستون غیرمجاز: {$column}");
         }
         return $column;
@@ -74,6 +83,62 @@ class QueryBuilder
         
         $this->select = $columns;
         return $this;
+    }
+
+    /**
+     * انتخاب به صورت Raw
+     */
+    public function selectRaw($expression)
+    {
+        // این مقدار بدون validation مستقیم به select اضافه می‌شود
+        // buildSelectQuery وظیفه هندل کردن استثناهای آن را دارد
+        $this->select[] = $expression;
+        return $this;
+    }
+
+    /**
+     * شرط WHERE به صورت Raw
+     */
+    public function whereRaw($sql, array $bindings = [])
+    {
+        $this->where[] = [
+            'type' => 'AND',
+            'operator' => 'RAW',
+            'sql' => $sql,
+            'bindings' => $bindings
+        ];
+        return $this;
+    }
+
+    /**
+     * مرتب‌سازی به صورت Raw
+     */
+    public function orderByRaw($sql)
+    {
+        $this->orderBy[] = ['RAW', $sql];
+        return $this;
+    }
+
+    /**
+     * Utility helper: قرار دادن Backtick دور نام ستون
+     */
+    private function wrapColumn(string $column): string
+    {
+        $column = trim($column);
+        if ($column === '*') {
+            return '*';
+        }
+        
+        if (strpos($column, '.') !== false) {
+            $parts = explode('.', $column);
+            $wrapped = array_map(function($p) {
+                $p = trim($p);
+                return ($p === '*') ? '*' : "`{$p}`";
+            }, $parts);
+            return implode('.', $wrapped);
+        }
+        
+        return "`{$column}`";
     }
 
     /**
@@ -339,20 +404,51 @@ class QueryBuilder
 
         $sql = $this->buildSelectQuery();
 
+        // M8 Fix: تضمین ۱۰۰ درصدی بازیابی وضعیت شیء با استفاده از الگوی طلایی try...finally
         try {
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute($this->bindings);
             $result = $stmt->fetch(\PDO::FETCH_OBJ);
-        } catch (\PDOException $e) {
+            return (int)($result->count ?? 0);
+        } finally {
             $this->select = $originalSelect;
             $this->limit  = $originalLimit;
-            throw $e;
+        }
+    }
+
+    /**
+     * صفحه‌بندی نتایج (Pagination)
+     */
+    public function paginate(int $perPage = 15, string $pageName = 'page', ?int $page = null): array
+    {
+        if ($page === null) {
+            $page = (int)($_GET[$pageName] ?? 1);
+        }
+        if ($page <= 0) {
+            $page = 1;
         }
 
-        $this->select = $originalSelect;
-        $this->limit  = $originalLimit;
+        $total = $this->count();
+        
+        $originalLimit  = $this->limit;
+        $originalOffset = $this->offset;
 
-        return (int)($result->count ?? 0);
+        try {
+            $this->limit($perPage);
+            $this->offset(($page - 1) * $perPage);
+            $items = $this->get();
+        } finally {
+            $this->limit  = $originalLimit;
+            $this->offset = $originalOffset;
+        }
+
+        return [
+            'data' => $items,
+            'total' => $total,
+            'per_page' => $perPage,
+            'current_page' => $page,
+            'last_page' => (int)ceil($total / $perPage),
+        ];
     }
 
     /**
@@ -511,28 +607,29 @@ class QueryBuilder
     {
         // استفاده از backticks برای جلوگیری از SQL Injection
         $selectCols = implode(', ', array_map(function($col) {
-            if (strpos($col, '*') !== false) {
-                return $col;
-            }
+            $col = (string)$col;
+            
+            // تقسیم به بخش اصلی و نام مستعار (AS)
             $aliasParts = preg_split('/\s+as\s+/i', $col);
             if (count($aliasParts) === 1) {
-                $aliasParts = preg_split('/\s+/', $col);
+                // فقط اگر پرانتز نداشته باشد (برای جلوگیری از شکستن توابع مثل DATE(x) y)
+                if (!str_contains($col, '(') && !str_contains($col, ')')) {
+                    $aliasParts = preg_split('/\s+/', $col);
+                }
             }
             
             $mainCol = trim($aliasParts[0]);
             $alias = isset($aliasParts[1]) ? trim($aliasParts[1]) : null;
 
-            if (strpos($mainCol, '.') !== false) {
-                $parts = explode('.', $mainCol);
-                $wrappedMain = '`' . trim($parts[0]) . '`.`' . trim($parts[1]) . '`';
+            // اگر شامل توابع (پرانتز) یا اعمال محاسباتی باشد، به صورت خام باقی می‌ماند و بک‌تیک نمی‌خورد
+            if (preg_match('/[\(\)\+\-\/]/', $mainCol)) {
+                $wrappedMain = $mainCol;
             } else {
-                $wrappedMain = '`' . $mainCol . '`';
+                // استفاده از متد ایمن wrapColumn که برای فیلدهای استاندارد و .* آماده است
+                $wrappedMain = $this->wrapColumn($mainCol);
             }
 
-            if ($alias) {
-                return $wrappedMain . ' as `' . $alias . '`';
-            }
-            return $wrappedMain;
+            return $alias ? "{$wrappedMain} as `{$alias}`" : $wrappedMain;
         }, $this->select));
 
         $tableSql = $this->table;
@@ -563,7 +660,9 @@ class QueryBuilder
                 } else {
                     $joinTable = "`{$joinTable}`";
                 }
-                $sql .= " {$join['type']} JOIN {$joinTable} ON {$join['first']} {$join['operator']} {$join['second']}";
+                $first = $this->wrapColumn($join['first']);
+                $second = $this->wrapColumn($join['second']);
+                $sql .= " {$join['type']} JOIN {$joinTable} ON {$first} {$join['operator']} {$second}";
             }
         }
         
@@ -577,11 +676,12 @@ class QueryBuilder
             $sql .= " ORDER BY ";
             $orders = [];
             foreach ($this->orderBy as $order) {
-                // اضافه کردن backticks برای ستون
-                $col = strpos($order[0], '.') !== false 
-                    ? str_replace('.', '`.`', '`' . $order[0] . '`')
-                    : '`' . $order[0] . '`';
-                $orders[] = "{$col} {$order[1]}";
+                if ($order[0] === 'RAW') {
+                    $orders[] = $order[1];
+                } else {
+                    $col = $this->wrapColumn($order[0]);
+                    $orders[] = "{$col} {$order[1]}";
+                }
             }
             $sql .= implode(', ', $orders);
         }

@@ -32,11 +32,13 @@ class Router
     private Container $container;
 
     private array $routes = [
-        'GET'    => [],
-        'POST'   => [],
-        'PUT'    => [],
-        'DELETE' => [],
-        'PATCH'  => [],
+        'GET'     => [],
+        'POST'    => [],
+        'PUT'     => [],
+        'DELETE'  => [],
+        'PATCH'   => [],
+        'OPTIONS' => [], // M10 Fix: پشتیبانی بومی از متد پیش‌پرواز OPTIONS جهت تکمیل استاندارد REST
+        'HEAD'    => [], // M10 Fix: پشتیبانی از درخواست‌های صرفاً هدر HEAD
     ];
 
     public function __construct(Request $request, Response $response, Container $container)
@@ -78,6 +80,16 @@ class Router
     public function patch(string $uri, $action, array $middleware = []): Route
     {
         return $this->addRoute('PATCH', $uri, $action, $middleware);
+    }
+
+    public function options(string $uri, $action, array $middleware = []): Route
+    {
+        return $this->addRoute('OPTIONS', $uri, $action, $middleware);
+    }
+
+    public function head(string $uri, $action, array $middleware = []): Route
+    {
+        return $this->addRoute('HEAD', $uri, $action, $middleware);
     }
 
     private function addRoute(string $method, string $uri, $action, array $routeMiddleware = []): Route
@@ -144,6 +156,9 @@ class Router
 
     public function dispatch(): void
     {
+        // H15 Fix: اطمینان از تمیز بودن استک وابستگی‌های کانتینر در هر ورودی جدید
+        Container::resetTraceStack();
+
         // Ensure session is started at the beginning of request handling
         try {
             $this->container->make(\Core\Session::class)->ensureStarted();
@@ -157,49 +172,62 @@ class Router
         // ── Global Middleware Stack ─────────────────────────────────────
         // این میدل‌ویرها برای تمامی درخواست‌ها (حتی صفحات ۴۰۴) اجرا می‌شوند
         $globalMiddlewares = [
+            \App\Middleware\LoggingMiddleware::class,         // رصد دقیق پرفورمنس و مدیریت آسنکرون لاگ
             \App\Middleware\CorsMiddleware::class,
             \App\Middleware\HttpsMiddleware::class,
-            \App\Middleware\SecurityHeadersMiddleware::class
+            \App\Middleware\SecurityHeadersMiddleware::class,
+            \App\Middleware\MaintenanceMiddleware::class,     // جایگزین هوشمند لایه سنتی تعمیرات در هسته
+            \App\Middleware\SafeModeMiddleware::class         // سپر نهایی محافظت فقط خواندنی (Read-only)
         ];
 
-        // اجرای حلقه اصلی مسیریابی از میان Pipeline سراسری
-        $response = (new Pipeline($this->container))
-            ->send($this->request)
-            ->through($globalMiddlewares)
-            ->then(function ($request) {
-                
-                $method = $request->method();
-                $uri    = $this->normalizeUri($_SERVER['REQUEST_URI'] ?? '/');
+        // H10 Fix: کپسوله کردن پایپ‌لاین روت‌ها در try/catch برای گرفتن Exceptionهای پاسخدهی استاندارد
+        try {
+            // اجرای حلقه اصلی مسیریابی از میان Pipeline سراسری
+            $response = (new Pipeline($this->container))
+                ->send($this->request)
+                ->through($globalMiddlewares)
+                ->then(function ($request) {
+                    
+                    $method = $request->method();
+                    $uri    = $this->normalizeUri($_SERVER['REQUEST_URI'] ?? '/');
 
-                // ① جستجوی مسیر منطبق (Route Matching)
-                foreach ($this->routes[$method] ?? [] as $routeData) {
-                    $params = $this->matchRoute($routeData['uri'], $uri);
+                    // ① جستجوی مسیر منطبق (Route Matching)
+                    foreach ($this->routes[$method] ?? [] as $routeData) {
+                        $params = $this->matchRoute($routeData['uri'], $uri);
 
-                    if ($params === false) {
-                        continue;
+                        if ($params === false) {
+                            continue;
+                        }
+
+                        $request->setParams($params);
+                        $GLOBALS['_route_params'] = $params;
+
+                        // ② اجرای پایپ‌لاین اختصاصی روت
+                        $middlewares = $routeData['route']->getMiddleware();
+
+                        return (new Pipeline($this->container))
+                            ->send($request)
+                            ->through($middlewares)
+                            ->then(function ($req) use ($routeData, $params) {
+                                // مقصد نهایی: اجرای Action کنترلر
+                                return $this->executeAction($routeData['route']->getAction(), $params);
+                            });
                     }
 
-                    $request->setParams($params);
-                    $GLOBALS['_route_params'] = $params;
+                    // ③ در صورت عدم یافتن مسیر، خروجی ۴۰۴ استاندارد برگردانده می‌شود
+                    return $this->generateNotFoundResponse($uri, $method);
+                });
 
-                    // ② اجرای پایپ‌لاین اختصاصی روت
-                    $middlewares = $routeData['route']->getMiddleware();
-
-                    return (new Pipeline($this->container))
-                        ->send($request)
-                        ->through($middlewares)
-                        ->then(function ($req) use ($routeData, $params) {
-                            // مقصد نهایی: اجرای Action کنترلر
-                            return $this->executeAction($routeData['route']->getAction(), $params);
-                        });
-                }
-
-                // ③ در صورت عدم یافتن مسیر، خروجی ۴۰۴ استاندارد برگردانده می‌شود
-                return $this->generateNotFoundResponse($uri, $method);
-            });
-
-        // ④ نهایی‌سازی و تحویل پاسخ نهایی به خروجی
-        $this->handleResult($response);
+            // ④ نهایی‌سازی و تحویل پاسخ نهایی به خروجی
+            $this->handleResult($response);
+            
+        } catch (\Core\Exceptions\HttpResponseException $e) {
+            // اگر کنترلر یا میدل‌ویرها Response->send() زده باشند، در اینجا گرفته و منتشر می‌شود
+            $this->handleResult($e->getResponse());
+        } catch (\Throwable $e) {
+            // سایر خطاها جهت مدیریت متمرکز به ExceptionHandler سراسری ارجاع می‌شوند
+            throw $e;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -265,7 +293,8 @@ class Router
     private function handleResult(mixed $result): void
     {
         if ($result instanceof Response) {
-            $result->send();
+            // H10 Fix: صدا زدن امیتور فیزیکی به جای متد Send برای جلوگیری از حلقه تکرار exception
+            $result->sendToBrowser();
             return;
         }
         if (is_string($result)) {
@@ -287,9 +316,17 @@ class Router
     {
         $uri = strtok($rawUri, '?');
 
-        // حذف base path (برای نصب در subdirectory)
-        $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
-        $basePath   = str_replace('/public', '', dirname($scriptName));
+        // M9 Fix: مکانیزم هوشمند و امن برای حذف دایرکتوری‌های اجرایی
+        // ابتدا مقدار صریح کانفیگ را بررسی می‌کند، سپس با ریجکس دقیق انتهای پوشه public را حذف می‌کند
+        $basePath = config('app.base_path');
+        
+        if ($basePath === null) {
+            $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+            $scriptDir  = dirname($scriptName);
+            $basePath   = ($scriptDir === '/' || $scriptDir === '\\') ? '' : rtrim($scriptDir, '/');
+            // حذف بسیار امن کلمه public صرفاً در صورتی که در انتهای مطلق دایرکتوری اجرایی قرار داشته باشد
+            $basePath   = preg_replace('/\/public$/', '', $basePath);
+        }
 
         if ($basePath !== '/' && $basePath !== '' && str_starts_with($uri, $basePath)) {
             $uri = substr($uri, strlen($basePath));
@@ -319,7 +356,12 @@ class Router
 
         $params = [];
         foreach ($paramNames as $i => $name) {
-            $params[$name] = urldecode($matches[$i + 1] ?? '');
+            $decoded = urldecode($matches[$i + 1] ?? '');
+            // H7: جلوگیری از Path Traversal یا تزریق سگمنت با / بعد از دیکد شدن
+            if (strpos($decoded, '/') !== false) {
+                return false;
+            }
+            $params[$name] = $decoded;
         }
 
         return $params;
@@ -365,6 +407,36 @@ class Router
 
         $response->setContent(ob_get_clean());
         return $response;
+    }
+
+    /**
+     * تولید آدرس URL بر اساس نام Route
+     */
+    public function route(string $name, array $params = []): string
+    {
+        foreach ($this->routes as $method => $routes) {
+            foreach ($routes as $routeData) {
+                /** @var Route $route */
+                $route = $routeData['route'];
+                if ($route->getName() === $name) {
+                    $uri = $route->getUri();
+                    
+                    // جایگزینی پارامترها در URI (مانند /users/{id})
+                    foreach ($params as $key => $value) {
+                        $uri = str_replace('{' . $key . '}', (string)$value, $uri);
+                        $uri = str_replace('{' . $key . '?}', (string)$value, $uri);
+                    }
+                    
+                    // پاک‌سازی پارامترهای اختیاری خالی باقی‌مانده
+                    $uri = preg_replace('/\/\{[a-zA-Z0-9_]+\?\}/', '', $uri);
+
+                    // استفاده از هلپر سراسری url() برای تکمیل آدرس نهایی
+                    return function_exists('url') ? url($uri) : $uri;
+                }
+            }
+        }
+
+        throw new \InvalidArgumentException("مسیر با نام '{$name}' یافت نشد.");
     }
 
     // ─────────────────────────────────────────────────────────────

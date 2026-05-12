@@ -43,7 +43,10 @@ class CSRF
             return true;
         }
         $tokenName = config('csrf.token_name') ?? '_token';
-        $token = $this->request->input($tokenName) ?? $this->request->header('X-CSRF-TOKEN');
+        // M16 Fix: پشتیبانی کامل از هدرهای کلاینت‌های Vue.js و Axios با چک کردن X-XSRF-TOKEN به عنوان جایگزین
+        $token = $this->request->input($tokenName) 
+                 ?? $this->request->header('X-CSRF-TOKEN') 
+                 ?? $this->request->header('X-XSRF-TOKEN');
         return $this->verify($token);
     }
 

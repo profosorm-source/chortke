@@ -19,11 +19,13 @@ class Database
 	private static int $queryDepth = 0;
     private static bool $fallbackLogging = false;
 	private static ?array $lastSqlErrorContext = null;
+    private ?object $sentryMonitor = null; // M3 Fix: کش کلاینت مانیتورینگ جهت افزایش پرفورمنس کوئری‌ها
 
     /**
      * Constructor (Private)
+     * M4 Fix: رفع منقضی شدن PHP 8.1+ با تبدیل به تایپ نال‌پذیر
      */
-    private function __construct(array $dbConfig = null)
+    private function __construct(?array $dbConfig = null)
     {
         $config = $dbConfig ?? config('database');
         
@@ -39,7 +41,8 @@ class Database
         try {
             $this->pdo = new \PDO($dsn, $config['user'], $config['pass'], $options);
         } catch (\PDOException $e) {
-            throw new \Exception("Database connection failed: " . $e->getMessage());
+            // M5 Fix: استفاده از RuntimeException به جای کلاس والد اکسپشن جهت رعایت تمیزی در سلسله مراتب خطاها
+            throw new \RuntimeException("Database connection failed: " . $e->getMessage(), (int)$e->getCode(), $e);
         }
         
         $this->queryBuilder = new QueryBuilder($this->pdo);
@@ -206,143 +209,81 @@ public function prepare(string $sql): \PDOStatement
 	
 public function fetch(string $sql, array $params = []): ?object
 {
-    $sql = $this->normalizeSql($sql);
-
-    try {
-        $stmt = $this->pdo->prepare($sql);
-
-        foreach ($params as $key => $value) {
-            $param = \is_int($key) ? $key + 1 : ':' . ltrim((string)$key, ':');
-
-            $type = \PDO::PARAM_STR;
-            if (\is_int($value)) $type = \PDO::PARAM_INT;
-            elseif (\is_bool($value)) $type = \PDO::PARAM_BOOL;
-            elseif ($value === null) $type = \PDO::PARAM_NULL;
-
-            $stmt->bindValue($param, $value, $type);
-        }
-
-        $stmt->execute();
-        $row = $stmt->fetch(\PDO::FETCH_OBJ);
-        return $row ?: null;
-    } catch (\PDOException $e) {
-        $ctx = $this->buildSqlErrorContext($sql, $params, $e);
-self::$lastSqlErrorContext = $ctx;
-self::fallbackLog('database.fetch.failed', $ctx);
-throw $e;
-    }
+    $stmt = $this->executeStatement($sql, $params, 'database.fetch.failed');
+    $row = $stmt->fetch(\PDO::FETCH_OBJ);
+    return $row ?: null;
 }
 
 public function fetchAll(string $sql, array $params = []): array
 {
-    $sql = $this->normalizeSql($sql);
-
-    try {
-        $stmt = $this->pdo->prepare($sql);
-
-        foreach ($params as $key => $value) {
-            $param = \is_int($key) ? $key + 1 : ':' . ltrim((string)$key, ':');
-
-            $type = \PDO::PARAM_STR;
-            if (\is_int($value)) $type = \PDO::PARAM_INT;
-            elseif (\is_bool($value)) $type = \PDO::PARAM_BOOL;
-            elseif ($value === null) $type = \PDO::PARAM_NULL;
-
-            $stmt->bindValue($param, $value, $type);
-        }
-
-        $stmt->execute();
-        return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
-    } catch (\PDOException $e) {
-        $ctx = $this->buildSqlErrorContext($sql, $params, $e);
-self::$lastSqlErrorContext = $ctx;
-self::fallbackLog('database.fetch.failed', $ctx);
-throw $e;
-    }
+    $stmt = $this->executeStatement($sql, $params, 'database.fetchAll.failed');
+    return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
 }
 
 public function fetchColumn(string $sql, array $params = [], int $column = 0)
 {
-    $sql = $this->normalizeSql($sql);
+    $stmt = $this->executeStatement($sql, $params, 'database.fetchColumn.failed');
+    return $stmt->fetchColumn($column);
+}
 
-    try {
-        $stmt = $this->pdo->prepare($sql);
-
-        foreach ($params as $key => $value) {
-            $param = \is_int($key) ? $key + 1 : ':' . ltrim((string)$key, ':');
-
-            $type = \PDO::PARAM_STR;
-            if (\is_int($value)) {
-                $type = \PDO::PARAM_INT;
-            } elseif (\is_bool($value)) {
-                $type = \PDO::PARAM_BOOL;
-            } elseif ($value === null) {
-                $type = \PDO::PARAM_NULL;
-            }
-
-            $stmt->bindValue($param, $value, $type);
+    /**
+     * اجرای مرکزی دستورات دیتابیس با مدیریت هوشمند ریکرژن، لاگ و استثناها
+     */
+    private function executeStatement(string $sql, array $params, string $failureEvent): \PDOStatement
+    {
+        self::$queryDepth++;
+        if (self::$queryDepth > 100) {
+            self::$queryDepth--;
+            throw new \RuntimeException('Database recursion guard triggered');
         }
 
-        $stmt->execute();
-        return $stmt->fetchColumn($column);
-    } catch (\PDOException $e) {
-        $ctx = $this->buildSqlErrorContext($sql, $params, $e);
-self::$lastSqlErrorContext = $ctx;
-self::fallbackLog('database.fetch.failed', $ctx);
-throw $e;
+        $sql = $this->normalizeSql($sql);
+        $startTime = microtime(true);
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+
+            foreach ($params as $key => $value) {
+                $param = is_int($key) ? $key + 1 : ':' . ltrim((string)$key, ':');
+
+                $type = \PDO::PARAM_STR;
+                if (is_int($value))        $type = \PDO::PARAM_INT;
+                elseif (is_bool($value))   $type = \PDO::PARAM_BOOL;
+                elseif ($value === null)   $type = \PDO::PARAM_NULL;
+
+                $stmt->bindValue($param, $value, $type);
+            }
+
+            $stmt->execute();
+
+            // مانیتورینگ کوئری‌های کند
+            $duration = microtime(true) - $startTime;
+            if ($duration > 0.1) {
+                $this->logSlowQuery($sql, $params, $duration);
+            }
+
+            return $stmt;
+        } catch (\PDOException $e) {
+            $ctx = $this->buildSqlErrorContext($sql, $params, $e);
+            self::$lastSqlErrorContext = $ctx;
+            self::fallbackLog($failureEvent, $ctx);
+
+            // ارسال خودکار تمام خطاهای دیتابیسی (از کوئری، فچ و غیره) به سیستم مانیتورینگ
+            $this->logQueryErrorToSentry($sql, $params, $e);
+
+            throw $e;
+        } finally {
+            self::$queryDepth--;
+        }
     }
-}
 
     /**
      * اجرای Query مستقیم
      */
-   public function query(string $sql, array $params = []): \PDOStatement
-{
-    self::$queryDepth++;
-    if (self::$queryDepth > 100) {
-        self::$queryDepth--;
-        throw new \RuntimeException('Database recursion guard triggered');
+    public function query(string $sql, array $params = []): \PDOStatement
+    {
+        return $this->executeStatement($sql, $params, 'database.query.failed');
     }
-
-    $sql = $this->normalizeSql($sql);
-    $startTime = microtime(true);
-
-    try {
-        $stmt = $this->pdo->prepare($sql);
-
-        foreach ($params as $key => $value) {
-            $param = is_int($key) ? $key + 1 : ':' . ltrim((string)$key, ':');
-
-            $type = \PDO::PARAM_STR;
-            if (is_int($value))        $type = \PDO::PARAM_INT;
-            elseif (is_bool($value))   $type = \PDO::PARAM_BOOL;
-            elseif ($value === null)   $type = \PDO::PARAM_NULL;
-
-            $stmt->bindValue($param, $value, $type);
-        }
-
-        $stmt->execute();
-
-        // بررسی کوئری‌های کند (Slow Queries)
-        $duration = microtime(true) - $startTime;
-        if ($duration > 0.1) { // آستانه ۱۰۰ میلی‌ثانیه
-            $this->logSlowQuery($sql, $params, $duration);
-        }
-
-        return $stmt;
-    } catch (\PDOException $e) {
-        $ctx = $this->buildSqlErrorContext($sql, $params, $e);
-        self::$lastSqlErrorContext = $ctx;
-        self::fallbackLog('database.fetch.failed', $ctx);
-
-        // ارسال خطای دیتابیس به Sentry شخصی‌سازی شده
-        $this->logQueryErrorToSentry($sql, $params, $e);
-
-        throw $e;
-    } finally {
-        self::$queryDepth--;
-    }
-}
 
 private function formatParamValue(mixed $value): string
 {
@@ -530,27 +471,46 @@ public function lastInsertId(): int
         return $this->pdo->inTransaction();
     }
 
-    private function logSlowQuery(string $sql, array $params, float $duration): void
+    /**
+     * M3 Fix: حل‌کننده هوشمند و دارای کش کلاینت سنتری
+     */
+    private function getSentryMonitor(): ?object
     {
+        if ($this->sentryMonitor !== null) {
+            return $this->sentryMonitor;
+        }
+
         try {
             $container = Container::getInstance();
             if ($container && $container->has(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class)) {
-                $sentry = $container->make(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class);
-                if ($sentry) {
-                    $interpolatedSql = $this->interpolateSql($sql, $params);
-                    $sentry->captureMessage(
-                        "Slow query detected: " . mb_substr($interpolatedSql, 0, 200),
-                        'warning',
-                        null,
-                        [
-                            'sql' => $sql,
-                            'params_count' => count($params),
-                            'duration_seconds' => $duration,
-                            'interpolated_sql' => mb_substr($interpolatedSql, 0, 1000),
-                            'backtrace' => array_slice(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10), 2)
-                        ]
-                    );
-                }
+                $this->sentryMonitor = $container->make(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class);
+            }
+        } catch (\Throwable) {
+            // بدون خطا در صورت عدم امکان بارگذاری اولیه کانتینر
+        }
+
+        return $this->sentryMonitor;
+    }
+
+    private function logSlowQuery(string $sql, array $params, float $duration): void
+    {
+        try {
+            // M3 Fix: استفاده از کلاینت مانیتور کش شده به جای حل مجدد و سنگین در هر ریکوئست
+            $sentry = $this->getSentryMonitor();
+            if ($sentry) {
+                $interpolatedSql = $this->interpolateSql($sql, $params);
+                $sentry->captureMessage(
+                    "Slow query detected: " . mb_substr($interpolatedSql, 0, 200),
+                    'warning',
+                    null,
+                    [
+                        'sql' => $sql,
+                        'params_count' => count($params),
+                        'duration_seconds' => $duration,
+                        'interpolated_sql' => mb_substr($interpolatedSql, 0, 1000),
+                        'backtrace' => array_slice(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10), 2)
+                    ]
+                );
             }
         } catch (\Throwable $ignore) {
             // کاملاً فیل‌سیف
@@ -560,22 +520,20 @@ public function lastInsertId(): int
     private function logQueryErrorToSentry(string $sql, array $params, \Throwable $e): void
     {
         try {
-            $container = Container::getInstance();
-            if ($container && $container->has(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class)) {
-                $sentry = $container->make(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class);
-                if ($sentry) {
-                    $interpolatedSql = $this->interpolateSql($sql, $params);
-                    $sentry->captureException(
-                        $e,
-                        null,
-                        [
-                            'sql' => $sql,
-                            'params_count' => count($params),
-                            'interpolated_sql' => mb_substr($interpolatedSql, 0, 1000),
-                        ],
-                        'error'
-                    );
-                }
+            // M3 Fix: بازیابی کلاینت مانیتور از کش داخلی دیتابیس
+            $sentry = $this->getSentryMonitor();
+            if ($sentry) {
+                $interpolatedSql = $this->interpolateSql($sql, $params);
+                $sentry->captureException(
+                    $e,
+                    null,
+                    [
+                        'sql' => $sql,
+                        'params_count' => count($params),
+                        'interpolated_sql' => mb_substr($interpolatedSql, 0, 1000),
+                    ],
+                    'error'
+                );
             }
         } catch (\Throwable $ignore) {
             // کاملاً فیل‌سیف

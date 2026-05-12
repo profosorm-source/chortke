@@ -10,9 +10,11 @@ namespace Core;
 class MaintenanceMode
 {
     private string $flagFile;
+    private \App\Contracts\LoggerInterface $logger;
 
-    public function __construct()
+    public function __construct(?\App\Contracts\LoggerInterface $logger = null)
     {
+        $this->logger = $logger ?: logger();
         $this->flagFile = config('paths.storage') . '/maintenance.flag';
     }
 

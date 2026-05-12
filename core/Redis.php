@@ -45,6 +45,7 @@ class Redis
             }
 
             $redis->select($db);
+            $redis->setOption(\Redis::OPT_SCAN, \Redis::SCAN_RETRY);
             $redis->ping();
 
             $this->client = $redis;
@@ -84,28 +85,12 @@ class Redis
         $keys = [];
         $iterator = null;
 
-        // SCAN returns [iterator, keys]
-        while (true) {
-            $result = $this->client->scan($iterator, $pattern, $count);
-            
-            if ($result === false) {
-                break;
+        // scan expects &$iterator, performs iterations and updates the pointer
+        while (false !== ($batch = $this->client->scan($iterator, $pattern, $count))) {
+            foreach ($batch as $key) {
+                $keys[] = $key;
             }
-
-            // PhpRedis returns [new_iterator, keys_array]
-            if (is_array($result) && isset($result[1])) {
-                $keys = array_merge($keys, $result[1]);
-                $iterator = $result[0];
-            } else {
-                // Fallback for different Redis implementations
-                if (is_array($result)) {
-                    $keys = array_merge($keys, $result);
-                }
-                break;
-            }
-
-            // If iterator is 0, scan completed
-            if ($iterator === '0' || $iterator === 0) {
+            if ($iterator === 0 || $iterator === '0') {
                 break;
             }
         }

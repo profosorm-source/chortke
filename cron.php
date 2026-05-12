@@ -11,7 +11,7 @@
  *   php cron.php --job=email_queue   (فقط یک job خاص)
  *   php cron.php --dry-run            (فقط نمایش بدون اجرا)
  */
-if (php_sapi_name() !== 'cli') {
+if (php_sapi_name() !== 'cli' && !defined('INTERNAL_APP_CRON_TRIGGER')) {
     die("Access Denied: Cron jobs can only be run via CLI.\n");
 }
 
@@ -50,14 +50,24 @@ $container = Container::getInstance();
 // ==========================================
 //  File Lock — جلوگیری از اجرای همزمان cron (مشکل #9)
 // ==========================================
-$lockFile = BASE_PATH . '/storage/logs/cron.lock';
-$lockHandle = fopen($lockFile, 'c');
-if ($lockHandle === false || !flock($lockHandle, LOCK_EX | LOCK_NB)) {
-    // نمونه دیگری در حال اجراست
-    if (is_resource($lockHandle)) {
-        fclose($lockHandle);
-    }
+$lockDir = BASE_PATH . '/storage/logs';
+if (!is_dir($lockDir)) {
+    @mkdir($lockDir, 0775, true);
+}
+
+$lockFile = $lockDir . '/cron.lock';
+$lockHandle = @fopen($lockFile, 'c');
+
+if ($lockHandle === false) {
+    echo '[' . date('Y-m-d H:i:s') . "] [ERROR] Unable to open/create lock file: {$lockFile}.\n";
+    if (defined('INTERNAL_APP_CRON_TRIGGER')) return;
+    exit(1);
+}
+
+if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
+    fclose($lockHandle);
     echo '[' . date('Y-m-d H:i:s') . "] [SKIP] cron.php already running — exiting.\n";
+    if (defined('INTERNAL_APP_CRON_TRIGGER')) return;
     exit(0);
 }
 
@@ -127,6 +137,9 @@ $scheduler->everyMinute(function () {
         
         try {
             if (class_exists($jobClass)) {
+                // H15 Fix: جلوگیری از هم‌پوشانی استک کانتینر بین جاب‌های مختلف در فرآیند CLI طولانی
+                Container::resetTraceStack();
+                
                 $handler = Container::getInstance()->make($jobClass);
                 if (method_exists($handler, 'handle')) {
                     $handler->handle($data);
@@ -197,8 +210,11 @@ $scheduler->everyMinutes(feature_config('cron_scheduler_interval', 'rollout_perc
 // اجرا در فواصل کوتاه برای ارسال موازی و کم‌بار بدون سنگین کردن سرور
 $scheduler->everyMinutes(feature_config('cron_ad_push_interval', 'rollout_percentage', 3), function () {
     $dispatcher = Container::getInstance()->make(AdNotificationDispatcher::class);
-    $stats = $dispatcher->processAdNotifications();
-    return $stats;
+    $result = $dispatcher->processAdNotifications();
+    if (($result['total_sent'] ?? 0) > 0) {
+        echo "[AdPush] Processed {$result['ads_processed']} ads, sent {$result['total_sent']} push packets\n";
+    }
+    return $result;
 }, 'ad_notification_push');
 
 /**
@@ -723,18 +739,6 @@ $scheduler->everyMinute(function () use ($container) {
     return ['processed' => $processed];
 }, 'notification_scheduled');
 
-/**
- * هر دقیقه: توزیع آگهی‌های نوتیفیکیشن انبوه‌ (Push Ads)
- */
-$scheduler->everyMinute(function () use ($container) {
-    $dispatcher = $container->make(\App\Services\AdNotificationDispatcher::class);
-    $result = $dispatcher->processAdNotifications();
-    
-    if ($result['total_sent'] > 0) {
-        echo "[AdPush] Processed {$result['ads_processed']} ads, sent {$result['total_sent']} push packets\n";
-    }
-    return $result;
-}, 'ad_notification_blast');
 
 /**
  * هر ساعت: آرشیو نوتیفیکیشن‌های منقضی‌شده
@@ -768,6 +772,7 @@ $scheduler->hourly(function () use ($container) {
 
 if ($dryRun) {
     echo "وظایف ثبت‌شده - اجرا نشدند (dry-run mode)\n";
+    if (defined('INTERNAL_APP_CRON_TRIGGER')) return;
     exit(0);
 }
 
@@ -825,7 +830,7 @@ echo '[' . date('Y-m-d H:i:s') . '] پایان' . PHP_EOL;
         // Logger failed or not booted
     }
 
-    // 3. Native server logging
     error_log($errorMsg);
+    if (defined('INTERNAL_APP_CRON_TRIGGER')) throw $e;
     exit(1);
 }

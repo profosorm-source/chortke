@@ -11,6 +11,7 @@ class Response
     private $statusCode = 200;
     private $headers = [];
     private $content = '';
+    private ?string $downloadPath = null; // H10 Fix: مدیریت استریم دانلود بدون بلاک کردن ترد اجرا
     
     // ✅ Whitelist of allowed header names (case-insensitive)
     private const ALLOWED_HEADERS = [
@@ -47,7 +48,6 @@ class Response
     public function setStatusCode(int $code): void
     {
         $this->statusCode = $code;
-        http_response_code($code);
     }
     
     /**
@@ -87,9 +87,7 @@ class Response
     public function setHeader(string $name, string $value): void
     {
         $this->validateHeader($name, $value);
-        if (!headers_sent()) {
-            header("{$name}: {$value}");
-        }
+        $this->headers[$name] = $value;
     }
 
     /**
@@ -111,19 +109,26 @@ class Response
 
     public function json(array $data, int $statusCode = 200): void
     {
-        http_response_code($statusCode);
-        if (!headers_sent()) {
-            header('Content-Type: application/json; charset=utf-8');
-        }
+        $this->statusCode = $statusCode;
+        $this->setHeader('Content-Type', 'application/json; charset=utf-8');
+
         $options = JSON_UNESCAPED_UNICODE;
         if (config('app.debug')) {
             $options |= JSON_PRETTY_PRINT;
         }
-        echo json_encode($data, $options);
-        if (defined('TESTING') && TESTING === true) {
-            return;
-        }
-        exit;
+        
+        $this->content = json_encode($data, $options);
+        $this->send();
+    }
+
+    /**
+     * ارسال پاسخ بدون محتوا (204 No Content)
+     */
+    public function noContent(): void
+    {
+        $this->statusCode = 204;
+        $this->content = '';
+        $this->send();
     }
 
     /**
@@ -131,15 +136,11 @@ class Response
      */
     public function html(string $content, int $statusCode = 200): void
     {
-        http_response_code($statusCode);
-        if (!headers_sent()) {
-            header('Content-Type: text/html; charset=utf-8');
-        }
-        echo $content;
-        if (defined('TESTING') && TESTING === true) {
-            return;
-        }
-        exit;
+        $this->statusCode = $statusCode;
+        $this->setHeader('Content-Type', 'text/html; charset=utf-8');
+        
+        $this->content = $content;
+        $this->send();
     }
     
     /**
@@ -171,6 +172,11 @@ class Response
      */
     private function validateRedirectUrl(string $url): bool
     {
+        // H9 Fix: جلوگیری از حملات Open Redirect با استفاده از بک‌اسلش‌های گمراه‌کننده
+        if (preg_match('#^(/|\\\\)\\\\#', $url) || preg_match('#^/+\\\\#', $url)) {
+            throw new \InvalidArgumentException('آدرس ریدایرکت نامعتبر است (سوءاستفاده از بک‌اسلش)');
+        }
+
         // ✅ Allow relative URLs (start with / but NOT //)
         if (strpos($url, '/') === 0 && strpos($url, '//') !== 0) {
             return true;
@@ -195,16 +201,11 @@ class Response
     {
         $this->validateRedirectUrl($url);
         session_write_close();
-        http_response_code($statusCode);
-        if (!headers_sent()) {
-            header("Location: {$url}");
-        }
-        if (defined('TESTING') && TESTING === true) {
-            $this->statusCode = $statusCode;
-            $this->headers['Location'] = $url;
-            return;
-        }
-        exit;
+        
+        $this->statusCode = $statusCode;
+        $this->setHeader('Location', $url);
+        
+        $this->send();
     }
     
     private function validateFilePath(string $filePath): bool
@@ -270,18 +271,19 @@ class Response
         $fileName = $this->validateFileName($fileName);
         
         if (!file_exists($filePath)) {
-            http_response_code(404);
-            echo 'فایل پیدا نشد';
-            exit;
+            $this->statusCode = 404;
+            $this->content = 'فایل پیدا نشد';
+            $this->send();
+            return;
         }
 
-        // ✅ Set proper headers (validated)
-        header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="' . $fileName . '"');
-        header('Content-Length: ' . filesize($filePath));
+        // H10 Fix: به جای exit، مسیر دانلود را ست کرده و Response Exception شلیک می‌کنیم
+        $this->setHeader('Content-Type', 'application/octet-stream');
+        $this->setHeader('Content-Disposition', 'attachment; filename="' . $fileName . '"');
+        $this->setHeader('Content-Length', (string)filesize($filePath));
         
-        readfile($filePath);
-        exit;
+        $this->downloadPath = $filePath;
+        $this->send();
     }
     
     /**
@@ -298,28 +300,58 @@ class Response
     }
 
     /**
-     * ارسال پاسخ
+     * ارسال فیزیکی Status Code و هدرهای انباشته شده به کلاینت
      */
-    public function send()
+    private function sendHeaders(): void
     {
-        // تنظیم Status Code
+        if (headers_sent()) {
+            return;
+        }
+
+        // اعمال نهایی وضعیت HTTP
         http_response_code($this->statusCode);
         
-        // ارسال Headers
+        // انتشار تمامی هدرهای ساخته شده توسط لایه‌های سیستم
         foreach ($this->headers as $name => $value) {
-            try {
-                $this->validateHeader($name, $value);
-                header("{$name}: {$value}");
-            } catch (\InvalidArgumentException $e) {
-                // Log and skip invalid header
-                error_log($e->getMessage());
-            }
+            header("{$name}: {$value}");
         }
+    }
+
+    /**
+     * ارسال نهایی فیزیکی به مرورگر (فقط توسط Router صدا زده می‌شود)
+     */
+    public function sendToBrowser(): void
+    {
+        $this->sendHeaders();
         
-        // ارسال Content
-        echo $this->content;
-        
-        exit;
+        if ($this->downloadPath && file_exists($this->downloadPath)) {
+            // M13 Fix: پیاده‌سازی مکانیزم دانلود امن و کم‌مصرف حافظه (Chunked Memory-Safe Streaming)
+            // غیرفعال کردن تمامی بافرهای خروجی فعال جهت آزادسازی رم سرور
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+            
+            $file = fopen($this->downloadPath, 'rb');
+            if ($file !== false) {
+                while (!feof($file) && connection_status() === 0) {
+                    echo fread($file, 8192); // استریم فایل به صورت تکه‌تکه‌های ۸ کیلوبایتی
+                    flush(); // هل دادن فیزیکی داده‌ها به سمت کلاینت و مرورگر
+                }
+                fclose($file);
+            }
+        } else {
+            echo $this->content;
+        }
+    }
+
+    /**
+     * H10 Fix: آزادسازی پایپ‌لاین روت‌ها
+     * به جای خروج فیزیکی و خاموش شدن پردازش، یک Response Exception پرتاب می‌شود 
+     * که توسط لایه Router گرفته شده و به چرخه حیات طبیعی برمی‌گرداند.
+     */
+    public function send(): void
+    {
+        throw new \Core\Exceptions\HttpResponseException($this);
     }
 
     /**
@@ -331,8 +363,8 @@ class Response
         view($viewName, $data);
         $this->content = ob_get_clean();
         
-        echo $this->content;
-        exit;
+        // H10 Fix: شلیک پاسخ استاندارد به جای echo و exit فیزیکی
+        $this->send();
     }
 
 	/**
@@ -340,7 +372,7 @@ class Response
      */
     public function status(int $code): self
     {
-        http_response_code($code);
+        $this->statusCode = $code;
         return $this;
     }
 

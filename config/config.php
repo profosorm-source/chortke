@@ -13,6 +13,10 @@ return [
         'url' => env('APP_URL', 'http://localhost'),
         'timezone' => env('APP_TIMEZONE', 'Asia/Tehran'),
         'key' => env('APP_KEY', ''),
+        'trusted_proxies' => array_filter(array_map('trim', explode(',', env('TRUSTED_PROXIES', '127.0.0.1')))),
+        'safe_mode' => env('APP_SAFE_MODE', false),
+        'version' => env('APP_VERSION', '1.0.0'),
+        'release' => env('APP_RELEASE', '1.0.0'),
     ],
     
     'database' => [
@@ -62,7 +66,7 @@ return [
         'max_size' => env('MAX_UPLOAD_SIZE', 10485760), // 10MB
         // ── Fix #3: مسیر آپلود خارج از public (برای فایل‌های خصوصی)
         // ── UploadService خودش public/uploads vs storage/uploads را مدیریت می‌کند
-        'path' => __DIR__ . '/../storage/uploads/',
+        'path' => env('UPLOAD_PATH', __DIR__ . '/../storage/uploads/'),
         // ── Fix #4: allowed_videos حذف شد
         // ── UploadService منبع حقیقت واحد برای MIME های مجاز است (IMAGE_MIMES)
         // ── ویدیو توسط UploadService::DANGEROUS_EXT صریحاً رد می‌شود
@@ -95,4 +99,8 @@ return [
   'recaptcha_site_key'   => env('RECAPTCHA_SITE_KEY', ''),
   'recaptcha_secret_key' => env('RECAPTCHA_SECRET_KEY', ''),
 ],
+
+    'cors' => [
+        'allowed_origins' => env('CORS_ALLOWED_ORIGINS', ''),
+    ],
 ];

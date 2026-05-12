@@ -125,11 +125,21 @@ class Scheduler
                 continue;
             }
 
-            $lockKey = 'cron:' . md5($job['key']);
+            $lastRunKey = 'cron_last_run:' . md5($job['key']);
+            $mutexKey = 'cron_mutex:' . md5($job['key']);
 
-            // بررسی lock - جلوگیری از اجرای موازی با استفاده از سیستم کش (Redis/File)
-            if (!Cache::getInstance()->lock($lockKey, $job['interval'])) {
-                $results[$job['name']] = ['status' => 'skipped', 'reason' => 'lock'];
+            // ۱. بررسی فاصله زمانی از آخرین اجرای موفق (فقط برای کرون اتوماتیک)
+            if ($onlyJobName === null) {
+                $lastRun = Cache::getInstance()->get($lastRunKey);
+                if ($lastRun && (time() - (int)$lastRun) < ($job['interval'] - 5)) {
+                    $results[$job['name']] = ['status' => 'skipped', 'reason' => 'already_run_within_interval'];
+                    continue;
+                }
+            }
+
+            // ۲. دریافت قفل همزمانی کوتاه‌مدت (جلوگیری از تداخل لحظه‌ای)
+            if (!Cache::getInstance()->lock($mutexKey, 300)) { // قفل ۵ دقیقه‌ای
+                $results[$job['name']] = ['status' => 'skipped', 'reason' => 'concurrent_mutex'];
                 continue;
             }
 
@@ -137,6 +147,9 @@ class Scheduler
             try {
                 $output = ($job['callback'])();
                 $duration = round((microtime(true) - $start) * 1000, 2);
+
+                // ۳. ثبت موفقیت اجرای این بازه
+                Cache::getInstance()->forever($lastRunKey, time());
 
                 $results[$job['name']] = [
                     'status'   => 'ok',
@@ -181,7 +194,7 @@ class Scheduler
                 // release lock در صورت خطا هم
             } finally {
                 // release lock after execution
-                Cache::getInstance()->unlock('cron:' . md5($job['key']));
+                Cache::getInstance()->unlock('cron_mutex:' . md5($job['key']));
             }
         }
 

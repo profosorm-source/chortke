@@ -31,6 +31,12 @@ class Container
 
     private $reflectionCache = [];
     private bool $isLoggingMissing = false;
+
+    /** @var array<string, array<string>> */
+    private array $tags = [];
+
+    /** @var array<string, array<\Closure>> */
+    private array $extenders = [];
     // ─────────────────────────────────────────────────────────────
     // Singleton Access
     // ─────────────────────────────────────────────────────────────
@@ -85,8 +91,16 @@ class Container
     // ─────────────────────────────────────────────────────────────
     // Resolution
     // ─────────────────────────────────────────────────────────────
-
+    
     private static array $traceStack = [];
+
+    /**
+     * H15 Fix: پاکسازی استک دیباگ چرخه‌ای برای جلوگیری از false-positive در فرآیندهای طولانی
+     */
+    public static function resetTraceStack(): void
+    {
+        self::$traceStack = [];
+    }
 
     /**
      * ساخت / دریافت instance
@@ -94,25 +108,40 @@ class Container
      * @throws \RuntimeException
      */
     public function make(string $abstract): object
-{
-    if (in_array($abstract, self::$traceStack, true)) {
-        throw new \RuntimeException("Circular dependency detected: " . implode(" -> ", self::$traceStack) . " -> " . $abstract);
-    }
-    self::$traceStack[] = $abstract;
-    try {
-        // Singleton cache
-        if (array_key_exists($abstract, $this->singletons)) {
-            if ($this->singletons[$abstract] === null) {
-                $this->singletons[$abstract] = $this->resolve($abstract);
-            }
-            return $this->singletons[$abstract];
+    {
+        if (in_array($abstract, self::$traceStack, true)) {
+            throw new \RuntimeException("Circular dependency detected: " . implode(" -> ", self::$traceStack) . " -> " . $abstract);
         }
+        self::$traceStack[] = $abstract;
+        try {
+            // Singleton cache
+            if (array_key_exists($abstract, $this->singletons)) {
+                if ($this->singletons[$abstract] === null) {
+                    $instance = $this->resolve($abstract);
+                    $this->singletons[$abstract] = $this->applyExtenders($abstract, $instance);
+                }
+                return $this->singletons[$abstract];
+            }
 
-        return $this->resolve($abstract);
-    } finally {
-        array_pop(self::$traceStack);
+            $instance = $this->resolve($abstract);
+            return $this->applyExtenders($abstract, $instance);
+        } finally {
+            array_pop(self::$traceStack);
+        }
     }
-}
+
+    /**
+     * اعمال توابع گسترش‌دهنده (Extenders) روی شیء ساخته‌شده
+     */
+    private function applyExtenders(string $abstract, object $instance): object
+    {
+        if (isset($this->extenders[$abstract])) {
+            foreach ($this->extenders[$abstract] as $extender) {
+                $instance = $extender($instance, $this);
+            }
+        }
+        return $instance;
+    }
 
     private function resolve(string $abstract): object
 {
@@ -124,6 +153,14 @@ class Container
         if (!is_object($object)) {
             throw new \RuntimeException("[Container] Binding '{$abstract}' did not return an object.");
         }
+        
+        // H14 Fix: بررسی انطباق نوع شیء ساخته شده با اینترفیس/کلاس درخواستی
+        if (class_exists($abstract) || interface_exists($abstract)) {
+            if (!($object instanceof $abstract)) {
+                throw new \RuntimeException("[Container] Container binding for '{$abstract}' returned incompatible type (" . get_class($object) . ").");
+            }
+        }
+        
         return $object;
     }
 
@@ -143,6 +180,10 @@ class Container
     }
 
     if (!isset($this->reflectionCache[$concrete])) {
+        // M6 Fix: جلوگیری از رشد نامحدود حافظه با تعیین سقف ۵۰۰ آیتم برای کش رفلکشن
+        if (count($this->reflectionCache) >= 500) {
+            array_shift($this->reflectionCache);
+        }
         $this->reflectionCache[$concrete] = new \ReflectionClass($concrete);
     }
 
@@ -213,7 +254,15 @@ class Container
             if ($parameter->allowsNull()) {
                 try {
                     $dependencies[] = $this->make($typeName);
-                } catch (\RuntimeException) {
+                } catch (\RuntimeException $e) {
+                    // M7 Fix: ثبت در لاگ سیستمی جهت سهولت در دیباگ زمانی که سیستم قادر به حل یک وابستگی Nullable نیست
+                    if (function_exists('logger')) {
+                        try {
+                            logger()->debug("[Container] Resolved nullable '\${$parameter->getName()}' as null due to: " . $e->getMessage());
+                        } catch (\Throwable) {
+                            // Fallback silent
+                        }
+                    }
                     $dependencies[] = null;
                 }
                 continue;
@@ -228,6 +277,56 @@ class Container
     // ─────────────────────────────────────────────────────────────
     // Utility
     // ─────────────────────────────────────────────────────────────
+
+    /**
+     * گسترش دادن یا تغییر نحوه ساخت نهایی یک شیء (Decoration)
+     */
+    public function extend(string $abstract, \Closure $closure): void
+    {
+        // اگر قبلاً در کش سینگلتون‌ها مقداردهی اولیه شده است، بلافاصله آن را تغییر بده
+        if (array_key_exists($abstract, $this->singletons) && $this->singletons[$abstract] !== null) {
+            $this->singletons[$abstract] = $closure($this->singletons[$abstract], $this);
+        } else {
+            $this->extenders[$abstract][] = $closure;
+        }
+    }
+
+    /**
+     * اختصاص تگ به چندین کلاس/آبسترکت جهت ارجاع گروهی
+     */
+    public function tag(string|array $abstracts, string ...$tags): void
+    {
+        $abstracts = (array)$abstracts;
+
+        foreach ($tags as $tag) {
+            if (!isset($this->tags[$tag])) {
+                $this->tags[$tag] = [];
+            }
+
+            foreach ($abstracts as $abstract) {
+                if (!\in_array($abstract, $this->tags[$tag], true)) {
+                    $this->tags[$tag][] = $abstract;
+                }
+            }
+        }
+    }
+
+    /**
+     * دریافت تمامی اشیائی که با تگ خاصی ثبت شده‌اند
+     */
+    public function tagged(string $tag): iterable
+    {
+        if (!isset($this->tags[$tag])) {
+            return [];
+        }
+
+        $instances = [];
+        foreach ($this->tags[$tag] as $abstract) {
+            $instances[] = $this->make($abstract);
+        }
+
+        return $instances;
+    }
 
     public function has(string $abstract): bool
     {

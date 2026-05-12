@@ -35,6 +35,8 @@ class Cache
     private string $redisPrefix = 'chortke:';
 
     private string $cacheDir;
+    private array $fileLocks = [];
+    private array $redisLocks = [];
 
     // ─────────────────────────────────────────────────
     //  Bootstrap
@@ -65,21 +67,28 @@ class Cache
         return $this->driver;
     }
 
-private function safeUnserialize($raw)
-{
-    if ($raw === null || $raw === false) {
-        return null;
-    }
+    public function safeUnserialize($raw, array $allowedClasses = [\stdClass::class])
+    {
+        if ($raw === null || $raw === false) {
+            return null;
+        }
 
-    // JSON first (recommended)
-    $json = json_decode($raw, true);
-    if (json_last_error() === JSON_ERROR_NONE) {
-        return $json;
-    }
+        // JSON first (recommended)
+        $json = json_decode($raw, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $json;
+        }
 
-    // fallback legacy serialize
-    return @unserialize($raw, ['allowed_classes' => false]);
-}
+        // Legacy serialized payloads: allow specified classes (e.g. stdClass)
+        $value = @unserialize($raw, ['allowed_classes' => !empty($allowedClasses) ? $allowedClasses : false]);
+
+        // distinguish unserialize failure from valid serialized false ("b:0;")
+        if ($value === false && $raw !== 'b:0;') {
+            return null;
+        }
+
+        return $value;
+    }
     // ─────────────────────────────────────────────────
     //  اتصال Redis
     // ─────────────────────────────────────────────────
@@ -114,6 +123,7 @@ private function safeUnserialize($raw)
             }
 
             $r->select($db);
+            $r->setOption(\Redis::OPT_SCAN, \Redis::SCAN_RETRY);
             $r->ping(); // تست واقعی اتصال
 
             $this->redis  = $r;
@@ -162,6 +172,16 @@ private function safeUnserialize($raw)
         return $this->fileGet($key, $default);
     }
 
+    /**
+     * خواندن مقدار کش و حذف فوری آن (Get and Forget)
+     */
+    public function pull(string $key, mixed $default = null): mixed
+    {
+        $value = $this->get($key, $default);
+        $this->forget($key);
+        return $value;
+    }
+
     public function has(string $key): bool
     {
         if ($this->driver === 'redis') {
@@ -183,18 +203,18 @@ private function safeUnserialize($raw)
     public function flush(): bool
     {
         if ($this->driver === 'redis') {
-            // فقط کلیدهای این پروژه را پاک می‌کند (نه همه Redis)
-            $keys = [];
-            $cursor = '0';
-            do {
-                $result = $this->redis->scan($cursor, 'MATCH', $this->redisPrefix . '*', 'COUNT', 100);
-                $cursor = $result[0];
-                $keys = array_merge($keys, $result[1]);
-            } while ($cursor !== '0');
+            $iterator = null;
+            $pattern = $this->redisPrefix . '*';
 
-            if (!empty($keys)) {
-                $this->redis->del($keys);
+            while (false !== ($batch = $this->redis->scan($iterator, $pattern, 100))) {
+                if (!empty($batch)) {
+                    $this->redis->del($batch);
+                }
+                if ($iterator === 0 || $iterator === '0') {
+                    break;
+                }
             }
+
             return true;
         }
 
@@ -226,8 +246,11 @@ private function safeUnserialize($raw)
     public function forever(string $key, mixed $value): bool
     {
         if ($this->driver === 'redis') {
-            return (bool) $this->redis->set(
+            // یک سال به ثانیه: ۳۱۵۳۶۰۰۰ (همسان با رانر فایل برای جلوگیری از انباشت بی‌نهایت حافظه)
+            $oneYear = 31536000;
+            return (bool) $this->redis->setex(
                 $this->redisKey($key),
+                $oneYear,
                 serialize($value)
             );
         }
@@ -239,34 +262,145 @@ private function safeUnserialize($raw)
     //  Counter (atomic در Redis)
     // ─────────────────────────────────────────────────
 
-    public function increment(string $key, int $step = 1): int|false
+    public function increment(string $key, int $step = 1, int $ttlSeconds = 0): int|false
     {
         if ($this->driver === 'redis') {
-            return $step === 1
-                ? $this->redis->incr($this->redisKey($key))
-                : $this->redis->incrBy($this->redisKey($key), $step);
+            // اسکریپت لوآ برای اتمیک اینکریمنت + تنظیم انقضا در صورتی که از قبل ندارد
+            $script = <<<'LUA'
+local current = redis.call('INCRBY', KEYS[1], ARGV[1])
+local ttl = redis.call('TTL', KEYS[1])
+local targetTtl = tonumber(ARGV[2])
+-- فقط اگر کلید تازه ساخته شده یا انقضا ندارد (TTL = -1) و درخواست TTL داده شده باشد
+if ttl == -1 and targetTtl > 0 then
+    redis.call('EXPIRE', KEYS[1], targetTtl)
+end
+return current
+LUA;
+            $result = $this->redis->eval($script, [$this->redisKey($key), $step, $ttlSeconds], 1);
+            return $result !== false ? (int)$result : false;
         }
 
-        $current = (int) $this->get($key, 0);
-        $new     = $current + $step;
-        $this->forever($key, $new);
+        // M20 Fix: افزایش اتمیک فایل با flock برای مسدود کردن تداخلات همزمانی
+        $file = $this->cacheFile($key);
+        $dir  = dirname($file);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+
+        $fh = fopen($file, 'c+');
+        if (!$fh) {
+            return false;
+        }
+
+        $new = false;
+        if (flock($fh, LOCK_EX)) {
+            $size = @filesize($file);
+            $raw = ($size > 0) ? fread($fh, $size) : '';
+            
+            $currentValue = 0;
+            // یک سال پیش‌فرض (بر حسب ثانیه)
+            $expireAt = time() + ($ttlSeconds > 0 ? $ttlSeconds : (525_600 * 60));
+
+            if (!empty($raw)) {
+                $data = $this->safeUnserialize($raw);
+                if (is_array($data) && isset($data['expire_at'])) {
+                    // اگر کلید منقضی شده باشد مقدار قبلی نادیده گرفته می‌شود
+                    if ($data['expire_at'] >= time()) {
+                        $currentValue = (int)($data['value'] ?? 0);
+                        // اگر انقضای جدید تعیین نشده، انقضای قبلی را حفظ کن
+                        if ($ttlSeconds <= 0) {
+                            $expireAt = $data['expire_at'];
+                        }
+                    }
+                }
+            }
+
+            $new = $currentValue + $step;
+            
+            $newData = serialize([
+                'expire_at' => $expireAt,
+                'value'     => $new,
+            ]);
+            
+            ftruncate($fh, 0);
+            rewind($fh);
+            fwrite($fh, $newData);
+            fflush($fh);
+            flock($fh, LOCK_UN);
+        }
+        fclose($fh);
+
         return $new;
     }
 
-    public function decrement(string $key, int $step = 1): int|false
+    public function decrement(string $key, int $step = 1, int $ttlSeconds = 0): int|false
     {
-        return $this->increment($key, -$step);
+        return $this->increment($key, -$step, $ttlSeconds);
     }
 
-    public function incrementFloat(string $key, float $step = 1.0): float|false
+    public function incrementFloat(string $key, float $step = 1.0, int $ttlSeconds = 0): float|false
     {
         if ($this->driver === 'redis') {
-            return (float) $this->redis->incrByFloat($this->redisKey($key), $step);
+            $script = <<<'LUA'
+local current = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])
+local ttl = redis.call('TTL', KEYS[1])
+local targetTtl = tonumber(ARGV[2])
+if ttl == -1 and targetTtl > 0 then
+    redis.call('EXPIRE', KEYS[1], targetTtl)
+end
+return current
+LUA;
+            $result = $this->redis->eval($script, [$this->redisKey($key), $step, $ttlSeconds], 1);
+            return $result !== false ? (float)$result : false;
         }
 
-        $current = (float) $this->get($key, 0.0);
-        $new     = $current + $step;
-        $this->forever($key, $new);
+        // M20 Fix: افزایش اعشاری اتمیک فایل با flock
+        $file = $this->cacheFile($key);
+        $dir  = dirname($file);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+
+        $fh = fopen($file, 'c+');
+        if (!$fh) {
+            return false;
+        }
+
+        $new = false;
+        if (flock($fh, LOCK_EX)) {
+            $size = @filesize($file);
+            $raw = ($size > 0) ? fread($fh, $size) : '';
+            
+            $currentValue = 0.0;
+            $expireAt = time() + ($ttlSeconds > 0 ? $ttlSeconds : (525_600 * 60));
+
+            if (!empty($raw)) {
+                $data = $this->safeUnserialize($raw);
+                if (is_array($data) && isset($data['expire_at'])) {
+                    if ($data['expire_at'] >= time()) {
+                        $currentValue = (float)($data['value'] ?? 0.0);
+                        if ($ttlSeconds <= 0) {
+                            $expireAt = $data['expire_at'];
+                        }
+                    }
+                }
+            }
+
+            $new = $currentValue + $step;
+            
+            $newData = serialize([
+                'expire_at' => $expireAt,
+                'value'     => $new,
+            ]);
+            
+            ftruncate($fh, 0);
+            rewind($fh);
+            fwrite($fh, $newData);
+            fflush($fh);
+            flock($fh, LOCK_UN);
+        }
+        fclose($fh);
+
         return $new;
     }
 
@@ -332,22 +466,38 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
      * @param int $ttl ثانیه‌های timeout (فقط Redis)
      * @return bool آیا lock گرفته شد؟
      */
-    public function lock(string $key, int $ttl = 30): bool
+    /**
+     * Acquire a distributed lock
+     *
+     * Redis: استفاده از SET NX EX برای atomic locking
+     * File: استفاده از file locking با timeout
+     *
+     * @param string $key نام lock
+     * @param int $ttl ثانیه‌های timeout (فقط Redis)
+     * @param int $wait حداکثر ثانیه‌های انتظار برای آزادسازی قفل (فایل)
+     * @return bool آیا lock گرفته شد؟
+     */
+    public function lock(string $key, int $ttl = 30, int $wait = 1): bool
     {
         $lockKey = 'lock:' . $key;
 
         if ($this->driver === 'redis') {
-            // SET lock:key value unique_id NX EX ttl
+            // M19 Fix: ذخیره سازی شناسه مالکیت قفل در سشن پردازش جاری
             $uniqueId = uniqid('', true);
             $result = $this->redis->set(
                 $this->redisKey($lockKey),
                 $uniqueId,
                 ['nx', 'ex' => $ttl]
             );
-            return $result !== false;
+            
+            if ($result !== false) {
+                $this->redisLocks[$lockKey] = $uniqueId;
+                return true;
+            }
+            return false;
         }
 
-        // File-based locking with timeout simulation
+        // M18 Fix: پیاده‌سازی قفل‌گذاری فایل با قابلیت تعیین زمان داینامیک انتظار ($wait)
         $lockFile = $this->cacheDir . 'locks/' . md5($lockKey) . '.lock';
         $lockDir = dirname($lockFile);
         if (!is_dir($lockDir)) {
@@ -362,7 +512,7 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
         // Try to acquire lock with timeout (simulate)
         $start = microtime(true);
         while (!flock($fh, LOCK_EX | LOCK_NB)) {
-            if ((microtime(true) - $start) > 1) { // 1 second timeout for file
+            if ((microtime(true) - $start) > $wait) { // استفاده از پارامتر پویا
                 fclose($fh);
                 return false;
             }
@@ -385,7 +535,23 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
         $lockKey = 'lock:' . $key;
 
         if ($this->driver === 'redis') {
-            return (bool) $this->redis->del($this->redisKey($lockKey));
+            // M19 Ultimate Fix: آزادسازی کاملاً امن و اتمیک قفل صرفاً در صورت تطابق توکن مالکیت (Lua)
+            $owner = $this->redisLocks[$lockKey] ?? null;
+            if ($owner === null) {
+                return false; // این پردازش مالک قفل نبوده و اجازه آزاد سازی ندارد
+            }
+            
+            unset($this->redisLocks[$lockKey]);
+            
+            $script = '
+                if redis.call("get", KEYS[1]) == ARGV[1] then
+                    return redis.call("del", KEYS[1])
+                else
+                    return 0
+                end
+            ';
+            
+            return (bool) $this->redis->eval($script, [$this->redisKey($lockKey), $owner], 1);
         }
 
         // File-based unlock
@@ -433,9 +599,6 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
             $this->unlock($key);
         }
     }
-
-    // Storage for file-based locks
-    private array $fileLocks = [];
 
     // ─────────────────────────────────────────────────
     //  Cleanup — فقط در حالت فایل
@@ -541,7 +704,7 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
         return $this->cacheDir . md5($key) . '.cache';
     }
 
-    private function redisKey(string $key): string
+    public function redisKey(string $key): string
     {
         return $this->redisPrefix . $key;
     }
@@ -613,7 +776,7 @@ class TaggedCache
         if ($this->cache->driver() === 'redis') {
             $redis = $this->cache->redis();
             foreach ($this->tags as $tag) {
-                $setKey  = 'tag:' . $tag;
+                $setKey  = $this->cache->redisKey('tag:' . $tag);
                 $members = $redis->sMembers($setKey);
                 if (!empty($members)) {
                     $redis->del($members);
@@ -648,8 +811,9 @@ class TaggedCache
     {
         if ($this->cache->driver() === 'redis') {
             $redis = $this->cache->redis();
+            $fullTaggedKey = $this->cache->redisKey($taggedKey);
             foreach ($this->tags as $tag) {
-                $redis->sAdd('tag:' . $tag, $taggedKey);
+                $redis->sAdd($this->cache->redisKey('tag:' . $tag), $fullTaggedKey);
             }
             return;
         }
@@ -682,8 +846,9 @@ class TaggedCache
     {
         if ($this->cache->driver() === 'redis') {
             $redis = $this->cache->redis();
+            $fullTaggedKey = $this->cache->redisKey($taggedKey);
             foreach ($this->tags as $tag) {
-                $redis->sRem('tag:' . $tag, $taggedKey);
+                $redis->sRem($this->cache->redisKey('tag:' . $tag), $fullTaggedKey);
             }
             return;
         }
@@ -708,27 +873,5 @@ class TaggedCache
         return $dir . md5($tag) . '.json';
     }
 	
-	private function safeUnserialize($raw)
-{
-    if ($raw === null || $raw === false) {
-        return null;
-    }
-
-    // JSON first (recommended)
-    $json = json_decode($raw, true);
-    if (json_last_error() === JSON_ERROR_NONE) {
-        return $json;
-    }
-
-    // Legacy serialized payloads:
-    // allow only stdClass (used by PDO fetch objects in dashboard cache)
-    $value = @unserialize($raw, ['allowed_classes' => [\stdClass::class]]);
-
-    // distinguish unserialize failure from valid serialized false ("b:0;")
-    if ($value === false && $raw !== 'b:0;') {
-        return null;
-    }
-
-    return $value;
-}
+    // M17 Fix: متد منقضی شده و بلااستفاده به نفع متد تجمیع شده و پابلیک کلاس والد حذف شد
 }

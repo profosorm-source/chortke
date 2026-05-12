@@ -32,7 +32,7 @@ class Queue
     /**
      * اضافه کردن job به صف
      */
-    public function push(string $job, array $data = [], string $queue = null, int $delay = 0): bool
+    public function push(string $job, array $data = [], ?string $queue = null, int $delay = 0): bool
     {
         $queue = $queue ?: $this->defaultQueue;
         $availableAt = $delay > 0 ? time() + $delay : time();
@@ -51,7 +51,7 @@ class Queue
         return (bool)$result;
     }
 
-    public function pop(string $queue = null): ?array
+    public function pop(?string $queue = null): ?array
     {
         $queue = $queue ?: $this->defaultQueue;
 
@@ -59,20 +59,24 @@ class Queue
             $this->db->beginTransaction();
 
             $nowStr = date('Y-m-d H:i:s');
+            // H22 Fix: زمان انقضا برای بازگرداندن جاب‌های یتیم شده (مثلاً 90 ثانیه پیش)
+            $timeoutThreshold = date('Y-m-d H:i:s', time() - 90);
 
             // SELECT ... FOR UPDATE قفل امن برای جلوگیری از همپوشانی در سیستم‌های توزیع شده
+            // الحاق شرط بازیابی جاب‌های استاک‌شده در وضعیت reserved_at
             $job = $this->db->selectOne(
                 "SELECT * FROM queues 
                  WHERE queue = :queue 
                    AND attempts < :max_attempts 
                    AND available_at <= :now 
-                   AND reserved_at IS NULL 
+                   AND (reserved_at IS NULL OR reserved_at <= :timeout) 
                  ORDER BY created_at ASC 
                  LIMIT 1 FOR UPDATE",
                 [
                     'queue' => $queue,
                     'max_attempts' => $this->maxAttempts,
-                    'now' => $nowStr
+                    'now' => $nowStr,
+                    'timeout' => $timeoutThreshold
                 ]
             );
 
@@ -155,7 +159,7 @@ class Queue
     /**
      * شمارش jobهای موجود در صف
      */
-    public function size(string $queue = null): int
+    public function size(?string $queue = null): int
     {
         $queue = $queue ?: $this->defaultQueue;
 

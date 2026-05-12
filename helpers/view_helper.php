@@ -42,17 +42,8 @@ if (!function_exists('e')) {
 
 function old(string $key, $default = ''): string
 {
-    $old = app()->session->getFlash('old');
-    
-    if ($old === null) {
-        return e($default);
-    }
-    
-    if (!is_array($old)) {
-        return e($default);
-    }
-    
-    return e($old[$key] ?? $default);
+    $val = app()->session->getOld($key, $default);
+    return e($val);
 }
 
 function error(string $field): ?string
