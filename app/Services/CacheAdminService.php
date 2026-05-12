@@ -6,11 +6,12 @@ namespace App\Services;
 
 use Core\Cache;
 use App\Contracts\LoggerInterface;
+
 /**
  * CacheAdminService
  * مدیریت cache برای بخش ادمین
  */
-class CacheAdminServiceextends \App\Services\BaseService
+class CacheAdminService extends \App\Services\BaseService
 {
     private Cache $cache;
     public function __construct(Cache $cache, LoggerInterface $logger)
@@ -28,12 +29,20 @@ class CacheAdminServiceextends \App\Services\BaseService
 
         try {
             if ($type === 'settings') {
+                // پاکسازی کلیدهای جدید و قدیم کش
+                $this->cache->forget('system:settings:v2');
                 $this->cache->forget('system:settings');
-                // سازگاری با SettingService
-                $legacyFile = BASE_PATH . '/storage/cache/system_settings.php';
-                if (file_exists($legacyFile)) {
-                    @unlink($legacyFile);
+
+                // پاکسازی فایلهای باقیمانده و منسوخ جهت سبک‌سازی دیسک
+                $legacyJson = BASE_PATH . '/storage/cache/system_settings.json';
+                if (file_exists($legacyJson)) {
+                    @unlink($legacyJson);
                 }
+                $legacyPhp = BASE_PATH . '/storage/cache/system_settings.php';
+                if (file_exists($legacyPhp)) {
+                    @unlink($legacyPhp);
+                }
+                
                 $cleared = 1;
             } elseif ($type === 'kpi') {
                 $this->cache->forget('kpi:dashboard:summary');
@@ -214,4 +223,3 @@ class CacheAdminServiceextends \App\Services\BaseService
         return round($hits / $total * 100, 1) . '%';
     }
 }
-
