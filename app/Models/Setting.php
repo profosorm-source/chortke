@@ -98,7 +98,7 @@ class Setting extends Model
      */
     public function getByCategory(string $category): array
     {
-        $sql = "SELECT * FROM " . static::$table . " WHERE category = ? ORDER BY `key` ASC";
+        $sql = "SELECT * FROM " . static::$table . " WHERE `group` = ? ORDER BY `key` ASC";
         return $this->db->query($sql, [$category])->fetchAll(\PDO::FETCH_OBJ);
     }
 
@@ -107,7 +107,7 @@ class Setting extends Model
      */
     public function getAll(): array
     {
-        $sql = "SELECT * FROM " . static::$table . " ORDER BY category, `key`";
+        $sql = "SELECT * FROM " . static::$table . " ORDER BY `group`, `key`";
         return $this->db->query($sql)->fetchAll(\PDO::FETCH_OBJ);
     }
 
