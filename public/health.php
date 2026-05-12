@@ -4,9 +4,9 @@ header('Content-Type: application/json');
 
 require_once __DIR__ . '/../bootstrap/app.php';
 
-// Access protection logic
-$allowedIps = array_filter(array_map('trim', explode(',', env('HEALTH_ALLOWED_IPS', '127.0.0.1,::1'))));
-$token = env('HEALTH_CHECK_TOKEN', '');
+// Access protection logic from centralized config
+$allowedIps = (array)config('health.allowed_ips', ['127.0.0.1', '::1']);
+$token = (string)config('health.check_token', '');
 
 $clientIp = $_SERVER['REMOTE_ADDR'] ?? '';
 $requestToken = $_GET['token'] ?? $_SERVER['HTTP_X_HEALTH_TOKEN'] ?? '';
