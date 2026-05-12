@@ -26,7 +26,7 @@ use Core\Queue;
 class EmailService extends \App\Services\BaseService
 {
     private User                   $userModel;
-    private Setting                $settingModel;
+    private SettingService         $settingService;
     private EmailQueue             $emailQueue;
     private NotificationPreference $prefModel;
     private Queue                  $queue;
@@ -45,7 +45,7 @@ class EmailService extends \App\Services\BaseService
         LoggerInterface        $logger,
         EmailQueue             $emailQueue,
         NotificationPreference $prefModel,
-        Setting                $settingModel,
+        SettingService         $settingService,
         User                   $userModel,
         Queue                  $queue,
         RedisEmailQueueService $redisQueue
@@ -53,7 +53,7 @@ class EmailService extends \App\Services\BaseService
         parent::__construct($logger);
         $this->emailQueue   = $emailQueue;
         $this->prefModel    = $prefModel;
-        $this->settingModel = $settingModel;
+        $this->settingService = $settingService;
         $this->userModel    = $userModel;
         $this->queue        = $queue;
         $this->redisQueue   = $redisQueue;
@@ -67,7 +67,7 @@ class EmailService extends \App\Services\BaseService
 
     private function loadSmtpSettings(): void
     {
-        $s = $this->settingModel;
+        $s = $this->settingService;
 
         $this->smtpHost       = (string) $this->resolve($s->get('smtp_host'),       config('mail.host',         '127.0.0.1'));
         $this->smtpPort       = (int) $this->resolve($s->get('smtp_port'), config('mail.port',         1025));
