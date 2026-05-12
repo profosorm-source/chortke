@@ -261,7 +261,7 @@ class FeatureFlag extends Model
             return true;
         }
         
-        $currentEnv = env('APP_ENV', 'production');
+        $currentEnv = config('app.env', 'production');
         
         return in_array($currentEnv, $environments, true);
     }
