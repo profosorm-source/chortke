@@ -3,14 +3,12 @@
 namespace App\Models;
 
 use Core\Model;
-use Core\Cache;
 
 /**
- * Setting - تنظیمات سایت با Cache لایه‌ای
- *
- * دو سطح cache:
- *   1. static در-حافظه (همان request) → فوری
- *   2. فایل-based Cache (بین request‌ها، 10 دقیقه) → کاهش DB hit
+ * Setting - مدل خالص دیتابیس برای تنظیمات سیستم
+ * 
+ * وظایف کش‌گذاری و منطق تجاری اکنون به SettingService منتقل شده است.
+ * این کلاس صرفاً مسئول برقراری ارتباط با جدول system_settings می‌باشد.
  */
 class Setting extends Model
 {
@@ -21,57 +19,35 @@ class Setting extends Model
         parent::__construct($db);
     }
 
-    /** cache در-حافظه برای همان request */
-    private static array $memCache = [];
-
-    private const CACHE_KEY    = 'settings_all';
-    private const CACHE_TTL    = 10; // دقیقه
-
     /**
-     * دریافت یک تنظیم
+     * دریافت یک تنظیم از دیتابیس (خام)
      */
     public function get(string $key, mixed $default = null): mixed
     {
-        $all = $this->all();
-        return $all[$key] ?? $default;
+        $row = $this->findByKey($key);
+        return $row ? $row->value : $default;
     }
 
     /**
-     * دریافت همه تنظیمات (با دو لایه cache)
+     * دریافت لیست کلیدی تنظیمات از دیتابیس (خام)
      */
     public function all($filters = [], $limit = 100, $offset = 0): array
-{
-    // لایه 1: در-حافظه
-    if (!empty(self::$memCache)) {
-        return self::$memCache;
+    {
+        $rows = $this->db->fetchAll(
+            "SELECT `key`, `value` FROM " . static::$table
+        );
+
+        $out = [];
+        foreach ($rows as $r) {
+            $r = (array) $r;
+            $out[$r['key']] = $r['value'];
+        }
+
+        return $out;
     }
-
-    // لایه 2: فایل cache
-    $cached = Cache::getInstance()->get(self::CACHE_KEY);
-    if ($cached !== null) {
-        self::$memCache = $cached;
-        return $cached;
-    }
-
-    // لایه 3: دیتابیس
-    $rows = $this->db->fetchAll(
-        "SELECT `key`, `value` FROM " . static::$table
-    );
-
-    $out = [];
-    foreach ($rows as $r) {
-        $r = (array) $r;
-        $out[$r['key']] = $r['value'];
-    }
-
-    Cache::getInstance()->put(self::CACHE_KEY, $out, self::CACHE_TTL);
-    self::$memCache = $out;
-
-    return $out;
-}
 
     /**
-     * ذخیره تنظیم و پاک‌سازی cache
+     * ذخیره مقدار یک تنظیم
      */
     public function set(string $key, string $value): bool
     {
@@ -81,26 +57,20 @@ class Setting extends Model
         );
 
         if ($exists) {
-            $ok = $this->db->query(
+            return $this->db->query(
                 "UPDATE " . static::$table . " SET `value` = ?, updated_at = NOW() WHERE `key` = ?",
                 [$value, $key]
             ) !== false;
-        } else {
-            $ok = $this->db->query(
-                "INSERT INTO " . static::$table . " (`key`, `value`, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
-                [$key, $value]
-            ) !== false;
         }
 
-        if ($ok) {
-            $this->clearCache();
-        }
-
-        return $ok;
+        return $this->db->query(
+            "INSERT INTO " . static::$table . " (`key`, `value`, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
+            [$key, $value]
+        ) !== false;
     }
 
     /**
-     * ذخیره دسته‌ای
+     * ذخیره دسته‌ای تنظیمات
      */
     public function setMany(array $settings): bool
     {
@@ -114,24 +84,7 @@ class Setting extends Model
     }
 
     /**
-     * پاک‌سازی cache (instance)
-     */
-    public function clearCache(): void
-    {
-        self::$memCache = [];
-        Cache::getInstance()->forget(self::CACHE_KEY);
-    }
-
-    /**
-     * پاک‌سازی cache (static - برای CacheAdminController)
-     */
-    public static function clearCacheStatic(): void
-    {
-        self::$memCache = [];
-        Cache::getInstance()->forget(self::CACHE_KEY);
-    }
-    /**
-     * دریافت با کلید
+     * دریافت رکورد کامل با کلید
      */
     public function findByKey(string $key): ?object
     {
@@ -141,7 +94,7 @@ class Setting extends Model
     }
 
     /**
-     * دریافت بر اساس دسته
+     * دریافت لیست کامل بر اساس دسته‌بندی
      */
     public function getByCategory(string $category): array
     {
@@ -150,7 +103,7 @@ class Setting extends Model
     }
 
     /**
-     * دریافت همه کامل (به همراه جزئیات رکوردها)
+     * دریافت تمام رکوردهای کامل (شامل Type) برای لودر سرویس
      */
     public function getAll(): array
     {
@@ -165,8 +118,6 @@ class Setting extends Model
     {
         $sql = "UPDATE " . static::$table . " SET value = ?, updated_at = NOW() WHERE id = ?";
         $stmt = $this->db->query($sql, [$value, $id]);
-        
-        $this->clearCache();
         
         if ($stmt instanceof \PDOStatement) {
             return $stmt->rowCount() >= 0;
