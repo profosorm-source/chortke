@@ -60,6 +60,12 @@ class CryptoDepositService extends \App\Services\BaseService
         ?string $ipAddress = null,
         ?string $userAgent = null
     ): array {
+        // LOW-09: Defensively sanitize raw user-supplied IP addresses to safeguard system telemetry
+        $cleanIp = null;
+        if ($ipAddress !== null) {
+            $cleanIp = \filter_var($ipAddress, \FILTER_VALIDATE_IP) ?: null;
+        }
+
         $this->logger->info('crypto.intent.create.started', [
             'user_id' => $userId,
             'network' => $network,
@@ -71,7 +77,7 @@ class CryptoDepositService extends \App\Services\BaseService
             'amount'      => $requestedAmount,
             'currency'    => 'usdt',
             'network'     => $network,
-            'ip'          => $ipAddress,
+            'ip'          => $cleanIp,
             'user_agent'  => $userAgent
         ]);
 
@@ -108,10 +114,10 @@ class CryptoDepositService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'ولت این شبکه تنظیم نشده است'];
         }
 
-        $expected = $this->generateUniqueAmount($network, $requestedAmount);
-        $expiresAt = \date('Y-m-d H:i:s', \time() + ($expireMinutes * 60));
-
         try {
+            $expected = $this->generateUniqueAmount($network, $requestedAmount);
+            $expiresAt = \date('Y-m-d H:i:s', \time() + ($expireMinutes * 60));
+
             $id = $this->intentModel->create([
                 'user_id' => $userId,
                 'network' => $network,
@@ -120,7 +126,7 @@ class CryptoDepositService extends \App\Services\BaseService
                 'to_wallet' => $toWallet,
                 'expires_at' => $expiresAt,
                 'status' => 'open',
-                'ip_address' => $ipAddress,
+                'ip_address' => $cleanIp,
                 'user_agent' => $userAgent,
                 'created_at' => \date('Y-m-d H:i:s'),
                 'updated_at' => \date('Y-m-d H:i:s'),
@@ -135,8 +141,7 @@ class CryptoDepositService extends \App\Services\BaseService
                 'exception' => \get_class($e),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
-            ]);
-            return ['success' => false, 'message' => 'خطای سیستمی در ساخت درخواست'];
+            return ['success' => false, 'message' => ($e instanceof \RuntimeException) ? $e->getMessage() : 'خطای سیستمی در ساخت درخواست'];
         }
 
         $this->logger->info('crypto.intent.created', [
@@ -209,12 +214,25 @@ class CryptoDepositService extends \App\Services\BaseService
 
             $this->db->commit();
 
-            // Notify user
-            $this->notifier->send($deposit->user_id, 'crypto_deposit_approved', [
-                'amount' => $deposit->amount,
-                'network' => $deposit->network,
-                'tx_hash' => $deposit->tx_hash,
-            ]);
+            // MED-27: Fix severe application crash (TypeError) by ensuring correct string inputs to notification engines
+            try {
+                $this->notifier->send(
+                    (int)$deposit->user_id,
+                    'deposit', // Valid mapping
+                    'واریز کریپتو تأیید شد',
+                    'تراکنش واریز شما در شبکه ' . strtoupper((string)$deposit->network) . ' به مبلغ ' . $deposit->amount . ' USDT تأیید شد.',
+                    [
+                        'amount' => $deposit->amount,
+                        'network' => $deposit->network,
+                        'tx_hash' => $deposit->tx_hash,
+                    ]
+                );
+            } catch (\Throwable $notifErr) {
+                $this->logger->error('crypto.deposit.approve.notification_failed', [
+                    'deposit_id' => $depositId,
+                    'error' => $notifErr->getMessage()
+                ]);
+            }
 
             $this->logger->info('crypto.deposit.approved', [
                 'deposit_id' => $depositId,
@@ -411,14 +429,15 @@ class CryptoDepositService extends \App\Services\BaseService
      */
     private function generateUniqueAmount(string $network, float $requestedAmount): float
     {
-        $maxAttempts = 10;
+        $maxAttempts = 30;
         $attempt = 0;
         do {
-            // Add a wider random amount (0.00001 to 0.09999)
-            $randomAddition = \mt_rand(1, 9999) / 100000;
-            $expected = \round($requestedAmount + $randomAddition, 5);
+            // HIGH-07: Formulate higher precision entropy bounds (6 decimals) to dilute collision density
+            $randomAddition = \random_int(1, 99999) / 1000000;
+            $expected = \round($requestedAmount + $randomAddition, 6);
 
-            $stmt = $this->db->prepare("SELECT COUNT(*) FROM crypto_deposit_intents WHERE network = ? AND expected_amount = ? AND status = 'open'");
+            // Ensure unique search asserts across BOTH Network scopes and Open/Active intent expiry brackets
+            $stmt = $this->db->prepare("SELECT COUNT(*) FROM crypto_deposit_intents WHERE network = ? AND expected_amount = ? AND status = 'open' AND expires_at > NOW()");
             $stmt->execute([$network, $expected]);
             $count = (int)$stmt->fetchColumn();
 
@@ -428,8 +447,8 @@ class CryptoDepositService extends \App\Services\BaseService
             $attempt++;
         } while ($attempt < $maxAttempts);
 
-        // Fallback to a wider random value if we hit max attempts
-        return \round($requestedAmount + (\mt_rand(10000, 99999) / 100000), 5);
+        // HIGH-07: Assert an atomic failure state instead of emitting duplicate/colliding amounts which allows payment hijacking
+        throw new \RuntimeException("امکان تولید شناسه واریز منحصر به فرد در این لحظه وجود ندارد. لطفاً دقایقی دیگر تلاش نمایید.");
     }
 
     /**

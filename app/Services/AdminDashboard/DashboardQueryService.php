@@ -91,8 +91,11 @@ class DashboardQueryService extends \App\Services\BaseService
                 $data['appeals']['total'] = (int)($result->appeals_total ?? 0);
                 $data['appeals']['pending'] = (int)($result->appeals_pending ?? 0);
                 
-                $data['_execution_time_ms'] = round($executionTime * 1000, 2);
-                $data['_query_optimization'] = 'consolidated (5 queries → 1)';
+                // LOW-13: Suppress diagnostic meta-telemetry in production responses to minimize metadata footprint
+                if (function_exists('config') && (config('app.debug') || config('app.env') === 'local')) {
+                    $data['_execution_time_ms'] = round($executionTime * 1000, 2);
+                    $data['_query_optimization'] = 'consolidated (5 queries → 1)';
+                }
             }
             
         } catch (\Throwable $e) {
@@ -121,35 +124,43 @@ class DashboardQueryService extends \App\Services\BaseService
             }
 
             // جداول optional
-            $optionalTables = ['disputes', 'appeals', 'activities'];
             $haDisputes = $this->tableExists('disputes');
             $hasAppeals = $this->tableExists('appeals');
 
-            $sql = "
-                SELECT
-                    -- Users stats
-                    (SELECT COUNT(*) FROM users) as users_total,
-                    (SELECT COUNT(*) FROM users WHERE status = 'active') as users_active,
-                    (SELECT COUNT(*) FROM users WHERE two_factor_enabled = 1) as users_with_2fa,
-                    (SELECT COUNT(*) FROM users WHERE kyc_status = 'pending') as users_pending_kyc,
-                    
-                    -- Disputes stats
-                    " . ($haDisputes ? "(SELECT COUNT(*) FROM disputes) as disputes_total," : "0 as disputes_total," ) . "
-                    " . ($haDisputes ? "(SELECT COUNT(*) FROM disputes WHERE status IN ('open', 'open_peer', 'under_review', 'escalated')) as disputes_open," : "0 as disputes_open," ) . "
-                    " . ($haDisputes ? "(SELECT COUNT(*) FROM disputes WHERE status IN ('resolved_peer', 'resolved_admin', 'closed')) as disputes_resolved," : "0 as disputes_resolved," ) . "
-                    
-                    -- Financial stats
-                    (SELECT COUNT(*) FROM transactions WHERE status = 'completed') as fin_count,
-                    (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE status = 'completed') as fin_volume,
-                    
-                    -- Tickets stats
-                    (SELECT COUNT(*) FROM tickets) as tickets_total,
-                    (SELECT COUNT(*) FROM tickets WHERE status = 'pending') as tickets_pending,
-                    
-                    -- Appeals stats
-                    " . ($hasAppeals ? "(SELECT COUNT(*) FROM appeals) as appeals_total," : "0 as appeals_total," ) . "
-                    " . ($hasAppeals ? "(SELECT COUNT(*) FROM appeals WHERE status = 'pending') as appeals_pending" : "0 as appeals_pending" ) . "
-            ";
+            // HIGH-08: Completely eliminate complex inline string concatenations in the SQL generator.
+            // Instead, compile discrete, static SELECT expressions inside a clean associative array map.
+            $selects = [
+                "(SELECT COUNT(*) FROM users) as users_total",
+                "(SELECT COUNT(*) FROM users WHERE status = 'active') as users_active",
+                "(SELECT COUNT(*) FROM users WHERE two_factor_enabled = 1) as users_with_2fa",
+                "(SELECT COUNT(*) FROM users WHERE kyc_status = 'pending') as users_pending_kyc",
+                
+                "(SELECT COUNT(*) FROM transactions WHERE status = 'completed') as fin_count",
+                "(SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE status = 'completed') as fin_volume",
+                
+                "(SELECT COUNT(*) FROM tickets) as tickets_total",
+                "(SELECT COUNT(*) FROM tickets WHERE status = 'pending') as tickets_pending",
+            ];
+
+            if ($haDisputes) {
+                $selects[] = "(SELECT COUNT(*) FROM disputes) as disputes_total";
+                $selects[] = "(SELECT COUNT(*) FROM disputes WHERE status IN ('open', 'open_peer', 'under_review', 'escalated')) as disputes_open";
+                $selects[] = "(SELECT COUNT(*) FROM disputes WHERE status IN ('resolved_peer', 'resolved_admin', 'closed')) as disputes_resolved";
+            } else {
+                $selects[] = "0 as disputes_total";
+                $selects[] = "0 as disputes_open";
+                $selects[] = "0 as disputes_resolved";
+            }
+
+            if ($hasAppeals) {
+                $selects[] = "(SELECT COUNT(*) FROM appeals) as appeals_total";
+                $selects[] = "(SELECT COUNT(*) FROM appeals WHERE status = 'pending') as appeals_pending";
+            } else {
+                $selects[] = "0 as appeals_total";
+                $selects[] = "0 as appeals_pending";
+            }
+
+            $sql = "SELECT " . implode(", ", $selects);
             
             try {
                 return $this->db->fetch($sql);
@@ -169,17 +180,9 @@ class DashboardQueryService extends \App\Services\BaseService
     private function tableExists(string $tableName): bool
     {
         try {
-            $databaseName = $this->db->fetchOne(
-                "SELECT DATABASE()"
-            );
-            
-            $result = $this->db->fetch(
-                "SELECT 1 FROM INFORMATION_SCHEMA.TABLES 
-                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1",
-                [$databaseName, $tableName]
-            );
-            
-            return $result !== null;
+            // MED-24: Supplant multi-query raw schema inspections with high-speed, parameter-bound native PDO attribute lookups
+            $result = $this->db->query("SHOW TABLES LIKE ?", [$tableName])->fetchAll();
+            return !empty($result);
         } catch (\Throwable $e) {
             $this->logger->warning('dashboard.table_check_failed', [
                 'table' => $tableName,

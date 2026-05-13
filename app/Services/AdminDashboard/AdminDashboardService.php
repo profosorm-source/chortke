@@ -2,7 +2,6 @@
 
 namespace App\Services\AdminDashboard;
 
-use App\Models\User;
 use App\Contracts\LoggerInterface;
 /**
  * AdminDashboardService (Orchestrator)
