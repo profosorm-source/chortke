@@ -18,7 +18,7 @@ class ScoreEventService extends \App\Services\BaseService
 
     public function addEvent(int $entityId, string $entityType, string $domain, float $delta, string $source, array $meta = []): bool
     {
-        return $this->scoreModel->addEvent([
+        $ok = $this->scoreModel->addEvent([
             'entity_id' => $entityId,
             'entity_type' => $entityType,
             'domain' => $domain,
@@ -26,11 +26,37 @@ class ScoreEventService extends \App\Services\BaseService
             'source' => $source,
             'meta' => $meta
         ]);
+
+        if ($ok) {
+            $this->logInfo('score_event.recorded', [
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+                'domain' => $domain,
+                'delta' => $delta,
+                'source' => $source
+            ]);
+        }
+
+        return $ok;
     }
 
-    public function createEvent(int $userId, string $domain, string $source, float $delta, array $meta = []): bool
+    /**
+     * Renamed to recordEvent to avoid confusion with ScoreService delegates.
+     */
+    public function recordEvent(int $userId, string $domain, string $source, float $delta, array $meta = []): bool
     {
-        return $this->scoreModel->createEvent($userId, $domain, $source, $delta, $meta);
+        $ok = $this->scoreModel->createEvent($userId, $domain, $source, $delta, $meta);
+
+        if ($ok) {
+            $this->logInfo('score_event.user_recorded', [
+                'user_id' => $userId,
+                'domain' => $domain,
+                'delta' => $delta,
+                'source' => $source
+            ]);
+        }
+
+        return $ok;
     }
 
     public function getTotalScore(int $entityId, string $entityType, string $domain): float

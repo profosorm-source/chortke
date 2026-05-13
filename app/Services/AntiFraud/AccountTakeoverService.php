@@ -80,14 +80,44 @@ class AccountTakeoverService extends \App\Services\BaseService
             $signals[] = 'ورود از دستگاه جدید';
         }
 
-        // Activity time check using User Timezone
+        // 🧠 Activity Hour Behavioral Baseline Correlator
         $timezone = $this->model->getUserTimezone($userId);
         $userDateTime = new \DateTime('now', new \DateTimeZone($timezone));
         $hour = (int)$userDateTime->format('H');
         
+        // Static odd hour warning
         if ($hour >= 2 && $hour <= 6) {
             $riskScore += $this->policy->getInt('fraud', 'takeover.odd_hour_points', 10);
-            $signals[] = 'ورود در ساعت غیرمعمول';
+            $signals[] = 'ورود در ساعت غیرمعمول (۲ تا ۶ صبح)';
+        }
+
+        // Dynamic baseline comparison: Compare current login hour with user's 30-day transaction log.
+        try {
+            $historicHours = $this->model->getHourlyActivity($userId, 30);
+            if (!empty($historicHours) && !isset($historicHours[$hour])) {
+                // The user has zero historic transactions in this specific hour bucket
+                $riskScore += $this->policy->getInt('fraud', 'takeover.hourly_drift_points', 15);
+                $signals[] = 'انحراف زمانی: ورود در ساعت مغایر با الگوی رفتاری تاریخی';
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('takeover.baseline_drift_check_failed', ['error' => $e->getMessage()]);
+        }
+
+        // 🛡️ Session Behavioral & Impossible Travel Correlator
+        $sessionId = \session_id();
+        if ($sessionId) {
+            try {
+                $sessionRes = $this->sessionAnomaly->analyze($userId, $sessionId);
+                if (!empty($sessionRes['anomalies'])) {
+                    // Increment by half of session risk score as a blended metric
+                    $riskScore += (int)($sessionRes['score'] * 0.5);
+                    foreach ($sessionRes['anomalies'] as $anomaly) {
+                        $signals[] = "ناهنجاری رفتاری نشست: {$anomaly}";
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('takeover.session_correlator_failed', ['error' => $e->getMessage()]);
+            }
         }
 
         $failedAttempts = $this->model->getRecentFailedAttempts($userId);

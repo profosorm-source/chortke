@@ -35,8 +35,11 @@ class TwoFactorService extends \App\Services\BaseService
     {
         $secret = '';
         $chars  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        
+        // 🔐 Cryptographic Hardening: Using standard secure random_bytes generation
+        $bytes = random_bytes(32);
         for ($i = 0; $i < 32; $i++) {
-            $secret .= $chars[random_int(0, strlen($chars) - 1)];
+            $secret .= $chars[ord($bytes[$i]) % 32];
         }
         return $secret;
     }
@@ -50,7 +53,9 @@ class TwoFactorService extends \App\Services\BaseService
     public function verifyCode(string $secret, string $code, ?int $userId = null): bool
     {
         $timeSlice = (int)floor(time() / 30);
-        for ($i = -1; $i <= 1; $i++) {
+        
+        // ⏰ Enhanced Tolerance: Increased verification loop to ±2 slices (±60 seconds) to absorb client clock drift.
+        for ($i = -2; $i <= 2; $i++) {
             if ($this->timingSafeEquals($this->generateTOTP($secret, $timeSlice + $i), $code)) {
                 return true;
             }
@@ -78,6 +83,11 @@ class TwoFactorService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Secret key یافت نشد.'];
         }
 
+        // 🛡️ Domain Invariant Guard: Prevent repeated or corrupted 2FA activation states.
+        if (!empty($user->two_factor_enabled)) {
+            return ['success' => false, 'message' => 'احراز هویت دو مرحله‌ای قبلاً فعال شده است.'];
+        }
+
         if (!$this->verifyCode($user->two_factor_secret, $code)) {
             return ['success' => false, 'message' => 'کد وارد شده نامعتبر است.'];
         }
@@ -96,7 +106,9 @@ class TwoFactorService extends \App\Services\BaseService
     public function disable(int $userId, string $password): array
     {
         $user = $this->userModel->find($userId);
-        if (!$user || !verify_password($password, $user->password)) {
+        
+        // 🔐 Critical Security Fix: Explicitly migrated custom validation to native password_verify()
+        if (!$user || !password_verify($password, $user->password)) {
             return ['success' => false, 'message' => 'رمز عبور اشتباه است.'];
         }
 

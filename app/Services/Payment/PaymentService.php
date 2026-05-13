@@ -142,8 +142,20 @@ class PaymentService extends PaymentBaseService
         $callback = url('/payment/callback/' . $gatewayName);
         $desc = 'شارژ کیف پول چرتکه';
 
+        // 🕵️ Enrich gateway payload with optional user metadata for enhanced security compliance (email & phone validation)
+        $options = [];
         try {
-            $res = $gw->createPayment($amount, $desc, $callback);
+            $userRecord = $this->db->table('users')->where('id', '=', $userId)->first();
+            if ($userRecord) {
+                $options['email'] = $userRecord->email ?? '';
+                $options['mobile'] = $userRecord->phone ?? $userRecord->phone_number ?? $userRecord->mobile ?? '';
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('payment.metadata_enrichment_failed', ['error' => $e->getMessage()]);
+        }
+
+        try {
+            $res = $gw->createPayment($amount, $desc, $callback, $options);
         } catch (\Exception $e) {
             $this->logError('create', 'gateway_exception', [
                 'user_id' => $userId,
@@ -256,10 +268,10 @@ public function callback(string $gatewayName, array $callbackData): array
 
         try {
             // قفل کردن رکورد پرداخت برای جلوگیری از race condition
-            $lockedPay = $this->db->query(
-                "SELECT * FROM payment_logs WHERE id = :id FOR UPDATE",
-                ['id' => $pay->id]
-            )->fetch(\PDO::FETCH_OBJ);
+            $lockedPay = $this->log
+                ->where('id', '=', $pay->id)
+                ->lockForUpdate()
+                ->first();
 
             if (!$lockedPay) {
                 $this->db->rollBack();

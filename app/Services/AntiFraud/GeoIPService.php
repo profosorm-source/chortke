@@ -146,47 +146,43 @@ class GeoIPService extends \App\Services\BaseService
     /**
      * Lookup از دیتابیس محلی (IP ranges)
      */
-private function lookupLocalDatabase(string $ip): ?array
-{
-    try {
-        // دیتابیس ip_locations بر پایه IPv4 range است
-        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            return null;
+    /**
+     * Lookup از دیتابیس محلی (IP ranges)
+     */
+    private function lookupLocalDatabase(string $ip): ?array
+    {
+        try {
+            // دیتابیس ip_locations بر پایه IPv4 range است
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                return null;
+            }
+
+            $ipLong = ip2long($ip);
+            if ($ipLong === false) {
+                return null;
+            }
+
+            // Decoupled: Delegates native table scanning to the Model
+            $result = $this->model->getLocationByIpRange($ipLong);
+
+            if ($result) {
+                return [
+                    'ip' => $ip,
+                    'country_code' => $result->country_code ?? 'IR',
+                    'country_name' => $result->country_name ?? 'Iran',
+                    'city' => $result->city ?? 'Tehran',
+                    'latitude' => (float)($result->latitude ?? 35.6892),
+                    'longitude' => (float)($result->longitude ?? 51.3890),
+                    'timezone' => 'Asia/Tehran',
+                    'source' => 'local_db',
+                ];
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error("antifraud.geoip_lookup.local_db_failed", ['error' => $e->getMessage()]);
         }
 
-        $ipLong = ip2long($ip);
-        if ($ipLong === false) {
-            return null;
-        }
-
-        $sql = "SELECT country_code, country_name, city, latitude, longitude
-                FROM ip_locations
-                WHERE ip_start <= :ip_start AND ip_end >= :ip_end
-                LIMIT 1";
-
-        $result = $this->db->fetch($sql, [
-            'ip_start' => $ipLong,
-            'ip_end' => $ipLong,
-        ]);
-
-        if ($result) {
-            return [
-                'ip' => $ip,
-                'country_code' => $result->country_code ?? 'IR',
-                'country_name' => $result->country_name ?? 'Iran',
-                'city' => $result->city ?? 'Tehran',
-                'latitude' => (float)($result->latitude ?? 35.6892),
-                'longitude' => (float)($result->longitude ?? 51.3890),
-                'timezone' => 'Asia/Tehran',
-                'source' => 'local_db',
-            ];
-        }
-    } catch (\Throwable $e) {
-        error_log("Local database lookup failed: " . $e->getMessage());
+        return null;
     }
-
-    return null;
-}
     /**
      * دریافت از کش
      */

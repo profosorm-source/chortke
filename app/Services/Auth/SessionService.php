@@ -96,11 +96,12 @@ class SessionService extends \App\Services\BaseService
             // 🔒 PESSIMISTIC LOCKING: Prevent race condition in session creation
             $this->model->getDb()->beginTransaction();
 
-            // Lock existing session if it exists
-            $existing = $this->model->getDb()->selectOne(
-                "SELECT id FROM user_sessions WHERE session_id = ? FOR UPDATE",
-                [$sessionId]
-            );
+            // Safe Port: Moved RAW serialized lock to native atomic QueryBuilder execution.
+            $existing = $this->model->getDb()->table('user_sessions')
+                ->where('session_id', '=', $sessionId)
+                ->lockForUpdate()
+                ->select('id')
+                ->first();
 
             if ($existing) {
                 // Session exists, just update activity timestamp
@@ -154,6 +155,11 @@ class SessionService extends \App\Services\BaseService
         $session = $this->model->findSessionBySessionId($sessionId);
         if (!$session || (int)$session->user_id !== $userId) {
             return ['success' => false, 'message' => 'نشست یافت نشد'];
+        }
+
+        // 🛡️ State Domain Guard: Prevent redundant or logically corrupted state transitions.
+        if (empty($session->is_active)) {
+            return ['success' => false, 'message' => 'این نشست از قبل غیرفعال شده است'];
         }
 
         $this->model->deactivateSession((int)$session->id);

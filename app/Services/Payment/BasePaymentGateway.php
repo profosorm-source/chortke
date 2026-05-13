@@ -71,6 +71,7 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
      * @param array $data بھیجنے کا ڈیٹا
      * @param string $method HTTP method (POST, GET, etc.)
      * @param array $headers اضافی headers
+     * @param string $contentType 'json' or 'form'
      * @return array Response
      * @throws PaymentGatewayConnectionException
      */
@@ -78,11 +79,12 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
         string $url,
         array $data = [],
         string $method = 'POST',
-        array $headers = []
+        array $headers = [],
+        string $contentType = 'json'
     ): array {
         try {
             return $this->retryPolicy->execute(
-                fn() => $this->makeCurlRequest($url, $data, $method, $headers),
+                fn() => $this->makeCurlRequest($url, $data, $method, $headers, $contentType),
                 $this->retryableExceptions
             );
         } catch (\Exception $e) {
@@ -105,6 +107,7 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
      * @param array $data
      * @param string $method
      * @param array $headers
+     * @param string $contentType 'json' | 'form'
      * @return array
      * @throws \Exception
      */
@@ -112,33 +115,48 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
         string $url,
         array $data,
         string $method,
-        array $headers
+        array $headers,
+        string $contentType = 'json'
     ): array {
         $ch = \curl_init($url);
+        $method = strtoupper($method);
 
         try {
             // 🔒 SSL/TLS Security Options
             \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             \curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 
-            // ⏱️ Timeout Options
-            \curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-            \curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+            // ⏱️ Optimized Timeout Options (Reduced from 30s to 20s max for UI response preservation)
+            \curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+            \curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 8);
 
             // 📝 Request Options
             \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             \curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
 
-            if (strtoupper($method) === 'POST') {
+            // 🚀 Safe Non-GET Body Distribution Handling
+            $body = '';
+            $mimeType = 'application/json';
+            if ($contentType === 'form') {
+                $body = \http_build_query($data);
+                $mimeType = 'application/x-www-form-urlencoded';
+            } else {
+                $body = \json_encode($data);
+            }
+
+            if ($method === 'POST') {
                 \curl_setopt($ch, CURLOPT_POST, true);
-                \curl_setopt($ch, CURLOPT_POSTFIELDS, \json_encode($data));
-            } elseif (strtoupper($method) !== 'GET') {
+                \curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            } elseif ($method !== 'GET') {
                 \curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+                if (!empty($data)) {
+                    \curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+                }
             }
 
             // 📨 Headers
             $defaultHeaders = [
-                'Content-Type: application/json',
+                "Content-Type: {$mimeType}",
                 'Accept: application/json',
                 'User-Agent: ChortkePaymentClient/1.0'
             ];
@@ -173,8 +191,15 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
                 throw new \Exception("HTTP {$httpCode} - Client Error (will not retry)");
             }
 
-            // Parse JSON response
+            // 🔍 Parse & Audit JSON integrity via strict error checks
             $result = \json_decode($response ?? '{}', true);
+            if (\json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->error("payment.{$this->getGatewayName()}.json_parse_error", [
+                    'error' => \json_last_error_msg(),
+                    'raw' => substr((string)$response, 0, 250)
+                ]);
+                throw new \RuntimeException("Malformed JSON response from gateway: " . \json_last_error_msg());
+            }
 
             return [
                 'success' => $httpCode >= 200 && $httpCode < 300,

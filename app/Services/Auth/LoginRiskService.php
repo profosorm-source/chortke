@@ -103,15 +103,25 @@ class LoginRiskService extends \App\Services\BaseService
 
         $score = 0;
 
-        // بر اساس تعداد تلاش ناموفق با مقادیر ثابت معین
-        if ($failCount === self::FAIL_LIMIT_1) {
-            $score = 25;
-        } elseif ($failCount === self::FAIL_LIMIT_2) {
-            $score = 40;
-        } elseif ($failCount === self::FAIL_LIMIT_3) {
-            $score = 65;
-        } elseif ($failCount >= self::FAIL_LIMIT_4) {
-            $score = 85;
+        // 🔒 Dynamic System Tuning: Load failure limits and risk increments from application settings
+        $limit1 = (int)setting('login_risk_limit_1', self::FAIL_LIMIT_1);
+        $limit2 = (int)setting('login_risk_limit_2', self::FAIL_LIMIT_2);
+        $limit3 = (int)setting('login_risk_limit_3', self::FAIL_LIMIT_3);
+        $limit4 = (int)setting('login_risk_limit_4', self::FAIL_LIMIT_4);
+
+        $score1 = (int)setting('login_risk_score_1', 25);
+        $score2 = (int)setting('login_risk_score_2', 40);
+        $score3 = (int)setting('login_risk_score_3', 65);
+        $score4 = (int)setting('login_risk_score_4', 85);
+
+        if ($failCount === $limit1) {
+            $score = $score1;
+        } elseif ($failCount === $limit2) {
+            $score = $score2;
+        } elseif ($failCount === $limit3) {
+            $score = $score3;
+        } elseif ($failCount >= $limit4) {
+            $score = $score4;
         }
 
         return min(100, $score);
@@ -206,17 +216,32 @@ class LoginRiskService extends \App\Services\BaseService
     }
 
     /**
-     * حل چالش IP Spoofing به صورت امن و غیرقابل جعل
+     * حل چالش IP Spoofing به صورت مستقل، امن و غیرقابل جعل بدون وابستگی به توابع خارجی
      */
     private function resolveIp(?string $ip = null): string
     {
         if ($ip !== null && filter_var($ip, FILTER_VALIDATE_IP)) {
             return $ip;
         }
-        if (function_exists('get_client_ip')) {
-            return get_client_ip();
+        
+        $candidates = [
+            $_SERVER['HTTP_CF_CONNECTING_IP'] ?? null,
+            $_SERVER['HTTP_X_REAL_IP'] ?? null,
+            $_SERVER['HTTP_X_FORWARDED_FOR'] ?? null,
+            $_SERVER['REMOTE_ADDR'] ?? null
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate) {
+                // Extraction Logic: Support split proxy chains and secure parsing
+                $parts = explode(',', $candidate);
+                $extracted = trim((string)($parts[0] ?? ''));
+                if (filter_var($extracted, FILTER_VALIDATE_IP)) {
+                    return $extracted;
+                }
+            }
         }
-        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
-        return filter_var($remoteAddr, FILTER_VALIDATE_IP) ? $remoteAddr : '127.0.0.1';
+
+        return '127.0.0.1';
     }
 }

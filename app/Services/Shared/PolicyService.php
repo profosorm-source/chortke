@@ -69,15 +69,10 @@ class PolicyService extends \App\Services\BaseService
             return $this->permissionCache[$cacheKey];
         }
 
-        $result = $this->db->query(
-            "SELECT 1 FROM user_roles ur
-             INNER JOIN role_permissions rp ON ur.role_id = rp.role_id
-             INNER JOIN permissions p ON rp.permission_id = p.id
-             WHERE ur.user_id = ? AND p.slug = ? LIMIT 1",
-            [$user->id, $action]
-        )->fetch();
+        // Architectural Decoupling: Delegating lookups directly into model logic.
+        $result = $this->userModel->hasPermission($user->id, $action);
 
-        return $this->permissionCache[$cacheKey] = (bool) $result;
+        return $this->permissionCache[$cacheKey] = $result;
     }
 
     public function isAdmin(User $user): bool
@@ -100,9 +95,7 @@ class PolicyService extends \App\Services\BaseService
      */
     public function isAdminById(int $userId): bool
     {
-        $stmt = $this->db->prepare("SELECT role FROM users WHERE id = ? LIMIT 1");
-        $stmt->execute([$userId]);
-        $user = $stmt->fetch(\PDO::FETCH_OBJ);
+        $user = $this->userModel->findById($userId);
         return $user && in_array($user->role, ['admin', 'super_admin']);
     }
 
@@ -116,28 +109,14 @@ class PolicyService extends \App\Services\BaseService
             return $this->permissionCache[$cacheKey];
         }
 
-        $result = $this->db->query(
-            "SELECT 1 FROM user_roles ur
-             INNER JOIN role_permissions rp ON ur.role_id = rp.role_id
-             INNER JOIN permissions p ON rp.permission_id = p.id
-             WHERE ur.user_id = ? AND p.slug = ? LIMIT 1",
-            [$userId, $action]
-        )->fetch();
+        $result = $this->userModel->hasPermission($userId, $action);
 
-        return $this->permissionCache[$cacheKey] = (bool) $result;
+        return $this->permissionCache[$cacheKey] = $result;
     }
 
     public function getPermissions(User $user): array
     {
-        $permissions = $this->db->query(
-            "SELECT p.slug FROM user_roles ur
-             INNER JOIN role_permissions rp ON ur.role_id = rp.role_id
-             INNER JOIN permissions p ON rp.permission_id = p.id
-             WHERE ur.user_id = ?",
-            [$user->id]
-        )->fetchAll() ?? [];
-
-        return array_map(fn($p) => $p->slug, $permissions);
+        return $this->userModel->getUserPermissions($user->id);
     }
 
     public function grantRole(User $user, string $roleSlug, ?int $grantedBy = null): bool
@@ -146,10 +125,7 @@ class PolicyService extends \App\Services\BaseService
             $role = $this->roleModel->findBySlug($roleSlug);
             if (!$role) throw new \Exception("Role '$roleSlug' یافت نشد");
 
-            $this->db->query(
-                "INSERT IGNORE INTO user_roles (user_id, role_id, granted_by, granted_at) VALUES (?, ?, ?, NOW())",
-                [$user->id, $role->id, $grantedBy]
-            );
+            $this->userModel->assignRole($user->id, $role->id, $grantedBy);
 
             $this->auditTrail->log('role_granted', "Granted role $roleSlug to user {$user->id}", ['role' => $roleSlug]);
             return true;
@@ -165,7 +141,7 @@ class PolicyService extends \App\Services\BaseService
             $role = $this->roleModel->findBySlug($roleSlug);
             if (!$role) throw new \Exception("Role '$roleSlug' یافت نشد");
 
-            $this->db->query("DELETE FROM user_roles WHERE user_id = ? AND role_id = ?", [$user->id, $role->id]);
+            $this->userModel->removeRole($user->id, $role->id);
             $this->auditTrail->log('role_revoked', "Revoked role $roleSlug from user {$user->id}");
             return true;
         } catch (\Exception $e) {

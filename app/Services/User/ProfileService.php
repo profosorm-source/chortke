@@ -21,7 +21,9 @@ class ProfileService extends \App\Services\BaseService
         private User $model,
         protected LoggerInterface $logger,
         private ?Cache $cache = null
-    ) {}
+    ) {
+        parent::__construct($logger);
+    }
 
     public function getProfile(int $userId): ?object
     {
@@ -79,14 +81,22 @@ class ProfileService extends \App\Services\BaseService
 
     public function updateMultipleSettings(int $userId, array $settings): bool
     {
-        foreach ($settings as $key => $value) {
-            $this->updateSetting($userId, $key, $value);
+        $this->model->beginTransaction();
+        try {
+            foreach ($settings as $key => $value) {
+                $this->updateSetting($userId, $key, $value);
+            }
+            $this->model->commit();
+            return true;
+        } catch (\Throwable $e) {
+            $this->model->rollback();
+            $this->logger->error('user.settings.batch_update_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return false;
         }
-        return true;
     }
 
     /**
-     * پروفایل اپ‌ڈیٹ کو validate کنید
+     * اعتبارسنجی بروزرسانی اطلاعات پروفایل
      */
     public function validateProfileUpdate(array $data): array
     {
@@ -100,7 +110,7 @@ class ProfileService extends \App\Services\BaseService
                 $errors['full_name'] = 'نام کامل باید حداقل 3 کاراکتر باشد';
             }
             if (mb_strlen($fullName) > 255) {
-                $errors['full_name'] = 'نام کامل بیش از حد طویل است';
+                $errors['full_name'] = 'نام کامل بیش از حد طولانی است';
             }
         }
 
@@ -108,7 +118,7 @@ class ProfileService extends \App\Services\BaseService
         if (isset($data['mobile']) && $data['mobile'] !== '') {
             $mobile = trim($data['mobile']);
             if (!preg_match('/^09[0-9]{9}$/', $mobile)) {
-                $errors['mobile'] = 'شماره موبایل نامعتبر است (باید 09 سے شروع ہو)';
+                $errors['mobile'] = 'شماره موبایل نامعتبر است (باید با 09 شروع شود)';
             }
         }
 
@@ -150,7 +160,7 @@ class ProfileService extends \App\Services\BaseService
         if (isset($data['address']) && $data['address'] !== '') {
             $address = trim($data['address']);
             if (mb_strlen($address) > 500) {
-                $errors['address'] = 'آدرس بیش از حد طویل است';
+                $errors['address'] = 'آدرس بیش از حد طولانی است';
             }
         }
 
@@ -158,7 +168,7 @@ class ProfileService extends \App\Services\BaseService
         if (isset($data['bio']) && $data['bio'] !== '') {
             $bio = trim($data['bio']);
             if (mb_strlen($bio) > 500) {
-                $errors['bio'] = 'بیوگرافی بیش از حد طویل است';
+                $errors['bio'] = 'بیوگرافی بیش از حد طولانی است';
             }
         }
 
@@ -166,7 +176,7 @@ class ProfileService extends \App\Services\BaseService
     }
 
     /**
-     * پروفایل کو validation کے ساتھ اپ‌ڈیٹ کنید
+     * بروزرسانی پروفایل به همراه اعتبارسنجی و ذخیره‌سازی
      */
     public function updateProfileWithValidation(int $userId, array $data): array
     {
@@ -192,15 +202,21 @@ class ProfileService extends \App\Services\BaseService
 
         // Update
         if ($this->updateProfile($userId, $sanitized)) {
-            return ['success' => true, 'message' => 'پروفائل کامیابی سے اپ‌ڈیٹ ہو گیا'];
+            return ['success' => true, 'message' => 'پروفایل با موفقیت بروزرسانی شد'];
         }
 
-        return ['success' => false, 'errors' => ['general' => 'پروفائل کو اپ‌ڈیٹ کرنے میں خرابی']];
+        return ['success' => false, 'errors' => ['general' => 'خطا در بروزرسانی اطلاعات پروفایل']];
     }
 
     private function castValue(string $value): mixed
     {
-        if ($value === '1' || $value === '0') return $value === '1';
+        $normalized = strtolower(trim($value));
+        if ($normalized === '1' || $normalized === 'true' || $normalized === 'yes' || $normalized === 'on') {
+            return true;
+        }
+        if ($normalized === '0' || $normalized === 'false' || $normalized === 'no' || $normalized === 'off') {
+            return false;
+        }
         if (is_numeric($value)) return strpos($value, '.') !== false ? (float)$value : (int)$value;
         return $value;
     }

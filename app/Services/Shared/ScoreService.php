@@ -43,7 +43,7 @@ class ScoreService extends \App\Services\BaseService
 
     public function createEvent(int $userId, string $domain, string $source, float $delta, array $meta = []): bool
     {
-        return $this->scoreEventService->createEvent($userId, $domain, $source, $delta, $meta);
+        return $this->scoreEventService->recordEvent($userId, $domain, $source, $delta, $meta);
     }
 
     public function getTotalScore(int $entityId, string $entityType, string $domain): float
@@ -164,6 +164,12 @@ class ScoreService extends \App\Services\BaseService
 
     public function adjust(int $adminId, int $userId, string $domain, string $operation, float $value, string $reason, ?string $expiresAt = null): bool
     {
+        // Security: Verify operational authority at the service level
+        $adminUser = $this->userModel->findById($adminId);
+        if (!$adminUser || ($adminUser->role !== 'admin' && $adminUser->role !== 'superadmin')) {
+            throw new InvalidArgumentException('Unauthorized action: Only administrators can perform score adjustments.');
+        }
+
         $this->validateAdjustment($domain, $operation, $value, $reason);
 
         $ok = $this->scoreModel->createAdjustment([
@@ -184,16 +190,54 @@ class ScoreService extends \App\Services\BaseService
                 'expires_at' => $expiresAt,
                 'admin_id' => $adminId,
             ]);
+
+            $this->logInfo('admin.score.adjusted', [
+                'admin_id' => $adminId,
+                'user_id' => $userId,
+                'domain' => $domain,
+                'operation' => $operation,
+                'value' => $value,
+                'expires_at' => $expiresAt
+            ]);
         }
         return $ok;
     }
 
     public function revokeAdjustment(int $adminId, int $adjustmentId, string $reason): bool
     {
+        // Security: Verify operational authority at the service level
+        $adminUser = $this->userModel->findById($adminId);
+        if (!$adminUser || ($adminUser->role !== 'admin' && $adminUser->role !== 'superadmin')) {
+            throw new InvalidArgumentException('Unauthorized action: Only administrators can revoke score adjustments.');
+        }
+
         if (trim($reason) === '') {
             throw new InvalidArgumentException('Revoke reason is required.');
         }
-        return $this->scoreModel->revokeAdjustment($adjustmentId, $adminId, $reason);
+
+        // Verify if adjustment actually exists and is currently active
+        $adjustment = $this->db->table('user_score_adjustments')
+            ->where('id', '=', $adjustmentId)
+            ->first();
+
+        if (!$adjustment) {
+            throw new InvalidArgumentException('Adjustment not found.');
+        }
+
+        if ((int)$adjustment->is_active === 0) {
+            throw new InvalidArgumentException('Adjustment is already inactive.');
+        }
+
+        $ok = $this->scoreModel->revokeAdjustment($adjustmentId, $adminId, $reason);
+        
+        if ($ok) {
+            $this->logInfo('admin.score.adjustment_revoked', [
+                'admin_id' => $adminId,
+                'adjustment_id' => $adjustmentId,
+                'reason' => $reason
+            ]);
+        }
+        return $ok;
     }
 
     public function getActiveAdjustments(int $userId, string $domain): array
@@ -209,8 +253,8 @@ class ScoreService extends \App\Services\BaseService
         if (!in_array($operation, ['set', 'add', 'subtract'], true)) {
             throw new InvalidArgumentException('Invalid score operation.');
         }
-        if ($value < 0) {
-            throw new InvalidArgumentException('Adjustment value cannot be negative.');
+        if ($value <= 0) {
+            throw new InvalidArgumentException('Adjustment value must be greater than 0.');
         }
         if (trim($reason) === '') {
             throw new InvalidArgumentException('Adjustment reason is required.');

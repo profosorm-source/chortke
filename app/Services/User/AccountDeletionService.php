@@ -9,6 +9,8 @@ use App\Contracts\LoggerInterface;
 use App\Services\CustomTaskService;
 use Core\EventDispatcher;
 
+use App\Models\Wallet;
+
 /**
  * AccountDeletionService — حذف حساب کاربران
  */
@@ -19,6 +21,7 @@ class AccountDeletionService extends \App\Services\BaseService
     private Database $db;
     private CustomTaskService $customTaskService;
     private EventDispatcher $eventDispatcher;
+    private Wallet $walletModel;
 
     public function __construct(
         User $userModel,
@@ -26,7 +29,8 @@ class AccountDeletionService extends \App\Services\BaseService
         Database $db,
         LoggerInterface $logger,
         CustomTaskService $customTaskService,
-        EventDispatcher $eventDispatcher
+        EventDispatcher $eventDispatcher,
+        Wallet $walletModel
     ) {
         parent::__construct($logger);
         $this->userModel = $userModel;
@@ -34,6 +38,7 @@ class AccountDeletionService extends \App\Services\BaseService
         $this->db = $db;
         $this->customTaskService = $customTaskService;
         $this->eventDispatcher = $eventDispatcher;
+        $this->walletModel = $walletModel;
     }
 
     /**
@@ -43,18 +48,29 @@ class AccountDeletionService extends \App\Services\BaseService
     public function processExpiredDeletionRequests(): int
     {
         try {
+            // LOW-01: Acquire specific session Mutex to block concurrent cron overlaps safely
+            $lock = $this->db->fetch("SELECT GET_LOCK('cron_account_deletion_lock', 10) as locked");
+            if (!$lock || !isset($lock->locked) || (int)$lock->locked !== 1) {
+                $this->logger->warning('account_deletion.cron_skipped_mutex_busy');
+                return 0;
+            }
+
             $expiredRequests = $this->deletionLogModel->getExpiredDeletionRequests();
             $deletedCount = 0;
 
             foreach ($expiredRequests as $request) {
-                if ($this->deleteUserAccount($request['user_id'], 'Automated deletion after 7-day period')) {
+                if ($this->deleteUserAccount((int)$request['user_id'], 'Automated deletion after 7-day period')) {
                     $deletedCount++;
                 }
             }
 
+            // Free locks
+            $this->db->query("SELECT RELEASE_LOCK('cron_account_deletion_lock')");
+
             $this->logger->info('account_deletion.automated_completed', ['count' => $deletedCount]);
             return $deletedCount;
         } catch (\Exception $e) {
+            try { $this->db->query("SELECT RELEASE_LOCK('cron_account_deletion_lock')"); } catch (\Throwable $t) {}
             $this->logger->error('account_deletion.automated_failed', ['error' => $e->getMessage()]);
             return 0;
         }
@@ -65,11 +81,31 @@ class AccountDeletionService extends \App\Services\BaseService
      */
     public function deleteUserAccount(int $userId, ?string $reason = null, ?int $deletedBy = null): bool
     {
+        // MED-01: Stop and assert user does not have any remaining positive wallet balances
+        try {
+            $balanceIrt = $this->walletModel->getTotalBalance($userId, 'irt');
+            $balanceUsdt = $this->walletModel->getTotalBalance($userId, 'usdt');
+            
+            if ($balanceIrt > 0 || $balanceUsdt > 0) {
+                $this->logger->critical('account_deletion.blocked_positive_balance', [
+                    'user_id' => $userId,
+                    'balance_irt' => $balanceIrt,
+                    'balance_usdt' => $balanceUsdt
+                ]);
+                return false; // Cannot delete accounts that still hold customer funds
+            }
+        } catch (\Throwable $e) {
+            // Allow fallback if model errors but default to fail-safe rejection
+            $this->logger->error('account_deletion.balance_check_failed', ['error' => $e->getMessage()]);
+            return false;
+        }
+
         $this->db->beginTransaction();
 
         try {
             $user = $this->userModel->findById($userId);
             if (!$user) {
+                $this->db->rollback();
                 $this->logger->warning('account_deletion.user_not_found', ['user_id' => $userId]);
                 return false;
             }
@@ -191,6 +227,10 @@ class AccountDeletionService extends \App\Services\BaseService
      */
     public function getDeletionHistory(int $limit = 50, int $offset = 0): array
     {
-        return $this->deletionLogModel->getDeletionHistory($limit, $offset);
+        // LOW-02: Bound pagination inputs to defend against excessive memory usage
+        $safeLimit = max(1, min(250, $limit));
+        $safeOffset = max(0, $offset);
+
+        return $this->deletionLogModel->getDeletionHistory($safeLimit, $safeOffset);
     }
 }

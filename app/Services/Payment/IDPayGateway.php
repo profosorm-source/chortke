@@ -46,7 +46,7 @@ class IDPayGateway extends BasePaymentGateway
      * - Server errors (5xx): ✅ Retry
      * - Invalid API key: ❌ Do not retry
      */
-    public function createPayment(float $amount, string $description, string $callbackUrl): array
+    public function createPayment(float $amount, string $description, string $callbackUrl, array $options = []): array
     {
         if (!$this->config) {
             return [
@@ -61,13 +61,17 @@ class IDPayGateway extends BasePaymentGateway
             throw new \InvalidArgumentException('Amount must be greater than 0');
         }
 
-        // IDPay expects amount in Toman, input is in Rial
-        // Conversion: Rial → Toman (1 Toman = 10 Rial)
+        $orderId = \uniqid('idpay_');
+
+        // IDPay expects amount in Rial, input is in Toman (IRT)
+        // Conversion: Toman → Rial (1 Toman = 10 Rial)
         $data = [
-            'order_id' => \uniqid('idpay_'),
-            'amount' => (int)($amount / 10), // IDPay requires Toman (divide Rial by 10)
+            'order_id' => $orderId,
+            'amount' => (int)($amount * 10), // IDPay requires Rial (multiply Toman by 10)
             'desc' => $description,
             'callback' => $callbackUrl,
+            'phone' => $options['mobile'] ?? $options['phone'] ?? '',
+            'mail' => $options['email'] ?? '',
         ];
 
         $url = 'https://api.idpay.ir/v1.1/payment';
@@ -94,14 +98,16 @@ class IDPayGateway extends BasePaymentGateway
             if (isset($result['id']) && isset($result['link'])) {
                 $this->logger->info('payment.idpay.payment_created', [
                     'id' => $result['id'],
-                    'amount_toman' => (int)($amount / 10)
+                    'amount_toman' => (int)$amount
                 ]);
 
                 return [
                     'success' => true,
-                    'authority' => $result['id'],
-                    'url' => $result['link'],
-                    'message' => 'موفق'
+                    'authority' => (string)$result['id'],
+                    'url' => (string)$result['link'],
+                    'message' => 'موفق',
+                    // 💾 Save order_id to ensure verification retrieves and sends the SAME order_id
+                    'order_id' => $orderId 
                 ];
             }
 
@@ -152,9 +158,29 @@ class IDPayGateway extends BasePaymentGateway
             throw new \InvalidArgumentException('Amount must be greater than 0');
         }
 
+        // 🕵️ Stateful Matching: Retrieve the EXACT same order_id originally sent during createPayment
+        $orderId = null;
+        try {
+            $log = $this->paymentGatewayModel->getDb()->table('payment_logs')
+                ->where('authority', '=', $authority)
+                ->first();
+
+            if ($log && !empty($log->response_data)) {
+                $savedRes = \json_decode((string)$log->response_data, true);
+                $orderId = $savedRes['order_id'] ?? null;
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('payment.idpay.order_id_lookup_exception', ['error' => $e->getMessage()]);
+        }
+
+        // Failover to current tracking ID if historical record lookup falls short
+        if (!$orderId) {
+            $orderId = $authority;
+        }
+
         $data = [
             'id' => $authority,
-            'order_id' => \uniqid('idpay_'),
+            'order_id' => $orderId,
         ];
 
         $url = 'https://api.idpay.ir/v1.1/payment/verify';

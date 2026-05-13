@@ -39,7 +39,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
     }
 
     /**
-     * ارسال نوتیفیکیشن به یک کاربر
+     * ارسال نوتیفیکیشن به یک کاربر (بخش‌بندی شده برای کاهش وابستگی‌های یکپارچه)
      */
     public function send(
         int     $userId,
@@ -55,63 +55,109 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         ?string $groupKey    = null,
         ?string $scheduledAt = null
     ): ?int {
+        // 1. Rate Limiter assertion
         if (!$this->checkRateLimit($userId)) {
             $this->logger->info('notif.rate_limited', ['user_id' => $userId, 'type' => $type]);
             return null;
         }
 
-        if ($scheduledAt === null && $priority !== Notification::PRIORITY_URGENT) {
-            if ($this->preferenceService->isInDndMode($userId)) {
-                $scheduledAt = $this->preferenceService->getNextDndEndTime($userId);
-                $this->logger->info('notif.dnd_deferred', ['user_id' => $userId, 'scheduled_at' => $scheduledAt]);
-            }
-        }
+        // 2. DND Scheduling resolution
+        $scheduledAt = $this->resolveScheduledTime($userId, $priority, $scheduledAt);
 
-        $notifId = null;
+        // 3. Persist Database record
+        $notifId = $this->persistInAppNotification(
+            $userId, $type, $title, $message, $data, 
+            $actionUrl, $actionText, $priority, $expiresAt, $imageUrl, $groupKey, $scheduledAt
+        );
 
-        try {
-            if ($this->preferenceService->isInAppEnabled($userId, $type)) {
-                $notifId = $this->model->create([
-                    'user_id'      => $userId,
-                    'type'         => $type,
-                    'title'        => $title,
-                    'message'      => $message,
-                    'data'         => $data,
-                    'action_url'   => $actionUrl,
-                    'action_text'  => $actionText,
-                    'priority'     => $priority,
-                    'expires_at'   => $expiresAt,
-                    'image_url'    => $imageUrl,
-                    'group_key'    => $groupKey ?? $type,
-                    'channel'      => Notification::CHANNEL_IN_APP,
-                    'scheduled_at' => $scheduledAt,
-                ]) ?: null;
-
-                if ($notifId && $scheduledAt === null) {
-                    $this->tracker->invalidateUnreadCache($userId);
-                }
-            }
-        } catch (\Throwable $e) {
-            $this->logger->error('notif.in_app_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
-        }
-
-        if ($scheduledAt === null && $this->preferenceService->isPushEnabled($userId, $type)) {
-            try {
-                $this->dispatcher->dispatch(
-                    'fcm',
-                    $userId,
-                    $title,
-                    $message,
-                    array_merge($data ?? [], ['type' => $type, 'notif_id' => (string)($notifId ?? '')]),
-                    $imageUrl,
-                    $actionUrl
-                );
-            } catch (\Throwable $e) {
-                $this->logger->warning('notif.push_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
-            }
-        }
+        // 4. Dispatch External Push Channels (FCM)
+        $this->dispatchPushNotification(
+            $userId, $type, $title, $message, $data, 
+            $actionUrl, $imageUrl, $scheduledAt, $notifId
+        );
 
         return $notifId;
+    }
+
+    /**
+     * Handles DND adjustments for specific users.
+     */
+    private function resolveScheduledTime(int $userId, string $priority, ?string $scheduledAt): ?string
+    {
+        if ($scheduledAt === null && $priority !== Notification::PRIORITY_URGENT) {
+            if ($this->preferenceService->isInDndMode($userId)) {
+                $deferredTime = $this->preferenceService->getNextDndEndTime($userId);
+                $this->logger->info('notif.dnd_deferred', ['user_id' => $userId, 'scheduled_at' => $deferredTime]);
+                return $deferredTime;
+            }
+        }
+        return $scheduledAt;
+    }
+
+    /**
+     * Handles database archiving and unread counter resets.
+     */
+    private function persistInAppNotification(
+        int $userId, string $type, string $title, string $message, ?array $data,
+        ?string $actionUrl, ?string $actionText, string $priority, ?string $expiresAt,
+        ?string $imageUrl, ?string $groupKey, ?string $scheduledAt
+    ): ?int {
+        try {
+            if (!$this->preferenceService->isInAppEnabled($userId, $type)) {
+                return null;
+            }
+
+            $notifId = $this->model->create([
+                'user_id'      => $userId,
+                'type'         => $type,
+                'title'        => $title,
+                'message'      => $message,
+                'data'         => $data,
+                'action_url'   => $actionUrl,
+                'action_text'  => $actionText,
+                'priority'     => $priority,
+                'expires_at'   => $expiresAt,
+                'image_url'    => $imageUrl,
+                'group_key'    => $groupKey ?? $type,
+                'channel'      => Notification::CHANNEL_IN_APP,
+                'scheduled_at' => $scheduledAt,
+            ]) ?: null;
+
+            if ($notifId && $scheduledAt === null) {
+                $this->tracker->invalidateUnreadCache($userId);
+            }
+
+            return $notifId;
+        } catch (\Throwable $e) {
+            $this->logger->error('notif.in_app_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Dispatches remote notifications.
+     */
+    private function dispatchPushNotification(
+        int $userId, string $type, string $title, string $message, ?array $data,
+        ?string $actionUrl, ?string $imageUrl, ?string $scheduledAt, ?int $notifId
+    ): void {
+        if ($scheduledAt !== null || !$this->preferenceService->isPushEnabled($userId, $type)) {
+            return;
+        }
+
+        try {
+            $this->dispatcher->dispatch(
+                'fcm',
+                $userId,
+                $title,
+                $message,
+                array_merge($data ?? [], ['type' => $type, 'notif_id' => (string)($notifId ?? '')]),
+                $imageUrl,
+                $actionUrl
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('notif.push_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+        }
     }
 
     private function checkRateLimit(int $userId): bool
@@ -205,13 +251,53 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         return $sent;
     }
 
-    private function sendBulkToUsers(array $users, string $type, string $title, string $message, ?array $data, ?string $actionUrl, ?string $actionText, string $priority, ?string $scheduledAt): array
-    {
-        $sent = 0; $skipped = 0;
+    private function sendBulkToUsers(
+        array $users, string $type, string $title, string $message, 
+        ?array $data, ?string $actionUrl, ?string $actionText, string $priority, ?string $scheduledAt
+    ): array {
+        $userIds = [];
         foreach ($users as $u) {
-            $ok = $this->send((int)$u->id, $type, $title, $message, $data, $actionUrl, $actionText, $priority, null, null, null, $scheduledAt);
-            $ok ? $sent++ : $skipped++;
+            $userIds[] = (int)$u->id;
         }
+
+        if (empty($userIds)) {
+            return ['sent' => 0, 'skipped' => 0];
+        }
+
+        // HIGH-02: 1. Push Dispatch Offloading to System Queue (Fully Async)
+        try {
+            // Evaluates FCM channel chunking (100 users/job) safely behind the scenes.
+            $this->dispatcher->dispatchBulk('fcm', $userIds, $title, $message, $data, null, $actionUrl);
+        } catch (\Throwable $e) {
+            $this->logger->error('notif.bulk_async_offload_failed', ['error' => $e->getMessage()]);
+        }
+
+        // 2. Local Database Recording (Executed in chunks to avoid CPU spikes)
+        $sent = 0;
+        $skipped = 0;
+
+        $chunks = array_chunk($userIds, 100);
+        foreach ($chunks as $chunk) {
+            foreach ($chunk as $uid) {
+                // Rate limits and resolving schedules
+                if (!$this->checkRateLimit($uid)) {
+                    $skipped++;
+                    continue;
+                }
+                
+                $resTime = $this->resolveScheduledTime($uid, $priority, $scheduledAt);
+                
+                // Persist database record locally only (skips repeated remote API dispatches)
+                $ok = $this->persistInAppNotification(
+                    $uid, $type, $title, $message, $data, 
+                    $actionUrl, $actionText, $priority, null, null, null, $resTime
+                );
+                
+                $ok ? $sent++ : $skipped++;
+            }
+            unset($chunk); // Help GC cycle release memory segments
+        }
+
         return ['sent' => $sent, 'skipped' => $skipped];
     }
 

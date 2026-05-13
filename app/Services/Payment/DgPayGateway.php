@@ -46,7 +46,7 @@ class DgPayGateway extends BasePaymentGateway
      * - Server errors (5xx): ✅ Retry
      * - Invalid merchant key: ❌ Do not retry
      */
-    public function createPayment(float $amount, string $description, string $callbackUrl): array
+    public function createPayment(float $amount, string $description, string $callbackUrl, array $options = []): array
     {
         if (!$this->config) {
             return [
@@ -61,13 +61,14 @@ class DgPayGateway extends BasePaymentGateway
             throw new \InvalidArgumentException('Amount must be greater than 0');
         }
 
-        // DgPay expects amount in Toman, input is in Rial
-        // Conversion: Rial → Toman (1 Toman = 10 Rial)
+        // DgPay expects amount in Rial, input is in Toman (IRT)
+        // Conversion: Toman → Rial (1 Toman = 10 Rial)
         $data = [
             'merchant' => $this->config->merchant_id,
-            'amount' => (int)($amount / 10), // DgPay requires Toman (divide Rial by 10)
+            'amount' => (int)($amount * 10), // DgPay requires Rial (multiply Toman by 10)
             'description' => $description,
             'callback' => $callbackUrl,
+            'mobile' => $options['mobile'] ?? '',
         ];
 
         $url = 'https://dgpay.ir/api/v1/payment/request';
@@ -93,7 +94,7 @@ class DgPayGateway extends BasePaymentGateway
             if (isset($result['status']) && $result['status'] === 'success') {
                 $this->logger->info('payment.dgpay.payment_created', [
                     'token' => $result['token'],
-                    'amount_toman' => (int)($amount / 10)
+                    'amount_toman' => (int)$amount
                 ]);
 
                 return [
@@ -147,9 +148,15 @@ class DgPayGateway extends BasePaymentGateway
             throw new \InvalidArgumentException('Authority cannot be empty');
         }
 
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException('Amount must be greater than 0');
+        }
+
+        // 🕵️ Extended Matching: Safely forward amount (normalized to Rial) to prevent potential gateway mismatch
         $data = [
             'merchant' => $this->config->merchant_id,
             'token' => $authority,
+            'amount' => (int)($amount * 10)
         ];
 
         $url = 'https://dgpay.ir/api/v1/payment/verify';

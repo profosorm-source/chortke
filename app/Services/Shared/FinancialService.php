@@ -30,7 +30,7 @@ class FinancialService extends \App\Services\BaseService
     // Escrow Operations
     // ═══════════════════════════════════════════════════════════════════════
 
-    public function createEscrow(int $orderId, string $orderType, int $buyerId, int $sellerId, float $amount, string $currency = 'USDT'): int|false
+    public function createEscrow(int $orderId, string $orderType, int $buyerId, int $sellerId, string $amount, string $currency = 'USDT'): int|false
     {
         return $this->escrowModel->createEscrow($orderId, $orderType, $buyerId, $sellerId, $amount, $currency);
     }
@@ -88,8 +88,8 @@ class FinancialService extends \App\Services\BaseService
     public function logTransaction(
         string $transactionId,
         string $account,
-        float $debit,
-        float $credit,
+        string $debit,
+        string $credit,
         string $currency,
         ?string $description = null,
         array $metadata = []

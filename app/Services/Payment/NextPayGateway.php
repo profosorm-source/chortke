@@ -46,7 +46,7 @@ class NextPayGateway extends BasePaymentGateway
      * - Server errors (5xx): ✅ Retry
      * - Invalid API key: ❌ Do not retry
      */
-    public function createPayment(float $amount, string $description, string $callbackUrl): array
+    public function createPayment(float $amount, string $description, string $callbackUrl, array $options = []): array
     {
         if (!$this->config) {
             return [
@@ -61,19 +61,20 @@ class NextPayGateway extends BasePaymentGateway
             throw new \InvalidArgumentException('Amount must be greater than 0');
         }
 
-        // NextPay expects amount in Toman, input is in Rial
-        // Conversion: Rial → Toman (1 Toman = 10 Rial)
+        // NextPay expects amount in Toman, input is in Toman
+        // Conversion: Toman → Toman (No conversion needed)
         $data = [
             'api_key' => $this->config->api_key,
-            'amount' => (int)($amount / 10), // NextPay requires Toman (divide Rial by 10)
+            'amount' => (int)$amount, // NextPay requires Toman
             'order_id' => \uniqid('nextpay_'),
             'callback_uri' => $callbackUrl,
+            'customer_phone' => $options['mobile'] ?? '',
         ];
 
         $url = 'https://nextpay.org/nx/gateway/token';
 
         try {
-            // 🔄 Execute with retry and exponential backoff
+            // 🔄 Execute with retry and exponential backoff (Using explicitly mapped 'form' payload type)
             $response = $this->executeWithRetry($url, $data, 'POST', [], 'form');
 
             // NextPay returns 200 on success
@@ -90,7 +91,7 @@ class NextPayGateway extends BasePaymentGateway
                 $transId = $result['trans_id'];
                 $this->logger->info('payment.nextpay.payment_created', [
                     'trans_id' => $transId,
-                    'amount_toman' => (int)($amount / 10)
+                    'amount_toman' => (int)$amount
                 ]);
 
                 return [
@@ -148,11 +149,11 @@ class NextPayGateway extends BasePaymentGateway
             throw new \InvalidArgumentException('Amount must be greater than 0');
         }
 
-        // NextPay expects amount in Toman, input is in Rial
+        // NextPay expects amount in Toman, input is in Toman
         $data = [
             'api_key' => $this->config->api_key,
             'trans_id' => $authority,
-            'amount' => (int)($amount / 10), // Toman amount for verification
+            'amount' => (int)$amount, // Toman amount for verification
         ];
 
         $url = 'https://nextpay.org/nx/gateway/verify';

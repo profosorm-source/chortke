@@ -42,9 +42,15 @@ class AnalyticsService extends \App\Services\BaseService
     public function getGlobalStats(): array
     {
         return $this->cache->remember('global_stats', 3600, function() {
+            $stmt1 = $this->db->prepare("SELECT COUNT(*) FROM users");
+            $stmt1->execute();
+
+            $stmt2 = $this->db->prepare("SELECT COUNT(*) FROM custom_tasks WHERE status = ?");
+            $stmt2->execute(['active']);
+
             return [
-                'users_count' => $this->db->query("SELECT COUNT(*) FROM users")->fetchColumn(),
-                'active_tasks' => $this->db->query("SELECT COUNT(*) FROM custom_tasks WHERE status = 'active'")->fetchColumn()
+                'users_count' => (int)$stmt1->fetchColumn(),
+                'active_tasks' => (int)$stmt2->fetchColumn()
             ];
         });
     }
@@ -54,7 +60,11 @@ class AnalyticsService extends \App\Services\BaseService
      */
     public function getTrends(string $metric, string $period = 'daily'): array
     {
-        return [];
+        $days = $period === 'monthly' ? 90 : ($period === 'weekly' ? 30 : 7);
+        
+        // Map general metric identifier to physical allowed tables
+        $table = $metric === 'users' ? 'users' : 'transactions';
+        return $this->getTrendData($table, 'created_at', $days);
     }
 
     public function getTrend(
@@ -71,9 +81,10 @@ class AnalyticsService extends \App\Services\BaseService
 
     public function getCount(string $table, array $conditions = []): int
     {
+        $this->validateIdentifier($table);
         [$where, $params] = $this->buildWhere($conditions);
 
-        $sql = "SELECT COUNT(*) as total FROM {$table} WHERE {$where}";
+        $sql = "SELECT COUNT(*) as total FROM `{$table}` WHERE {$where}";
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
 
@@ -91,10 +102,22 @@ class AnalyticsService extends \App\Services\BaseService
 
     public function getAggregates(string $table, array $conditions = [], array $selectColumns = []): array
     {
-        $select = empty($selectColumns) ? 'COUNT(*) as total' : implode(', ', $selectColumns);
+        $this->validateIdentifier($table);
+        
+        $cleanSelect = [];
+        if (empty($selectColumns)) {
+            $cleanSelect[] = 'COUNT(*) as total';
+        } else {
+            foreach ($selectColumns as $col) {
+                $this->validateIdentifier($col);
+                $cleanSelect[] = "`{$col}`";
+            }
+        }
+        
+        $select = implode(', ', $cleanSelect);
         [$where, $params] = $this->buildWhere($conditions);
 
-        $sql = "SELECT {$select} FROM {$table} WHERE {$where}";
+        $sql = "SELECT {$select} FROM `{$table}` WHERE {$where}";
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
 
@@ -107,6 +130,15 @@ class AnalyticsService extends \App\Services\BaseService
 
     public function exportToCsv(int $adId, int $userId): string
     {
+        // Crucial ownership validation to prevent IDOR
+        $ad = $this->db->table('seo_ads')
+            ->where('id', '=', $adId)
+            ->first();
+
+        if (!$ad || (int)($ad->user_id ?? 0) !== $userId) {
+            throw new \InvalidArgumentException("Access denied: The requesting user does not own the requested ad resources.");
+        }
+
         $sql = "SELECT e.id, e.created_at, e.status, e.payout_amount, e.final_score
                 FROM seo_executions e
                 INNER JOIN seo_ads a ON e.ad_id = a.id
@@ -142,12 +174,21 @@ class AnalyticsService extends \App\Services\BaseService
         return $csv ?: '';
     }
 
+    private function validateIdentifier(string $identifier): void
+    {
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $identifier)) {
+            throw new \InvalidArgumentException("Potential SQL injection vector blocked: invalid database identifier '{$identifier}'.");
+        }
+    }
+
     private function buildWhere(array $conditions): array
     {
         $where = [];
         $params = [];
 
         foreach ($conditions as $column => $value) {
+            $this->validateIdentifier($column);
+
             if (is_array($value) && count($value) === 2 && strtoupper($value[0]) === 'IN' && is_array($value[1])) {
                 if (empty($value[1])) {
                     $where[] = '0=1';
@@ -155,17 +196,17 @@ class AnalyticsService extends \App\Services\BaseService
                 }
 
                 $placeholders = implode(', ', array_fill(0, count($value[1]), '?'));
-                $where[] = "{$column} IN ({$placeholders})";
+                $where[] = "`{$column}` IN ({$placeholders})";
                 $params = array_merge($params, $value[1]);
                 continue;
             }
 
             if ($value === null) {
-                $where[] = "{$column} IS NULL";
+                $where[] = "`{$column}` IS NULL";
                 continue;
             }
 
-            $where[] = "{$column} = ?";
+            $where[] = "`{$column}` = ?";
             $params[] = $value;
         }
 
@@ -205,7 +246,10 @@ class AnalyticsService extends \App\Services\BaseService
      */
     public function getAdvancedStats(): array
     {
-        return [];
+        return [
+            'users_retention' => $this->advancedAnalytics->getRetentionRateData('users', 'id', 'created_at'),
+            'transactions_descriptive' => $this->advancedAnalytics->getDescriptiveStatsData('transactions', 'amount'),
+        ];
     }
 
     /**

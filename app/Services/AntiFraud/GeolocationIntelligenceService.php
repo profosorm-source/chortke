@@ -50,10 +50,14 @@ class GeolocationIntelligenceService extends \App\Services\BaseService
         $lastLogin = $this->getLastLogin($userId);
         
         if (!$lastLogin) {
-            return [
-                'is_impossible' => false,
-                'reason' => 'اولین لاگین یا داده کافی وجود ندارد'
-            ];
+            // HIGH-01: Fallback to initial registration baseline if standard last-login is absent
+            $lastLogin = $this->getRegistrationBaseline($userId);
+            if (!$lastLogin) {
+                return [
+                    'is_impossible' => false,
+                    'reason' => 'اولین لاگین یا داده کافی وجود ندارد'
+                ];
+            }
         }
         
         $distance = $this->calculateDistance(
@@ -63,7 +67,7 @@ class GeolocationIntelligenceService extends \App\Services\BaseService
             (float)$currentLocation['longitude']
         );
         
-        $timeDiffSeconds = time() - strtotime($lastLogin['login_at']);
+        $timeDiffSeconds = time() - strtotime((string)$lastLogin['login_at']);
         $timeDiffHours = $timeDiffSeconds / 3600;
         
         $requiredSpeed = $timeDiffHours > 0 ? ($distance / $timeDiffHours) : PHP_FLOAT_MAX;
@@ -134,6 +138,25 @@ class GeolocationIntelligenceService extends \App\Services\BaseService
     }
 
     /**
+     * Establishes user initial registration footprint mapping to prevent spoofing across logins.
+     */
+    private function getRegistrationBaseline(int $userId): ?array
+    {
+        try {
+            // Resolves earliest established physical geographic anchor
+            $baseline = $this->model->fetch(
+                "SELECT ip_address, country, city, latitude, longitude, created_at as login_at 
+                 FROM user_sessions WHERE user_id = ? AND latitude IS NOT NULL 
+                 ORDER BY created_at ASC LIMIT 1",
+                [$userId]
+            );
+            return $baseline ? (array)$baseline : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
      * امتیازدهی ریسک بر اساس کشور
      */
     public function getCountryRiskScore(string $countryCode): int
@@ -144,7 +167,10 @@ class GeolocationIntelligenceService extends \App\Services\BaseService
             return $customScore;
         }
         
-        return self::COUNTRY_RISK_SCORES[$countryCode] ?? 30;
+        // MED-03: Dynamically load global Country Risk Mapping array from Settings Policy
+        $riskMap = $this->policy->getArray('fraud', 'geo.country_risk_scores', self::COUNTRY_RISK_SCORES);
+
+        return (int)($riskMap[$countryCode] ?? 30);
     }
 
     /**
@@ -155,6 +181,11 @@ class GeolocationIntelligenceService extends \App\Services\BaseService
         $since = date('Y-m-d H:i:s', time() - ($lookbackHours * 3600));
         $sessions = $this->model->getSessionsForVelocity($userId, $since);
         
+        // HIGH-02: Slice array tracking depth to preserve loop iteration performance
+        if (count($sessions) > 25) {
+            $sessions = \array_slice($sessions, -25);
+        }
+
         if (count($sessions) < 2) {
             return [
                 'is_suspicious' => false,
@@ -179,7 +210,7 @@ class GeolocationIntelligenceService extends \App\Services\BaseService
                 (float)$curr->longitude
             );
             
-            $timeDiff = strtotime($curr->created_at) - strtotime($prev->created_at);
+            $timeDiff = strtotime((string)$curr->created_at) - strtotime((string)$prev->created_at);
             $speed = $timeDiff > 0 ? ($distance / ($timeDiff / 3600)) : 0;
             
             $totalDistance += $distance;
@@ -250,7 +281,10 @@ class GeolocationIntelligenceService extends \App\Services\BaseService
         }
         
         $difference = abs($ipOffset - $browserOffset);
-        $isAnomaly = $difference > 2;
+        
+        // MED-04: Load allowed drift discrepancy from dynamic RiskPolicy store
+        $allowedDrift = (float)$this->policy->getFloat('fraud', 'geo.timezone_discrepancy_limit', 2.0);
+        $isAnomaly = $difference > $allowedDrift;
         
         return [
             'is_anomaly' => $isAnomaly,

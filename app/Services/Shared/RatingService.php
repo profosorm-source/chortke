@@ -32,17 +32,38 @@ class RatingService extends \App\Services\BaseService
         string $refType,
         int $refId,
         int $rating,
-        ?string $review = null
+        ?string $review = null,
+        string $ratedType = 'user'
     ): bool {
-        return $this->ratingModel->create([
+        // Guard: Block duplicate multi-rating attempts
+        if ($this->ratingModel->hasRated($raterId, $refType, $refId)) {
+            $this->logWarning('rating.duplicate_attempted', [
+                'rater_id' => $raterId,
+                'ref_type' => $refType,
+                'ref_id' => $refId
+            ]);
+            return false;
+        }
+
+        $ok = $this->ratingModel->create([
             'rater_id' => $raterId,
             'rated_id' => $ratedId,
-            'rated_type' => 'user', // Default to user, can be expanded
+            'rated_type' => $ratedType, // Support dynamic injection
             'ref_type' => $refType,
             'ref_id' => $refId,
             'rating' => $rating,
             'review_text' => $review
         ]);
+
+        if ($ok) {
+            $this->logInfo('rating.submitted', [
+                'rater_id' => $raterId,
+                'ref_id' => $refId,
+                'rating' => $rating
+            ]);
+        }
+
+        return (bool)$ok;
     }
 
     /**
@@ -78,16 +99,24 @@ class RatingService extends \App\Services\BaseService
      */
     public function report(array $data): bool
     {
+        // Schema Guard Validation: Protect data structure and domain safety.
+        $this->guardValidation($data, [
+            'reporter_id' => 'required|numeric',
+            'ref_type' => 'required|string',
+            'ref_id' => 'required|numeric',
+            'reason' => 'required|string'
+        ]);
+
         try {
             $stmt = $this->db->prepare("
                 INSERT INTO reports (reporter_id, ref_type, ref_id, reason, description, status, created_at)
                 VALUES (?, ?, ?, ?, ?, 'pending', NOW())
             ");
             return $stmt->execute([
-                $data['reporter_id'],
-                $data['ref_type'],
-                $data['ref_id'],
-                $data['reason'],
+                (int)$data['reporter_id'],
+                (string)$data['ref_type'],
+                (int)$data['ref_id'],
+                (string)$data['reason'],
                 $data['description'] ?? null
             ]);
         } catch (\Throwable $e) {

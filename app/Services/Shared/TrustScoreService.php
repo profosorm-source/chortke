@@ -28,6 +28,9 @@ class TrustScoreService extends \App\Services\BaseService
         private Score $scoreModel,
         private SocialTaskAnalyticsModel $socialTaskModel,
         private ScoreEventService $scoreEventService,
+        private \Core\Database $db,
+        private \App\Models\User $userModel,
+        private \App\Services\SettingService $settingService,
         protected LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -42,11 +45,25 @@ class TrustScoreService extends \App\Services\BaseService
     {
         $trust = $this->getTrustScore($userId);
 
-        if ($trust >= 80) return 10.0;
-        if ($trust >= 60) return 5.0;
-        if ($trust >= 40) return 0.0;
-        if ($trust >= 20) return -5.0;
-        return -10.0;
+        // Dynamic thresholds read from system settings
+        $threshHigh = (float)$this->settingService->get('trust_thresh_high', 80.0);
+        $threshMed  = (float)$this->settingService->get('trust_thresh_med', 60.0);
+        $threshLow  = (float)$this->settingService->get('trust_thresh_low', 40.0);
+        $threshCrit = (float)$this->settingService->get('trust_thresh_crit', 20.0);
+
+        // Dynamic modifier values read from system settings
+        $modHigh     = (float)$this->settingService->get('trust_mod_high', 10.0);
+        $modMed      = (float)$this->settingService->get('trust_mod_med', 5.0);
+        $modLow      = (float)$this->settingService->get('trust_mod_low', 0.0);
+        $modCrit     = (float)$this->settingService->get('trust_mod_crit', -5.0);
+        $modVeryCrit = (float)$this->settingService->get('trust_mod_verycrit', -10.0);
+
+        if ($trust >= $threshHigh) return $modHigh;
+        if ($trust >= $threshMed)  return $modMed;
+        if ($trust >= $threshLow)  return $modLow;
+        if ($trust >= $threshCrit) return $modCrit;
+        
+        return $modVeryCrit;
     }
 
     public function rewardGoodTask(int $userId, int $executionId): void
@@ -74,26 +91,43 @@ class TrustScoreService extends \App\Services\BaseService
         $this->applyTrustDelta($userId, self::TRUST_DEC_CONFIRMED_FRAUD, 'confirmed_fraud', ['reason' => $reason]);
     }
 
-    public function processWeeklyRecovery(): array
+    public function processWeeklyRecovery(int $chunkSize = 100): array
     {
         $updated = 0;
         $checked = 0;
-        $users = $this->socialTaskModel->getRecentActiveExecutors(7);
+        $offset = 0;
 
-        foreach ($users as $row) {
-            $userId = (int)($row->user_id ?? $row['user_id']);
-            $checked++;
-            $stats = $this->getWeeklyStats($userId);
+        // Batched memory-safe retrieval to prevent server timeouts and memory exhaustion
+        do {
+            $users = $this->db->table('social_task_executions')
+                ->select('DISTINCT executor_id AS user_id')
+                ->where('created_at', '>=', date('Y-m-d H:i:s', strtotime('-7 days')))
+                ->limit($chunkSize)
+                ->offset($offset)
+                ->get();
 
-            if ($stats['rejected'] === 0 && $stats['good_tasks'] >= 5) {
-                $this->applyTrustDelta($userId, self::TRUST_INC_HEALTHY_WEEK, 'weekly_recovery', $stats);
-                $updated++;
+            if (empty($users)) {
+                break;
             }
-            if ($stats['soft_approved'] >= 3) {
-                $this->penalizeSoftExcess($userId);
+
+            foreach ($users as $row) {
+                $userId = (int)($row->user_id ?? $row['user_id']);
+                $checked++;
+                $stats = $this->getWeeklyStats($userId);
+
+                if ($stats['rejected'] === 0 && $stats['good_tasks'] >= 5) {
+                    $this->applyTrustDelta($userId, self::TRUST_INC_HEALTHY_WEEK, 'weekly_recovery', $stats);
+                    $updated++;
+                }
+                if ($stats['soft_approved'] >= 3) {
+                    $this->penalizeSoftExcess($userId);
+                }
+                $this->saveTrustSnapshot($userId);
             }
-            $this->saveTrustSnapshot($userId);
-        }
+
+            $offset += $chunkSize;
+            unset($users); // Immediate memory reclaim
+        } while (true);
 
         return ['checked' => $checked, 'updated' => $updated];
     }
@@ -115,21 +149,40 @@ class TrustScoreService extends \App\Services\BaseService
 
     private function applyTrustDelta(int $userId, float $delta, string $source, array $meta): void
     {
-        $current = $this->getTrustScore($userId);
-        $newVal = $this->clampTrustScore($current + $delta);
+        // Validation: Guard against operations on non-existent users
+        $user = $this->userModel->findById($userId);
+        if (!$user) {
+            $this->logWarning('trust_score.user_not_found', ['user_id' => $userId, 'source' => $source]);
+            return;
+        }
 
-        $this->scoreModel->updateTrustScore($userId, $newVal);
+        // Database Transaction wrapper to ensure atomic event creation and update
+        $this->transaction(function() use ($userId, $delta, $source, $meta) {
+            $current = $this->getTrustScore($userId);
+            $newVal = $this->clampTrustScore($current + $delta);
 
-        $this->scoreEventService->createEvent(
-            $userId,
-            'social_trust',
-            $source,
-            $delta,
-            array_merge($meta, [
+            $this->scoreModel->updateTrustScore($userId, $newVal);
+
+            $this->scoreEventService->recordEvent(
+                $userId,
+                'social_trust',
+                $source,
+                $delta,
+                array_merge($meta, [
+                    'old_trust' => $current,
+                    'new_trust' => $newVal,
+                ])
+            );
+
+            // Audit structured logging
+            $this->logInfo('trust_score.adjusted', [
+                'user_id' => $userId,
+                'delta' => $delta,
+                'source' => $source,
                 'old_trust' => $current,
                 'new_trust' => $newVal,
-            ])
-        );
+            ]);
+        });
     }
 
     private function saveTrustSnapshot(int $userId): void

@@ -44,9 +44,20 @@ class FraudDetectionService extends \App\Services\BaseService
         'geographic'      => 0.2
     ];
 
+    // تنظیمات پیش‌فرض سرعت تراکنش‌ها (Velocity Fallback)
+    private const VELOCITY_DEFAULTS = [
+        'daily_high'        => 10,
+        'daily_medium'      => 5,
+        'weekly_high'       => 50,
+        'weekly_medium'     => 20,
+        'spike_ratio'       => 2.0,
+        'spike_min'         => 10,
+    ];
+
     // MED-06: وزن‌های پویا از RiskPolicyService
     private array $thresholds;
     private array $weights;
+    private array $velocitySettings;
 
     public function __construct(
         VelocityAndScoreModel $fraudModel,
@@ -57,9 +68,21 @@ class FraudDetectionService extends \App\Services\BaseService
         $this->fraudModel = $fraudModel;
         $this->policy = $policy;
         
-        // MED-06: بارگذاری وزن‌ها و آستانه‌ها از RiskPolicyService
-        $this->thresholds = $this->policy->getArray('fraud', 'risk_thresholds', self::RISK_THRESHOLDS);
-        $this->weights = $this->policy->getArray('fraud', 'score_weights', self::WEIGHTS);
+        // 🛡️ Strict Fallback Merging: Ensures EVERY single required key exists, even if remote policy configuration returns an incomplete array.
+        $this->thresholds = array_merge(
+            self::RISK_THRESHOLDS, 
+            $this->policy->getArray('fraud', 'risk_thresholds', self::RISK_THRESHOLDS)
+        );
+        
+        $this->weights = array_merge(
+            self::WEIGHTS, 
+            $this->policy->getArray('fraud', 'score_weights', self::WEIGHTS)
+        );
+
+        $this->velocitySettings = array_merge(
+            self::VELOCITY_DEFAULTS,
+            $this->policy->getArray('fraud', 'velocity_settings', self::VELOCITY_DEFAULTS)
+        );
     }
 
     /**
@@ -124,7 +147,7 @@ class FraudDetectionService extends \App\Services\BaseService
     }
 
     /**
-     * محاسبه عامل سرعت تراکنش با اصلاح کلیدهای متناظر
+     * محاسبه عامل سرعت تراکنش با متغیرهای کاملاً پویا
      */
     private function calculateVelocityFactor(array $velocity): float
     {
@@ -134,18 +157,26 @@ class FraudDetectionService extends \App\Services\BaseService
         $weekly = (int)($velocity['weekly'] ?? 0);
         $prevWeekly = (int)($velocity['prev_weekly'] ?? 0);
 
-        // بررسی تعداد تراکنش‌های روزانه
-        if ($daily > 10) $score += 30;
-        elseif ($daily > 5) $score += 15;
+        // 📈 Dynamic Metric Check: Evaluates velocity bounds retrieved from active Risk Policy settings.
+        if ($daily > (int)$this->velocitySettings['daily_high']) {
+            $score += 30;
+        } elseif ($daily > (int)$this->velocitySettings['daily_medium']) {
+            $score += 15;
+        }
 
-        // بررسی تعداد تراکنش‌های هفتگی
-        if ($weekly > 50) $score += 40;
-        elseif ($weekly > 20) $score += 20;
+        if ($weekly > (int)$this->velocitySettings['weekly_high']) {
+            $score += 40;
+        } elseif ($weekly > (int)$this->velocitySettings['weekly_medium']) {
+            $score += 20;
+        }
 
-        // بررسی تغییرات ناگهانی (Sudden Spike)
-        if ($prevWeekly === 0 && $weekly > 10) {
-            $score += 25; // از صفر به فعالیت بالا
-        } elseif ($prevWeekly > 0 && ($weekly / $prevWeekly) >= 2.0 && $weekly > 5) {
+        // Sudden Spike Detection: Compares ratios against configured spike limits.
+        $ratio = (float)$this->velocitySettings['spike_ratio'];
+        $minSpike = (int)$this->velocitySettings['spike_min'];
+
+        if ($prevWeekly === 0 && $weekly > $minSpike) {
+            $score += 25; // Step from inactivity to high volume
+        } elseif ($prevWeekly > 0 && ($weekly / $prevWeekly) >= $ratio && $weekly > 5) {
             $score += 30;
         }
 

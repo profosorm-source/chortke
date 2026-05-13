@@ -17,6 +17,8 @@ use App\Jobs\SendBulkNotificationJob;
  */
 class NotificationDispatcher extends \App\Services\BaseService
 {
+    private array $channelHandlers = [];
+
     public function __construct(
         private PushNotificationAdapter $pushAdapter,
         private SmsNotificationAdapter $smsAdapter,
@@ -26,10 +28,41 @@ class NotificationDispatcher extends \App\Services\BaseService
         private Queue $queue
     ) {
         parent::__construct($logger);
+        $this->initializeDefaultChannels();
     }
 
     /**
-     * ارسال نوتیفیکیشن به کانال مشخص
+     * HIGH-01: Satisfying the Open/Closed principle by mapping drivers via dynamic Strategical registry.
+     */
+    private function initializeDefaultChannels(): void
+    {
+        $this->registerChannel('push', function(int $uid, string $title, string $msg, ?array $data, ?string $img, ?string $url) {
+            return $this->pushAdapter->sendToUser($uid, $title, $msg, $data, $img, $url);
+        });
+
+        $this->registerChannel('fcm', function(int $uid, string $title, string $msg, ?array $data, ?string $img, ?string $url) {
+            return $this->fcmAdapter->sendToUser($uid, $title, $msg, $data, $img, $url);
+        });
+
+        $this->registerChannel('sms', function(int $uid, string $title, string $msg, ?array $data, ?string $img, ?string $url) {
+            return $this->smsAdapter->sendToUser($uid, $msg);
+        });
+
+        $this->registerChannel('log', function(int $uid, string $title, string $msg, ?array $data, ?string $img, ?string $url) {
+            return $this->logAdapter->sendAlert($title, $msg);
+        });
+    }
+
+    /**
+     * Allows registering new, custom adapters dynamically without touching the dispatcher core code.
+     */
+    public function registerChannel(string $channel, callable $handler): void
+    {
+        $this->channelHandlers[strtolower(trim($channel))] = $handler;
+    }
+
+    /**
+     * ارسال نوتیفیکیشن به کانال مشخص با اجرای Strategy منطبق
      */
     public function dispatch(
         string $channel,
@@ -40,20 +73,17 @@ class NotificationDispatcher extends \App\Services\BaseService
         ?string $imageUrl = null,
         ?string $actionUrl = null
     ): bool {
+        $channelName = strtolower(trim($channel));
+
+        if (!isset($this->channelHandlers[$channelName])) {
+            $this->logger->warning('notif.unknown_channel', ['channel' => $channel]);
+            return false;
+        }
+
         try {
-            switch ($channel) {
-                case 'push':
-                    return $this->pushAdapter->sendToUser($userId, $title, $message, $data, $imageUrl, $actionUrl);
-                case 'sms':
-                    return $this->smsAdapter->sendToUser($userId, $message);
-                case 'fcm':
-                    return $this->fcmAdapter->sendToUser($userId, $title, $message, $data, $imageUrl, $actionUrl);
-                case 'log':
-                    return $this->logAdapter->sendAlert($title, $message);
-                default:
-                    $this->logger->warning('notif.unknown_channel', ['channel' => $channel]);
-                    return false;
-            }
+            // Execute standard strategy routine
+            $handler = $this->channelHandlers[$channelName];
+            return (bool)$handler($userId, $title, $message, $data, $imageUrl, $actionUrl);
         } catch (\Throwable $e) {
             $this->logger->error('notif.dispatch_failed', [
                 'channel' => $channel,

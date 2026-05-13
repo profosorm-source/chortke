@@ -44,7 +44,7 @@ class ZarinPalGateway extends BasePaymentGateway
      * - Server errors (5xx): ✅ Retry
      * - Invalid amount: ❌ Do not retry
      */
-    public function createPayment(float $amount, string $description, string $callbackUrl): array
+    public function createPayment(float $amount, string $description, string $callbackUrl, array $options = []): array
     {
         if (!$this->config) {
             return [
@@ -64,6 +64,10 @@ class ZarinPalGateway extends BasePaymentGateway
             'amount' => $amount,
             'description' => $description,
             'callback_url' => $callbackUrl,
+            'metadata' => [
+                'mobile' => (string)($options['mobile'] ?? ''),
+                'email' => (string)($options['email'] ?? '')
+            ]
         ];
 
         $url = $this->config->is_test_mode 
@@ -173,22 +177,23 @@ class ZarinPalGateway extends BasePaymentGateway
 
             $result = $response['data'];
 
-            if (isset($result['data']['code']) && $result['data']['code'] == 100) {
+            // 🕵️ Strictly verify existence of ref_id ensuring settlement security
+            if (isset($result['data']['code']) && $result['data']['code'] == 100 && isset($result['data']['ref_id']) && !empty($result['data']['ref_id'])) {
                 $this->logger->info('payment.zarinpal.verified', [
                     'authority' => $authority,
-                    'ref_id' => $result['data']['ref_id'] ?? 'unknown'
+                    'ref_id' => $result['data']['ref_id']
                 ]);
 
                 return [
                     'success' => true,
-                    'ref_id' => $result['data']['ref_id'],
+                    'ref_id' => (string)$result['data']['ref_id'],
                     'message' => 'پرداخت با موفقیت انجام شد'
                 ];
             }
 
             return [
                 'success' => false,
-                'message' => $result['errors']['message'] ?? 'تراکنش ناموفق'
+                'message' => $result['errors']['message'] ?? 'تراکنش ناموفق یا شناسه مرجع نامعتبر'
             ];
 
         } catch (PaymentGatewayConnectionException $e) {

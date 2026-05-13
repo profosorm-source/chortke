@@ -57,7 +57,7 @@ class AuthService extends \App\Services\BaseService
         }
 
         $user = $this->userModel->findByCredentials($identifier);
-        if (!$user || !verify_password($password, $user->password)) {
+        if (!$user || !password_verify($password, $user->password)) {
             $this->logger->warning('auth.login.failed', ['identifier' => $identifier]);
             
             // فقط وقتی تلاش‌ها کمتر از حد آستانه باشد نمره تقلب افزایش می‌یابد
@@ -116,7 +116,16 @@ class AuthService extends \App\Services\BaseService
         if ($remember) {
             $token = bin2hex(random_bytes(32));
             $this->userModel->update((int)$user->id, ['remember_token' => hash('sha256', $token)]);
-            setcookie('remember_token', $token, time() + (30 * 86400), '/', '', true, true);
+            
+            // 🛡️ Modernized Security Attributes: Strictly enforcing HttpOnly, Secure and Lax SameSite policies
+            setcookie('remember_token', $token, [
+                'expires' => time() + (30 * 86400),
+                'path' => '/',
+                'domain' => '',
+                'secure' => true,
+                'httponly' => true,
+                'samesite' => 'Lax'
+            ]);
         }
 
         $this->sessionService->recordSession(
@@ -137,7 +146,14 @@ class AuthService extends \App\Services\BaseService
         }
 
         if (isset($_COOKIE['remember_token'])) {
-            setcookie('remember_token', '', time() - 3600, '/', '', true, true);
+            setcookie('remember_token', '', [
+                'expires' => time() - 3600,
+                'path' => '/',
+                'domain' => '',
+                'secure' => true,
+                'httponly' => true,
+                'samesite' => 'Lax'
+            ]);
         }
 
         $this->session->destroy();
@@ -219,6 +235,26 @@ class AuthService extends \App\Services\BaseService
 
     public function requestPasswordReset(string $email): array
     {
+        // 🛡️ Security Hardening: Stop automated exhaustion attacks via precise Action-Rate-Limiting
+        $ip = get_client_ip();
+        $rateLimitKey = "pw_reset:" . hash('sha256', "{$email}:{$ip}");
+        
+        // Threshold limit: 3 recovery attempts per hour
+        if (!$this->rateLimiter->attempt($rateLimitKey, 3, 60)) {
+            $seconds = $this->rateLimiter->availableIn($rateLimitKey);
+            $minutes = (int)ceil($seconds / 60);
+            
+            $this->logWarning('auth.password_reset.rate_limited', [
+                'email' => $email,
+                'ip' => $ip
+            ]);
+            
+            return [
+                'success' => false, 
+                'message' => "تعداد درخواست‌های بازیابی بیش از حد مجاز است. لطفاً {$minutes} دقیقه دیگر امتحان کنید."
+            ];
+        }
+
         $user = $this->userModel->findByEmail($email);
         $genericMsg = 'اگر این ایمیل در سیستم ثبت شده باشد، لینک بازیابی برای شما ارسال می‌شود.';
 

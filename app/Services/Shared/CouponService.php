@@ -45,6 +45,11 @@ class CouponService extends \App\Services\BaseService
             return ['valid' => false, 'error' => 'کد تخفیف منقضی شده یا غیرفعال است'];
         }
 
+        // Double-check usage limit explicitly to safeguard validation context
+        if ($coupon->usage_limit !== null && $coupon->usage_limit > 0 && $coupon->usage_count >= $coupon->usage_limit) {
+            return ['valid' => false, 'error' => 'ظرفیت استفاده از این کد تخفیف به پایان رسیده است.'];
+        }
+
         if ($coupon->applicable_to !== 'all' && $coupon->applicable_to !== $applicableTo) {
             return ['valid' => false, 'error' => 'این کد تخفیف برای این نوع عملیات قابل استفاده نیست'];
         }
@@ -57,14 +62,14 @@ class CouponService extends \App\Services\BaseService
             return ['valid' => false, 'error' => 'شما قبلاً از این کد تخفیف استفاده کرده‌اید'];
         }
 
-        $discount = 0;
+        $discount = 0.0;
         if ($coupon->type === 'percent') {
-            $discount = ($amount * $coupon->value) / 100;
-            if ($coupon->max_discount && $discount > $coupon->max_discount) {
-                $discount = $coupon->max_discount;
+            $discount = round(($amount * (float)$coupon->value) / 100.0, 2);
+            if ($coupon->max_discount && $discount > (float)$coupon->max_discount) {
+                $discount = (float)$coupon->max_discount;
             }
         } else {
-            $discount = min($coupon->value, $amount);
+            $discount = min((float)$coupon->value, $amount);
         }
 
         $finalAmount = max(0, $amount - $discount);
@@ -83,7 +88,7 @@ class CouponService extends \App\Services\BaseService
     /**
      * ثبت مصرف کوپن
      */
-        public function redeem(
+    public function redeem(
         int $couponId,
         int $userId,
         float $originalAmount,
@@ -93,24 +98,21 @@ class CouponService extends \App\Services\BaseService
         string $entityType,
         ?int $entityId = null
     ): bool {
-        $db = $this->db;
-        try {
-            $db->beginTransaction();
-
-            $coupon = $db->query("SELECT * FROM coupons WHERE id = ? FOR UPDATE", [$couponId])->fetch(\PDO::FETCH_OBJ);
+        return $this->transaction(function() use (
+            $couponId, $userId, $originalAmount, $discountAmount, $finalAmount, $currency, $entityType, $entityId
+        ) {
+            // Architectural Fix: Utilize locked Model locator instead of writing inline RAW FOR UPDATE.
+            $coupon = $this->couponModel->findWithLock($couponId);
             
             if (!$coupon) {
-                $db->rollback();
                 return false;
             }
 
             if ($coupon->usage_limit !== null && $coupon->usage_count >= $coupon->usage_limit) {
-                $db->rollback();
                 throw new \Exception('ظرفیت استفاده از این کد تخفیف به پایان رسیده است.');
             }
 
             if ($this->redemptionModel->hasUserUsedCoupon($userId, $couponId)) {
-                $db->rollback();
                 throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
             }
 
@@ -127,29 +129,26 @@ class CouponService extends \App\Services\BaseService
             ]);
 
             if (!$redemptionId) {
-                $db->rollback();
-                return false;
+                throw new \RuntimeException('Redemption trace failed.');
             }
 
             $success = $this->couponModel->incrementUsage($couponId);
             if (!$success) {
-                $db->rollback();
-                return false;
+                throw new \RuntimeException('Increment usage failed.');
             }
 
-            $db->commit();
+            // Success Structured Logging
+            $this->logInfo('coupon.redeemed', [
+                'coupon_id' => $couponId,
+                'user_id' => $userId,
+                'discount' => $discountAmount,
+                'final' => $finalAmount,
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+            ]);
+
             return true;
-
-        } catch (\PDOException $e) {
-            if ($db->inTransaction()) $db->rollback();
-            if ($e->getCode() == '23000') {
-                throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
-            }
-            throw $e;
-        } catch (\Throwable $e) {
-            if ($db->inTransaction()) $db->rollback();
-            throw $e;
-        }
+        });
     }
 
     /**
@@ -183,13 +182,10 @@ class CouponService extends \App\Services\BaseService
     public function all(int $limit = null, int $offset = 0): array
     {
         if ($limit === null) {
-            return $this->couponModel->all() ?? [];
+            return $this->couponModel->getAll(100, $offset);
         }
         
-        return $this->db->query(
-            "SELECT * FROM coupons ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            [$limit, $offset]
-        )->fetchAll(\PDO::FETCH_OBJ) ?? [];
+        return $this->couponModel->getAll($limit, $offset);
     }
 
     /**
@@ -325,42 +321,34 @@ class CouponService extends \App\Services\BaseService
      */
     public function paginate(int $page = 1, int $perPage = 20, array $filters = []): array
     {
-        $offset = ($page - 1) * $perPage;
+        // Secure architectural refactor: Replace dynamic raw concatenations with Safe Query Builder
+        $query = $this->db->table('coupons')->whereNull('deleted_at');
 
-        $query = "SELECT * FROM coupons WHERE 1=1";
-        $params = [];
-
-        // Apply filters
         if (!empty($filters['status'])) {
-            $query .= " AND active = ?";
-            $params[] = $filters['status'] === 'active' ? 1 : 0;
+            $query->where('active', '=', $filters['status'] === 'active' ? 1 : 0);
         }
 
         if (!empty($filters['type'])) {
-            $query .= " AND type = ?";
-            $params[] = $filters['type'];
+            $query->where('type', '=', $filters['type']);
         }
 
         if (!empty($filters['search'])) {
-            $query .= " AND (code LIKE ? OR description LIKE ?)";
-            $params[] = '%' . $filters['search'] . '%';
-            $params[] = '%' . $filters['search'] . '%';
+            $search = '%' . $filters['search'] . '%';
+            $query->where(function ($q) use ($search) {
+                $q->where('code', 'LIKE', $search)
+                  ->orWhere('description', 'LIKE', $search);
+            });
         }
 
-        // Count total
-        $countQuery = "SELECT COUNT(*) as total FROM (" . str_replace('SELECT *', 'SELECT 1', $query) . ") as cnt";
-        $countResult = $this->db->query($countQuery, $params)->fetch(\PDO::FETCH_OBJ);
-        $total = $countResult->total ?? 0;
+        $total = $query->count();
 
-        // Get paginated results
-        $query .= " ORDER BY created_at DESC LIMIT ? OFFSET ?";
-        $params[] = $perPage;
-        $params[] = $offset;
-
-        $coupons = $this->db->query($query, $params)->fetchAll(\PDO::FETCH_OBJ) ?? [];
+        $coupons = $query->orderBy('created_at', 'DESC')
+            ->limit($perPage)
+            ->offset(($page - 1) * $perPage)
+            ->get();
 
         return [
-            'data' => $coupons,
+            'data' => $coupons ?? [],
             'total' => $total,
             'page' => $page,
             'per_page' => $perPage,

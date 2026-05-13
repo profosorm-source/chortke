@@ -25,6 +25,11 @@ class BehavioralBiometricsService extends \App\Services\BaseService
      */
     public function analyzeTypingPattern(int $userId, array $keystrokes): array
     {
+        // Performance Guard: Cap evaluation depth to preserve CPU cycles
+        if (count($keystrokes) > 250) {
+            $keystrokes = \array_slice($keystrokes, 0, 250);
+        }
+
         if (count($keystrokes) < 10) {
             return [
                 'is_suspicious' => false,
@@ -118,6 +123,11 @@ class BehavioralBiometricsService extends \App\Services\BaseService
      */
     public function analyzeMousePattern(array $movements): array
     {
+        // Performance Guard: Limit coordinate tracking density to protect server rendering speeds
+        if (count($movements) > 250) {
+            $movements = \array_slice($movements, 0, 250);
+        }
+
         if (count($movements) < 20) {
             return [
                 'is_suspicious' => false,
@@ -208,6 +218,11 @@ class BehavioralBiometricsService extends \App\Services\BaseService
      */
     public function analyzeClickPattern(array $clicks): array
     {
+        // Performance Guard: Bound analysis count to block massive click payloads
+        if (count($clicks) > 250) {
+            $clicks = \array_slice($clicks, 0, 250);
+        }
+
         if (count($clicks) < 5) {
             return [
                 'is_suspicious' => false,
@@ -258,6 +273,11 @@ class BehavioralBiometricsService extends \App\Services\BaseService
      */
     public function analyzeScrollBehavior(array $scrolls): array
     {
+        // Performance Guard: Keep tracking within safe iterative range
+        if (count($scrolls) > 250) {
+            $scrolls = \array_slice($scrolls, 0, 250);
+        }
+
         if (count($scrolls) < 5) {
             return [
                 'is_suspicious' => false,

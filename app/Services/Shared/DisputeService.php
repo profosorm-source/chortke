@@ -29,7 +29,8 @@ class DisputeService extends \App\Services\BaseService
         private NotificationService $notificationService,
         private Dispute $disputeModel,
         private WalletServiceInterface $walletService,
-        private ReconciliationService $reconciliationService
+        private ReconciliationService $reconciliationService,
+        private \App\Models\Transaction $transactionModel
     ) {
         parent::__construct($logger);
     }
@@ -39,11 +40,31 @@ class DisputeService extends \App\Services\BaseService
      */
     public function openDispute(int $orderId, int $customerId, string $reason): array
     {
+        // 🔐 Architectural Fix: Ensure Order integrity and contextual ownership
+        $order = $this->db->table('story_orders')
+            ->where('id', '=', $orderId)
+            ->first();
+
+        if (!$order) {
+            return ['success' => false, 'message' => 'سفارش معتبر یافت نشد.'];
+        }
+
+        $customerId = (int)$customerId;
+        $buyerId = (int)($order->customer_id ?? 0);
+        $sellerId = (int)($order->influencer_user_id ?? 0);
+
+        if ($buyerId !== $customerId && $sellerId !== $customerId) {
+            return ['success' => false, 'message' => 'شما دسترسی به طرح اختلاف برای این سفارش را ندارید.'];
+        }
+
+        // Auto-determine target counterparty safely
+        $targetUserId = ($buyerId === $customerId) ? $sellerId : $buyerId;
+
         $data = [
             'ref_type' => 'order',
             'ref_id' => $orderId,
             'user_id' => $customerId,
-            'target_user_id' => null,
+            'target_user_id' => $targetUserId,
             'reason' => $reason
         ];
         
@@ -144,40 +165,36 @@ class DisputeService extends \App\Services\BaseService
      */
     public function adminResolve(int $disputeId, int $adminId, string $verdict, string $note, float $refundPercent = 0): array
     {
-        $dispute = $this->disputeModel->getSafe($disputeId);
-        if (!$dispute) {
-            return ['success' => false, 'message' => 'پرونده یافت نشد.'];
-        }
-        
-        $ok = $this->disputeModel->update($disputeId, [
-            'status' => Dispute::STATUS_RESOLVED_ADMIN,
-            'admin_decision' => $verdict,
-            'admin_id' => $adminId,
-            'admin_note' => $note,
-            'refund_percent' => $refundPercent,
-            'resolved_at' => date('Y-m-d H:i:s')
-        ]);
-        
-        if (!$ok) {
-            return ['success' => false, 'message' => 'خطا در ثبت رای مدیر.'];
-        }
-        
-        $this->logger->info('case.resolved_admin', [
-            'dispute_id' => $disputeId,
-            'admin_id' => $adminId,
-            'verdict' => $verdict
-        ]);
-        
-        // پردازش استرداد وجه بر اساس ردیابی زنجیره تراکنش‌های مالی (Flawless Money-Trail Lookup)
-        if ($refundPercent > 0) {
-            try {
-                // یافتن تراکنش اصلی که برای این مرجع (Ad, Task, etc) ثبت شده بود
-                $originalTx = $this->db->query(
-                    "SELECT * FROM transactions 
-                     WHERE ref_id = ? AND ref_type = ? AND status = 'completed' 
-                     ORDER BY created_at DESC LIMIT 1",
-                    [(string)$dispute->ref_id, (string)$dispute->ref_type]
-                )->fetch();
+        // 🔒 Hardened Fix: Wrapping entire multi-step resolver in an Atomic DB Transaction
+        return $this->transaction(function() use ($disputeId, $adminId, $verdict, $note, $refundPercent) {
+            $dispute = $this->disputeModel->getSafe($disputeId);
+            if (!$dispute) {
+                return ['success' => false, 'message' => 'پرونده یافت نشد.'];
+            }
+            
+            $ok = $this->disputeModel->update($disputeId, [
+                'status' => Dispute::STATUS_RESOLVED_ADMIN,
+                'admin_decision' => $verdict,
+                'admin_id' => $adminId,
+                'admin_note' => $note,
+                'refund_percent' => $refundPercent,
+                'resolved_at' => date('Y-m-d H:i:s')
+            ]);
+            
+            if (!$ok) {
+                throw new \RuntimeException('Failed to record administrative arbitration verdict.');
+            }
+            
+            $this->logger->info('case.resolved_admin', [
+                'dispute_id' => $disputeId,
+                'admin_id' => $adminId,
+                'verdict' => $verdict
+            ]);
+            
+            // پردازش استرداد وجه بر اساس ردیابی زنجیره تراکنش‌های مالی
+            if ($refundPercent > 0) {
+                // 🔐 Safe Architectural Refactor: Swapped dynamic RAW string lookup for hard-coded Transaction model helper.
+                $originalTx = $this->transactionModel->findCompletedByReference((string)$dispute->ref_id, (string)$dispute->ref_type);
 
                 if ($originalTx && isset($originalTx->amount)) {
                     $baseAmount = abs((float)$originalTx->amount);
@@ -229,7 +246,7 @@ class DisputeService extends \App\Services\BaseService
                             'timestamp' => time(),
                         ]);
                     } else {
-                        throw new \RuntimeException("Wallet operation failed during refund execution.");
+                        throw new \RuntimeException("Atomic dispute reversal failed at Wallet core.");
                     }
                 } else {
                     $this->logger->warning('case.refund_skipped_no_tx', [
@@ -239,21 +256,15 @@ class DisputeService extends \App\Services\BaseService
                         'message' => 'No matching completed transaction found to derive refund amount.'
                     ]);
                 }
-            } catch (\Throwable $refundEx) {
-                $this->logger->error('case.refund_failed', [
-                    'dispute_id' => $disputeId,
-                    'error' => $refundEx->getMessage()
-                ]);
-                // اصل ثبت رأی اختلاف قبلاً در دیتابیس ذخیره شده، ولی استرداد ناموفق لاگ شد
             }
-        }
-        
-        $this->notificationService->send($dispute->user_id, 'system', 'رأی داوری صادر شد', 'داور سیستم رأی پرونده اختلاف را صادر کرد.');
-        if ($dispute->target_user_id) {
-            $this->notificationService->send($dispute->target_user_id, 'system', 'رأی داوری صادر شد', 'داور سیستم رأی پرونده اختلاف را صادر کرد.');
-        }
-        
-        return ['success' => true];
+            
+            $this->notificationService->send($dispute->user_id, 'system', 'رأی داوری صادر شد', 'داور سیستم رأی پرونده اختلاف را صادر کرد.');
+            if ($dispute->target_user_id) {
+                $this->notificationService->send($dispute->target_user_id, 'system', 'رأی داوری صادر شد', 'داور سیستم رأی پرونده اختلاف را صادر کرد.');
+            }
+            
+            return ['success' => true];
+        });
     }
 
     /**

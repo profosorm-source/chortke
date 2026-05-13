@@ -91,6 +91,16 @@ class DeviceIntelligenceService extends \App\Services\BaseService
                 break;
             }
         }
+
+        // 🖥️ Advanced WebGL & Hardware Profiler Check
+        $webglRenderer = $deviceInfo['webgl_renderer'] ?? '';
+        if (!empty($webglRenderer)) {
+            // Software rasterizers like SwiftShader or Llvmpipe are standard signs of Emulators & Automated headless environments
+            if (stripos($webglRenderer, 'SwiftShader') !== false || stripos($webglRenderer, 'llvmpipe') !== false) {
+                $suspiciousReasons[] = 'شبیه‌ساز نرم‌افزاری WebGL Renderer (مثل SwiftShader) شناسایی شد';
+                $riskScore += 70;
+            }
+        }
         
         return [
             'is_emulator' => $riskScore >= 50,
@@ -194,9 +204,25 @@ class DeviceIntelligenceService extends \App\Services\BaseService
         $suspiciousReasons = [];
         $riskScore = 0;
         
+        // A. Basic Driver Checks
         if ($deviceInfo['webdriver'] ?? false) {
             $suspiciousReasons[] = 'navigator.webdriver = true (Selenium/Puppeteer)';
             $riskScore += 90;
+        }
+        
+        // 🦾 B. Advanced CDP (Chrome DevTools Protocol) & CDC/Selenium Hook Detection
+        $advancedAutomationChecks = [
+            'cdc_props' => ['ردپاهای اجرای متغیرهای خودکار (مانند CDC Selenium hooks) شناسایی شد', 95],
+            'dom_automation' => ['متغیر DOM Automation Controller شناسایی شد', 90],
+            'phantom_api' => ['نشانه‌های آبجکت PhantomJS/Nightmare در Context پیدا شد', 85],
+            'unwrapped_selenium' => ['شناسایی متغیرهای unwrapped selenium یا __webdriver_evaluate', 90]
+        ];
+
+        foreach ($advancedAutomationChecks as $prop => $meta) {
+            if (!empty($deviceInfo[$prop])) {
+                $suspiciousReasons[] = $meta[0];
+                $riskScore += $meta[1];
+            }
         }
         
         $ua = $deviceInfo['user_agent'] ?? '';
@@ -298,7 +324,7 @@ class DeviceIntelligenceService extends \App\Services\BaseService
     }
 
     /**
-     * تحلیل جامع دستگاه
+     * تحلیل جامع دستگاه با استفاده از مدل امتیازدهی وزنی (Weighted Severity Engine)
      */
     public function comprehensiveAnalysis(array $deviceInfo): array
     {
@@ -310,26 +336,42 @@ class DeviceIntelligenceService extends \App\Services\BaseService
             'resolution_fraud' => $this->detectResolutionFraud($deviceInfo)
         ];
         
-        $totalRisk = 0;
+        // HIGH-02: Scaled impact mappings ensuring critical automation carries heavier significance
+        $weights = [
+            'automation' => 0.35,
+            'emulator' => 0.25,
+            'vm' => 0.15,
+            'rooted' => 0.15,
+            'resolution_fraud' => 0.10
+        ];
+
+        $weightedRisk = 0.0;
         $highestRisk = 0;
         $criticalIssues = [];
         
         foreach ($analyses as $type => $result) {
             $risk = $result['risk_score'] ?? 0;
-            $totalRisk += $risk;
+            
+            // Compound highest risk tracking
             $highestRisk = max($highestRisk, $risk);
+            
+            // Weighted calculations
+            $weight = $weights[$type] ?? 0.20;
+            $weightedRisk += ($risk * $weight);
             
             if ($risk >= 70) {
                 $criticalIssues[] = $type;
             }
         }
         
-        $avgRisk = $totalRisk / count($analyses);
-        
+        // Enforce safety floor: If any critical metric hits maximum risk, average doesn't fully hide it
+        $finalScore = (int)max($weightedRisk, ($highestRisk * 0.5));
+        $finalScore = min(100, $finalScore);
+
         return [
-            'overall_risk_score' => round($avgRisk, 2),
+            'overall_risk_score' => $finalScore,
             'highest_risk_score' => $highestRisk,
-            'is_suspicious' => $highestRisk >= 60 || $avgRisk >= 50,
+            'is_suspicious' => $highestRisk >= 60 || $finalScore >= 50,
             'critical_issues' => $criticalIssues,
             'detailed_analyses' => $analyses,
             'recommendation' => $this->getRecommendation($highestRisk, $criticalIssues)

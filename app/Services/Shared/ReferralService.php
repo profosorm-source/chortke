@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace App\Services\Shared;
 
-use App\Services\Notification\NotificationService;
 use Core\Database;
 use App\Models\ReferralCommission;
 use App\Models\User;
-use App\Services\WalletService;
 use App\Services\AuditTrail;
 use App\Services\SettingService;
 
 use App\Contracts\LoggerInterface;
+use App\Contracts\WalletServiceInterface;
+use App\Contracts\NotificationServiceInterface;
 /**
  * ReferralService — سرویس اشتراکی سیستم رفرال
  *
@@ -23,8 +23,8 @@ class ReferralService extends \App\Services\BaseService
     public function __construct(
         private Database $db,
         protected LoggerInterface $logger,
-        private WalletService $walletService,
-        private NotificationService $notificationService,
+        private WalletServiceInterface $walletService,
+        private NotificationServiceInterface $notificationService,
         private AuditTrail $auditTrail,
         private ReferralCommission $commissionModel,
         private User $userModel,
@@ -39,29 +39,13 @@ class ReferralService extends \App\Services\BaseService
 
     public function getReferralTrend(int $userId, int $days = 30): array
     {
-        $trend = $this->db->query(
-            "SELECT DATE(referred_at) as date, COUNT(*) as count, SUM(commission_amount) as total_commission
-             FROM referral_commissions
-             WHERE referrer_id = ? AND referred_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-             GROUP BY DATE(referred_at) ORDER BY date ASC",
-            [$userId, $days]
-        )->fetchAll() ?? [];
-
+        $trend = $this->commissionModel->getReferralTrend($userId, $days);
         return ['data' => $trend, 'period_days' => $days];
     }
 
     public function getConversionRate(int $userId, int $days = 30): array
     {
-        $result = $this->db->query(
-            "SELECT COUNT(DISTINCT referred_user_id) as converted,
-                    COUNT(DISTINCT click_user_id) as clicked,
-                    ROUND(100.0 * COUNT(DISTINCT referred_user_id) / NULLIF(COUNT(DISTINCT click_user_id), 0), 2) as conversion_rate
-             FROM referral_clicks rc
-             LEFT JOIN referral_commissions r ON rc.referred_user_id = r.referred_user_id
-             WHERE rc.referrer_id = ? AND rc.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)",
-            [$userId, $days]
-        )->fetch();
-
+        $result = $this->commissionModel->getConversionRate($userId, $days);
         return [
             'converted' => $result->converted ?? 0,
             'clicked' => $result->clicked ?? 0,
@@ -71,25 +55,17 @@ class ReferralService extends \App\Services\BaseService
 
     public function getIndirectEarnings(int $userId, string $currency = 'irt'): float
     {
-        $result = $this->db->query(
-            "SELECT SUM(commission_amount) as total FROM referral_commissions rc
-             WHERE rc.referrer_id IN (
-                SELECT referred_user_id FROM referral_commissions WHERE referrer_id = ?
-             ) AND rc.currency = ?",
-            [$userId, $currency]
-        )->fetch();
-
-        return (float)($result->total ?? 0);
+        return $this->commissionModel->getIndirectEarnings($userId, $currency);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Commission Processing
     // ═══════════════════════════════════════════════════════════════════════
 
-    public function processCommission(int $referrerId, float $amount, string $currency, array $context = []): array
+    public function processCommission(int $referrerId, string $amount, string $currency, array $context = []): array
     {
         $percentage = (float) $this->settingService->get('referral_commission_percent', 5);
-        $commission = $amount * ($percentage / 100);
+        $commission = (string)((float)$amount * ($percentage / 100));
 
         try {
             $this->db->beginTransaction();
@@ -105,7 +81,7 @@ class ReferralService extends \App\Services\BaseService
 
             $this->walletService->deposit($referrerId, $commission, $currency, [
                 'type' => 'referral_commission',
-                'idempotency_key' => "referral_{$referrerId}_" . hash('sha256', serialize($context)),
+                'idempotency_key' => "referral_{$referrerId}_" . hash('sha256', json_encode($context)),
             ]);
 
             $this->db->commit();
@@ -120,26 +96,25 @@ class ReferralService extends \App\Services\BaseService
     /**
      * پردازش پورسانت داینامیک و تفکیک‌شده بر اساس نوع ماژول و نقش معرف
      */
-    public function processModularCommission(int $referredUserId, string $module, float $amount, string $currency, array $context = []): array
+    public function processModularCommission(int $referredUserId, string $module, string $amount, string $currency, array $context = []): array
     {
         // پیدا کردن معرف کاربر
-        $referrer = $this->db->query("SELECT referred_by FROM users WHERE id = ? LIMIT 1", [$referredUserId])->fetch();
-        if (!$referrer || !$referrer->referred_by) {
+        $referrerUser = $this->userModel->findById($referredUserId);
+        if (!$referrerUser || !$referrerUser->referred_by) {
             return ['success' => true, 'commission' => 0.0, 'message' => 'No referrer found'];
         }
 
-        $referrerId = (int)$referrer->referred_by;
+        $referrerId = (int)$referrerUser->referred_by;
 
         // دریافت درصد پورسانت بر اساس نوع ماژول
         if ($module === 'influencer') {
             // بررسی اینکه آیا معرف خودش به عنوان اینفلوئنسر ثبت‌نام شده یا خیر
             $isInfluencer = false;
             try {
-                $count = (int)$this->db->query("
-                    SELECT COUNT(*) FROM influencer_profiles 
-                    WHERE user_id = ? AND status = 'approved'
-                    LIMIT 1
-                ", [$referrerId])->fetchColumn();
+                $count = (int)$this->db->table('influencer_profiles')
+                    ->where('user_id', '=', $referrerId)
+                    ->where('status', '=', 'approved')
+                    ->count();
                 $isInfluencer = $count > 0;
             } catch (\Throwable $t) {
                 // اگر جدول influencer_profiles هنوز ساخته نشده یا با فیلد دیگری است
@@ -156,7 +131,7 @@ class ReferralService extends \App\Services\BaseService
             $percentage = (float)$this->settingService->get($settingKey, 5.0);
         }
 
-        $commission = $amount * ($percentage / 100);
+        $commission = (string)((float)$amount * ($percentage / 100));
 
         try {
             $this->db->beginTransaction();
@@ -176,7 +151,7 @@ class ReferralService extends \App\Services\BaseService
 
             $this->walletService->deposit($referrerId, $commission, $currency, [
                 'type' => 'referral_commission',
-                'idempotency_key' => "referral_{$referrerId}_modular_" . hash('sha256', serialize($context)),
+                'idempotency_key' => "referral_{$referrerId}_modular_" . hash('sha256', json_encode($context)),
             ]);
 
             $this->db->commit();
@@ -188,17 +163,19 @@ class ReferralService extends \App\Services\BaseService
         }
     }
 
-    public function processMultiTierCommissions(int $userId, float $amount, string $currency): array
+    public function processMultiTierCommissions(int $userId, string $amount, string $currency): array
     {
         $processed = [];
-        $referrer = $this->db->query("SELECT referred_by FROM users WHERE id = ? LIMIT 1", [$userId])->fetch();
+        $referrer = $this->userModel->findById($userId);
 
         if ($referrer && $referrer->referred_by) {
-            $processed[1] = $this->processCommission($referrer->referred_by, $amount, $currency);
+            $processed[1] = $this->processCommission((int)$referrer->referred_by, $amount, $currency);
 
-            $referrer2 = $this->db->query("SELECT referred_by FROM users WHERE id = ? LIMIT 1", [$referrer->referred_by])->fetch();
+            $tier2Multiplier = (float)$this->settingService->get('referral_tier2_multiplier', 0.5);
+            $referrer2 = $this->userModel->findById((int)$referrer->referred_by);
             if ($referrer2 && $referrer2->referred_by) {
-                $processed[2] = $this->processCommission($referrer2->referred_by, $amount * 0.5, $currency);
+                $tier2Amount = (string)((float)$amount * $tier2Multiplier);
+                $processed[2] = $this->processCommission((int)$referrer2->referred_by, $tier2Amount, $currency);
             }
         }
 
@@ -211,37 +188,25 @@ class ReferralService extends \App\Services\BaseService
 
     public function getLeaderboard(int $limit = 50, string $period = 'month'): array
     {
-        $dateFilter = match($period) {
-            'week' => "DATE_SUB(NOW(), INTERVAL 7 DAY)",
-            'year' => "DATE_SUB(NOW(), INTERVAL 365 DAY)",
-            default => "DATE_SUB(NOW(), INTERVAL 30 DAY)",
+        $days = match($period) {
+            'week' => 7,
+            'year' => 365,
+            default => 30,
         };
 
-        $leaderboard = $this->db->query(
-            "SELECT u.id, u.username, COUNT(DISTINCT rc.referred_user_id) as referrals,
-                    SUM(rc.commission_amount) as total_commission
-             FROM users u
-             LEFT JOIN referral_commissions rc ON u.id = rc.referrer_id
-             WHERE rc.commission_date >= {$dateFilter}
-             GROUP BY u.id ORDER BY total_commission DESC LIMIT ?",
-            [$limit]
-        )->fetchAll() ?? [];
+        $leaderboard = $this->commissionModel->getLeaderboard($days, $limit);
 
         return array_map(fn($user, $rank) => (array)$user + ['rank' => $rank + 1], $leaderboard, array_keys($leaderboard));
     }
 
     public function distributeMonthlyRewards(): array
     {
-        $top = $this->db->query(
-            "SELECT u.id, SUM(rc.commission_amount) as total FROM users u
-             LEFT JOIN referral_commissions rc ON u.id = rc.referrer_id
-             WHERE MONTH(rc.commission_date) = MONTH(NOW()) GROUP BY u.id ORDER BY total DESC LIMIT 1"
-        )->fetch();
+        $top = $this->commissionModel->getTopMonthlyReferrer();
 
         if ($top) {
             $bonusPercent = (float)$this->settingService->get('referral_top_bonus_percent', 5) / 100;
             $bonus = $top->total * $bonusPercent;
-            $this->walletService->deposit($top->id, $bonus, 'irt', ['type' => 'referral_bonus']);
+            $this->walletService->deposit((int)$top->id, $bonus, 'irt', ['type' => 'referral_bonus']);
             return ['bonus_percent' => $bonusPercent];
         }
 
@@ -261,14 +226,21 @@ class ReferralService extends \App\Services\BaseService
             ['name' => 'hundred_referrals','condition' => 100, 'reward' => 5000000],
         ]);
 
-        $refCount = $this->db->query("SELECT COUNT(*) as count FROM referral_commissions WHERE referrer_id = ?", [$userId])->fetch()->count ?? 0;
+        $refCount = $this->commissionModel->where('referrer_id', '=', $userId)->count();
 
         $awarded = [];
         foreach ($milestones as $milestone) {
             if ($refCount >= $milestone['condition']) {
-                $existing = $this->db->query("SELECT id FROM user_milestones WHERE user_id = ? AND milestone = ? LIMIT 1", [$userId, $milestone['name']])->fetch();
+                $existing = $this->db->table('user_milestones')
+                    ->where('user_id', '=', $userId)
+                    ->where('milestone', '=', $milestone['name'])
+                    ->first();
                 if (!$existing) {
-                    $this->db->query("INSERT INTO user_milestones (user_id, milestone, awarded_at) VALUES (?, ?, NOW())", [$userId, $milestone['name']]);
+                    $this->db->table('user_milestones')->insert([
+                        'user_id' => $userId,
+                        'milestone' => $milestone['name'],
+                        'awarded_at' => date('Y-m-d H:i:s')
+                    ]);
                     $this->walletService->deposit($userId, $milestone['reward'], 'irt', ['type' => 'milestone_bonus']);
                     $awarded[] = $milestone['name'];
                 }
@@ -280,7 +252,10 @@ class ReferralService extends \App\Services\BaseService
 
     public function getUserAchievedMilestones(int $userId): array
     {
-        return $this->db->query("SELECT * FROM user_milestones WHERE user_id = ? ORDER BY awarded_at DESC", [$userId])->fetchAll() ?? [];
+        return $this->db->table('user_milestones')
+            ->where('user_id', '=', $userId)
+            ->orderBy('awarded_at', 'DESC')
+            ->get() ?? [];
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -289,12 +264,18 @@ class ReferralService extends \App\Services\BaseService
 
     public function getCurrentTier(int $userId): ?object
     {
-        return $this->db->query("SELECT * FROM referral_tiers WHERE user_id = ? AND is_active = 1 LIMIT 1", [$userId])->fetch() ?: null;
+        return $this->db->table('referral_tiers')
+            ->where('user_id', '=', $userId)
+            ->where('is_active', '=', 1)
+            ->first();
     }
 
     public function checkAndUpgrade(int $userId): ?object
     {
-        $refCount = $this->db->query("SELECT COUNT(*) as c FROM referral_commissions WHERE referrer_id = ? AND status = 'paid'", [$userId])->fetch()->c ?? 0;
+        $refCount = $this->commissionModel
+            ->where('referrer_id', '=', $userId)
+            ->where('status', '=', 'paid')
+            ->count();
 
         $tiers = $this->settingService->get('referral_tiers', [
             ['name' => 'bronze',   'min_referrals' => 5,   'bonus_percent' => 1],
@@ -307,11 +288,16 @@ class ReferralService extends \App\Services\BaseService
             if ($refCount >= $tier['min_referrals']) {
                 $current = $this->getCurrentTier($userId);
                 if (!$current || $current->tier_name !== $tier['name']) {
-                    $this->db->query("UPDATE referral_tiers SET is_active = 0 WHERE user_id = ?", [$userId]);
-                    $this->db->query(
-                        "INSERT INTO referral_tiers (user_id, tier_name, bonus_percent, is_active, upgraded_at) VALUES (?, ?, ?, 1, NOW())",
-                        [$userId, $tier['name'], $tier['bonus_percent']]
-                    );
+                    $this->db->table('referral_tiers')
+                        ->where('user_id', '=', $userId)
+                        ->update(['is_active' => 0]);
+                    $this->db->table('referral_tiers')->insert([
+                        'user_id' => $userId,
+                        'tier_name' => $tier['name'],
+                        'bonus_percent' => $tier['bonus_percent'],
+                        'is_active' => 1,
+                        'upgraded_at' => date('Y-m-d H:i:s')
+                    ]);
                     return $this->getCurrentTier($userId);
                 }
             }
@@ -333,36 +319,67 @@ class ReferralService extends \App\Services\BaseService
 
     public function getScore(int $userId): float
     {
-        $result = $this->db->query("SELECT quality_score FROM user_quality_scores WHERE user_id = ? LIMIT 1", [$userId])->fetch();
+        $result = $this->db->table('user_quality_scores')
+            ->where('user_id', '=', $userId)
+            ->first();
         return $result ? (float)$result->quality_score : 50.0;
     }
 
     public function calculateScore(int $userId): float
     {
-        $refCount = $this->db->query("SELECT COUNT(*) as c FROM referral_commissions WHERE referrer_id = ?", [$userId])->fetch()->c ?? 0;
+        $refCount = $this->commissionModel->where('referrer_id', '=', $userId)->count();
         $convRate = $this->getConversionRate($userId)['rate'] ?? 0;
-        $ageDays  = $this->db->query("SELECT DATEDIFF(NOW(), created_at) as days FROM users WHERE id = ? LIMIT 1", [$userId])->fetch()->days ?? 0;
+        
+        $user = $this->userModel->findById($userId);
+        $ageDays = 0;
+        if ($user && isset($user->created_at)) {
+            $ageDays = (int)floor((time() - strtotime($user->created_at)) / 86400);
+        }
 
         $score = 50 + min($refCount * 2, 25) + min($convRate, 15) + min($ageDays / 10, 10);
 
-        $this->db->query(
-            "INSERT INTO user_quality_scores (user_id, quality_score, last_updated) VALUES (?, ?, NOW())
-             ON DUPLICATE KEY UPDATE quality_score = ?, last_updated = NOW()",
-            [$userId, $score, $score]
-        );
+        $existing = $this->db->table('user_quality_scores')
+            ->where('user_id', '=', $userId)
+            ->first();
+        if ($existing) {
+            $this->db->table('user_quality_scores')
+                ->where('user_id', '=', $userId)
+                ->update([
+                    'quality_score' => $score,
+                    'last_updated' => date('Y-m-d H:i:s')
+                ]);
+        } else {
+            $this->db->table('user_quality_scores')->insert([
+                'user_id' => $userId,
+                'quality_score' => $score,
+                'last_updated' => date('Y-m-d H:i:s')
+            ]);
+        }
 
         return $score;
     }
 
     public function penalizeScore(int $userId, int $points = 10, string $reason = ''): void
     {
-        $this->db->query("UPDATE user_quality_scores SET quality_score = GREATEST(0, quality_score - ?) WHERE user_id = ?", [$points, $userId]);
+        $existing = $this->db->table('user_quality_scores')->where('user_id', '=', $userId)->first();
+        if ($existing) {
+            $newScore = max(0, (float)$existing->quality_score - $points);
+            $this->db->table('user_quality_scores')
+                ->where('user_id', '=', $userId)
+                ->update(['quality_score' => $newScore, 'last_updated' => date('Y-m-d H:i:s')]);
+        }
         $this->auditTrail->log('score_penalized', "User $userId penalized: $reason", ['points' => $points]);
     }
 
     public function rewardScore(int $userId, int $points = 5, string $reason = ''): void
     {
-        $this->db->query("UPDATE user_quality_scores SET quality_score = LEAST(100, quality_score + ?) WHERE user_id = ?", [$points, $userId]);
+        $existing = $this->db->table('user_quality_scores')->where('user_id', '=', $userId)->first();
+        if ($existing) {
+            $newScore = min(100, (float)$existing->quality_score + $points);
+            $this->db->table('user_quality_scores')
+                ->where('user_id', '=', $userId)
+                ->update(['quality_score' => $newScore, 'last_updated' => date('Y-m-d H:i:s')]);
+        }
         $this->auditTrail->log('score_rewarded', "User $userId rewarded: $reason", ['points' => $points]);
     }
 
@@ -423,7 +440,12 @@ class ReferralService extends \App\Services\BaseService
         $currency = strtolower($currency);
         if (!in_array($currency, ['irt', 'usdt'], true)) return ['success' => false, 'message' => 'ارز نامعتبر'];
 
-        $commissions = $this->db->query("SELECT * FROM referral_commissions WHERE status = 'pending' AND currency = ? ORDER BY created_at ASC LIMIT 100", [$currency])->fetchAll() ?? [];
+        $commissions = $this->commissionModel
+            ->where('status', '=', 'pending')
+            ->where('currency', '=', $currency)
+            ->orderBy('created_at', 'ASC')
+            ->limit(100)
+            ->get() ?? [];
         $results = ['success' => 0, 'failed' => 0, 'skipped' => 0];
 
         foreach ($commissions as $commission) {

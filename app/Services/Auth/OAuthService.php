@@ -45,7 +45,12 @@ class OAuthService extends \App\Services\BaseService
     {
         $redirectUri = "{$this->appUrl}/auth/callback/google";
         $state = bin2hex(random_bytes(16));
-        $this->session->set('oauth_state', $state);
+        
+        // 🛡️ Security Improvement: Storing cryptographic state with creation timestamp for TTL enforcement.
+        $this->session->set('oauth_state', [
+            'token' => $state,
+            'created_at' => time()
+        ]);
 
         return "https://accounts.google.com/o/oauth2/v2/auth?" . http_build_query([
             'client_id' => $this->googleClientId,
@@ -58,8 +63,26 @@ class OAuthService extends \App\Services\BaseService
 
     public function handleGoogleCallback(string $code, string $state): array
     {
-        if (!$this->session->has('oauth_state') || $this->session->get('oauth_state') !== $state) {
-            return ['success' => false, 'message' => 'Invalid state security check failed.'];
+        if (!$this->session->has('oauth_state')) {
+            return ['success' => false, 'message' => 'Invalid request: session state missing.'];
+        }
+
+        $stored = $this->session->get('oauth_state');
+        
+        // Atomic Cleanup: Clear state instantly to block replay attacks
+        $this->session->remove('oauth_state');
+
+        if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
+            return ['success' => false, 'message' => 'Invalid state structure.'];
+        }
+
+        if ($stored['token'] !== $state) {
+            return ['success' => false, 'message' => 'Invalid state token match failed.'];
+        }
+
+        // 🛡️ Hardened Expiration: Bound security state validity to maximum 5 minutes
+        if ((time() - (int)$stored['created_at']) > 300) {
+            return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
         }
 
         try {
@@ -110,11 +133,12 @@ class OAuthService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // 🔒 PESSIMISTIC LOCKING: Lock social_accounts row to prevent race condition
-            $socialAccount = $this->db->selectOne(
-                "SELECT * FROM social_accounts WHERE provider = ? AND provider_id = ? FOR UPDATE",
-                [$provider, (string)$userData['id']]
-            );
+            // 🔒 Safe Pessimistic Lock: Swapped RAW SQL query for native, database-agnostic lockForUpdate()
+            $socialAccount = $this->db->table('social_accounts')
+                ->where('provider', '=', $provider)
+                ->where('provider_id', '=', (string)$userData['id'])
+                ->lockForUpdate()
+                ->first();
 
             if ($socialAccount) {
                 $user = $this->userModel->find((int)$socialAccount->user_id);
@@ -128,11 +152,11 @@ class OAuthService extends \App\Services\BaseService
                 }
             }
 
-            // 🔒 PESSIMISTIC LOCKING: Lock users row by email to prevent duplicate user creation
-            $existingUser = $this->db->selectOne(
-                "SELECT * FROM users WHERE email = ? FOR UPDATE",
-                [(string)$userData['email']]
-            );
+            // 🔒 Safe Pessimistic Lock: Prevent account duplication safely via atomic Query Builder locking
+            $existingUser = $this->db->table('users')
+                ->where('email', '=', (string)$userData['email'])
+                ->lockForUpdate()
+                ->first();
 
             if ($existingUser) {
                 // Link existing user to OAuth provider
