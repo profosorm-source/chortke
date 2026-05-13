@@ -6,6 +6,8 @@ namespace App\Services\SocialTask;
 
 
 use App\Contracts\LoggerInterface;
+use App\Services\SettingService;
+
 /**
  * SocialTaskScoringService
  *
@@ -13,6 +15,13 @@ use App\Contracts\LoggerInterface;
  */
 class SocialTaskScoringService extends \App\Services\BaseService
 {
+    public function __construct(
+        protected LoggerInterface $logger,
+        private SettingService $settingService
+    ) {
+        parent::__construct($logger);
+    }
+
     /**
      * محاسبه Task Score کامل
      */
@@ -41,9 +50,14 @@ class SocialTaskScoringService extends \App\Services\BaseService
             $cameraBonus = $this->calculateCameraContribution($cScore, $cSignals);
         }
 
-        $rawScore = ($timeScore * 0.30)
-            + ($interactionScore * 0.25)
-            + ($behaviorScore * 0.20)
+        // MED-13: Move hardcoded contribution weights to configurable admin settings
+        $weightTime = (float)$this->settingService->get('scoring_weight_time', 0.30);
+        $weightInteraction = (float)$this->settingService->get('scoring_weight_interaction', 0.25);
+        $weightBehavior = (float)$this->settingService->get('scoring_weight_behavior', 0.20);
+
+        $rawScore = ($timeScore * $weightTime)
+            + ($interactionScore * $weightInteraction)
+            + ($behaviorScore * $weightBehavior)
             + $trustModifier
             + $cameraBonus
             + $penaltySum;
@@ -59,9 +73,9 @@ class SocialTaskScoringService extends \App\Services\BaseService
             'penalties'         => $penalties,
             'camera_bonus'      => $cameraBonus,
             'breakdown'         => [
-                'time_contribution'        => round($timeScore * 0.30, 1),
-                'interaction_contribution' => round($interactionScore * 0.25, 1),
-                'behavior_contribution'    => round($behaviorScore * 0.20, 1),
+                'time_contribution'        => round($timeScore * $weightTime, 1),
+                'interaction_contribution' => round($interactionScore * $weightInteraction, 1),
+                'behavior_contribution'    => round($behaviorScore * $weightBehavior, 1),
                 'camera_contribution'      => $cameraBonus,
             ],
         ];
@@ -71,10 +85,14 @@ class SocialTaskScoringService extends \App\Services\BaseService
     {
         if ($expectedTime <= 0) return 0;
         $ratio = $activeTime / $expectedTime;
+
+        // MED-12: Replace unfair discrete steps with fair, linear interpolation maps
         if ($ratio >= 1.0)  return 100;
-        if ($ratio >= 0.70) return 70;
-        if ($ratio >= 0.40) return 40;
-        return 10;
+        if ($ratio <= 0.10) return 10;
+
+        // Maps ratios 0.10 to 1.00 uniformly to score range 10 to 100
+        $score = 10 + (($ratio - 0.10) / 0.90) * 90;
+        return (int)round($score);
     }
 
     public function calculateInteractionScore(array $interactions): int
@@ -199,7 +217,8 @@ class SocialTaskScoringService extends \App\Services\BaseService
         return -10;
     }
 
-    private function calculateCameraContribution(int $cameraScore, array $verifiedSignals = []): int
+    // MED-14: Converted to public to serve as the unified DRY scoring hook for camera evaluations
+    public function calculateCameraContribution(int $cameraScore, array $verifiedSignals = []): int
     {
         $base = 0;
         if ($cameraScore >= 80) $base = 15;

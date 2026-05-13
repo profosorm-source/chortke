@@ -11,37 +11,48 @@ use Core\Cache;
 use Core\Queue;
 use App\Jobs\UpdateFraudScoreJob;
 
+use App\Models\Score as ScoreModel;
+
 class UserScoreService extends \App\Services\BaseService
 {
+    // HIGH-05: Strict Scoring Domain Whitelist prevents logic injections into scoring buckets
+    private const ALLOWED_DOMAINS = ['fraud', 'task', 'trust', 'referral', 'activity', 'loyalty'];
+
     public function __construct(
         private Database $db,
         private RiskPolicyService $policyService,
         protected LoggerInterface $logger,
         private Cache $cache,
-        private Queue $queue
+        private Queue $queue,
+        private ScoreModel $scoreModel
     ) {
         parent::__construct($logger);
     }
 
+    private function validateDomain(string $domain): void
+    {
+        if (!\in_array($domain, self::ALLOWED_DOMAINS, true)) {
+            throw new \InvalidArgumentException("Unsupported or unauthorized score domain: {$domain}");
+        }
+    }
+
     public function applyEventDelta(int $userId, string $domain, float $delta, string $source, array $meta = []): bool
     {
-        // برای دامنه حساس Fraud، از مکانیسم ضد DoS ناهمگام استفاده می‌کنیم
-        if ($domain === 'fraud') {
-            // 1. ثبت آنی در کش برای قابلیت اطمینان لحظه‌ای
-            $cacheKey = "temp_fraud_score:{$userId}";
-            $this->cache->incrementFloat($cacheKey, $delta);
+        $this->validateDomain($domain);
 
-            // 2. ارسال دستور نهایی نوشتن در دیتابیس به صف پردازش پس‌زمینه
-            return $this->queue->push(UpdateFraudScoreJob::class, [
-                'user_id' => $userId,
-                'delta'   => $delta,
-                'source'  => $source,
-                'meta'    => $meta
-            ]);
-        }
+        // MED-06: Offload physical database persistence for ALL score domains to background workers for high responsiveness
+        // 1. Pre-register in consistent cache block
+        $cacheKey = "temp_{$domain}_score:{$userId}";
+        $this->cache->incrementFloat($cacheKey, $delta);
 
-        // برای سایر دامنه ها (فعلاً) نوشتن مستقیم در دیتابیس ادامه می‌یابد
-        return $this->commitDeltaToDatabase($userId, $domain, $delta, $source, $meta);
+        // 2. Dispatch physical async execution to safe queue worker
+        return $this->queue->push(UpdateFraudScoreJob::class, [
+            'user_id' => $userId,
+            'delta'   => $delta,
+            'domain'  => $domain,
+            'source'  => $source,
+            'meta'    => $meta
+        ]);
     }
 
     /**
@@ -50,6 +61,8 @@ class UserScoreService extends \App\Services\BaseService
     public function commitDeltaToDatabase(int $userId, string $domain, float $delta, string $source, array $meta = []): bool
     {
         try {
+            $this->validateDomain($domain);
+
             $stmt = $this->db->prepare("
                 INSERT INTO user_scores (user_id, domain, score, updated_at)
                 VALUES (?, ?, ?, NOW())
@@ -57,52 +70,77 @@ class UserScoreService extends \App\Services\BaseService
             ");
             $ok = $stmt->execute([$userId, $domain, $delta]);
             
-            // در صورت موفقیت‌آمیز بودن ثبت دامنه fraud، کش موقت همگام‌ساز را پاک یا کسر می‌کنیم
-            if ($ok && $domain === 'fraud') {
-                // کسر کردن از کلید کش (جلوگیری از دوباره شماری در خواندن ترکیبی)
-                $this->cache->incrementFloat("temp_fraud_score:{$userId}", -$delta);
+            // Clean/deduct cache buffer upon backend persistence to prevent double counts during get() execution
+            if ($ok) {
+                $this->cache->incrementFloat("temp_{$domain}_score:{$userId}", -$delta);
             }
             
             return $ok;
         } catch (\Throwable $e) {
-            $this->logger->error('user_score.commit_db.failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            $this->logger->error('user_score.commit_db.failed', [
+                'user_id' => $userId,
+                'domain' => $domain,
+                'error' => $e->getMessage()
+            ]);
             return false;
+        }
+    }
+
+    /**
+     * Unifies database tracking and real-time cache buffers to represent real-time scoring totals
+     */
+    public function getScore(int $userId, string $domain): float
+    {
+        $this->validateDomain($domain);
+
+        try {
+            $stmt = $this->db->prepare("SELECT score FROM user_scores WHERE user_id = ? AND domain = ? LIMIT 1");
+            $stmt->execute([$userId, $domain]);
+            $dbScore = (float)$stmt->fetchColumn();
+
+            $cachedDelta = (float)$this->cache->get("temp_{$domain}_score:{$userId}", 0.0);
+
+            return $dbScore + $cachedDelta;
+        } catch (\Throwable $ignore) {
+            return (float)$this->cache->get("temp_{$domain}_score:{$userId}", 0.0);
         }
     }
 
     public function getFraudScore(int $userId): float
     {
-        try {
-            // 1. خواندن مقدار نهایی ثبت شده در دیتابیس
-            $stmt = $this->db->prepare("SELECT score FROM user_scores WHERE user_id = ? AND domain = 'fraud' LIMIT 1");
-            $stmt->execute([$userId]);
-            $dbScore = (float)$stmt->fetchColumn();
-
-            // 2. خواندن مقادیر تجمیع شده در صف (در صف انتظار برای درج)
-            $cachedDelta = (float)$this->cache->get("temp_fraud_score:{$userId}", 0.0);
-
-            // مجموع دو مقدار نمایانگر وضعیت ۱۰۰٪ ریل تایم است
-            return $dbScore + $cachedDelta;
-        } catch (\Throwable $ignore) {
-            return (float)$this->cache->get("temp_fraud_score:{$userId}", 0.0);
-        }
+        return $this->getScore($userId, 'fraud');
     }
 
     public function getTaskScore(int $userId): float
     {
-        try {
-            $stmt = $this->db->prepare("SELECT score FROM user_scores WHERE user_id = ? AND domain = 'task' LIMIT 1");
-            $stmt->execute([$userId]);
-            $score = $stmt->fetchColumn();
-            return $score ? (float)$score : 0.0;
-        } catch (\Throwable $ignore) {
-            return 0.0;
-        }
+        return $this->getScore($userId, 'task');
     }
 
+    /**
+     * Calculates final actionable scoring by reading raw scores and applying explicit admin modifiers
+     */
     public function getEffectiveScore(int $userId, string $domain, float $rawScore): float
     {
-        return $rawScore;
+        $this->validateDomain($domain);
+
+        // LOW-05: Wire placeholder to dynamically calculate effective scoring through adjustments
+        $effective = $rawScore;
+        $adjustments = $this->scoreModel->getActiveAdjustments($userId, $domain);
+
+        foreach ($adjustments as $adj) {
+            $val = (float)$adj['value'];
+            $op  = \strtolower(\trim($adj['operation'] ?? 'add'));
+
+            if ($op === 'set') {
+                return $val; // Absolute priority override
+            } elseif ($op === 'add') {
+                $effective += $val;
+            } elseif ($op === 'multiply') {
+                $effective *= $val;
+            }
+        }
+
+        return $effective;
     }
 
     public function incrementFraudRawScore(int $userId, float $delta, string $source, array $meta = []): bool
@@ -110,8 +148,30 @@ class UserScoreService extends \App\Services\BaseService
         return $this->applyEventDelta($userId, 'fraud', $delta, $source, $meta);
     }
 
-    public function createAdjustment(int $userId, string $domain, float $adjustment, string $reason, ?string $expiry = null, ?int $createdBy = null): array
-    {
-        return ['success' => true];
+    /**
+     * Inserts temporary/permanent administrative modifiers impacting effective scores
+     */
+    public function createAdjustment(
+        int $userId, 
+        string $domain, 
+        float $adjustment, 
+        string $reason, 
+        ?string $expiry = null, 
+        ?int $createdBy = null
+    ): array {
+        $this->validateDomain($domain);
+
+        // LOW-06: Replace dummy stub to trigger physical persistent adjustments in Score Model
+        $success = $this->scoreModel->createAdjustment([
+            'user_id'    => $userId,
+            'domain'     => $domain,
+            'operation'  => 'add',
+            'value'      => $adjustment,
+            'reason'     => $reason,
+            'expires_at' => $expiry,
+            'created_by' => $createdBy ?? 0,
+        ]);
+
+        return ['success' => $success];
     }
 }

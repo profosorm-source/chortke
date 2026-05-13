@@ -1097,4 +1097,64 @@ class CustomTaskService extends \App\Services\BaseService
                                      ->limit($limit)->offset($offset)->get() ?? []
         ];
     }
+
+    /**
+     * Cancels all active ads/tasks of the user and refunds remaining escrow budget to their wallet.
+     * Invoked automatically before user account deletion to prevent financial leaks.
+     */
+    public function cancelActiveTasksForUser(int $userId): void
+    {
+        try {
+            // 1. Fetch all active/pending advertisements belonging to user from 'ads' table
+            $activeAds = $this->db->fetchAll(
+                "SELECT id, title, type, currency, total_budget, remaining_budget, site_commission_percent 
+                 FROM ads 
+                 WHERE user_id = ? AND status IN ('active', 'pending', 'paused', 'draft', 'pending_review')",
+                [$userId]
+            );
+
+            if (is_array($activeAds)) {
+                foreach ($activeAds as $ad) {
+                    $adArr = (array)$ad;
+                    $remaining = (float)($adArr['remaining_budget'] ?? 0);
+                    if ($remaining <= 0) {
+                        continue;
+                    }
+
+                    $feePercent = (float)($adArr['site_commission_percent'] ?? 0);
+                    // Proportional escrow refund including commission refund
+                    $refundAmount = round($remaining * (1 + ($feePercent / 100)), 2);
+                    $currency = $adArr['currency'] ?? 'irt';
+
+                    $idempotencyKey = "escrow_rfnd_ad_" . ($adArr['id'] ?? 0) . "_" . time();
+                    
+                    // Perform immediate wallet deposit via Service
+                    $this->walletService->deposit($userId, $refundAmount, $currency, [
+                        'type' => 'escrow_refund',
+                        'description' => "استرداد بودجه تبلیغ #{$adArr['id']} به دلیل لغو حساب کاربری",
+                        'idempotency_key' => $idempotencyKey
+                    ]);
+
+                    // Lock the ad budget to 0 and mark completed
+                    $this->db->query("UPDATE ads SET remaining_budget = 0, status = 'completed', updated_at = NOW() WHERE id = ?", [$adArr['id']]);
+                    
+                    $this->logger->info('escrow.refunded_during_deletion', [
+                        'ad_id' => $adArr['id'],
+                        'user_id' => $userId,
+                        'refund' => $refundAmount,
+                        'currency' => $currency
+                    ]);
+                }
+            }
+
+            // 2. Handle legacy 'custom_tasks' status transitions
+            $this->db->query("UPDATE custom_tasks SET status = 'cancelled', updated_at = NOW() WHERE user_id = ? AND status NOT IN ('completed', 'cancelled')", [$userId]);
+            
+        } catch (\Throwable $e) {
+            $this->logger->error('escrow.bulk_refund_during_deletion_failed', [
+                'user_id' => $userId,
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
 }

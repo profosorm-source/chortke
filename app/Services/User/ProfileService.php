@@ -73,7 +73,7 @@ class ProfileService extends \App\Services\BaseService
         $success = $this->model->upsertSetting($userId, $key, $serialized);
 
         if ($success && $this->cache) {
-            $this->cache->delete(self::SETTINGS_CACHE_PREFIX . $userId);
+            $this->cache->forget(self::SETTINGS_CACHE_PREFIX . $userId);
         }
 
         return $success;

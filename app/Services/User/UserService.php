@@ -6,6 +6,8 @@ namespace App\Services\User;
 
 use App\Models\User;
 use App\Contracts\LoggerInterface;
+use App\Services\AntiFraud\GeoIPService;
+
 /**
  * UserService
  *
@@ -15,7 +17,8 @@ class UserService extends \App\Services\BaseService
 {
     public function __construct(
         private User $model,
-        protected LoggerInterface $logger
+        protected LoggerInterface $logger,
+        private ?GeoIPService $geoService = null
     ) {
         parent::__construct($logger);
     }
@@ -24,8 +27,8 @@ class UserService extends \App\Services\BaseService
     {
         $this->logger->info('user.registration.attempt', ['email' => $data['email'] ?? 'unknown']);
 
-        // لاجیک ساخت نام کاربری تصادفی برای جلوگیری از خطای دیتابیس (NOT NULL)
-        $data['username'] = $data['username'] ?? explode('@', $data['email'] ?? 'user')[0] . '_' . rand(1000, 9999);
+        // MED-07: Transition to cryptographically secure random_int instead of basic rand
+        $data['username'] = $data['username'] ?? explode('@', $data['email'] ?? 'user')[0] . '_' . \random_int(1000, 9999);
         $data['password'] = hash_password($data['password'] ?? bin2hex(random_bytes(8)));
         
         $data['referral_code'] = $this->generateUniqueReferralCode();
@@ -34,23 +37,19 @@ class UserService extends \App\Services\BaseService
         $data['role'] = $data['role'] ?? 'user';
         $data['created_at'] = date('Y-m-d H:i:s');
 
-        // Detect and store user's country and flag on registration
+        // HIGH-06: DI Architecture Fix — eliminate static Container::make and leverage injected GeoIPService
         try {
             $ipAddress = function_exists('get_client_ip') ? get_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? null);
-            if ($ipAddress && filter_var($ipAddress, FILTER_VALIDATE_IP)) {
-                $container = \Core\Container::getInstance();
-                if ($container->has(\App\Services\AntiFraud\GeoIPService::class)) {
-                    $geoService = $container->make(\App\Services\AntiFraud\GeoIPService::class);
-                    $location = $geoService->lookup($ipAddress);
-                    if ($location && ($location['source'] ?? '') !== 'default') {
-                        $data['country_code'] = strtoupper((string)($location['country_code'] ?? 'IR'));
-                        $data['country_name'] = (string)($location['country_name'] ?? 'Iran');
-                        
-                        if (strlen($data['country_code']) === 2) {
-                            $c1 = ord($data['country_code'][0]) + 127397;
-                            $c2 = ord($data['country_code'][1]) + 127397;
-                            $data['country_flag'] = html_entity_decode("&#$c1;&#$c2;", ENT_HTML5, 'UTF-8');
-                        }
+            if ($ipAddress && filter_var($ipAddress, FILTER_VALIDATE_IP) && $this->geoService) {
+                $location = $this->geoService->lookup($ipAddress);
+                if ($location && ($location['source'] ?? '') !== 'default') {
+                    $data['country_code'] = strtoupper((string)($location['country_code'] ?? 'IR'));
+                    $data['country_name'] = (string)($location['country_name'] ?? 'Iran');
+                    
+                    if (strlen($data['country_code']) === 2) {
+                        $c1 = ord($data['country_code'][0]) + 127397;
+                        $c2 = ord($data['country_code'][1]) + 127397;
+                        $data['country_flag'] = html_entity_decode("&#$c1;&#$c2;", ENT_HTML5, 'UTF-8');
                     }
                 }
             }
@@ -215,14 +214,27 @@ class UserService extends \App\Services\BaseService
 
     public function quickSearch(string $term, int $limit = 5): array
     {
-        $query = $this->model->query()
-            ->select('id', 'full_name', 'email', 'mobile', 'kyc_status', 'created_at')
-            ->whereNull('deleted_at');
+        $cleanTerm = \trim($term);
+        if ($cleanTerm === '') {
+            return [];
+        }
 
-        $this->model->applySearch($query, $term);
+        // MED-08: Bound search results to safe memory ceilings and verify query components
+        $safeLimit = \max(1, \min(50, $limit));
+
+        $query = $this->model->query();
+        if (!$query) {
+            $this->logger->error('user.quick_search.query_builder_missing');
+            return [];
+        }
+
+        $query->select('id', 'full_name', 'email', 'mobile', 'kyc_status', 'created_at')
+              ->whereNull('deleted_at');
+
+        $this->model->applySearch($query, $cleanTerm);
 
         return $query->orderBy('created_at', 'DESC')
-                     ->limit($limit)
+                     ->limit($safeLimit)
                      ->get() ?? [];
     }
 

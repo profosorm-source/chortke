@@ -99,7 +99,8 @@ class RatingService extends \App\Services\BaseService
         );
 
         if ($stars >= 4) {
-            // Reward trust for good rating? Logic can be expanded here.
+            // MED-16: Reward trust for receiving an excellent executor rating
+            $this->trust->rewardGoodTask((int)$exec->executor_id, $executionId);
         }
 
         $this->updateExecutorRating((int)$exec->executor_id);
@@ -125,7 +126,8 @@ class RatingService extends \App\Services\BaseService
         ];
     }
 
-    public function getComments(int $userId, string $raterType = 'advertiser', int $limit = 10): array
+    // MED-18: Standardized naming from getComments to getRatingComments for architectural clarity
+    public function getRatingComments(int $userId, string $raterType = 'advertiser', int $limit = 10): array
     {
         return $this->analyticsModel->getUserRatingHistory($userId, $raterType, $limit);
     }
@@ -179,8 +181,18 @@ class RatingService extends \App\Services\BaseService
     private function isWithinRatingWindow(?string $completedAt): bool
     {
         if (!$completedAt) return false;
-        $completed = strtotime($completedAt);
-        return (time() - $completed) <= (self::RATING_WINDOW_HOURS * 3600);
+
+        // MED-17: Upgrade comparison checks to use explicit timezones and avoid server OS configuration leaks
+        try {
+            $completed = new \DateTime($completedAt, new \DateTimeZone('UTC'));
+            $now = new \DateTime('now', new \DateTimeZone('UTC'));
+
+            $elapsed = $now->getTimestamp() - $completed->getTimestamp();
+            return $elapsed <= (self::RATING_WINDOW_HOURS * 3600);
+        } catch (\Exception $e) {
+            $this->logger->error('rating.window_calculation_failed', ['error' => $e->getMessage()]);
+            return false;
+        }
     }
 
     private function updateAdvertiserRating(int $advertiserId): void

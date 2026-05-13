@@ -5,17 +5,18 @@ declare(strict_types=1);
 namespace App\Services\SocialTask;
 
 use App\Services\Shared\ScoreService;
+use App\Contracts\LoggerInterface;
 
 /**
  * TrustScoreService — کلاس سازگاری برای بازگرداندن متد گت از ScoreService ادغام‌شده
  */
-class TrustScoreService
+class TrustScoreService extends \App\Services\BaseService
 {
-    private ScoreService $scoreService;
-
-    public function __construct(ScoreService $scoreService)
-    {
-        $this->scoreService = $scoreService;
+    public function __construct(
+        private ScoreService $scoreService,
+        protected LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
     }
 
     /**

@@ -42,59 +42,79 @@ class UserLevelService extends \App\Services\BaseService
         $this->eventDispatcher = $eventDispatcher;
     }
 
-    /**
-     * ثبت فعالیت روزانه کاربر (فراخوانی هنگام لاگین یا انجام تسک)
-     */
     public function recordDailyActivity(int $userId): void
     {
         if (!$this->isEnabled()) return;
 
         $today = \date('Y-m-d');
-
-        $stmt = $this->db->prepare("SELECT last_active_date, monthly_active_days, active_days_count FROM users WHERE id = ?");
-        $stmt->execute([$userId]);
-        $user = $stmt->fetch(\PDO::FETCH_OBJ);
-
-        if (!$user) return;
-
-        // اگر امروز قبلاً ثبت شده
-        if ($user->last_active_date === $today) return;
-
-        // بررسی تغییر ماه
         $currentMonth = \date('Y-m');
-        $lastMonth = $user->last_active_date ? \substr($user->last_active_date, 0, 7) : null;
-        $monthlyDays = ($lastMonth === $currentMonth) ? (int) $user->monthly_active_days + 1 : 1;
 
-        $stmt = $this->db->prepare("
-            UPDATE users SET 
-                last_active_date = ?,
-                active_days_count = active_days_count + 1,
-                monthly_active_days = ?
-            WHERE id = ?
-        ");
-        $stmt->execute([$today, $monthlyDays, $userId]);
+        $this->db->beginTransaction();
+        try {
+            // MED-04: Wrap read-modify-write steps inside explicit transaction boundaries with FOR UPDATE to stop double counting
+            $stmt = $this->db->prepare("SELECT last_active_date, monthly_active_days, active_days_count FROM users WHERE id = ? FOR UPDATE");
+            $stmt->execute([$userId]);
+            $user = $stmt->fetch(\PDO::FETCH_OBJ);
 
-        // بررسی ارتقای سطح
-        if ($this->settingService->get('level_activity_upgrade_enabled', 1)) {
-            $this->checkUpgrade($userId);
+            if (!$user) {
+                $this->db->commit();
+                return;
+            }
+
+            // If already registered today, rollback or commit and skip
+            if ($user->last_active_date === $today) {
+                $this->db->commit();
+                return;
+            }
+
+            $lastMonth = $user->last_active_date ? \substr($user->last_active_date, 0, 7) : null;
+            $monthlyDays = ($lastMonth === $currentMonth) ? (int)$user->monthly_active_days + 1 : 1;
+
+            $stmt = $this->db->prepare("
+                UPDATE users SET 
+                    last_active_date = ?,
+                    active_days_count = active_days_count + 1,
+                    monthly_active_days = ?
+                WHERE id = ?
+            ");
+            $stmt->execute([$today, $monthlyDays, $userId]);
+            
+            $this->db->commit();
+
+            // Verify user potential upgrade levels
+            if ($this->settingService->get('level_activity_upgrade_enabled', 1)) {
+                $this->checkUpgrade($userId);
+            }
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->logger->error('level.record_daily_activity.failed', [
+                'user_id' => $userId,
+                'error' => $e->getMessage()
+            ]);
         }
     }
 
-    /**
-     * ثبت تکمیل تسک (افزایش شمارنده)
-     */
     public function recordTaskCompletion(int $userId, float $earnedAmount, string $currency = 'irt'): void
     {
         if (!$this->isEnabled()) return;
 
-        $field = $currency === 'usdt' ? 'total_earning_usdt' : 'total_earning_irt';
+        // HIGH-04: Explicitly branch SQL statements into static strings to shield the app from dynamic field injections
+        if (\strtolower($currency) === 'usdt') {
+            $stmt = $this->db->prepare("
+                UPDATE users SET 
+                    completed_tasks_count = completed_tasks_count + 1,
+                    total_earning_usdt = total_earning_usdt + ?
+                WHERE id = ?
+            ");
+        } else {
+            $stmt = $this->db->prepare("
+                UPDATE users SET 
+                    completed_tasks_count = completed_tasks_count + 1,
+                    total_earning_irt = total_earning_irt + ?
+                WHERE id = ?
+            ");
+        }
 
-        $stmt = $this->db->prepare("
-            UPDATE users SET 
-                completed_tasks_count = completed_tasks_count + 1,
-                {$field} = {$field} + ?
-            WHERE id = ?
-        ");
         $stmt->execute([$earnedAmount, $userId]);
 
         $this->recordDailyActivity($userId);
@@ -198,13 +218,24 @@ class UserLevelService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'این سطح قابل خرید نیست.'];
         }
 
-        $idempotencyKey = "level_purchase_{$userId}_{$levelSlug}_" . \date('Y-m-d');
+        // Ensure safe idempotency token and boundary check to block concurrent duplicate execution rolls
+        $idempotencyKey = "level_purch_{$userId}_{$levelSlug}_" . \date('Ymd');
 
-        // بررسی تکراری
+        // MED-05: Enforce strong validation overlap: Block duplicate purchases of levels that haven't expired yet
+        $stmt = $this->db->prepare("SELECT level_slug, level_expires_at, level_type FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $u = $stmt->fetch(\PDO::FETCH_OBJ);
+
+        if ($u && $u->level_slug === $levelSlug && $u->level_type === 'purchased') {
+            if ($u->level_expires_at && \strtotime($u->level_expires_at) > \time()) {
+                return ['success' => false, 'message' => 'شما در حال حاضر اشتراک فعال برای این سطح را دارا هستید.'];
+            }
+        }
+
         $stmt = $this->db->prepare("SELECT id FROM user_level_purchases WHERE idempotency_key = ?");
         $stmt->execute([$idempotencyKey]);
         if ($stmt->fetch()) {
-            return ['success' => false, 'message' => 'شما قبلاً امروز این سطح را خریداری کرده‌اید.'];
+            return ['success' => false, 'message' => 'شما امروز درخواست مشابهی برای ارتقای این سطح ثبت کرده‌اید.'];
         }
 
         try {

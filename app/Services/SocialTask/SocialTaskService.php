@@ -14,6 +14,8 @@ use App\Models\SocialTaskModel;
 use App\Contracts\LoggerInterface;
 use App\Services\SettingService;
 use App\Services\SocialTask\CameraVerificationService;
+use App\Services\User\UserService;
+
 /**
  * SocialTaskService
  *
@@ -48,7 +50,7 @@ class SocialTaskService extends \App\Services\BaseService
         private StateMachineService $stateMachine,
         private WebSocketService $webSocket,
         private \App\Services\Shared\RatingService $ratingService,
-        private User $userModel,
+        private UserService $userService,
         private SettingService $settingService,
         private ?CameraVerificationService $cameraVerification = null,
         private ?\App\Services\AntiFraud\FraudGuardService $fraudGuard = null
@@ -158,9 +160,12 @@ class SocialTaskService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'این تبلیغ قابل لغو نیست'];
             }
 
-            $refund = (float)($ad->remaining_budget ?? 0);
+            $refund   = (float)($ad->remaining_budget ?? 0);
+            // MED-23: Dynamically check ad currency to accurately handle both IRT and USDT campaign budgets
+            $currency = (string)($ad->currency ?? 'irt');
+
             if ($refund > 0) {
-                $walletResult = $this->wallet->deposit((int)$ad->user_id, $refund, 'irt', [
+                $walletResult = $this->wallet->deposit((int)$ad->user_id, $refund, $currency, [
                     'type' => 'social_ad_refund',
                     'description' => "Refund for cancelled social ad #{$adId}",
                     'gateway' => 'social_ad_refund',
@@ -178,7 +183,7 @@ class SocialTaskService extends \App\Services\BaseService
             $this->model->updateAdStatus($adId, 'cancelled');
             $this->model->commit();
 
-            return ['success' => true, 'message' => 'تبلیغ لغو شد', 'refund' => $refund];
+            return ['success' => true, 'message' => 'تبلیغ لغو شد', 'refund' => $refund, 'currency' => $currency];
         } catch (\Throwable $e) {
             $this->model->rollBack();
             return ['success' => false, 'message' => 'خطا در لغو تبلیغ: ' . $e->getMessage()];
@@ -198,6 +203,12 @@ class SocialTaskService extends \App\Services\BaseService
             $this->model->flagExecution($executionId, $note);
             return ['success' => true, 'message' => 'اجرا برای بررسی علامت‌گذاری شد'];
         } catch (\Throwable $e) {
+            // LOW-12: Log exceptions inside catch blocks to preserve diagnostic records
+            $this->logger->error('social.execution.flagging_failed', [
+                'execution_id' => $executionId,
+                'admin_id'     => $adminId,
+                'error'        => $e->getMessage()
+            ]);
             return ['success' => false, 'message' => 'خطا در علامت‌گذاری اجرا'];
         }
     }
@@ -421,9 +432,11 @@ class SocialTaskService extends \App\Services\BaseService
 
             if (!empty($decision['pay_reward'])) {
                 $rewardAmount = (float)$this->antiFraud->adjustedReward($userId, (float)$exec->price_per_task);
+                // Dynamically resolve execution currency context
+                $currency = (string)($exec->currency ?? 'irt');
 
                 if ($rewardAmount > 0) {
-                    $pay = $this->wallet->deposit($userId, $rewardAmount, 'irt', [
+                    $pay = $this->wallet->deposit($userId, $rewardAmount, $currency, [
                         'source' => 'social_task_reward',
                         'execution_id' => $executionId,
                         'ad_id' => (int)$exec->ad_id,
@@ -439,10 +452,11 @@ class SocialTaskService extends \App\Services\BaseService
                     $rewardPaid = 1;
                     
                     // بررسی ارجاع دهنده (معرف) و پرداخت کمیسیون
-                    $userRecord = $this->userModel->findById($userId);
+                    // HIGH-07: Fully decouple direct DB layer dependencies by consuming injected UserService
+                    $userRecord = $this->userService->findById($userId);
                     if ($userRecord && !empty($userRecord->referred_by)) {
                         if ($this->referralService) {
-                            $this->referralService->processCommission((int)$userRecord->referred_by, $rewardAmount, 'irt', [
+                            $this->referralService->processCommission((int)$userRecord->referred_by, $rewardAmount, $currency, [
                                 'action' => 'social_task_reward',
                                 'executor_id' => $userId,
                                 'execution_id' => $executionId

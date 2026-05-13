@@ -7,6 +7,8 @@ namespace App\Services\SocialTask;
 use App\Models\SocialTaskExecutionModel;
 
 use App\Contracts\LoggerInterface;
+use App\Services\SettingService;
+
 /**
  * CameraVerificationService
  *
@@ -20,13 +22,15 @@ class CameraVerificationService extends \App\Services\BaseService
     public const STATUS_SKIPPED   = 'skipped';
     public const STATUS_EXPIRED   = 'expired';
 
-    // حداکثر مدت انتظار برای پاسخ کاربر (ثانیه)
-    private const EXPIRY_SECONDS = 120;
-
     public function __construct(
         private SocialTaskExecutionModel $model,
-        private BehaviorAnalysisService $behavior
-    ) {}
+        private BehaviorAnalysisService $behavior,
+        private SocialTaskScoringService $scoring,
+        private SettingService $settingService,
+        protected LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * بررسی اینکه آیا این execution نیاز به camera verification دارد.
@@ -45,10 +49,13 @@ class CameraVerificationService extends \App\Services\BaseService
      */
     public function createRequest(int $executionId, int $userId): int
     {
+        // LOW-10: Fetch configurable dynamic duration boundaries from SettingService instead of static limits
+        $expiry = (int)$this->settingService->get('camera_verification_expiry', 120);
+
         return $this->model->createCameraRequest([
             'execution_id' => $executionId,
-            'user_id' => $userId,
-            'expiry' => self::EXPIRY_SECONDS
+            'user_id'      => $userId,
+            'expiry'       => $expiry
         ]);
     }
 
@@ -72,11 +79,21 @@ class CameraVerificationService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'درخواست camera یافت نشد یا منقضی شده'];
         }
 
-        $this->model->updateCameraRequestResult($request->id, $cameraScore, json_encode($verifiedSignals, JSON_UNESCAPED_UNICODE));
+        // MED-15: Prevent silent serialization failures polluting DB entries
+        $encodedSignals = \json_encode($verifiedSignals, JSON_UNESCAPED_UNICODE);
+        if ($encodedSignals === false) {
+            $this->logger->error('camera.process_result.json_encode_failed', [
+                'user_id' => $userId,
+                'execution_id' => $executionId
+            ]);
+            $encodedSignals = '[]';
+        }
+
+        $this->model->updateCameraRequestResult($request->id, $cameraScore, $encodedSignals);
 
         $contribution = $this->scoreContribution($cameraScore, $verifiedSignals);
 
-        $this->model->updateExecutionBehaviorJson($executionId, $cameraScore, json_encode($verifiedSignals));
+        $this->model->updateExecutionBehaviorJson($executionId, $cameraScore, $encodedSignals);
 
         return [
             'success'            => true,
@@ -101,19 +118,8 @@ class CameraVerificationService extends \App\Services\BaseService
      */
     public function scoreContribution(int $cameraScore, array $verifiedSignals = []): int
     {
-        $base = 0;
-        if ($cameraScore >= 80) $base = 15;
-        elseif ($cameraScore >= 60) $base = 8;
-        elseif ($cameraScore >= 40) $base = 2;
-        else $base = -10;
-
-        $bonus = 0;
-        $highValueSignals = ['follow_button_visible', 'username_match', 'subscribe_confirmed', 'like_button_active'];
-        foreach ($highValueSignals as $sig) {
-            if (in_array($sig, $verifiedSignals, true)) $bonus += 3;
-        }
-
-        return $base + min($bonus, 10);
+        // MED-14: DRY Principle resolved by delegating scoring logic to SocialTaskScoringService
+        return $this->scoring->calculateCameraContribution($cameraScore, $verifiedSignals);
     }
 
     public function getStats(): object

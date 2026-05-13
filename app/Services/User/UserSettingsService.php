@@ -20,7 +20,7 @@ class UserSettingsService extends \App\Services\BaseService
 
     // ─── Cache ───────────────────────────────────────────────────────────────
     private const CACHE_PREFIX = 'user_settings:';
-    private const CACHE_TTL = 3600; // 1 ساعت
+    private const CACHE_TTL = 300; // 5 دقیقه (MED-09: Optimized from 3600 to 300s for higher sync speed)
 
     // لیست کلیدهای حساس که نباید در لاگ‌ها دیده شوند
     private const SENSITIVE_KEYS = [

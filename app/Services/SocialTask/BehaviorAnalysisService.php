@@ -6,6 +6,8 @@ namespace App\Services\SocialTask;
 
 
 use App\Contracts\LoggerInterface;
+use App\Services\SettingService;
+
 /**
  * BehaviorAnalysisService
  *
@@ -13,7 +15,13 @@ use App\Contracts\LoggerInterface;
  */
 class BehaviorAnalysisService extends \App\Services\BaseService
 {
-    public function __construct(private SocialTaskScoringService $scoring) {}
+    public function __construct(
+        private SocialTaskScoringService $scoring,
+        protected LoggerInterface $logger,
+        private SettingService $settingService
+    ) {
+        parent::__construct($logger);
+    }
 
     /**
      * تحلیل کامل رفتار و برگرداندن گزارش + امتیاز
@@ -65,7 +73,10 @@ class BehaviorAnalysisService extends \App\Services\BaseService
         $scrollCount = (int)($signals['scroll_count'] ?? 0);
         $blurCount = (int)($signals['app_blur_count'] ?? 0);
 
-        if ($expectedTime > 0 && abs($sessionDuration - $expectedTime) <= 1) return true;
+        // MED-10: Relax threshold from 1s to 3s to mitigate human false positives, adjustable from admin dashboard
+        $maxTimeDiff = (int)$this->settingService->get('behavior_farm_time_threshold', 3);
+
+        if ($expectedTime > 0 && abs($sessionDuration - $expectedTime) <= $maxTimeDiff) return true;
         if ($scrollCount > 3 && $variance < 2) return true;
         if ($sessionDuration > 60 && $blurCount === 0 && $scrollCount === 0) return true;
 
@@ -89,10 +100,12 @@ class BehaviorAnalysisService extends \App\Services\BaseService
         $scrollVariance = (float)($signals['scroll_speed_variance'] ?? 999);
         $cameraScore = (int)($signals['camera_score'] ?? -1);
 
+        $maxTimeDiff = (int)$this->settingService->get('behavior_farm_time_threshold', 3);
+
         if ($variance < 5 && $tapCount > 5) $patterns[] = 'bot_fixed_timing';
         if ($tapCount === 0 && $scrollCount === 0 && $swipeCount === 0) $patterns[] = 'bot_no_interaction';
         if ($avgDelay > 0 && $avgDelay < 80 && $tapCount > 3) $patterns[] = 'bot_straight_movement';
-        if ($expectedTime > 0 && abs($sessionDuration - $expectedTime) <= 1 && $sessionDuration > 0) $patterns[] = 'farm_exact_timing';
+        if ($expectedTime > 0 && abs($sessionDuration - $expectedTime) <= $maxTimeDiff && $sessionDuration > 0) $patterns[] = 'farm_exact_timing';
         if ($scrollCount > 2 && $scrollVariance < 3) $patterns[] = 'farm_linear_scroll';
         if ($hesitation > 1 && $avgDelay > 300) $patterns[] = 'human_hesitation';
 
@@ -100,8 +113,15 @@ class BehaviorAnalysisService extends \App\Services\BaseService
         if ($interactionTypes >= 2) $patterns[] = 'human_mixed_interaction';
         if ($blurCount > 0 && $blurCount <= 3) $patterns[] = 'natural_app_switch';
         if ($sessionDuration > 0 && $activeTime > 0 && ($activeTime / $sessionDuration) < 0.3) $patterns[] = 'low_active_time';
-        if ($cameraScore >= 70) $patterns[] = 'camera_verified';
-        elseif ($cameraScore >= 0 && $cameraScore < 50) $patterns[] = 'camera_failed';
+        
+        // MED-11: Exclude default -1 explicitly from failure classifications (indicates camera not active/used)
+        if ($cameraScore === -1) {
+            // Separate neutral state - camera verification was not active for this execution
+        } elseif ($cameraScore >= 70) {
+            $patterns[] = 'camera_verified';
+        } elseif ($cameraScore >= 0 && $cameraScore < 50) {
+            $patterns[] = 'camera_failed';
+        }
 
         return $patterns;
     }

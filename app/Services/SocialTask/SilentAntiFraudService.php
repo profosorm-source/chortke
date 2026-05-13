@@ -54,6 +54,12 @@ class SilentAntiFraudService extends \App\Services\BaseService
         $components = [];
         $totalScore = 0.0;
 
+        // MED-19: Upgrade hardcoded risk components weights to dynamically fetch from system configuration
+        $weightIp      = (float)$this->settingService->get('risk_weight_ip', 0.35);
+        $weightSession = (float)$this->settingService->get('risk_weight_session', 0.25);
+        $weightMulti   = (float)$this->settingService->get('risk_weight_multi', 0.25);
+        $weightPattern = (float)$this->settingService->get('risk_weight_pattern', 0.15);
+
         // ۱. IP Quality
         if ($ip !== '') {
             $ipResult = $this->ipService->check($ip);
@@ -62,7 +68,7 @@ class SilentAntiFraudService extends \App\Services\BaseService
                 'score' => $ipScore,
                 'reasons' => $ipResult['reasons'] ?? [],
             ];
-            $totalScore += $ipScore * 0.35;
+            $totalScore += $ipScore * $weightIp;
         }
 
         // ۲. Session Anomaly
@@ -73,18 +79,18 @@ class SilentAntiFraudService extends \App\Services\BaseService
                 'score' => $sessionScore,
                 'anomalies' => $sessionResult['anomalies'] ?? [],
             ];
-            $totalScore += $sessionScore * 0.25;
+            $totalScore += $sessionScore * $weightSession;
         }
 
         // ۳. Multi-Account Detection
         $multiResult = $this->detectMultiAccount($userId, $ip, $fingerprint);
         $components['multi_account'] = $multiResult;
-        $totalScore += $multiResult['score'] * 0.25;
+        $totalScore += $multiResult['score'] * $weightMulti;
 
         // ۴. Pattern Anomaly
         $patternResult = $this->detectPatternAnomaly($userId);
         $components['pattern'] = $patternResult;
-        $totalScore += $patternResult['score'] * 0.15;
+        $totalScore += $patternResult['score'] * $weightPattern;
 
         $finalScore = (int)min(100, $totalScore);
 
@@ -112,6 +118,7 @@ class SilentAntiFraudService extends \App\Services\BaseService
         $maxRiskScore  = (int)$this->settingService->get('antifraud_max_risk_score', 30);
         $softMinScore  = (int)$this->settingService->get('antifraud_soft_min_score', 40);
 
+        // MED-20: Disambiguated soft_approved branching logic by explicitly applying detailed operational tags
         if ($taskScore >= $minTaskScore && $trustScore >= $minTrustScore && $riskScore < $maxRiskScore) {
             $decision   = 'approved';
             $payReward  = true;
@@ -119,29 +126,46 @@ class SilentAntiFraudService extends \App\Services\BaseService
             $flagReview = false;
             $reason     = 'score_trust_risk_all_good';
         } elseif ($taskScore >= $minTaskScore) {
+            // Flow A: Verified tasks that suffer from external signals (low trust or device risk markers)
             $decision   = 'soft_approved';
             $payReward  = true;
             $giveScore  = true;
             $flagReview = false;
-            $reason     = $trustScore < 60 ? 'low_trust' : 'high_risk';
+            $reason     = $trustScore < $minTrustScore ? 'soft_approved_low_trust' : 'soft_approved_high_risk';
         } elseif ($taskScore >= $softMinScore) {
+            // Flow B: Bare minimum borderline quality tasks that skip direct trust bonuses
             $decision   = 'soft_approved';
             $payReward  = true;
             $giveScore  = false;
             $flagReview = $taskScore < 50;
-            $reason     = 'borderline_score';
+            $reason     = 'soft_approved_borderline_score';
         } else {
             $decision   = 'rejected';
             $payReward  = false;
             $giveScore  = false;
             $flagReview = $taskScore < 20;
-            $reason     = 'low_score';
+            $reason     = 'low_score_rejected';
         }
 
         if ($decision === 'approved') {
             $this->trustService->rewardGoodTask($userId, $executionId);
         } elseif ($decision === 'rejected') {
             $this->trustService->penalizeRejection($userId, $executionId);
+
+            // ENHANCEMENT: Notify administrator automatically when highly critical rejections warrant verification flag
+            if ($flagReview) {
+                $this->notificationService->send([
+                    'to' => 'admin',
+                    'type' => 'antifraud.critical_rejection_flagged',
+                    'payload' => [
+                        'user_id'      => $userId,
+                        'execution_id' => $executionId,
+                        'task_score'   => $taskScore,
+                        'risk_score'   => $riskScore,
+                        'reason'       => $reason
+                    ]
+                ]);
+            }
         }
 
         $this->auditTrail->record(
@@ -173,11 +197,16 @@ class SilentAntiFraudService extends \App\Services\BaseService
     {
         $trustScore = $this->trustService->get($userId);
 
-        if ($trustScore < 20) {
+        // LOW-11: Scale static hardcoded boundaries into injectable dynamic thresholds
+        $highLimit   = (int)$this->settingService->get('restriction_trust_limit_high', 20);
+        $mediumLimit = (int)$this->settingService->get('restriction_trust_limit_medium', 40);
+        $lowLimit    = (int)$this->settingService->get('restriction_trust_limit_low', 60);
+
+        if ($trustScore < $highLimit) {
             $level = 'high';
-        } elseif ($trustScore < 40) {
+        } elseif ($trustScore < $mediumLimit) {
             $level = 'medium';
-        } elseif ($trustScore < 60) {
+        } elseif ($trustScore < $lowLimit) {
             $level = 'low';
         } else {
             $level = 'clean';
@@ -210,10 +239,15 @@ class SilentAntiFraudService extends \App\Services\BaseService
 
         if ($ip !== '') {
             $count = $this->model->getRecentExecutionsByIp($ip, $userId);
-            if ($count >= 5) {
+
+            // MED-21: Convert fixed IP repetition counts to configurable admin rules
+            $highLimit = (int)$this->settingService->get('antifraud_ip_threshold_high', 5);
+            $lowLimit  = (int)$this->settingService->get('antifraud_ip_threshold_low', 2);
+
+            if ($count >= $highLimit) {
                 $score += 60;
                 $reasons[] = "IP مشترک با {$count} کاربر دیگر";
-            } elseif ($count >= 2) {
+            } elseif ($count >= $lowLimit) {
                 $score += 30;
                 $reasons[] = "IP مشترک با {$count} کاربر دیگر";
             }
