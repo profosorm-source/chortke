@@ -47,4 +47,4 @@ $r->get('/withdrawal/limits',[WithdrawalController::class, 'limitsInfo'], $auth)
 
 // ── پرداخت آنلاین ─────────────────────────────────────────────────────────
 $r->post('/payment/request',  [PaymentController::class, 'request'], $secureAuth);
-$r->get('/payment/callback',  [PaymentController::class, 'callback']);
+$r->get('/payment/callback',  [PaymentController::class, 'callback'], [RateLimitMiddleware::class]);

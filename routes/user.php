@@ -33,6 +33,7 @@ use App\Controllers\User\CouponController;
 use App\Controllers\SearchController;
 use App\Controllers\User\CustomTaskAdController;
 use App\Controllers\User\SocialTaskController;
+use App\Controllers\User\TicketController;
 use App\Controllers\Api\SocialTaskApiController;
 
 use App\Controllers\User\MessageController;
@@ -98,6 +99,14 @@ $r->post('/notifications/delete',                  [UserNotificationController::
 $r->get('/disputes',                [DisputeController::class, 'index'],      $auth);
 $r->get('/disputes/{id}',           [DisputeController::class, 'show'],       $auth);
 $r->post('/disputes/{id}/reply',    [DisputeController::class, 'addMessage'], $authCSRF);
+
+// ── تیکت‌ها ───────────────────────────────────────────────────────────────────
+$r->get('/tickets',             [TicketController::class, 'index'],  $auth);
+$r->get('/tickets/create',      [TicketController::class, 'create'], $auth);
+$r->post('/tickets/store',      [TicketController::class, 'store'],  $authCSRF);
+$r->get('/tickets/show/{id}',   [TicketController::class, 'show'],   $auth);
+$r->post('/tickets/reply',      [TicketController::class, 'reply'],  $authCSRF);
+$r->post('/tickets/close',      [TicketController::class, 'close'],  $authCSRF);
 
 $r->post('/notifications/fcm-token',               [UserNotificationController::class, 'saveFcmToken'],     $authCSRF);
 

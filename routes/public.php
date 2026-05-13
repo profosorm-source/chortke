@@ -52,4 +52,4 @@ $router->get('/test-captcha',                [TestCaptchaController::class, 'ind
 $router->post('/test-captcha/verify',        [TestCaptchaController::class, 'verify'], $publicForm);
 
 // جستجوی عمومی (API fingerprint)
-$router->post('/api/fingerprint', [\App\Controllers\Api\FingerprintController::class, 'store'], [RateLimitMiddleware::class]);
+$router->post('/api/fingerprint', [\App\Controllers\Api\FingerprintController::class, 'store'], [CSRFMiddleware::class, RateLimitMiddleware::class]);

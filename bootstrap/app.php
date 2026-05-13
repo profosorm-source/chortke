@@ -211,7 +211,11 @@ $container->singleton(\App\Services\Adapters\KycFaceVerificationAdapter::class, 
 
 
 $container->singleton(\App\Models\SocialTaskModel::class, function($c) {
-    return new \App\Models\SocialTaskModel($c->make(\Core\Database::class));
+    return new \App\Models\SocialTaskModel(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Models\SocialTaskExecutionModel::class),
+        $c->make(\App\Models\SocialTaskAnalyticsModel::class)
+    );
 });
 
 $container->singleton(\App\Models\SocialTaskExecutionModel::class, function($c) {

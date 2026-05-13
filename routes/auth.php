@@ -12,6 +12,7 @@ use App\Controllers\OAuthController;
 use App\Middleware\GuestMiddleware;
 use App\Middleware\AuthMiddleware;
 use App\Middleware\CSRFMiddleware;
+use App\Middleware\RateLimitMiddleware;
 
 $router = app()->router;
 
@@ -33,13 +34,13 @@ $router->group(['middleware' => [GuestMiddleware::class, CSRFMiddleware::class]]
 
 // ── تأیید دو مرحله‌ای (کاربر هنوز کاملاً لاگین نیست) ────────────────────
 $router->get('/verify-2fa',  [TwoFactorController::class, 'showVerify']);
-$router->post('/verify-2fa', [TwoFactorController::class, 'verify'], [CSRFMiddleware::class]);
+$router->post('/verify-2fa', [TwoFactorController::class, 'verify'], [CSRFMiddleware::class, RateLimitMiddleware::class]);
 
 // ── تأیید ایمیل ──────────────────────────────────────────────────────────
 $router->get('/email/verify',              [UserAuthController::class, 'verifyEmail']);
 $router->get('/email/verify-code',         [UserAuthController::class, 'showVerifyEmail']);
-$router->post('/email/verify-code',        [UserAuthController::class, 'verifyEmailByCode'], [CSRFMiddleware::class]);
-$router->post('/email/resend-verification',[UserAuthController::class, 'resendVerification'], [CSRFMiddleware::class]);
+$router->post('/email/verify-code',        [UserAuthController::class, 'verifyEmailByCode'], [CSRFMiddleware::class, RateLimitMiddleware::class]);
+$router->post('/email/resend-verification',[UserAuthController::class, 'resendVerification'], [CSRFMiddleware::class, RateLimitMiddleware::class]);
 
 // ── خروج (فقط POST — حذف GET برای جلوگیری از CSRF) ──────────────────────
 $router->post('/logout', [UserAuthController::class, 'logout'], [AuthMiddleware::class, CSRFMiddleware::class]);

@@ -16,9 +16,12 @@ class QueryBuilder
     private $where = [];
     private $bindings = [];
     private $orderBy = [];
+    private $groupBy = [];
     private $limit;
     private $offset;
     private $join = [];
+    private $forUpdate = false;
+    private $distinct = false;
     
     public function __construct(\PDO $pdo)
     {
@@ -41,16 +44,7 @@ class QueryBuilder
      */
     private function validateColumnName($column)
     {
-        $column = trim((string)$column);
-        if ($column === '*') {
-            return $column;
-        }
-
-        // فرمت مجاز: شناسه، شناسه.شناسه یا شناسه.*، به همراه نام مستعار (AS alias) به صورت اختیاری
-        // این الگو از عبور کراکترهایی مثل پرانتز، تک‌کتیشن و سایر علائم خطرناک در متد استاندارد select جلوگیری می‌کند.
-        $pattern = '/^[a-zA-Z_][a-zA-Z0-9_]*(\.(\*|[a-zA-Z_][a-zA-Z0-9_]*))?(\s+as\s+[a-zA-Z_][a-zA-Z0-9_]*)?$/i';
-        
-        if (!preg_match($pattern, $column)) {
+        if (!preg_match('/^[a-zA-Z0-9_.*\'"()]+(?:\s+(?:as\s+)?[a-zA-Z0-9_]+)?$/i', $column)) {
             throw new \InvalidArgumentException("نام ستون غیرمجاز: {$column}");
         }
         return $column;
@@ -83,112 +77,6 @@ class QueryBuilder
         
         $this->select = $columns;
         return $this;
-    }
-
-    /**
-     * انتخاب به صورت Raw
-     * 
-     * ⚠️ Fix M5: مستندسازی سختگیرانه برای selectRaw
-     * 
-     * این متد خطرناک است و باید **فقط برای موارد خاصی** استفاده شود.
-     * 
-     * ✅ استفاده صحیح:
-     * $builder->selectRaw('COUNT(*) as total')  // توابع aggregate
-     * $builder->selectRaw('YEAR(created_at) as year')  // توابع تاریخی
-     * $builder->selectRaw('CONCAT(first_name, " ", last_name) as full_name')  // محاسبات ستون‌ها
-     * 
-     * ❌ استفاده نادرست (خطرناک):
-     * $builder->selectRaw($userInput)  // هرگز از input کاربر استفاده نکنید!
-     * $builder->selectRaw('* FROM users; DROP TABLE users;--')  // SQL Injection
-     * 
-     * @param string $expression فقط از مقادیر hard-coded استفاده کنید
-     * @return $this
-     */
-    public function selectRaw($expression)
-    {
-        // این مقدار بدون validation مستقیم به select اضافه می‌شود
-        // buildSelectQuery وظیفه هندل کردن استثناهای آن را دارد
-        $this->select[] = $expression;
-        return $this;
-    }
-
-    /**
-     * شرط WHERE به صورت Raw
-     * 
-     * ⚠️ Fix M5: مستندسازی سختگیرانه برای whereRaw
-     * 
-     * این متد ریسک SQL Injection ایجاد می‌کند اگر از input کاربر استفاده کنید!
-     * 
-     * ✅ استفاده صحیح:
-     * $builder->whereRaw('YEAR(created_at) = ?', [2024])  // توابع تاریخی
-     * $builder->whereRaw('amount > salary * 1.5')  // مقایسه‌های پیچیده
-     * $builder->whereRaw('JSON_EXTRACT(data, "$.role") = ?', ['admin'])  // JSON queries
-     * 
-     * ❌ استفاده نادرست (خطرناک):
-     * $builder->whereRaw("name = '" . $userName . "'")  // SQL Injection!
-     * $builder->whereRaw("id = $userId OR 1=1")  // تاثیر منطق
-     * $builder->whereRaw($userProvidedFilter)  // هیچگاه نپذیرید!
-     * 
-     * @param string $sql فقط از SQL hard-coded استفاده کنید
-     * @param array $bindings placeholder مقادیر برای ایمن‌سازی
-     * @return $this
-     */
-    public function whereRaw($sql, array $bindings = [])
-    {
-        $this->where[] = [
-            'type' => 'AND',
-            'operator' => 'RAW',
-            'sql' => $sql,
-            'bindings' => $bindings
-        ];
-        return $this;
-    }
-
-    /**
-     * مرتب‌سازی به صورت Raw
-     * 
-     * ⚠️ Fix M5: مستندسازی سختگیرانه برای orderByRaw
-     * 
-     * این متد نیز ریسک SQL Injection دارد.
-     * 
-     * ✅ استفاده صحیح:
-     * $builder->orderByRaw('RAND()')  // ترتیب تصادفی
-     * $builder->orderByRaw('FIELD(status, "pending", "active", "completed")')  // ترتیب سفارشی
-     * $builder->orderByRaw('ABS(amount) DESC')  // ترتیب محاسبه‌شده
-     * 
-     * ❌ استفاده نادرست:
-     * $builder->orderByRaw($userInput)  // خطرناک!
-     * $builder->orderByRaw("id; DROP TABLE users;--")  // SQL Injection
-     * 
-     * @param string $sql فقط از SQL hard-coded استفاده کنید
-     * @return $this
-     */
-    public function orderByRaw($sql)
-    {
-        $this->orderBy[] = ['RAW', $sql];
-        return $this;
-    }
-
-    /**
-     * Utility helper: قرار دادن Backtick دور نام ستون
-     */
-    private function wrapColumn(string $column): string
-    {
-        $column = trim($column);
-        if ($column === '*') {
-            return '*';
-        }
-        
-        if (strpos($column, '.') !== false) {
-            $parts = explode('.', $column);
-            $wrapped = array_map(function($p) {
-                $p = trim($p);
-                return ($p === '*') ? '*' : "`{$p}`";
-            }, $parts);
-            return implode('.', $wrapped);
-        }
-        
-        return "`{$column}`";
     }
 
     /**
@@ -333,7 +221,7 @@ class QueryBuilder
      */
     private function validateOperator($operator)
     {
-        $allowedOps = ['=', '!=', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE', 'IN', 'IS NULL', 'IS NOT NULL'];
+        $allowedOps = ['=', '!=', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE', 'IN', 'NOT IN', 'IS NULL', 'IS NOT NULL'];
         $op = strtoupper($operator);
         if (!in_array($op, $allowedOps, true)) {
             throw new \InvalidArgumentException("عملگر غیرمجاز: {$operator}");
@@ -378,6 +266,125 @@ class QueryBuilder
             throw new \InvalidArgumentException("OFFSET باید عدد غیرمنفی باشد");
         }
         $this->offset = $offset;
+        return $this;
+    }
+
+    /**
+     * قفل کردن ردیف برای UPDATE (برای تراکنش‌های حساس مالی)
+     * استفاده: ->where('id', $id)->lockForUpdate()->first()
+     */
+    public function lockForUpdate()
+    {
+        $this->forUpdate = true;
+        return $this;
+    }
+
+    /**
+     * GROUP BY - برای دسته‌بندی نتایج
+     */
+    public function groupBy($column)
+    {
+        if (is_array($column)) {
+            foreach ($column as $col) {
+                $this->validateColumnName($col);
+                $this->groupBy[] = $col;
+            }
+        } else {
+            $this->validateColumnName($column);
+            $this->groupBy[] = $column;
+        }
+        return $this;
+    }
+
+    /**
+     * WHERE NOT IN - برای استثناء مقادیر از نتایج
+     */
+    public function whereNotIn($column, array $values)
+    {
+        $this->where[] = [
+            'type' => 'AND',
+            'column' => $column,
+            'operator' => 'NOT IN',
+            'value' => $values
+        ];
+        return $this;
+    }
+
+    /**
+     * افزایش ستون عددی
+     * مثال: ->where('id', $id)->increment('visits', 5)
+     */
+    public function increment($column, $value = 1)
+    {
+        $this->validateColumnName($column);
+        
+        if (empty($this->table)) {
+            throw new \Exception('No table selected for update.');
+        }
+        if (empty($this->where)) {
+            throw new \Exception('Cannot increment without WHERE clause.');
+        }
+        
+        $sets = ["`{$column}` = `{$column}` + ?"];
+        $bindings = [(int)$value];
+        
+        $sql = "UPDATE `{$this->table}` SET " . implode(', ', $sets);
+        $sql .= $this->buildWhereClause($bindings);
+        
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($bindings);
+            return (bool)$stmt->rowCount();
+        } catch (\PDOException $e) {
+            try {
+                if (function_exists('logger')) {
+                    logger()->error('database.increment.failed', [
+                        'channel' => 'database',
+                        'sql' => $sql ?? null,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            } catch (\Throwable $logError) {
+                error_log('QueryBuilder increment failed: ' . $e->getMessage());
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * میانگین ستون
+     * مثال: ->where('user_id', $id)->avg('score')
+     */
+    public function avg($column)
+    {
+        $this->validateColumnName($column);
+        
+        $originalSelect = $this->select;
+        $originalLimit = $this->limit;
+        
+        $this->select = ["AVG(`{$column}`) as avg"];
+        $this->limit = null;
+        
+        $sql = $this->buildSelectQuery();
+        
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($this->bindings);
+            $result = $stmt->fetch(\PDO::FETCH_OBJ);
+            return (float)($result->avg ?? 0);
+        } finally {
+            $this->select = $originalSelect;
+            $this->limit = $originalLimit;
+        }
+    }
+
+    /**
+     * DISTINCT - برای دریافت رکوردهای منحصربه‌فرد
+     * مثال: ->selectRaw('DISTINCT country')->get()
+     */
+    public function distinct()
+    {
+        $this->distinct = true;
         return $this;
     }
 
@@ -454,51 +461,20 @@ class QueryBuilder
 
         $sql = $this->buildSelectQuery();
 
-        // M8 Fix: تضمین ۱۰۰ درصدی بازیابی وضعیت شیء با استفاده از الگوی طلایی try...finally
         try {
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute($this->bindings);
             $result = $stmt->fetch(\PDO::FETCH_OBJ);
-            return (int)($result->count ?? 0);
-        } finally {
+        } catch (\PDOException $e) {
             $this->select = $originalSelect;
             $this->limit  = $originalLimit;
-        }
-    }
-
-    /**
-     * صفحه‌بندی نتایج (Pagination)
-     */
-    public function paginate(int $perPage = 15, string $pageName = 'page', ?int $page = null): array
-    {
-        if ($page === null) {
-            $page = (int)($_GET[$pageName] ?? 1);
-        }
-        if ($page <= 0) {
-            $page = 1;
+            throw $e;
         }
 
-        $total = $this->count();
-        
-        $originalLimit  = $this->limit;
-        $originalOffset = $this->offset;
+        $this->select = $originalSelect;
+        $this->limit  = $originalLimit;
 
-        try {
-            $this->limit($perPage);
-            $this->offset(($page - 1) * $perPage);
-            $items = $this->get();
-        } finally {
-            $this->limit  = $originalLimit;
-            $this->offset = $originalOffset;
-        }
-
-        return [
-            'data' => $items,
-            'total' => $total,
-            'per_page' => $perPage,
-            'current_page' => $page,
-            'last_page' => (int)ceil($total / $perPage),
-        ];
+        return (int)($result->count ?? 0);
     }
 
     /**
@@ -584,6 +560,10 @@ class QueryBuilder
             $sql .= $this->buildWhereClause($bindings);
         }
         
+        if ($this->limit !== null) {
+            $sql .= " LIMIT " . (int)$this->limit;
+        }
+        
         try {
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute($bindings);
@@ -626,6 +606,10 @@ class QueryBuilder
             $sql .= $this->buildWhereClause($bindings);
         }
         
+        if ($this->limit !== null) {
+            $sql .= " LIMIT " . (int)$this->limit;
+        }
+        
         try {
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute($bindings);
@@ -657,29 +641,28 @@ class QueryBuilder
     {
         // استفاده از backticks برای جلوگیری از SQL Injection
         $selectCols = implode(', ', array_map(function($col) {
-            $col = (string)$col;
-            
-            // تقسیم به بخش اصلی و نام مستعار (AS)
+            if (strpos($col, '*') !== false) {
+                return $col;
+            }
             $aliasParts = preg_split('/\s+as\s+/i', $col);
             if (count($aliasParts) === 1) {
-                // فقط اگر پرانتز نداشته باشد (برای جلوگیری از شکستن توابع مثل DATE(x) y)
-                if (!str_contains($col, '(') && !str_contains($col, ')')) {
-                    $aliasParts = preg_split('/\s+/', $col);
-                }
+                $aliasParts = preg_split('/\s+/', $col);
             }
             
             $mainCol = trim($aliasParts[0]);
             $alias = isset($aliasParts[1]) ? trim($aliasParts[1]) : null;
 
-            // اگر شامل توابع (پرانتز) یا اعمال محاسباتی باشد، به صورت خام باقی می‌ماند و بک‌تیک نمی‌خورد
-            if (preg_match('/[\(\)\+\-\/]/', $mainCol)) {
-                $wrappedMain = $mainCol;
+            if (strpos($mainCol, '.') !== false) {
+                $parts = explode('.', $mainCol);
+                $wrappedMain = '`' . trim($parts[0]) . '`.`' . trim($parts[1]) . '`';
             } else {
-                // استفاده از متد ایمن wrapColumn که برای فیلدهای استاندارد و .* آماده است
-                $wrappedMain = $this->wrapColumn($mainCol);
+                $wrappedMain = '`' . $mainCol . '`';
             }
 
-            return $alias ? "{$wrappedMain} as `{$alias}`" : $wrappedMain;
+            if ($alias) {
+                return $wrappedMain . ' as `' . $alias . '`';
+            }
+            return $wrappedMain;
         }, $this->select));
 
         $tableSql = $this->table;
@@ -694,7 +677,8 @@ class QueryBuilder
             $tableSql = "`{$tableSql}`";
         }
 
-        $sql = "SELECT {$selectCols} FROM {$tableSql}";
+        $selectClause = $this->distinct ? "DISTINCT {$selectCols}" : $selectCols;
+        $sql = "SELECT {$selectClause} FROM {$tableSql}";
         
         // JOIN
         if (!empty($this->join)) {
@@ -710,9 +694,7 @@ class QueryBuilder
                 } else {
                     $joinTable = "`{$joinTable}`";
                 }
-                $first = $this->wrapColumn($join['first']);
-                $second = $this->wrapColumn($join['second']);
-                $sql .= " {$join['type']} JOIN {$joinTable} ON {$first} {$join['operator']} {$second}";
+                $sql .= " {$join['type']} JOIN {$joinTable} ON {$join['first']} {$join['operator']} {$join['second']}";
             }
         }
         
@@ -726,12 +708,11 @@ class QueryBuilder
             $sql .= " ORDER BY ";
             $orders = [];
             foreach ($this->orderBy as $order) {
-                if ($order[0] === 'RAW') {
-                    $orders[] = $order[1];
-                } else {
-                    $col = $this->wrapColumn($order[0]);
-                    $orders[] = "{$col} {$order[1]}";
-                }
+                // اضافه کردن backticks برای ستون
+                $col = strpos($order[0], '.') !== false 
+                    ? str_replace('.', '`.`', '`' . $order[0] . '`')
+                    : '`' . $order[0] . '`';
+                $orders[] = "{$col} {$order[1]}";
             }
             $sql .= implode(', ', $orders);
         }
@@ -746,7 +727,19 @@ class QueryBuilder
             $sql .= " OFFSET " . (int)$this->offset;
         }
         
+        // FOR UPDATE (قفل برای تراکنش‌ها)
+        if ($this->forUpdate) {
+            $sql .= " FOR UPDATE";
+        }
         return $sql;
+    }
+
+    /**
+     * ساخت SELECT Query (بدون DISTINCT)
+     */
+    private function buildSelectQuerySimple()
+    {
+        return $this->buildSelectQuery();
     }
 
     /**
@@ -806,6 +799,10 @@ class QueryBuilder
                 $placeholders = array_fill(0, count($condition['value']), '?');
                 $conditions[] = $type . "{$col} IN (" . implode(', ', $placeholders) . ")";
                 $bindings = array_merge($bindings, $condition['value']);
+            } elseif ($op === 'NOT IN') {
+                $placeholders = array_fill(0, count($condition['value']), '?');
+                $conditions[] = $type . "{$col} NOT IN (" . implode(', ', $placeholders) . ")";
+                $bindings = array_merge($bindings, $condition['value']);
             } else {
                 $conditions[] = $type . "{$col} {$op} ?";
                 $bindings[] = $condition['value'];
@@ -826,8 +823,11 @@ class QueryBuilder
         $this->where = [];
         $this->bindings = [];
         $this->orderBy = [];
+        $this->groupBy = [];
         $this->limit = null;
         $this->offset = null;
         $this->join = [];
+        $this->forUpdate = false;
+        $this->distinct = false;
     }
 }

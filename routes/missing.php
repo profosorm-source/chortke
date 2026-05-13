@@ -176,22 +176,18 @@ $r->get('/admin/captcha/settings', function() {
 
 // واریز دستی — shortcut
 $r->get('/manual-deposit/create',   [ManualDepositController::class, 'create'], $auth);
-$r->get('/manual-deposits',         [ManualDepositController::class, 'index'],  $auth);
 
 // واریز کریپتو — shortcut
 $r->get('/crypto-deposit/create',   [CryptoDepositController::class, 'create'], $auth);
-$r->get('/crypto-deposits',         [CryptoDepositController::class, 'index'],  $auth);
 
 // برداشت — shortcut
 $r->get('/withdrawal/create',       [WithdrawalController::class, 'create'],     $auth);
+$r->post('/withdrawal/challenge/request', [WithdrawalController::class, 'requestWithdrawalChallenge'], $authCSRF);
+$r->post('/withdrawal/challenge/verify',  [WithdrawalController::class, 'verifyWithdrawalChallenge'],  $authCSRF);
 
 // ════════════════════════════════════════════════════════════════════════════
-// BANK CARDS — مسیرهای POST بدون {id} در URL (id از body می‌آید)
+// BANK CARDS — مسیرهای GET برای ایجاد/نمایش در user.php موجودند
 // ════════════════════════════════════════════════════════════════════════════
-
-
-$r->post('/bank-cards/delete',      [UserBankCardController::class, 'delete'],     $authCSRF);
-$r->post('/bank-cards/set-default', [UserBankCardController::class, 'setDefault'], $authCSRF);
 
 // ════════════════════════════════════════════════════════════════════════════
 // DASHBOARD SHORTCUTS — لینک‌های مستقیم داشبورد کاربر

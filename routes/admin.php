@@ -46,7 +46,6 @@ use App\Controllers\Admin\AuditTrailController;
 use App\Controllers\Admin\AdminExportController;
 use App\Controllers\Admin\FeatureFlagController;
 use App\Controllers\SearchController;
-use App\Controllers\User\TicketController         as UserTicketController;
 use App\Controllers\Admin\RiskPolicyController;
 use App\Controllers\Admin\ScoreManagementController;
 use App\Controllers\Admin\SentryAdminController;
@@ -222,12 +221,6 @@ $r->post('/admin/levels/{id}/update',             [AdminLevelController::class, 
 $r->post('/admin/levels/{id}/delete',             [AdminLevelController::class, 'destroy'],         array_merge($admin, [PermissionMiddleware::class . ':settings.edit']));
 $r->post('/admin/levels/change-user-level',       [AdminLevelController::class, 'changeUserLevel'], array_merge($admin, [PermissionMiddleware::class . ':users.edit']));
 
-// ── وظایف سفارشی ─────────────────────────────────────────────────────────────
-$r->get('/admin/custom-tasks',                    [AdminAdTaskController::class, 'index'],          array_merge($admin, [PermissionMiddleware::class . ':tasks.view']));
-$r->post('/admin/custom-tasks/approve',           [AdminAdTaskController::class, 'approve'],        array_merge($admin, [PermissionMiddleware::class . ':tasks.approve']));
-$r->get('/admin/custom-tasks/disputes',           [AdminExecutorTaskController::class, 'disputes'],       array_merge($admin, [PermissionMiddleware::class . ':tasks.manage']));
-$r->post('/admin/custom-tasks/disputes/resolve',  [AdminExecutorTaskController::class, 'resolveDispute'], array_merge($admin, [PermissionMiddleware::class . ':tasks.manage']));
-
 // ── استوری ──────────────────────────────────────────────────────────────────
 $r->get('/admin/influencer/orders',                   [AdminInfluencerController::class, 'orders'],        array_merge($admin, [PermissionMiddleware::class . ':influencer.view']));
 $r->get('/admin/influencer/profiles',                 [AdminInfluencerController::class, 'profiles'],      array_merge($admin, [PermissionMiddleware::class . ':influencer.manage']));
@@ -321,14 +314,7 @@ $r->get('/admin/pages/edit/{id}',   [AdminPageController::class, 'edit'],   $adm
 $r->post('/admin/pages/update/{id}',[AdminPageController::class, 'update'], $admin);
 $r->post('/admin/pages/delete',     [AdminPageController::class, 'delete'], $admin);
 
-// ── تیکت‌ها ───────────────────────────────────────────────────────────────────
-$r->get('/tickets',             [UserTicketController::class, 'index'],  [AuthMiddleware::class]);
-$r->get('/tickets/create',      [UserTicketController::class, 'create'], [AuthMiddleware::class]);
-$r->post('/tickets/store',      [UserTicketController::class, 'store'],  [AuthMiddleware::class]);
-$r->get('/tickets/show/{id}',   [UserTicketController::class, 'show'],   [AuthMiddleware::class]);
-$r->post('/tickets/reply',      [UserTicketController::class, 'reply'],  [AuthMiddleware::class]);
-$r->post('/tickets/close',      [UserTicketController::class, 'close'],  [AuthMiddleware::class]);
-
+// ── تیکت‌ها (ادمین فقط) ───────────────────────────────────────────────────────────────────
 $r->get('/admin/tickets',                  [AdminTicketController::class, 'index'],        $admin);
 $r->get('/admin/tickets/show/{id}',        [AdminTicketController::class, 'show'],         $admin);
 $r->post('/admin/tickets/reply',           [AdminTicketController::class, 'reply'],        $admin);
@@ -476,7 +462,6 @@ $r->get('/admin/fraud/risk-report',         [FraudController::class, 'getRiskRep
 $r->post('/admin/fraud/recalculate-score',  [FraudController::class, 'recalculateScore'],  $admin);
 $r->post('/admin/fraud/execute-actions',    [FraudController::class, 'executeActions'],    $admin);
 $r->get('/admin/fraud/high-risk-users',     [FraudController::class, 'getHighRiskUsers'],  $admin);
-$r->get('/admin/fraud/logs',                [FraudController::class, 'getFraudLogs'],      $admin);
 $r->post('/admin/fraud/clear-flags',        [FraudController::class, 'clearFlags'],        $admin);
 $r->post('/admin/fraud/suspend-user',       [FraudController::class, 'suspendUser'],       $admin);
 $r->post('/admin/fraud/unsuspend-user',     [FraudController::class, 'unsuspendUser'],     $admin);
