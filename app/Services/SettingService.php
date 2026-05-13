@@ -1,0 +1,223 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services;
+
+use App\Models\Setting;
+use Core\Cache;
+use App\Contracts\LoggerInterface;
+
+class SettingService extends \App\Services\BaseService
+{
+    private \Core\Database $db;
+    private Setting $model;
+    private Cache $cache;
+
+    // کش درون حافظه‌ای (Runtime Stack) برای پیشگیری از مراجعه مکرر در طول یک درخواست واحد
+    private static ?array $runtimeCache = null;
+
+    // کلید کش مرکزی سیستم
+    private const CACHE_KEY = 'system:settings:v2';
+    private const CACHE_TTL = 60; // دقیقه
+
+    public function __construct(
+        Setting $model,
+        \Core\Database $db,
+        Cache $cache,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+        $this->model     = $model;
+        $this->db        = $db;
+        $this->cache     = $cache;
+    }
+
+    /**
+     * بارگذاری هوشمند و کش‌شده تمام تنظیمات با قابلیت Type-Casting
+     */
+    public function load(): array
+    {
+        // ۱. لایه طلایی: کش مستقیم در حافظه (Memory Stack)
+        if (self::$runtimeCache !== null) {
+            return self::$runtimeCache;
+        }
+
+        // ۲. لایه نقره‌ای: کش توزیع شده (Redis / File Driver)
+        $cachedData = $this->cache->get(self::CACHE_KEY);
+        if (is_array($cachedData)) {
+            self::$runtimeCache = $cachedData;
+            return $cachedData;
+        }
+
+        // ۳. لایه دیتابیس: واکشی و تبدیل هوشمند مقادیر
+        try {
+            // دریافت کامل سطرها شامل ستون Type
+            $rawSettings = $this->model->getAll();
+            $parsedSettings = [];
+
+            foreach ($rawSettings as $row) {
+                $key = (string)($row->key ?? '');
+                if ($key === '') continue;
+
+                // تبدیل هوشمند نوع داده (Smart Casting)
+                $parsedSettings[$key] = $this->castValue($row->value ?? '', (string)($row->type ?? 'string'));
+            }
+
+            // ذخیره در لایه‌های کش برای مراجعات بعدی
+            $this->cache->put(self::CACHE_KEY, $parsedSettings, self::CACHE_TTL);
+            self::$runtimeCache = $parsedSettings;
+
+            return $parsedSettings;
+
+        } catch (\Throwable $e) {
+            $this->logger->error('settings.load_failed', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+
+    /**
+     * دریافت مقدار یک تنظیم خاص با هوشمندسازی نوع داده
+     */
+    public function get(string $key, mixed $default = null): mixed
+    {
+        $all = $this->load();
+        return $all[$key] ?? $default;
+    }
+
+    /**
+     * ذخیره مقدار جدید برای یک کلید خاص و پاکسازی آنی تمام کش‌ها
+     */
+    public function set(string $key, string $value): bool
+    {
+        $ok = $this->model->set($key, $value);
+        if ($ok) {
+            $this->clearCache();
+        }
+        return $ok;
+    }
+
+    /**
+     * ذخیره دسته‌ای تنظیمات و پاکسازی تجمیعی کش
+     */
+    public function setMany(array $settings): bool
+    {
+        $ok = $this->model->setMany($settings);
+        if ($ok) {
+            $this->clearCache();
+        }
+        return $ok;
+    }
+
+    /**
+     * بروزرسانی امن مقدار با شناسه (جایگزین کوئری‌های خام قبلی)
+     */
+    public function updateById(int $id, string $key, string $value): bool
+    {
+        $record = $this->model->find($id);
+        
+        // اعتبارسنجی تطابق کلید جهت جلوگیری از بروزرسانی‌های ناخواسته
+        if (!$record || (string)($record->key ?? '') !== $key) {
+            return false;
+        }
+
+        return $this->updateValueById($id, $value);
+    }
+
+    /**
+     * بروزرسانی مقدار با شناسه مستقیم و پاکسازی کش
+     */
+    public function updateValueById(int $id, string $value): bool
+    {
+        $ok = $this->model->updateValueById($id, $value);
+        if ($ok) {
+            $this->clearCache();
+        }
+        return $ok;
+    }
+
+    /**
+     * دریافت تنظیمات تفکیک شده بر اساس دسته‌بندی (مستقیم از مدل)
+     */
+    public function getByCategory(string $category): array
+    {
+        return $this->model->getByCategory($category);
+    }
+
+    /**
+     * جستجوی یک تنظیم کامل بر اساس شناسه
+     */
+    public function find(int $id): ?object
+    {
+        return $this->model->find($id);
+    }
+
+    /**
+     * جستجوی یک تنظیم کامل بر اساس کلید
+     */
+    public function findByKey(string $key): ?object
+    {
+        return $this->model->findByKey($key);
+    }
+
+    /**
+     * متد پشتیبان بارگذاری همه تنظیمات (همگام‌سازی شده با لودر هوشمند)
+     */
+    public function loadAll(): array
+    {
+        return $this->load();
+    }
+
+    /**
+     * پاک‌سازی فوری تمام لایه‌های کش (دستی و توزیع شده)
+     */
+    public function clearCache(): void
+    {
+        self::$runtimeCache = null;
+        $this->cache->forget(self::CACHE_KEY);
+    }
+
+    // =========================================================================
+    // Private Engine
+    // =========================================================================
+
+    /**
+     * تبدیل هوشمند داده‌های دیتابیس بر اساس تایپ تعریف شده
+     */
+    private function castValue(?string $value, string $type): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $type = strtolower(trim($type));
+
+        switch ($type) {
+            case 'boolean':
+            case 'bool':
+                // مدیریت دقیق مقادیر متنی رایج برای بولین
+                if (in_array(strtolower($value), ['false', '0', 'no', 'off', ''], true)) {
+                    return false;
+                }
+                return true;
+
+            case 'integer':
+            case 'int':
+                return (int) $value;
+
+            case 'float':
+            case 'double':
+            case 'numeric':
+                return (float) $value;
+
+            case 'json':
+            case 'array':
+                $decoded = json_decode($value, true);
+                return is_array($decoded) ? $decoded : [];
+
+            case 'string':
+            default:
+                return (string) $value;
+        }
+    }
+}
