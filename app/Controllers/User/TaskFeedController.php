@@ -6,7 +6,6 @@ namespace App\Controllers\User;
 
 use App\Controllers\BaseController;
 use App\Services\UnifiedTaskService;
-use Core\Database;
 
 /**
  * TaskFeedController - The Master Dashboard for Workers to Find and Filter Earning Tasks.
@@ -14,8 +13,7 @@ use Core\Database;
 class TaskFeedController extends BaseController
 {
     public function __construct(
-        private UnifiedTaskService $taskService,
-        private Database $db
+        private UnifiedTaskService $taskService
     ) {
         parent::__construct();
     }
@@ -50,15 +48,9 @@ class TaskFeedController extends BaseController
         // Helper Lookups for Filter Dropsdowns
         $platforms = $this->taskService->getAvailablePlatforms();
 
-        // Statistics / User Status quick-glance cards
-        $userStats = $this->db->fetch("
-            SELECT 
-                (SELECT COUNT(*) FROM social_task_executions WHERE executor_id = ? AND status = 'completed') as s_done,
-                (SELECT COUNT(*) FROM seo_executions WHERE user_id = ? AND status = 'completed') as seo_done,
-                (SELECT COUNT(*) FROM custom_task_submissions WHERE user_id = ? AND status = 'approved') as c_done
-        ", [$userId, $userId, $userId]);
-
-        $totalDone = (int)($userStats->s_done ?? 0) + (int)($userStats->seo_done ?? 0) + (int)($userStats->c_done ?? 0);
+        // Get executor stats from service
+        $stats = $this->taskService->getExecutorStats($userId);
+        $userStats = (object)$stats;
 
         return view('user.tasks.feed', [
             'tasks'       => $tasks,
@@ -67,7 +59,8 @@ class TaskFeedController extends BaseController
             'currentPage' => $page,
             'filters'     => $filters,
             'platforms'   => $platforms,
-            'totalDone'   => $totalDone
+            'userStats'   => $userStats,
+            'totalDone'   => $userStats->total_completed ?? 0
         ]);
     }
 }

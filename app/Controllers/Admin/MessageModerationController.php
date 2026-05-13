@@ -4,11 +4,7 @@ declare(strict_types=1);
 namespace App\Controllers\Admin;
 
 use Core\Controller;
-use Core\Database;
-use Core\Logger;
-use Core\Response;
 use App\Services\MessageModerationService;
-use App\Models\InteractionModel;
 
 /**
  * MessageModerationController
@@ -34,36 +30,10 @@ class MessageModerationController extends Controller
         $limit  = 20;
         $offset = ($page - 1) * $limit;
 
-        // دریافت گزارش‌ها
-        $reports = $this->db->table('message_reports')
-            ->join('direct_messages', 'message_reports.message_id', '=', 'direct_messages.id')
-            ->join('users', 'message_reports.reporter_id', '=', 'users.id')
-            ->select([
-                'message_reports.id',
-                'message_reports.message_id',
-                'message_reports.reason',
-                'message_reports.status',
-                'message_reports.created_at',
-                'direct_messages.message',
-                'direct_messages.sender_id',
-                'direct_messages.recipient_id',
-                'users.name as reporter_name',
-                'users.email as reporter_email'
-            ])
-            ->when($status !== 'all', function($q) use ($status) {
-                return $q->where('message_reports.status', '=', $status);
-            })
-            ->orderBy('message_reports.created_at', 'DESC')
-            ->limit($limit)
-            ->offset($offset)
-            ->get();
-
-        // تعداد کل
-        $total = $this->db->table('message_reports')
-            ->when($status !== 'all', function($q) use ($status) {
-                return $q->where('status', '=', $status);
-            })
-            ->count();
+        // Use service to get reports
+        $result = $this->moderationService->getReportsPaginated($status, $limit, $offset);
+        $reports = $result['reports'] ?? [];
+        $total = $result['total'] ?? 0;
 
         view('admin/messages/reports', [
             'reports'      => $reports,

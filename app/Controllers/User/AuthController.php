@@ -26,7 +26,8 @@ class AuthController extends BaseController
         private UserService $userService,
         private \App\Services\CaptchaService $captchaService,
         private AuthService $authService,
-        private LoginRiskService $loginRiskService
+        private LoginRiskService $loginRiskService,
+        private \App\Services\AntiFraud\FraudGuardService $fraudGuard
     ) {
         parent::__construct($session, $request, $response, $policyService, $logger);
     }
@@ -90,6 +91,26 @@ class AuthController extends BaseController
 
         if ($validator->fails()) {
             $this->session->setFlash('error', 'لطفاً اطلاعات را به درستی وارد کنید.');
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        // 🛡️ گیت ضدتقلب و امنیت هوشمند
+        $user = $this->userService->findByEmail((string)$data['email']);
+        $userId = $user ? (int)$user->id : 0;
+
+        $risk = $this->fraudGuard->checkAction($userId, 'auth.login', [
+            'email'      => (string)$data['email'],
+            'ip'         => $this->request->ip(),
+            'user_agent' => $this->request->userAgent()
+        ]);
+
+        if (!$risk['allowed']) {
+            $this->logger->warning('auth.login_blocked_by_fraud_guard', [
+                'email' => $data['email'],
+                'reason' => $risk['reason']
+            ]);
+            $this->session->setFlash('error', 'درخواست ورود به دلیل تشخیص فعالیت غیرمجاز مسدود گردید.');
             $this->response->redirect(url('login'));
             return;
         }
@@ -179,6 +200,24 @@ class AuthController extends BaseController
         $errors = $this->authService->validateRegister($data);
         if (!empty($errors)) {
             $this->session->setFlash('error', implode('<br>', $errors));
+            $this->response->redirect(url('register'));
+            return;
+        }
+
+        // 🛡️ گیت ضدتقلب و امنیت ثبت‌نام (شناسایی ربات‌ها، ایمیل‌های یک‌بار مصرف و مخرب)
+        $risk = $this->fraudGuard->checkAction(0, 'auth.register', [
+            'email'      => (string)($data['email'] ?? ''),
+            'phone'      => (string)($data['mobile'] ?? ''),
+            'ip'         => $this->request->ip(),
+            'user_agent' => $this->request->userAgent()
+        ]);
+
+        if (!$risk['allowed']) {
+            $this->logger->warning('auth.registration_blocked_by_fraud_guard', [
+                'email'  => $data['email'] ?? 'unknown',
+                'reason' => $risk['reason']
+            ]);
+            $this->session->setFlash('error', 'امکان ثبت‌نام به دلیل تشخیص رفتارهای مشکوک مسدود گردید.');
             $this->response->redirect(url('register'));
             return;
         }

@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers\User;
 
 use App\Controllers\BaseController;
-use App\Models\Dispute;
-use Core\Database;
+use App\Services\Shared\DisputeService;
 
 /**
  * DisputeController - کنترلر مرکزی برای نمایش و پیگیری اختلافات کاربران.
@@ -14,8 +13,7 @@ use Core\Database;
 class DisputeController extends BaseController
 {
     public function __construct(
-        private Dispute $disputeModel,
-        private Database $db
+        private DisputeService $disputeService
     ) {
         parent::__construct();
     }
@@ -26,22 +24,19 @@ class DisputeController extends BaseController
     public function index(): string
     {
         $userId = user_id();
-        
-        // Fetching all disputes where user is either initiator or target.
-        $disputes = $this->db->fetchAll("
-            SELECT d.*, 
-                   COALESCE(cu.full_name, 'کاربر') as creator_name,
-                   COALESCE(tu.full_name, 'طرف مقابل') as target_name
-            FROM disputes d
-            LEFT JOIN users cu ON cu.id = d.user_id
-            LEFT JOIN users tu ON tu.id = d.target_user_id
-            WHERE d.user_id = ? OR d.target_user_id = ?
-            ORDER BY d.updated_at DESC
-        ", [$userId, $userId]);
+        $page = max(1, (int)$this->request->get('page', 1));
+        $limit = 20;
+        $offset = ($page - 1) * $limit;
+
+        // Get disputes from service
+        $disputes = $this->disputeService->getUserDisputes($userId, $limit, $offset);
+        $total = $this->disputeService->countUserDisputes($userId);
 
         return view('user.disputes.index', [
             'disputes' => $disputes,
-            'model'    => $this->disputeModel // To access labels/constants
+            'total' => $total,
+            'page' => $page,
+            'limit' => $limit,
         ]);
     }
 
@@ -53,7 +48,8 @@ class DisputeController extends BaseController
         $id = (int)$this->request->param('id');
         $userId = user_id();
 
-        $dispute = $this->disputeModel->find($id);
+        // Get dispute from service
+        $dispute = $this->disputeService->find($id);
         
         // Security: Ensure user is party to this dispute
         if (!$dispute || ((int)$dispute->user_id !== $userId && (int)($dispute->target_user_id ?? 0) !== $userId)) {
@@ -62,12 +58,12 @@ class DisputeController extends BaseController
             exit;
         }
 
-        $messages = $this->disputeModel->getMessages($id);
+        // Get messages from service
+        $messages = $this->disputeService->getMessages($id);
 
         return view('user.disputes.show', [
             'dispute'  => $dispute,
             'messages' => $messages,
-            'model'    => $this->disputeModel
         ]);
     }
 

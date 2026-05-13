@@ -2,25 +2,21 @@
 
 namespace App\Controllers\Admin;
 
-use App\Models\Ads;
-use App\Models\BannerPlacement;
+use App\Services\BannerService;
 use App\Controllers\Admin\BaseAdminController;
 use App\Services\UploadService;
 use App\Services\AdvancedSearchService;
-use Core\Database;
 
 class BannerController extends BaseAdminController
 {
-    private Ads $banner;
-    private BannerPlacement $placement;
+    private BannerService $bannerService;
     private UploadService $uploadService;
     private AdvancedSearchService $searchService;
 
-    public function __construct(Ads $banner, BannerPlacement $placement, UploadService $uploadService, AdvancedSearchService $searchService)
+    public function __construct(BannerService $bannerService, UploadService $uploadService, AdvancedSearchService $searchService)
     {
         parent::__construct();
-        $this->banner = $banner;
-        $this->placement = $placement;
+        $this->bannerService = $bannerService;
         $this->uploadService = $uploadService;
         $this->searchService = $searchService;
     }
@@ -41,22 +37,16 @@ class BannerController extends BaseAdminController
         $search = trim($this->request->get('search', ''));
         $offset = ($page - 1) * $perPage;
 
-        // استفاده از AdvancedSearchService برای جستجو
-        if (!empty($search)) {
-            $result = $this->searchService->searchBanners($search, $filters, $perPage, $offset);
-            $banners = $result['items'] ?? [];
-            $total = $result['total'] ?? 0;
-        } else {
-            // استفاده از Service برای دریافت بنرها
-            $result = $this->searchService->searchBanners('', $filters, $perPage, $offset);
-            $banners = $result['items'] ?? [];
-            $total = $result['total'] ?? 0;
-        }
+        // Use service for search
+        $result = $this->searchService->searchBanners($search, $filters, $perPage, $offset);
+        $banners = $result['items'] ?? [];
+        $total = $result['total'] ?? 0;
                      
-        $placements = $this->placement->all();
+        // Use service to get placements
+        $placements = $this->bannerService->getAllPlacements();
         
-        // آمار از Service
-        $stats = $this->searchService->getBannerStats();
+        // Get stats from service
+        $stats = $this->bannerService->getStats();
 
         return view('admin.banners.index', compact('banners', 'placements', 'filters', 'stats', 'total', 'page', 'perPage', 'search'));
     }

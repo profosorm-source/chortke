@@ -3,25 +3,17 @@
 
 namespace App\Controllers\Admin;
 
-use App\Models\SocialAccount;
 use App\Services\SocialAccountService;
 use App\Controllers\Admin\BaseAdminController;
 
 class SocialAccountController extends BaseAdminController
 {
-    private \App\Services\SocialAccountService $socialAccountService;
-    private SocialAccountService $service;
+    private SocialAccountService $socialAccountService;
 
-    private SocialAccount $socialAccountModel;
-
-    public function __construct(
-        \App\Models\SocialAccount $socialAccountModel,
-        \App\Services\SocialAccountService $socialAccountService)
+    public function __construct(SocialAccountService $socialAccountService)
     {
         parent::__construct();
         $this->socialAccountService = $socialAccountService;
-        $this->socialAccountModel = $socialAccountModel;
-        $this->service = $this->socialAccountService;
     }
 
     /**
@@ -38,16 +30,17 @@ class SocialAccountController extends BaseAdminController
         if (!empty($_GET['platform'])) $filters['platform'] = $_GET['platform'];
         if (!empty($_GET['search'])) $filters['search'] = $_GET['search'];
 
-        $accounts = $this->socialAccountModel->getAll($filters, $limit, $offset);
-        $total = $this->socialAccountModel->countAll($filters);
+        // Use service to get accounts
+        $accounts = $this->socialAccountService->getAllForAdmin($filters, $limit, $offset);
+        $total = $this->socialAccountService->countForAdmin($filters);
         $totalPages = \ceil($total / $limit);
 
         return view('admin.social-accounts.index', [
-            'accounts'   => $accounts,
-            'filters'    => $filters,
-            'page'       => $page,
-            'totalPages' => $totalPages,
-            'total'      => $total,
+            'accounts'    => $accounts,
+            'filters'     => $filters,
+            'page'        => $page,
+            'totalPages'  => $totalPages,
+            'total'       => $total,
         ]);
     }
 
@@ -56,9 +49,10 @@ class SocialAccountController extends BaseAdminController
      */
     public function show()
     {
-                $id = (int) $this->request->param('id');
+        $id = (int) $this->request->param('id');
 
-        $account = $this->socialAccountModel->find($id);
+        // Use service to find account
+        $account = $this->socialAccountService->findForAdmin($id);
         if (!$account) {
             $this->session->setFlash('error', 'حساب یافت نشد.');
             return redirect(url('/admin/social-accounts'));
@@ -74,9 +68,7 @@ class SocialAccountController extends BaseAdminController
      */
     public function verify()
     {
-                        $id = (int) $this->request->param('id');
-
-        $result = $this->service->verify($id, user_id());
+        $id = (int) $this->request->param('id');
 
         $this->logger->activity('social_account_verify', 'تایید حساب اجتماعی #' . $id, user_id(), ['entity_type' => 'social_account', 'entity_id' => $id]);
 

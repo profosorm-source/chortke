@@ -10,14 +10,18 @@ class ProfileController extends BaseUserController
 {
     private UploadService $uploadService;
     private UserService $userService;
+    private \App\Services\User\ProfileService $profileService;
 
     public function __construct(
         UserService $userService,
-        \App\Services\UploadService $uploadService)
+        \App\Services\UploadService $uploadService,
+        \App\Services\User\ProfileService $profileService
+    )
     {
         parent::__construct();
         $this->userService = $userService;
         $this->uploadService = $uploadService;
+        $this->profileService = $profileService;
     }
 
     public function index(): void
@@ -37,7 +41,7 @@ class ProfileController extends BaseUserController
     {
         $userId = user_id();
 
-        // Rate Limiting - محدودیت بروزرسانی پروفایل
+        // Rate Limiting
         try {
             rate_limit('content', 'update', "user_{$userId}");
         } catch (\Exception $e) {
@@ -47,68 +51,31 @@ class ProfileController extends BaseUserController
                 return;
             }
         }
-        
-        $fullName = $this->request->input('full_name');
-        $mobile = $this->request->input('mobile');
-        $nationalId = $this->request->input('national_id');
-        $birthDate = $this->request->input('birth_date');
-        $gender = $this->request->input('gender');
-        $address = $this->request->input('address');
-        
-        $fullName = $fullName ? trim($fullName) : null;
-        $mobile = $mobile ? trim($mobile) : null;
-        $nationalId = $nationalId ? trim($nationalId) : null;
-        $address = $address ? trim($address) : null;
-        
-        $errors = [];
-        
-        if (!$fullName || mb_strlen($fullName) < 3) {
-            $errors[] = 'نام کامل باید حداقل 3 کاراکتر باشد';
-        }
-        
-        if ($mobile && !preg_match('/^09[0-9]{9}$/', $mobile)) {
-            $errors[] = 'شماره موبایل نامعتبر است';
-        }
-        
-        if ($nationalId && !preg_match('/^[0-9]{10}$/', $nationalId)) {
-            $errors[] = 'کد ملی باید 10 رقم باشد';
-        }
-        
-        if ($birthDate && !strtotime($birthDate)) {
-            $errors[] = 'تاریخ تولد نامعتبر است';
-        }
-        
-        if ($gender && !in_array($gender, ['male', 'female', 'other'])) {
-            $errors[] = 'جنسیت نامعتبر است';
-        }
-        
-        if (!empty($errors)) {
-            $this->session->setFlash('error', implode('<br>', $errors));
-            redirect('profile');
-            return;
-        }
-        
+
+        // Get data from request
         $data = [
-            'full_name'   => $fullName,
-            'mobile'      => $mobile,
-            'national_id' => $nationalId,
-            'birth_date'  => $birthDate ?: null,
-            'gender'      => $gender ?: null,
-            'address'     => $address,
-            'updated_at'  => date('Y-m-d H:i:s')
+            'full_name'   => $this->request->input('full_name'),
+            'mobile'      => $this->request->input('mobile'),
+            'national_id' => $this->request->input('national_id'),
+            'birth_date'  => $this->request->input('birth_date'),
+            'gender'      => $this->request->input('gender'),
+            'address'     => $this->request->input('address'),
+            'bio'         => $this->request->input('bio'),
         ];
-        
-        $result = $this->userService->update($userId, $data);
-        
-        if ($result) {
-            // ✅ اصلاح logger
-            $this->logger->info('Profile updated', ['user_id' => $userId]);
-            
-            $this->session->setFlash('success', 'اطلاعات پروفایل با موفقیت بروزرسانی شد');
+
+        // Use service for validation and update
+        $result = $this->profileService->updateProfileWithValidation($userId, $data);
+
+        if ($result['success']) {
+            $this->session->setFlash('success', $result['message']);
         } else {
-            $this->session->setFlash('error', 'خطا در بروزرسانی اطلاعات');
+            $errors = $result['errors'] ?? [];
+            $errorMessage = is_array($errors) 
+                ? implode('<br>', $errors)
+                : $errors;
+            $this->session->setFlash('error', $errorMessage);
         }
-        
+
         redirect('profile');
     }
 
@@ -154,9 +121,8 @@ class ProfileController extends BaseUserController
         }
     }
 
-$result = $this->userService->update($userId, [
+$result = $this->profileService->updateProfile($userId, [
         'avatar' => $filename,
-        'updated_at' => date('Y-m-d H:i:s'),
     ]);
 
     if (!$result) {
@@ -197,9 +163,8 @@ $result = $this->userService->update($userId, [
             $uploadService->delete('avatars/' . $user->avatar);
         }
 
-        $result = $this->userService->update($userId, [
-            'avatar'     => 'default-avatar.png',
-            'updated_at' => date('Y-m-d H:i:s')
+        $result = $this->profileService->updateProfile($userId, [
+            'avatar' => 'default-avatar.png',
         ]);
 
         if (!$result) {
