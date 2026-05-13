@@ -10,6 +10,6 @@ interface CurrencyServiceInterface
     public function isIRT(): bool;
     public function isUSDT(): bool;
     public function getCurrencySymbol(): string;
-    public function formatAmount(float $amount): string;
+    public function formatAmount(float $amount, ?string $currency = null): string;
     public function getSectionCurrency(): string;
 }
