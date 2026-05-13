@@ -25,10 +25,9 @@ class SlidingWindowStrategy implements RateLimitStrategy
     private Cache $cache;
     private string $prefix = 'rl:sw:';
 
-    public function __construct(?Cache $cache = null)
+    public function __construct(Cache $cache)
     {
-        // H21 Fix: استفاده از Dependency Injection به جای فراخوانی مستقیم Singleton
-        $this->cache = $cache ?? \Core\Container::getInstance()->make(Cache::class);
+        $this->cache = $cache;
     }
 
     public function attempt(string $key, int $maxAttempts, int $decayMinutes): bool

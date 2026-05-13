@@ -18,9 +18,9 @@ class Pipeline
     protected mixed $passable;
     protected Container $container;
 
-    public function __construct(?Container $container = null)
+    public function __construct(Container $container)
     {
-        $this->container = $container ?? Container::getInstance();
+        $this->container = $container;
     }
 
     /**

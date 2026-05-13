@@ -23,12 +23,12 @@ use App\Services\InvestmentService;
 use App\Services\LotteryService;
 use App\Services\ManualDepositService;
 use App\Services\CryptoDeposit\CryptoDepositService;
-use App\Services\Adapters\CryptoVerificationAdapter;
-use App\Services\Adapters\CryptoApiAdapter;
-use App\Services\Adapters\BankInquiryAdapter;
-use App\Services\Adapters\JibitInquiryAdapter;
-use App\Services\Adapters\KycFaceVerificationAdapter;
-use App\Services\Adapters\DeepFaceKycAdapter;
+use App\Adapters\CryptoVerificationAdapter;
+use App\Adapters\CryptoApiAdapter;
+use App\Adapters\BankInquiryAdapter;
+use App\Adapters\JibitInquiryAdapter;
+use App\Adapters\KycFaceVerificationAdapter;
+use App\Adapters\DeepFaceKycAdapter;
 use App\Services\PaymentService;
 use App\Services\InfluencerService;
 use App\Services\KYCService;
@@ -124,6 +124,9 @@ if ($isDebug && !$isProduction) {
 
 // Container Singleton
 $container = Container::getInstance();
+$container->singleton(\Core\Container::class, function() use ($container) {
+    return $container;
+});
 
 // Database Singleton - bind early
 $container->singleton(\Core\Database::class, function($c) use ($config) {
@@ -172,21 +175,21 @@ $container->singleton(\App\Services\CryptoDeposit\CryptoDepositService::class, f
         $c->make(\App\Models\CryptoDepositIntent::class),
         $c->make(\App\Models\CryptoDeposit::class),
         $c->make(\Core\Logger::class),
-        $c->make(\App\Services\Adapters\CryptoVerificationAdapter::class),
+        $c->make(\App\Adapters\CryptoVerificationAdapter::class),
         $c->make(\App\Services\SettingService::class),
         $c->make(\App\Services\ReconciliationService::class)
     );
 });
 
 // CryptoDeposit Adapters
-$container->singleton(\App\Services\Adapters\CryptoVerificationAdapter::class, function($c) {
-    return new \App\Services\Adapters\CryptoExplorerAdapter(
+$container->singleton(\App\Adapters\CryptoVerificationAdapter::class, function($c) {
+    return new \App\Adapters\CryptoExplorerAdapter(
         $c->make(\Core\Logger::class)
     );
 });
 
-$container->singleton(\App\Services\Adapters\CryptoApiAdapter::class, function($c) {
-    return new \App\Services\Adapters\CryptoApiAdapter(
+$container->singleton(\App\Adapters\CryptoApiAdapter::class, function($c) {
+    return new \App\Adapters\CryptoApiAdapter(
         $c->make(\Core\Database::class),
         $c->make(\Core\Logger::class),
         $c->make(\App\Services\SettingService::class)
@@ -194,16 +197,16 @@ $container->singleton(\App\Services\Adapters\CryptoApiAdapter::class, function($
 });
 
 // Bank Inquiry Adapter (Automatic Fallback enabled)
-$container->singleton(\App\Services\Adapters\BankInquiryAdapter::class, function($c) {
-    return new \App\Services\Adapters\JibitInquiryAdapter(
+$container->singleton(\App\Adapters\BankInquiryAdapter::class, function($c) {
+    return new \App\Adapters\JibitInquiryAdapter(
         $c->make(\Core\Logger::class),
         $c->make(\Core\Cache::class)
     );
 });
 
 // AI KYC Verification Adapter
-$container->singleton(\App\Services\Adapters\KycFaceVerificationAdapter::class, function($c) {
-    return new \App\Services\Adapters\DeepFaceKycAdapter(
+$container->singleton(\App\Adapters\KycFaceVerificationAdapter::class, function($c) {
+    return new \App\Adapters\DeepFaceKycAdapter(
         $c->make(\Core\Logger::class),
         $c->make(\Core\Database::class)
     );
@@ -456,10 +459,10 @@ $container->singleton(\App\Contracts\NotificationServiceInterface::class, functi
 
 $container->singleton(\App\Services\Notification\NotificationDispatcher::class, function($c) {
     return new \App\Services\Notification\NotificationDispatcher(
-        $c->make(\App\Services\Notification\Adapters\PushNotificationAdapter::class),
-        $c->make(\App\Services\Notification\Adapters\SmsNotificationAdapter::class),
-        $c->make(\App\Services\Notification\Adapters\FcmNotificationAdapter::class),
-        $c->make(\App\Services\Notification\Adapters\LogNotificationAdapter::class),
+        $c->make(\App\Adapters\Notification\PushNotificationAdapter::class),
+        $c->make(\App\Adapters\Notification\SmsNotificationAdapter::class),
+        $c->make(\App\Adapters\Notification\FcmNotificationAdapter::class),
+        $c->make(\App\Adapters\Notification\LogNotificationAdapter::class),
         $c->make(Logger::class),
         $c->make(\Core\Queue::class)
     );
@@ -475,30 +478,30 @@ $container->singleton(\App\Services\AdNotificationDispatcher::class, function($c
     );
 });
 
-$container->singleton(\App\Services\Notification\Adapters\PushNotificationAdapter::class, function($c) {
-    return new \App\Services\Notification\Adapters\PushNotificationAdapter(
-        $c->make(\App\Services\Notification\Adapters\FcmNotificationAdapter::class),
+$container->singleton(\App\Adapters\Notification\PushNotificationAdapter::class, function($c) {
+    return new \App\Adapters\Notification\PushNotificationAdapter(
+        $c->make(\App\Adapters\Notification\FcmNotificationAdapter::class),
         $c->make(\Core\Logger::class)
     );
 });
 
-$container->singleton(\App\Services\Notification\Adapters\SmsNotificationAdapter::class, function($c) {
-    return new \App\Services\Notification\Adapters\SmsNotificationAdapter(
+$container->singleton(\App\Adapters\Notification\SmsNotificationAdapter::class, function($c) {
+    return new \App\Adapters\Notification\SmsNotificationAdapter(
         $c->make(\App\Models\User::class),
         $c->make(\Core\Logger::class)
     );
 });
 
-$container->singleton(\App\Services\Notification\Adapters\FcmNotificationAdapter::class, function($c) {
-    return new \App\Services\Notification\Adapters\FcmNotificationAdapter(
+$container->singleton(\App\Adapters\Notification\FcmNotificationAdapter::class, function($c) {
+    return new \App\Adapters\Notification\FcmNotificationAdapter(
         $c->make(\Core\Logger::class),
         $c->make(\Core\Cache::class),
         $c->make(\Core\Database::class)
     );
 });
 
-$container->singleton(\App\Services\Notification\Adapters\LogNotificationAdapter::class, function($c) {
-    return new \App\Services\Notification\Adapters\LogNotificationAdapter(
+$container->singleton(\App\Adapters\Notification\LogNotificationAdapter::class, function($c) {
+    return new \App\Adapters\Notification\LogNotificationAdapter(
         $c->make(\App\Models\Notification::class),
         $c->make(\App\Models\SystemTelemetryModel::class),
         $c->make(\Core\Logger::class)
@@ -507,7 +510,7 @@ $container->singleton(\App\Services\Notification\Adapters\LogNotificationAdapter
 
 $container->singleton(\App\Services\Notification\FcmService::class, function($c) {
     return new \App\Services\Notification\FcmService(
-        $c->make(\App\Services\Notification\Adapters\FcmNotificationAdapter::class),
+        $c->make(\App\Adapters\Notification\FcmNotificationAdapter::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -625,6 +628,7 @@ $container->singleton(\App\Services\User\UserLevelService::class, function($c) {
         $c->make(\App\Models\UserLevel::class),
         $c->make(\App\Models\UserLevelHistory::class),
         $c->make(\App\Services\SettingService::class),
+        $c->make(\Core\EventDispatcher::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -653,12 +657,16 @@ $container->singleton(ContentService::class, function($c) {
     return new ContentService(
         $c->make(WalletService::class),
         $c->make(NotificationService::class),
+        $c->make(\App\Services\User\UserService::class),
+        $c->make(\App\Services\Shared\ReferralService::class),
         $c->make(App\Models\ContentSubmission::class),
         $c->make(App\Models\ContentRevenue::class),
         $c->make(App\Models\ContentAgreement::class),
         $c->make(\Core\TransactionWrapper::class),
         $c->make(\Core\EventDispatcher::class),
-        $c->make(Logger::class)
+        $c->make(Logger::class),
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Services\SettingService::class)
     );
 });
 
@@ -667,6 +675,8 @@ $container->singleton(\App\Services\InvestmentService::class, function($c) {
         $c->make(\Core\Database::class),
         $c->make(\App\Services\WalletService::class),
         $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Services\User\UserService::class),
+        $c->make(\App\Services\Shared\ReferralService::class),
         $c->make(\App\Models\Investment::class),
         $c->make(\App\Models\TradingRecord::class),
         $c->make(\App\Models\InvestmentProfit::class),
@@ -732,7 +742,9 @@ $container->singleton(\App\Services\Payment\PaymentService::class, function($c) 
         $c->make(\Core\IdempotencyKey::class),
         $c->make(\App\Services\Payment\PaymentGatewayFactory::class),
         $c->make(\App\Services\CurrencyService::class),
-        $c->make(\App\Services\ReconciliationService::class)
+        $c->make(\App\Services\ReconciliationService::class),
+        $c->make(\App\Services\AntiFraud\FraudGuardService::class),
+        $c->make(\Core\EventDispatcher::class)
     );
 });
 
@@ -1197,7 +1209,16 @@ $container->singleton(\App\Services\FeatureFlagService::class, function($c) {
 
 // ─── Core Services ────────────────────────────────────────────────────────
 $container->singleton(\Core\RateLimiter::class, function($c) {
-    return new \Core\RateLimiter();
+    return new \Core\RateLimiter(
+        $c->make(\Core\Cache::class),
+        $c->make(\Core\EventDispatcher::class)
+    );
+});
+
+$container->singleton(\Core\Scheduler::class, function($c) {
+    return new \Core\Scheduler(
+        $c->make(\App\Models\ActivityLog::class)
+    );
 });
 
 $container->singleton(\Core\RetryPolicy::class, function($c) {
@@ -1503,8 +1524,8 @@ $container->singleton(\App\Policies\FeatureFlagPolicy::class, function($c) {
 // ---------------------------------------------------------------------
 
 // Adapter??
-$container->singleton(\App\Services\Adapters\CustomTaskAdapter::class, function($c) {
-    return new \App\Services\Adapters\CustomTaskAdapter(
+$container->singleton(\App\Adapters\CustomTaskAdapter::class, function($c) {
+    return new \App\Adapters\CustomTaskAdapter(
         $c->make(\App\Models\Ads::class),
         $c->make(\App\Services\WalletService::class),
         $c->make(\Core\Database::class),
@@ -1513,8 +1534,8 @@ $container->singleton(\App\Services\Adapters\CustomTaskAdapter::class, function(
     );
 });
 
-$container->singleton(\App\Services\Adapters\SeoAdAdapter::class, function($c) {
-    return new \App\Services\Adapters\SeoAdAdapter(
+$container->singleton(\App\Adapters\SeoAdAdapter::class, function($c) {
+    return new \App\Adapters\SeoAdAdapter(
         $c->make(\App\Models\Ads::class),
         $c->make(\App\Services\WalletService::class),
         $c->make(\Core\Database::class),
@@ -1523,8 +1544,8 @@ $container->singleton(\App\Services\Adapters\SeoAdAdapter::class, function($c) {
     );
 });
 
-$container->singleton(\App\Services\Adapters\BannerAdapter::class, function($c) {
-    return new \App\Services\Adapters\BannerAdapter(
+$container->singleton(\App\Adapters\BannerAdapter::class, function($c) {
+    return new \App\Adapters\BannerAdapter(
         $c->make(\App\Models\Ads::class), // ارتقا به مدل متمرکز
         $c->make(\App\Services\WalletService::class),
         $c->make(\Core\Database::class),
@@ -1533,8 +1554,8 @@ $container->singleton(\App\Services\Adapters\BannerAdapter::class, function($c) 
     );
 });
 
-$container->singleton(\App\Services\Adapters\VitrineAdapter::class, function($c) {
-    return new \App\Services\Adapters\VitrineAdapter(
+$container->singleton(\App\Adapters\VitrineAdapter::class, function($c) {
+    return new \App\Adapters\VitrineAdapter(
         $c->make(\App\Models\VitrineListing::class),
         $c->make(\App\Services\WalletService::class),
         $c->make(\Core\Database::class)
@@ -1543,8 +1564,8 @@ $container->singleton(\App\Services\Adapters\VitrineAdapter::class, function($c)
 
 
 
-$container->singleton(\App\Services\Adapters\AdTubeAdapter::class, function($c) {
-    return new \App\Services\Adapters\AdTubeAdapter(
+$container->singleton(\App\Adapters\AdTubeAdapter::class, function($c) {
+    return new \App\Adapters\AdTubeAdapter(
         $c->make(\App\Models\Ads::class),
         $c->make(\App\Services\WalletService::class),
         $c->make(\Core\Database::class),
@@ -1553,8 +1574,8 @@ $container->singleton(\App\Services\Adapters\AdTubeAdapter::class, function($c) 
     );
 });
 
-$container->singleton(\App\Services\Adapters\AdSocialAdapter::class, function($c) {
-    return new \App\Services\Adapters\AdSocialAdapter(
+$container->singleton(\App\Adapters\AdSocialAdapter::class, function($c) {
+    return new \App\Adapters\AdSocialAdapter(
         $c->make(\App\Models\Ads::class),
         $c->make(\App\Services\WalletService::class),
         $c->make(\Core\Database::class),
@@ -1563,8 +1584,8 @@ $container->singleton(\App\Services\Adapters\AdSocialAdapter::class, function($c
     );
 });
 
-$container->singleton(\App\Services\Adapters\NotificationAdAdapter::class, function($c) {
-    return new \App\Services\Adapters\NotificationAdAdapter(
+$container->singleton(\App\Adapters\NotificationAdAdapter::class, function($c) {
+    return new \App\Adapters\NotificationAdAdapter(
         $c->make(\App\Models\Ads::class),
         $c->make(\App\Services\WalletService::class),
         $c->make(\Core\Database::class),
@@ -1576,14 +1597,14 @@ $container->singleton(\App\Services\Adapters\NotificationAdAdapter::class, funct
 // AdSystemManager
 $container->singleton(\App\Services\AdSystemManager::class, function($c) {
     return new \App\Services\AdSystemManager([
-        'custom_task' => $c->make(\App\Services\Adapters\CustomTaskAdapter::class),
-        'seo' => $c->make(\App\Services\Adapters\SeoAdAdapter::class),
-        'banner' => $c->make(\App\Services\Adapters\BannerAdapter::class),
-        'vitrine' => $c->make(\App\Services\Adapters\VitrineAdapter::class),
+        'custom_task' => $c->make(\App\Adapters\CustomTaskAdapter::class),
+        'seo' => $c->make(\App\Adapters\SeoAdAdapter::class),
+        'banner' => $c->make(\App\Adapters\BannerAdapter::class),
+        'vitrine' => $c->make(\App\Adapters\VitrineAdapter::class),
 
-        'adtube' => $c->make(\App\Services\Adapters\AdTubeAdapter::class),
-        'social_task' => $c->make(\App\Services\Adapters\AdSocialAdapter::class),
-        'notification' => $c->make(\App\Services\Adapters\NotificationAdAdapter::class),
+        'adtube' => $c->make(\App\Adapters\AdTubeAdapter::class),
+        'social_task' => $c->make(\App\Adapters\AdSocialAdapter::class),
+        'notification' => $c->make(\App\Adapters\NotificationAdAdapter::class),
     ], $c->make(\App\Contracts\LoggerInterface::class));
 });
 
@@ -1745,6 +1766,8 @@ $container->singleton(\App\Services\ContentService::class, function($c) {
     return new \App\Services\ContentService(
         $c->make(\App\Services\WalletService::class),
         $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Services\User\UserService::class),
+        $c->make(\App\Services\Shared\ReferralService::class),
         $c->make(\App\Models\ContentSubmission::class),
         $c->make(\App\Models\ContentRevenue::class),
         $c->make(\App\Models\ContentAgreement::class),
@@ -1761,12 +1784,6 @@ $container->singleton(\App\Services\CurrencyService::class, function($c) {
         $c->make(\App\Services\SettingService::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\Core\Request::class)
-    );
-});
-
-$container->singleton(\App\Services\FeatureFlagViewHelper::class, function($c) {
-    return new \App\Services\FeatureFlagViewHelper(
-        $c->make(\App\Services\FeatureFlagService::class)
     );
 });
 
@@ -1801,7 +1818,7 @@ $container->singleton(\App\Services\KYCService::class, function($c) {
         $c->make(\Core\Database::class),
         $c->make(\App\Services\UploadService::class),
         $c->make(\App\Services\AuditTrail::class),
-        $c->make(\App\Services\Adapters\KycFaceVerificationAdapter::class),
+        $c->make(\App\Adapters\KycFaceVerificationAdapter::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Services\Notification\NotificationService::class)
     );
@@ -1853,8 +1870,8 @@ $container->singleton(\App\Services\MessageModerationService::class, function($c
     );
 });
 
-$container->singleton(\App\Services\MigrationManager::class, function($c) {
-    return new \App\Services\MigrationManager(
+$container->singleton(\App\Commands\MigrationManager::class, function($c) {
+    return new \App\Commands\MigrationManager(
         $c->make(\Core\Database::class)
     );
 });
@@ -1877,8 +1894,8 @@ $container->singleton(\App\Services\ReferralManagementService::class, function($
     );
 });
 
-$container->singleton(\App\Services\RolePolicy::class, function($c) {
-    return new \App\Services\RolePolicy(
+$container->singleton(\App\Policies\RolePolicy::class, function($c) {
+    return new \App\Policies\RolePolicy(
     );
 });
 
@@ -1964,21 +1981,21 @@ $container->singleton(\App\Services\WithdrawalService::class, function($c) {
     );
 });
 
-$container->singleton(\App\Services\Adapters\CryptoExplorerAdapter::class, function($c) {
-    return new \App\Services\Adapters\CryptoExplorerAdapter(
+$container->singleton(\App\Adapters\CryptoExplorerAdapter::class, function($c) {
+    return new \App\Adapters\CryptoExplorerAdapter(
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
-$container->singleton(\App\Services\Adapters\DeepFaceKycAdapter::class, function($c) {
-    return new \App\Services\Adapters\DeepFaceKycAdapter(
+$container->singleton(\App\Adapters\DeepFaceKycAdapter::class, function($c) {
+    return new \App\Adapters\DeepFaceKycAdapter(
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\Core\Database::class)
     );
 });
 
-$container->singleton(\App\Services\Adapters\JibitInquiryAdapter::class, function($c) {
-    return new \App\Services\Adapters\JibitInquiryAdapter(
+$container->singleton(\App\Adapters\JibitInquiryAdapter::class, function($c) {
+    return new \App\Adapters\JibitInquiryAdapter(
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\Core\Cache::class)
     );
@@ -2072,7 +2089,7 @@ $container->singleton(\App\Services\Notification\NotificationTracker::class, fun
 
 $container->singleton(\App\Services\Notification\SmsNotificationService::class, function($c) {
     return new \App\Services\Notification\SmsNotificationService(
-        $c->make(\App\Services\Notification\Adapters\SmsNotificationAdapter::class),
+        $c->make(\App\Adapters\Notification\SmsNotificationAdapter::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -2139,11 +2156,11 @@ $container->singleton(\App\Services\Sentry\Analytics\TrendAnalyzer::class, funct
 
 $container->singleton(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class, function($c) {
     return new \App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor(
-        $c->make(\App\Services\Sentry\ErrorMonitoring\private::class),
-        $c->make(\App\Services\Sentry\ErrorMonitoring\private::class),
-        $c->make(\App\Services\Sentry\ErrorMonitoring\private::class),
-        $c->make(\App\Services\Sentry\ErrorMonitoring\private::class),
-        $c->make(\App\Services\Sentry\ErrorMonitoring\array::class)
+        $c->make(\App\Models\SentryModel::class),
+        $c->make(\Core\Logger::class),
+        $c->make(\App\Services\Sentry\Alerting\AlertDispatcher::class),
+        $c->make(\App\Services\AuditTrail::class),
+        []
     );
 });
 
@@ -2156,18 +2173,18 @@ $container->singleton(\App\Services\Sentry\PerformanceMonitoring\SentryPerforman
     );
 });
 
-$container->singleton(\App\Services\Sentry\Utils\BreadcrumbCollector::class, function($c) {
-    return new \App\Services\Sentry\Utils\BreadcrumbCollector(
+$container->singleton(\App\Utils\Sentry\BreadcrumbCollector::class, function($c) {
+    return new \App\Utils\Sentry\BreadcrumbCollector(
     );
 });
 
-$container->singleton(\App\Services\Sentry\Utils\ContextEnricher::class, function($c) {
-    return new \App\Services\Sentry\Utils\ContextEnricher(
+$container->singleton(\App\Utils\Sentry\ContextEnricher::class, function($c) {
+    return new \App\Utils\Sentry\ContextEnricher(
     );
 });
 
-$container->singleton(\App\Services\Sentry\Utils\StackTraceAnalyzer::class, function($c) {
-    return new \App\Services\Sentry\Utils\StackTraceAnalyzer(
+$container->singleton(\App\Utils\Sentry\StackTraceAnalyzer::class, function($c) {
+    return new \App\Utils\Sentry\StackTraceAnalyzer(
     );
 });
 
@@ -2193,7 +2210,8 @@ $container->singleton(\App\Services\User\AccountDeletionService::class, function
         $c->make(\App\Models\AccountDeletionLog::class),
         $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Services\CustomTaskService::class)
+        $c->make(\App\Services\CustomTaskService::class),
+        $c->make(\Core\EventDispatcher::class)
     );
 });
 
@@ -2232,3 +2250,6 @@ try {
 }
 
 return $app;
+
+
+

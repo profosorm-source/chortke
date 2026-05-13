@@ -140,5 +140,74 @@ if (!function_exists('enabled_features')) {
     }
 }
 
+if (!function_exists('feature_when_render')) {
+    /**
+     * Render محتوا فقط اگر فیچر فعال باشد (برای View ها)
+     * 
+     * استفاده در PHP Views:
+     * <?= feature_when_render('crypto_wallet', function() { ?>
+     *     <div>کیف پول رمزارز</div>
+     * <?php }) ?>
+     */
+    function feature_when_render(string $feature, callable $callback, ?callable $fallback = null): string
+    {
+        ob_start();
+        
+        if (app(\App\Services\FeatureFlagService::class)->isEnabled($feature, user_id())) {
+            $callback();
+        } elseif ($fallback) {
+            $fallback();
+        }
+        
+        return ob_get_clean();
+    }
+}
+
+if (!function_exists('feature_unless_render')) {
+    /**
+     * Render محتوا فقط اگر فیچر غیرفعال باشد (برای View ها)
+     */
+    function feature_unless_render(string $feature, callable $callback): string
+    {
+        ob_start();
+        
+        if (!app(\App\Services\FeatureFlagService::class)->isEnabled($feature, user_id())) {
+            $callback();
+        }
+        
+        return ob_get_clean();
+    }
+}
+
+if (!function_exists('feature_css_class')) {
+    /**
+     * Render کلاس CSS بر اساس فیچر
+     */
+    function feature_css_class(string $feature, string $enabledClass = 'feature-enabled', string $disabledClass = 'feature-disabled'): string
+    {
+        return app(\App\Services\FeatureFlagService::class)->isEnabled($feature, user_id()) 
+            ? $enabledClass 
+            : $disabledClass;
+    }
+}
+
+if (!function_exists('feature_attribute')) {
+    /**
+     * Render attribute بر اساس فیچر
+     */
+    function feature_attribute(string $feature, string $attribute, $value = true): string
+    {
+        if (!app(\App\Services\FeatureFlagService::class)->isEnabled($feature, user_id())) {
+            return '';
+        }
+        
+        if ($value === true) {
+            return $attribute;
+        }
+        
+        return sprintf('%s="%s"', $attribute, e($value));
+    }
+}
+
 
 

@@ -31,10 +31,12 @@ class RateLimiter
 {
     private RateLimitStrategy $strategy;
     private Cache $cache;
+    private EventDispatcher $eventDispatcher;
 
-    public function __construct(string $strategy = 'fixed_window')
+    public function __construct(Cache $cache, EventDispatcher $eventDispatcher, string $strategy = 'fixed_window')
     {
-        $this->cache = Cache::getInstance();
+        $this->cache = $cache;
+        $this->eventDispatcher = $eventDispatcher;
         $this->setStrategy($strategy);
     }
 
@@ -46,9 +48,9 @@ class RateLimiter
     public function setStrategy(string $name): self
     {
         $this->strategy = match($name) {
-            'fixed_window' => new FixedWindowStrategy(),
-            'token_bucket' => new TokenBucketStrategy(),
-            'sliding_window' => new SlidingWindowStrategy(),
+            'fixed_window' => new FixedWindowStrategy($this->cache),
+            'token_bucket' => new TokenBucketStrategy($this->cache),
+            'sliding_window' => new SlidingWindowStrategy($this->cache),
             default => throw new \InvalidArgumentException("Unknown strategy: $name"),
         };
 
@@ -85,8 +87,7 @@ class RateLimiter
         if (!$allowed) {
             // Dispatch Event without interfering with primary app flow
             try {
-                $dispatcher = \Core\EventDispatcher::getInstance();
-                $dispatcher->dispatch('rate_limit.exceeded', new \App\Events\RateLimitExceededEvent(
+                $this->eventDispatcher->dispatch('rate_limit.exceeded', new \App\Events\RateLimitExceededEvent(
                     $key,
                     $this->strategy->getName(),
                     function_exists('get_client_ip') ? get_client_ip() : '127.0.0.1'

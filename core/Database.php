@@ -19,7 +19,7 @@ class Database
 	private static int $queryDepth = 0;
     private static bool $fallbackLogging = false;
 	private static ?array $lastSqlErrorContext = null;
-    private ?object $sentryMonitor = null; // M3 Fix: کش کلاینت مانیتورینگ جهت افزایش پرفورمنس کوئری‌ها
+    private ?\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor $sentryMonitor = null; // M3 Fix: کش کلاینت مانیتورینگ جهت افزایش پرفورمنس کوئری‌ها
 
     /**
      * Constructor (Private)
@@ -47,7 +47,12 @@ class Database
         
         $this->queryBuilder = new QueryBuilder($this->pdo);
     }
-	
+
+    public function setSentryMonitor(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor $monitor): void
+    {
+        $this->sentryMonitor = $monitor;
+    }
+
 
 private function normalizeSql(string $sql): string
 {
@@ -474,21 +479,8 @@ public function lastInsertId(): int
     /**
      * M3 Fix: حل‌کننده هوشمند و دارای کش کلاینت سنتری
      */
-    private function getSentryMonitor(): ?object
+    private function getSentryMonitor(): ?\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor
     {
-        if ($this->sentryMonitor !== null) {
-            return $this->sentryMonitor;
-        }
-
-        try {
-            $container = Container::getInstance();
-            if ($container && $container->has(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class)) {
-                $this->sentryMonitor = $container->make(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::class);
-            }
-        } catch (\Throwable) {
-            // بدون خطا در صورت عدم امکان بارگذاری اولیه کانتینر
-        }
-
         return $this->sentryMonitor;
     }
 

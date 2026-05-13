@@ -29,9 +29,12 @@ class Scheduler
     /** @var Logger */
     private Logger $logger;
 
-    public function __construct()
+    private ActivityLog $activityLog;
+
+    public function __construct(ActivityLog $activityLog, ?string $lockDir = null)
 {
-    $this->lockDir = __DIR__ . '/../storage/cron/';
+    $this->activityLog = $activityLog;
+    $this->lockDir = $lockDir ?? __DIR__ . '/../storage/cron/';
     if (!is_dir($this->lockDir)) {
         mkdir($this->lockDir, 0755, true);
     }
@@ -161,8 +164,7 @@ class Scheduler
 
                 // ثبت لاگ در activity_logs برای نمایش در پنل مدیریت
                 try {
-                    $activityLog = Container::getInstance()->make(ActivityLog::class);
-                    $activityLog->log(
+                    $this->activityLog->log(
                         'cron',
                         $job['name'] . ' [' . $job['key'] . ']',
                         null,

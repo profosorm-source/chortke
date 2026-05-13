@@ -100,7 +100,7 @@ register_shutdown_function(function () use ($lockHandle, $lockFile) {
 // ==========================================
 //  تعریف وظایف
 // ==========================================
-$scheduler = new Scheduler();
+$scheduler = $container->make(\Core\Scheduler::class);
 
 /**
  * ─────────────────────────────────────────

@@ -8,7 +8,13 @@ use Core\Container;
 
 class CliDispatcher
 {
+    private Container $container;
     private array $commands = [];
+
+    public function __construct(Container $container)
+    {
+        $this->container = $container;
+    }
 
     public function register(string $name, string $commandClass, string $description = ''): void
     {
@@ -45,9 +51,7 @@ class CliDispatcher
         }
 
         try {
-            // فیکس ارجاع نادرست به کلاس کانتینر
-            $container = Container::getInstance();
-            $instance = $container->make($matchedCommand['class']);
+            $instance = $this->container->make($matchedCommand['class']);
             
             // بررسی اینکه آیا این دستور از متد run پشتیبانی می‌کند
             if (method_exists($instance, 'run')) {
