@@ -4,7 +4,7 @@ namespace App\Services\Adapters;
 
 use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
-use App\Models\CustomTaskModel;
+use App\Models\Ads;
 use App\Services\WalletService;
 use Core\Database;
 use App\Services\SettingService;
@@ -15,7 +15,7 @@ use App\Services\SettingService;
 class CustomTaskAdapter extends AdapterBase implements AdSystemContract
 {
     public function __construct(
-        private CustomTaskModel $taskModel,
+        private Ads $taskModel,
         private WalletService $walletService,
         private Database $db,
         LoggerInterface $logger,

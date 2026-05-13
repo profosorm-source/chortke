@@ -325,6 +325,56 @@ class DisputeService extends \App\Services\BaseService
     }
 
     /**
+     * کاربر کے تمام اختلافات حاصل کریں
+     */
+    public function getUserDisputes(int $userId, int $limit = 20, int $offset = 0): array
+    {
+        $disputes = $this->db->query("
+            SELECT d.*, 
+                   COALESCE(cu.full_name, 'کاربر') as creator_name,
+                   COALESCE(tu.full_name, 'طرف مقابل') as target_name
+            FROM disputes d
+            LEFT JOIN users cu ON cu.id = d.user_id
+            LEFT JOIN users tu ON tu.id = d.target_user_id
+            WHERE d.user_id = ? OR d.target_user_id = ?
+            ORDER BY d.updated_at DESC
+            LIMIT ? OFFSET ?
+        ", [$userId, $userId, $limit, $offset])->fetchAll(\PDO::FETCH_OBJ) ?? [];
+
+        return $disputes;
+    }
+
+    /**
+     * کاربر کے اختلافات کی تعداد گنتی کریں
+     */
+    public function countUserDisputes(int $userId): int
+    {
+        $result = $this->db->query("
+            SELECT COUNT(*) as total
+            FROM disputes
+            WHERE user_id = ? OR target_user_id = ?
+        ", [$userId, $userId])->fetch(\PDO::FETCH_OBJ);
+
+        return $result->total ?? 0;
+    }
+
+    /**
+     * dispute کو ID سے تلاش کریں
+     */
+    public function find(int $id): ?object
+    {
+        return $this->disputeModel->find($id);
+    }
+
+    /**
+     * Dispute کے پیام حاصل کریں
+     */
+    public function getMessages(int $disputeId): array
+    {
+        return $this->disputeModel->getMessages($disputeId) ?? [];
+    }
+
+    /**
      * بررسی محدودیت‌های ارسال کاربر
      */
     private function checkLimits(int $userId): bool

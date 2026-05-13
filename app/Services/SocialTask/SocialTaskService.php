@@ -13,6 +13,7 @@ use App\Services\WebSocketService;
 use App\Models\SocialTaskModel;
 use App\Contracts\LoggerInterface;
 use App\Services\SettingService;
+use App\Services\SocialTask\CameraVerificationService;
 /**
  * SocialTaskService
  *
@@ -48,7 +49,8 @@ class SocialTaskService extends \App\Services\BaseService
         private WebSocketService $webSocket,
         private \App\Services\Shared\RatingService $ratingService,
         private User $userModel,
-        private SettingService $settingService
+        private SettingService $settingService,
+        private ?CameraVerificationService $cameraVerification = null
     ) {
         parent::__construct($this->logger);
     }
@@ -351,6 +353,26 @@ class SocialTaskService extends \App\Services\BaseService
             }
 
             $score = $this->antiFraud->scoreExecution($exec, $payload);
+            
+            // Capture Fraud in Real-Time via CameraVerification if signals are suspicious
+            $behaviorSignals = (array)($payload['behavior_signals'] ?? []);
+            if ($this->cameraVerification && $this->cameraVerification->isRequired((int)$executionId, (float)($score['task_score'] ?? 0), $behaviorSignals)) {
+                $this->cameraVerification->createRequest((int)$executionId, $userId);
+                $this->model->updateExecutionStatus($executionId, 'pending_camera_verification', [
+                    'anti_fraud_score' => (float)($score['task_score'] ?? 0),
+                    'proof_url'        => $proofUrl !== '' ? $proofUrl : null,
+                    'proof_text'       => $proofText !== '' ? $proofText : null,
+                ]);
+                $this->model->commit();
+
+                return [
+                    'success' => true,
+                    'status'  => 'pending_camera_verification',
+                    'message' => 'تسک شما مشکوک تشخیص داده شد. لطفاً با استفاده از دوربین هویت تصویری خود را تأیید کنید تا پاداش آزاد شود.',
+                    'score'   => $score['task_score'] ?? 0,
+                ];
+            }
+
             $decision = $this->antiFraud->decisionFromScore($score);
 
             $finalStatus = ($decision['decision'] ?? '') === 'reject' ? 'rejected' : 'approved';

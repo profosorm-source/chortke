@@ -24,6 +24,7 @@ class CryptoDepositService extends \App\Services\BaseService
     private CryptoVerificationAdapter $verifier;
     private SettingService $settingService;
     private ReconciliationService $reconciliationService;
+    private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
 
     public function __construct(
         Database $db,
@@ -34,7 +35,8 @@ class CryptoDepositService extends \App\Services\BaseService
         LoggerInterface $logger,
         CryptoVerificationAdapter $verifier,
         SettingService $settingService,
-        ReconciliationService $reconciliationService
+        ReconciliationService $reconciliationService,
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -45,6 +47,7 @@ class CryptoDepositService extends \App\Services\BaseService
         $this->verifier = $verifier;
         $this->settingService = $settingService;
         $this->reconciliationService = $reconciliationService;
+        $this->fraudGuard = $fraudGuard;
     }
 
     /**
@@ -62,6 +65,24 @@ class CryptoDepositService extends \App\Services\BaseService
             'network' => $network,
             'requested_amount' => $requestedAmount
         ]);
+
+        // 🛡️ گیت ضدتقلب تراکنش کریپتو (Velocity check & Global policies)
+        $risk = $this->fraudGuard->checkAction($userId, 'crypto.deposit', [
+            'amount'      => $requestedAmount,
+            'currency'    => 'usdt',
+            'network'     => $network,
+            'ip'          => $ipAddress,
+            'user_agent'  => $userAgent
+        ]);
+
+        if (!$risk['allowed']) {
+            $this->logger->warning('crypto.intent_blocked_by_fraud_guard', [
+                'user_id' => $userId,
+                'amount'  => $requestedAmount,
+                'reason'  => $risk['reason']
+            ]);
+            return ['success' => false, 'message' => 'امکان ثبت درخواست شارژ رمزارز به دلایل امنیتی مسدود شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از سقف مجاز واریز کریپتو' : $risk['reason'])];
+        }
 
         $expireMinutes = (int) $this->settingService->get('crypto_intent_expire_minutes', 30);
 

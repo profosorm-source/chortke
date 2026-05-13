@@ -3,6 +3,7 @@
 namespace App\Services\Notification\Adapters;
 
 use Core\Logger;
+use App\Models\User;
 
 /**
  * SmsNotificationAdapter — ارسال پیامک برای نوتیفیکیشن‌های فوری
@@ -19,19 +20,40 @@ use Core\Logger;
  */
 class SmsNotificationAdapter
 {
+    private User   $userModel;
     private Logger $logger;
     private bool   $enabled;
     private string $provider;
     private string $apiKey;
     private string $from;
 
-    public function __construct(Logger $logger)
+    public function __construct(User $userModel, Logger $logger)
     {
+        $this->userModel = $userModel;
         $this->logger   = $logger;
         $this->enabled  = (bool)config('services.sms.enabled', false);
         $this->provider = config('services.sms.provider', '');
         $this->apiKey   = config('services.sms.api_key', '');
         $this->from     = config('services.sms.from', '');
+    }
+
+    public function sendToUser(int $userId, string $message): bool
+    {
+        try {
+            $user = $this->userModel->find($userId);
+            if (!$user || empty($user->mobile)) {
+                $this->logger->warning('sms.user_missing_mobile', ['user_id' => $userId]);
+                return false;
+            }
+            
+            return $this->send((string)$user->mobile, $message);
+        } catch (\Throwable $e) {
+            $this->logger->error('sms.send_to_user_failed', [
+                'user_id' => $userId,
+                'error'   => $e->getMessage(),
+            ]);
+            return false;
+        }
     }
 
     /**
@@ -81,6 +103,17 @@ class SmsNotificationAdapter
         return $this->send($mobile, "هشدار امنیتی چرتکه:\n{$message}");
     }
 
+    public function sendSecurityAlertToUser(int $userId, string $message): bool
+    {
+        try {
+            $user = $this->userModel->find($userId);
+            if (!$user || empty($user->mobile)) return false;
+            return $this->sendSecurityAlert((string)$user->mobile, $message);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
     /**
      * پیامک تأیید برداشت
      */
@@ -88,6 +121,17 @@ class SmsNotificationAdapter
     {
         $msg = "برداشت {$amount} {$currency} از حساب چرتکه شما پردازش شد.";
         return $this->send($mobile, $msg);
+    }
+
+    public function sendWithdrawalAlertToUser(int $userId, float $amount, string $currency): bool
+    {
+        try {
+            $user = $this->userModel->find($userId);
+            if (!$user || empty($user->mobile)) return false;
+            return $this->sendWithdrawalAlert((string)$user->mobile, $amount, $currency);
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**

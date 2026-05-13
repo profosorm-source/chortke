@@ -33,10 +33,19 @@ class SocialTaskScoringService extends \App\Services\BaseService
         $penalties = $this->calculatePenalties($data, $interactionScore);
         $penaltySum = array_sum(array_column($penalties, 'value'));
 
+        $cameraBonus = 0;
+        $signals = (array)($data['behavior_signals'] ?? []);
+        if (!empty($signals['camera_verified'])) {
+            $cScore = (int)($signals['camera_score'] ?? 0);
+            $cSignals = (array)($signals['camera_signals'] ?? []);
+            $cameraBonus = $this->calculateCameraContribution($cScore, $cSignals);
+        }
+
         $rawScore = ($timeScore * 0.30)
             + ($interactionScore * 0.25)
             + ($behaviorScore * 0.20)
             + $trustModifier
+            + $cameraBonus
             + $penaltySum;
 
         $taskScore = $this->clamp($rawScore, 0, 100);
@@ -48,10 +57,12 @@ class SocialTaskScoringService extends \App\Services\BaseService
             'behavior_score'    => $behaviorScore,
             'trust_modifier'    => $trustModifier,
             'penalties'         => $penalties,
+            'camera_bonus'      => $cameraBonus,
             'breakdown'         => [
                 'time_contribution'        => round($timeScore * 0.30, 1),
                 'interaction_contribution' => round($interactionScore * 0.25, 1),
                 'behavior_contribution'    => round($behaviorScore * 0.20, 1),
+                'camera_contribution'      => $cameraBonus,
             ],
         ];
     }
@@ -186,6 +197,23 @@ class SocialTaskScoringService extends \App\Services\BaseService
         if ($riskScore < 20) return 5;
         if ($riskScore <= 50) return 0;
         return -10;
+    }
+
+    private function calculateCameraContribution(int $cameraScore, array $verifiedSignals = []): int
+    {
+        $base = 0;
+        if ($cameraScore >= 80) $base = 15;
+        elseif ($cameraScore >= 60) $base = 8;
+        elseif ($cameraScore >= 40) $base = 2;
+        else $base = -10;
+
+        $bonus = 0;
+        $highValueSignals = ['follow_button_visible', 'username_match', 'subscribe_confirmed', 'like_button_active'];
+        foreach ($highValueSignals as $sig) {
+            if (in_array($sig, $verifiedSignals, true)) $bonus += 3;
+        }
+
+        return $base + min($bonus, 10);
     }
 
     private function clamp(float $val, float $min, float $max): float

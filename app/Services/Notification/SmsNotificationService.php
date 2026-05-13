@@ -26,9 +26,19 @@ class SmsNotificationService extends \App\Services\BaseService
         return $this->adapter->sendSecurityAlert($mobile, $message);
     }
 
+    public function sendSecurityAlertToUser(int $userId, string $message): bool
+    {
+        return $this->adapter->sendSecurityAlertToUser($userId, $message);
+    }
+
     public function sendWithdrawalAlert(string $mobile, float $amount, string $currency): bool
     {
         return $this->adapter->sendWithdrawalAlert($mobile, $amount, $currency);
+    }
+
+    public function sendWithdrawalAlertToUser(int $userId, float $amount, string $currency): bool
+    {
+        return $this->adapter->sendWithdrawalAlertToUser($userId, $amount, $currency);
     }
 
     public function isEnabled(): bool

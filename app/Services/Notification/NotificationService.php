@@ -32,7 +32,8 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         private NotificationTracker $tracker,
         private NotificationAnalyticsService $analyticsService,
         private SettingService $settingService,
-        private ?EmailService $emailService = null
+        private ?EmailService $emailService = null,
+        private ?SmsNotificationService $smsService = null
     ) {
         parent::__construct($logger);
     }
@@ -519,7 +520,11 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             $prefs = $this->preferenceService->getPreferences($userId);
             if (isset($prefs->sms_notifications) && !$prefs->sms_notifications) return;
             
-            $this->dispatcher->dispatch('sms', $userId, 'هشدار امنیتی', $message);
+            if ($this->smsService) {
+                $this->smsService->sendSecurityAlertToUser($userId, $message);
+            } else {
+                $this->dispatcher->dispatch('sms', $userId, 'هشدار امنیتی', $message);
+            }
         } catch (\Throwable $e) {
             $this->logger->warning('notif.sms_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }
@@ -531,7 +536,11 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             $prefs = $this->preferenceService->getPreferences($userId);
             if (isset($prefs->sms_notifications) && !$prefs->sms_notifications) return;
             
-            $this->dispatcher->dispatch('sms', $userId, 'برداشت تأیید شد', "برداشت {$amount} {$currency} تأیید شد");
+            if ($this->smsService) {
+                $this->smsService->sendWithdrawalAlertToUser($userId, $amount, $currency);
+            } else {
+                $this->dispatcher->dispatch('sms', $userId, 'برداشت تأیید شد', "برداشت {$amount} {$currency} تأیید شد");
+            }
         } catch (\Throwable $e) {
             $this->logger->warning('notif.sms_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }

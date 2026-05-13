@@ -28,6 +28,7 @@ class PaymentService extends PaymentBaseService
     private PaymentGatewayFactory $gatewayFactory;
     private CurrencyServiceInterface $currencyService;
     private ReconciliationService $reconciliationService;
+    private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
 
     public function __construct(
         WalletServiceInterface $walletService,
@@ -38,7 +39,8 @@ class PaymentService extends PaymentBaseService
         IdempotencyKey $idempotencyKey,
         PaymentGatewayFactory $gatewayFactory,
         CurrencyServiceInterface $currencyService,
-        ReconciliationService $reconciliationService
+        ReconciliationService $reconciliationService,
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard
     ) {
         parent::__construct($logger);
         $this->log = $log;
@@ -49,6 +51,7 @@ class PaymentService extends PaymentBaseService
         $this->gatewayFactory = $gatewayFactory;
         $this->currencyService = $currencyService;
         $this->reconciliationService = $reconciliationService;
+        $this->fraudGuard = $fraudGuard;
     }
 
     private function gateway(string $name): ?PaymentGatewayInterface
@@ -68,6 +71,24 @@ class PaymentService extends PaymentBaseService
             'amount' => $amount,
             'bank_card_id' => $bankCardId
         ]);
+
+        // 🛡️ گیت جامع ضدتقلب پرداخت و بررسی امنیت تراکنش (Rate Limiting & Velocity)
+        $risk = $this->fraudGuard->checkAction($userId, 'payment.create', [
+            'amount'       => $amount,
+            'gateway'      => $gatewayName,
+            'bank_card_id' => $bankCardId,
+            'ip'           => get_client_ip(),
+            'user_agent'   => get_user_agent()
+        ]);
+
+        if (!$risk['allowed']) {
+            $this->logError('create', 'payment_blocked_by_fraud_guard', [
+                'user_id' => $userId,
+                'amount'  => $amount,
+                'reason'  => $risk['reason']
+            ]);
+            throw new BusinessException('امکان ایجاد پرداخت آنلاین به دلیل محدودیت‌های امنیتی یا تشخیص تراکنش غیرمجاز موقتاً وجود ندارد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از سقف تعداد یا مبلغ تراکنش' : $risk['reason']));
+        }
 
         // اعتبارسنجی مبلغ
         $amountValidation = $this->validateAmount($amount);

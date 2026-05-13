@@ -176,5 +176,196 @@ class CouponService extends \App\Services\BaseService
             'today_redemptions_count' => count($this->redemptionModel->getTodayRedemptions())
         ];
     }
+
+    /**
+     * تمام کوپن‌ها دریافت کنید (با pagination)
+     */
+    public function all(int $limit = null, int $offset = 0): array
+    {
+        if ($limit === null) {
+            return $this->couponModel->all() ?? [];
+        }
+        
+        return $this->db->query(
+            "SELECT * FROM coupons ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            [$limit, $offset]
+        )->fetchAll(\PDO::FETCH_OBJ) ?? [];
+    }
+
+    /**
+     * کوپن کد سے تلاش کنید
+     */
+    public function findByCode(string $code): ?object
+    {
+        return $this->couponModel->findByCode($code);
+    }
+
+    /**
+     * کوپن ID سے تلاش کنید
+     */
+    public function find(int $id): ?object
+    {
+        return $this->couponModel->find($id);
+    }
+
+    /**
+     * نیا کوپن بنائیں
+     */
+    public function create(array $data): ?int
+    {
+        // Validate code exists
+        if (empty($data['code'])) {
+            $this->logger->warning('coupon.create.empty_code');
+            return null;
+        }
+
+        // Check for duplicates
+        if ($this->couponModel->findByCode($data['code'])) {
+            $this->logger->warning('coupon.create.duplicate', ['code' => $data['code']]);
+            return null;
+        }
+
+        // Ensure data has defaults
+        $data['code'] = strtoupper($data['code']);
+        $data['usage_count'] = $data['usage_count'] ?? 0;
+        $data['created_at'] = $data['created_at'] ?? date('Y-m-d H:i:s');
+
+        try {
+            $result = $this->couponModel->create($data);
+
+            if ($result) {
+                $this->logger->info('coupon.created', ['code' => $data['code'], 'id' => $result]);
+            }
+
+            return $result;
+        } catch (\Exception $e) {
+            $this->logger->error('coupon.create.failed', ['code' => $data['code'], 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * کوپن کو اپ‌ڈیٹ کنید
+     */
+    public function update(int $id, array $data): bool
+    {
+        $coupon = $this->couponModel->find($id);
+        if (!$coupon) {
+            $this->logger->warning('coupon.update.not_found', ['id' => $id]);
+            return false;
+        }
+
+        // Prevent code changes if not provided
+        if (isset($data['code']) && $data['code'] !== $coupon->code) {
+            // Check if new code already exists
+            if ($this->couponModel->findByCode($data['code'])) {
+                $this->logger->warning('coupon.update.duplicate_code', ['id' => $id, 'code' => $data['code']]);
+                return false;
+            }
+            $data['code'] = strtoupper($data['code']);
+        }
+
+        $data['updated_at'] = date('Y-m-d H:i:s');
+
+        try {
+            $result = $this->couponModel->update($id, $data);
+
+            if ($result) {
+                $this->logger->info('coupon.updated', ['id' => $id, 'fields' => array_keys($data)]);
+            }
+
+            return $result;
+        } catch (\Exception $e) {
+            $this->logger->error('coupon.update.failed', ['id' => $id, 'error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /**
+     * کوپن کو حذف کنید
+     */
+    public function delete(int $id): bool
+    {
+        $coupon = $this->couponModel->find($id);
+        if (!$coupon) {
+            $this->logger->warning('coupon.delete.not_found', ['id' => $id]);
+            return false;
+        }
+
+        try {
+            $result = $this->couponModel->delete($id);
+
+            if ($result) {
+                $this->logger->info('coupon.deleted', ['id' => $id, 'code' => $coupon->code]);
+            }
+
+            return $result;
+        } catch (\Exception $e) {
+            $this->logger->error('coupon.delete.failed', ['id' => $id, 'error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /**
+     * کوپن کی حالت toggle کنید (فعال/غیرفعال)
+     */
+    public function toggle(int $id): bool
+    {
+        $coupon = $this->couponModel->find($id);
+        if (!$coupon) {
+            return false;
+        }
+
+        $newStatus = !$coupon->active;
+        return $this->update($id, ['active' => $newStatus ? 1 : 0]);
+    }
+
+    /**
+     * کوپنز کو صفحہ بندی کے ساتھ تلاش کنید
+     */
+    public function paginate(int $page = 1, int $perPage = 20, array $filters = []): array
+    {
+        $offset = ($page - 1) * $perPage;
+
+        $query = "SELECT * FROM coupons WHERE 1=1";
+        $params = [];
+
+        // Apply filters
+        if (!empty($filters['status'])) {
+            $query .= " AND active = ?";
+            $params[] = $filters['status'] === 'active' ? 1 : 0;
+        }
+
+        if (!empty($filters['type'])) {
+            $query .= " AND type = ?";
+            $params[] = $filters['type'];
+        }
+
+        if (!empty($filters['search'])) {
+            $query .= " AND (code LIKE ? OR description LIKE ?)";
+            $params[] = '%' . $filters['search'] . '%';
+            $params[] = '%' . $filters['search'] . '%';
+        }
+
+        // Count total
+        $countQuery = "SELECT COUNT(*) as total FROM (" . str_replace('SELECT *', 'SELECT 1', $query) . ") as cnt";
+        $countResult = $this->db->query($countQuery, $params)->fetch(\PDO::FETCH_OBJ);
+        $total = $countResult->total ?? 0;
+
+        // Get paginated results
+        $query .= " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+        $params[] = $perPage;
+        $params[] = $offset;
+
+        $coupons = $this->db->query($query, $params)->fetchAll(\PDO::FETCH_OBJ) ?? [];
+
+        return [
+            'data' => $coupons,
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => ceil($total / $perPage),
+        ];
+    }
 }
 
