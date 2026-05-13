@@ -135,12 +135,27 @@ $scheduler->everyMinute(function () {
         $jobClass = $job['job'];
         $data = $job['data'];
         
+        // SECURITY: Whitelist of allowed Job classes to prevent arbitrary class instantiation exploits
+        $allowedJobs = [
+            \App\Jobs\ApplyWeeklyProfitLossJob::class,
+            \App\Jobs\LogPerformanceJob::class,
+            \App\Jobs\SendBulkNotificationJob::class,
+            \App\Jobs\SendEmailJob::class,
+            \App\Jobs\UpdateFraudScoreJob::class,
+        ];
+
+        if (!in_array($jobClass, $allowedJobs, true)) {
+            logger()->error('queue_job_not_allowed', ['job' => $jobClass]);
+            continue;
+        }
+
         try {
             if (class_exists($jobClass)) {
                 // H15 Fix: جلوگیری از هم‌پوشانی استک کانتینر بین جاب‌های مختلف در فرآیند CLI طولانی
                 Container::resetTraceStack();
                 
                 $handler = Container::getInstance()->make($jobClass);
+                
                 if (method_exists($handler, 'handle')) {
                     $handler->handle($data);
                     $queue->delete($job['id']);
@@ -506,10 +521,17 @@ $scheduler->daily('03:30', function () {
         $row = (array)$row;
         foreach (['document_front', 'document_back', 'selfie'] as $field) {
             if (!empty($row[$field])) {
-                $path = BASE_PATH . '/storage/uploads/kyc/' . $row[$field];
-                if (file_exists($path)) {
-                    unlink($path);
-                }
+                $baseDir = realpath(BASE_PATH . '/storage/uploads/kyc');
+$file = basename((string) $row[$field]);
+$path = realpath($baseDir . DIRECTORY_SEPARATOR . $file);
+
+if (
+    $path !== false &&
+    $baseDir !== false &&
+    str_starts_with($path, $baseDir . DIRECTORY_SEPARATOR)
+) {
+    unlink($path);
+}
             }
         }
         $db->execute(
@@ -813,8 +835,11 @@ echo '[' . date('Y-m-d H:i:s') . '] پایان' . PHP_EOL;
 } catch (\Throwable $e) {
     $errorMsg = "CRON FATAL ERROR: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine();
     // 1. Echo to standard output (will capture in redirected logs)
-    echo "\n❌ " . $errorMsg . "\n";
+    if (config('app.debug')) {
     echo substr($e->getTraceAsString(), 0, 2000) . "\n";
+} else {
+    echo "See application logs for details. Error ID: " . uniqid('cron_', true) . "\n";
+}
 
     // 2. Try to utilize framework Logger if initialized
     try {
