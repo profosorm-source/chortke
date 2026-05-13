@@ -172,4 +172,43 @@ class UnifiedTaskService extends BaseService
     {
         return $this->db->fetchAll("SELECT DISTINCT platform FROM ads WHERE platform IS NOT NULL AND platform != 'youtube'");
     }
+
+    /**
+     * executor کے اعدادوشمار حاصل کریں
+     */
+    public function getExecutorStats(int $userId): array
+    {
+        $stats = $this->db->fetch("
+            SELECT 
+                (SELECT COUNT(*) FROM social_task_executions WHERE executor_id = ? AND status = 'completed') as social_done,
+                (SELECT COUNT(*) FROM seo_executions WHERE user_id = ? AND status = 'completed') as seo_done,
+                (SELECT COUNT(*) FROM custom_task_submissions WHERE user_id = ? AND status = 'approved') as custom_done,
+                (SELECT COUNT(*) FROM social_task_executions WHERE executor_id = ? AND status IN ('pending', 'in_progress')) as social_pending,
+                (SELECT COUNT(*) FROM seo_executions WHERE user_id = ? AND status = 'pending') as seo_pending,
+                (SELECT COUNT(*) FROM custom_task_submissions WHERE user_id = ? AND status = 'pending') as custom_pending,
+                (SELECT COALESCE(SUM(price_per_task * remaining_count), 0) FROM ads WHERE type IN ('seo', 'social', 'custom_task') AND status = 'active') as available_earnings
+        ", [$userId, $userId, $userId, $userId, $userId, $userId]);
+
+        $socialDone = (int)($stats->social_done ?? 0);
+        $seoDone = (int)($stats->seo_done ?? 0);
+        $customDone = (int)($stats->custom_done ?? 0);
+        $totalCompleted = $socialDone + $seoDone + $customDone;
+
+        $socialPending = (int)($stats->social_pending ?? 0);
+        $seoPending = (int)($stats->seo_pending ?? 0);
+        $customPending = (int)($stats->custom_pending ?? 0);
+        $totalPending = $socialPending + $seoPending + $customPending;
+
+        return [
+            'total_completed' => $totalCompleted,
+            'social_completed' => $socialDone,
+            'seo_completed' => $seoDone,
+            'custom_completed' => $customDone,
+            'pending_total' => $totalPending,
+            'social_pending' => $socialPending,
+            'seo_pending' => $seoPending,
+            'custom_pending' => $customPending,
+            'available_earnings' => (float)($stats->available_earnings ?? 0),
+        ];
+    }
 }

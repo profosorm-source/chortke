@@ -30,7 +30,7 @@ class ProfileService extends \App\Services\BaseService
 
     public function updateProfile(int $userId, array $data): bool
     {
-        $allowedFields = ['full_name', 'bio', 'avatar', 'website', 'location'];
+        $allowedFields = ['full_name', 'bio', 'avatar', 'website', 'location', 'mobile', 'national_id', 'birth_date', 'gender', 'address'];
         $updateData = array_intersect_key($data, array_flip($allowedFields));
         
         if (empty($updateData)) return false;
@@ -83,6 +83,119 @@ class ProfileService extends \App\Services\BaseService
             $this->updateSetting($userId, $key, $value);
         }
         return true;
+    }
+
+    /**
+     * پروفایل اپ‌ڈیٹ کو validate کنید
+     */
+    public function validateProfileUpdate(array $data): array
+    {
+        $errors = [];
+
+        // Full Name validation
+        $fullName = $data['full_name'] ?? '';
+        if ($fullName !== '') {
+            $fullName = trim($fullName);
+            if (mb_strlen($fullName) < 3) {
+                $errors['full_name'] = 'نام کامل باید حداقل 3 کاراکتر باشد';
+            }
+            if (mb_strlen($fullName) > 255) {
+                $errors['full_name'] = 'نام کامل بیش از حد طویل است';
+            }
+        }
+
+        // Mobile validation
+        if (isset($data['mobile']) && $data['mobile'] !== '') {
+            $mobile = trim($data['mobile']);
+            if (!preg_match('/^09[0-9]{9}$/', $mobile)) {
+                $errors['mobile'] = 'شماره موبایل نامعتبر است (باید 09 سے شروع ہو)';
+            }
+        }
+
+        // National ID validation
+        if (isset($data['national_id']) && $data['national_id'] !== '') {
+            $nationalId = trim($data['national_id']);
+            if (!preg_match('/^[0-9]{10}$/', $nationalId)) {
+                $errors['national_id'] = 'کد ملی باید 10 رقم باشد';
+            }
+        }
+
+        // Birth date validation
+        if (isset($data['birth_date']) && $data['birth_date'] !== '') {
+            if (!strtotime($data['birth_date'])) {
+                $errors['birth_date'] = 'تاریخ تولد نامعتبر است';
+            } else {
+                // Check if birth date is in the future
+                if (strtotime($data['birth_date']) > time()) {
+                    $errors['birth_date'] = 'تاریخ تولد نمی‌تواند در آینده باشد';
+                }
+                // Check if user is at least 13 years old
+                $birthDate = new \DateTime($data['birth_date']);
+                $today = new \DateTime();
+                $age = $today->diff($birthDate)->y;
+                if ($age < 13) {
+                    $errors['birth_date'] = 'شما باید حداقل 13 سال داشته باشید';
+                }
+            }
+        }
+
+        // Gender validation
+        if (isset($data['gender']) && $data['gender'] !== '') {
+            if (!in_array($data['gender'], ['male', 'female', 'other'])) {
+                $errors['gender'] = 'جنسیت نامعتبر است';
+            }
+        }
+
+        // Address validation
+        if (isset($data['address']) && $data['address'] !== '') {
+            $address = trim($data['address']);
+            if (mb_strlen($address) > 500) {
+                $errors['address'] = 'آدرس بیش از حد طویل است';
+            }
+        }
+
+        // Bio validation
+        if (isset($data['bio']) && $data['bio'] !== '') {
+            $bio = trim($data['bio']);
+            if (mb_strlen($bio) > 500) {
+                $errors['bio'] = 'بیوگرافی بیش از حد طویل است';
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * پروفایل کو validation کے ساتھ اپ‌ڈیٹ کنید
+     */
+    public function updateProfileWithValidation(int $userId, array $data): array
+    {
+        // Validate
+        $errors = $this->validateProfileUpdate($data);
+        if (!empty($errors)) {
+            return ['success' => false, 'errors' => $errors];
+        }
+
+        // Sanitize
+        $sanitized = [];
+        $allowedFields = ['full_name', 'bio', 'avatar', 'website', 'location', 'mobile', 'national_id', 'birth_date', 'gender', 'address'];
+
+        foreach ($allowedFields as $field) {
+            if (isset($data[$field])) {
+                $value = $data[$field];
+                if (is_string($value)) {
+                    $value = trim($value);
+                }
+                $sanitized[$field] = $value;
+            }
+        }
+
+        // Update
+        if ($this->updateProfile($userId, $sanitized)) {
+            return ['success' => true, 'message' => 'پروفائل کامیابی سے اپ‌ڈیٹ ہو گیا'];
+        }
+
+        return ['success' => false, 'errors' => ['general' => 'پروفائل کو اپ‌ڈیٹ کرنے میں خرابی']];
     }
 
     private function castValue(string $value): mixed

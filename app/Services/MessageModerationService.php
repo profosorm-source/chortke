@@ -8,7 +8,8 @@ use App\Models\InteractionModel;
 use App\Models\MessageModerationModel;
 use Core\Database;
 use App\Contracts\LoggerInterface;
-class MessageModerationServiceextends \App\Services\BaseService
+class MessageModerationService
+extends \App\Services\BaseService
 {
     private Database $db;
     private InteractionModel $interactionModel;
@@ -93,6 +94,9 @@ class MessageModerationServiceextends \App\Services\BaseService
         return (int)($count['cnt'] ?? 0);
     }
 
+    /**
+     * دریافت رپورٹس (پہلے والا)
+     */
     public function getStats(): array
     {
         $today = date('Y-m-d 00:00:00');
@@ -162,5 +166,84 @@ class MessageModerationServiceextends \App\Services\BaseService
             [$userId]
         );
     }
-}
 
+    /**
+     * صفحہ بندی کے ساتھ رپورٹس حاصل کریں
+     */
+    public function getReportsPaginated(string $status = 'all', int $limit = 20, int $offset = 0): array
+    {
+        if ($status === 'all') {
+            return $this->interactionModel->findMessageReportsPaginated($limit, $offset, null);
+        }
+        return $this->interactionModel->findMessageReportsPaginated($limit, $offset, $status);
+    }
+
+    /**
+     * کل رپورٹس گنتی کریں
+     */
+    public function countReports(string $status = 'all'): int
+    {
+        if ($status === 'all') {
+            return $this->interactionModel->countMessageReports(null);
+        }
+        return $this->interactionModel->countMessageReports($status);
+    }
+
+    /**
+     * کاربر کو مسدود کریں
+     */
+    public function blockUser(int $userId, string $reason, int $adminId): array
+    {
+        try {
+            $this->db->beginTransaction();
+
+            // Check if user exists
+            $user = $this->db->query("SELECT id FROM users WHERE id = ?", [$userId])->fetch(\PDO::FETCH_OBJ);
+            if (!$user) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'کاربر یافت نشد'];
+            }
+
+            // Block the user
+            $this->db->query(
+                "INSERT INTO user_blocks (user_id, blocked_reason, blocked_by, blocked_at) VALUES (?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE blocked_reason = VALUES(blocked_reason), blocked_at = NOW()",
+                [$userId, $reason, $adminId]
+            );
+
+            $this->db->commit();
+            $this->logger->info('user.blocked', ['user_id' => $userId, 'admin_id' => $adminId, 'reason' => $reason]);
+            return ['success' => true, 'message' => 'کاربر مسدود شد'];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->logger->error('user.block.failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'خطا در مسدود کردن'];
+        }
+    }
+
+    /**
+     * کاربر کو رہا کریں (unblock)
+     */
+    public function unblockUser(int $userId): bool
+    {
+        try {
+            $this->db->query("DELETE FROM user_blocks WHERE user_id = ?", [$userId]);
+            $this->logger->info('user.unblocked', ['user_id' => $userId]);
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error('user.unblock.failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /**
+     * پیام کو براہ راست حاصل کریں
+     */
+    public function getMessage(int $messageId): ?array
+    {
+        return $this->db->query(
+            "SELECT * FROM direct_messages WHERE id = ?",
+            [$messageId]
+        )->fetch(\PDO::FETCH_ASSOC);
+    }
+}

@@ -18,6 +18,7 @@ use App\Services\KYCService;
 use App\Services\AntiFraud\RiskDecisionService;
 use App\Services\PerformanceOptimizationService;
 use App\Services\ReconciliationService;
+use App\Contracts\CurrencyServiceInterface;
 
 class WithdrawalService extends PaymentBaseService
 {
@@ -37,6 +38,8 @@ class WithdrawalService extends PaymentBaseService
     private PerformanceOptimizationService $performance;
     private StateMachineService      $stateMachine;
     private ReconciliationService    $reconciliation;
+    private CurrencyServiceInterface $currencyService;
+    private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
 
     private const PROFILES_DEFAULT = [
         'no_kyc'        => ['daily'=>0,  'weekly'=>0,   'monthly'=>0,   'multiplier'=>0],
@@ -63,7 +66,9 @@ class WithdrawalService extends PaymentBaseService
         LoggerInterface        $logger,
         PerformanceOptimizationService $performance,
         StateMachineService    $stateMachine,
-        ReconciliationService  $reconciliation
+        ReconciliationService  $reconciliation,
+        CurrencyServiceInterface $currencyService,
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard
     ) {
         parent::__construct($logger);
         $this->db               = $db;
@@ -83,6 +88,8 @@ class WithdrawalService extends PaymentBaseService
         $this->stateMachine     = $stateMachine;
         $this->reconciliation   = $reconciliation;
         $this->logger           = $logger;
+        $this->currencyService  = $currencyService;
+        $this->fraudGuard       = $fraudGuard;
     }
 
     public function requestFromUser(int $userId, array $payload): array
@@ -101,7 +108,7 @@ class WithdrawalService extends PaymentBaseService
 
             $minAmount = (float)($this->settings->get('withdrawal_min_amount', 10000));
             if ($amount < $minAmount) {
-                return ['success' => false, 'message' => "حداقل مبلغ برداشت {$minAmount} است"];
+                return ['success' => false, 'message' => "حداقل مبلغ برداشت " . $this->currencyService->formatAmount($minAmount, $currency) . " است"];
             }
 
             if (!$this->kycService->isApproved($userId)) {
@@ -114,10 +121,22 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'کارت بانکی معتبر یافت نشد'];
             }
 
-            // ریسک
-            $riskDecision = $this->riskDecisionService->decide($userId, ['action' => 'withdraw']);
-            if (!empty($riskDecision['deny'])) {
-                return ['success' => false, 'message' => $riskDecision['message'] ?? 'درخواست شما رد شد'];
+            // 🛡️ گیت ضدتقلب متمرکز برداشت (Velocity, ATO, Geolocation)
+            $risk = $this->fraudGuard->checkAction($userId, 'withdrawal.create', [
+                'amount'      => $amount,
+                'currency'    => $currency,
+                'ip'          => $ip,
+                'fingerprint' => $fingerprint,
+                'user_agent'  => get_user_agent()
+            ]);
+
+            if (!$risk['allowed']) {
+                $this->logger->warning('withdrawal.blocked_by_fraud_guard', [
+                    'user_id' => $userId,
+                    'amount' => $amount,
+                    'reason' => $risk['reason']
+                ]);
+                return ['success' => false, 'message' => 'درخواست برداشت به دلایل امنیتی مسدود شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از محدودیت تعداد تراکنش' : $risk['reason'])];
             }
 
             // تکراری/pending
@@ -221,6 +240,23 @@ class WithdrawalService extends PaymentBaseService
             return ['success' => false, 'message' => $limitCheck['reason']];
         }
 
+        // 🛡️ گیت ضدتقلب متمرکز برداشت (Velocity, ATO, Geolocation)
+        $risk = $this->fraudGuard->checkAction($userId, 'withdrawal.create', [
+            'amount'      => $amount,
+            'currency'    => $currency,
+            'ip'          => get_client_ip(),
+            'user_agent'  => get_user_agent()
+        ]);
+
+        if (!$risk['allowed']) {
+            $this->logger->warning('withdrawal.blocked_by_fraud_guard', [
+                'user_id' => $userId,
+                'amount'  => $amount,
+                'reason'  => $risk['reason']
+            ]);
+            return ['success' => false, 'message' => 'برداشت وجه به دلایل امنیتی متوقف شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از سقف برداشت امن' : $risk['reason'])];
+        }
+
         $pending = $this->model->where('user_id', $userId)
                                ->whereIn('status', ['pending', 'processing'])
                                ->first();
@@ -238,10 +274,10 @@ class WithdrawalService extends PaymentBaseService
         );
 
         if ($amount < $min) {
-            return ['success' => false, 'message' => 'کمتر از حداقل برداشت است'];
+            return ['success' => false, 'message' => 'کمتر از حداقل برداشت (' . $this->currencyService->formatAmount($min, $currency) . ') است'];
         }
         if ($amount > $max) {
-            return ['success' => false, 'message' => 'بیشتر از حداکثر برداشت است'];
+            return ['success' => false, 'message' => 'بیشتر از حداکثر برداشت (' . $this->currencyService->formatAmount($max, $currency) . ') است'];
         }
 
         $feePercent = (float)$this->settings->get(
@@ -539,7 +575,7 @@ class WithdrawalService extends PaymentBaseService
         if ($amount > $limits['max_amount']) {
             return [
                 'allowed' => false,
-                'reason'  => 'مبلغ بیشتر از سقف مجاز است',
+                'reason'  => 'مبلغ بیشتر از سقف مجاز (' . $this->currencyService->formatAmount($limits['max_amount'], $currency) . ') است',
                 'limits'  => $limits,
             ];
         }
@@ -547,7 +583,7 @@ class WithdrawalService extends PaymentBaseService
         if ($amount < $limits['min_amount']) {
             return [
                 'allowed' => false,
-                'reason'  => 'مبلغ کمتر از حداقل برداشت است',
+                'reason'  => 'مبلغ کمتر از حداقل برداشت (' . $this->currencyService->formatAmount($limits['min_amount'], $currency) . ') است',
                 'limits'  => $limits,
             ];
         }
@@ -671,14 +707,6 @@ class WithdrawalService extends PaymentBaseService
     private function increaseDailyLimit(int $userId): void
     {
         $this->limitModel->incrementDailyCount($userId);
-    }
-
-    private function uuid(): string
-    {
-        $data    = random_bytes(16);
-        $data[6] = chr(ord($data[6]) & 0x0f | 0x40);
-        $data[8] = chr(ord($data[8]) & 0x3f | 0x80);
-        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
 
     public function recordTransactionStatusChange(

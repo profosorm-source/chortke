@@ -68,7 +68,10 @@ class FinancialEscrowService extends \App\Services\BaseService
             }
 
             // ✅ Deduct from advertiser wallet (lock funds)
-            $this->wallet->withdraw($advertiserId, $reward, 'social_task_escrow', $executionId);
+            $this->wallet->withdraw($advertiserId, $reward, 'irt', [
+                'type' => 'social_task_escrow',
+                'execution_id' => $executionId
+            ]);
 
             $this->logger->info('social_task.escrow_hold', [
                 'execution_id' => $executionId,
@@ -118,7 +121,10 @@ class FinancialEscrowService extends \App\Services\BaseService
             }
 
             // ✅ Transfer to executor wallet
-            $this->wallet->deposit($executorId, $amount, 'social_task_reward', $executionId);
+            $this->wallet->deposit($executorId, $amount, 'irt', [
+                'type' => 'social_task_reward',
+                'execution_id' => $executionId
+            ]);
 
             $this->logger->info('social_task.escrow_released', [
                 'execution_id' => $executionId,
@@ -168,8 +174,11 @@ class FinancialEscrowService extends \App\Services\BaseService
             $this->wallet->deposit(
                 $advertiserId,
                 $escrow->amount,
-                'social_task_refund',
-                $executionId
+                'irt',
+                [
+                    'type' => 'social_task_refund',
+                    'execution_id' => $executionId
+                ]
             );
 
             $this->db->commit();
@@ -225,7 +234,10 @@ class FinancialEscrowService extends \App\Services\BaseService
             }
 
             // ✅ Deduct from buyer wallet
-            $this->wallet->withdraw($buyerId, $amount, 'influencer_escrow', $orderId);
+            $this->wallet->withdraw($buyerId, $amount, 'irt', [
+                'type' => 'influencer_escrow',
+                'order_id' => $orderId
+            ]);
 
             return ['ok' => true, 'escrow_id' => $result['escrow_id'] ?? null];
 
@@ -251,7 +263,10 @@ class FinancialEscrowService extends \App\Services\BaseService
                 return $result;
             }
 
-            $this->wallet->deposit($sellerId, $amount, 'influencer_order_payment', $orderId);
+            $this->wallet->deposit($sellerId, $amount, 'irt', [
+                'type' => 'influencer_order_payment',
+                'order_id' => $orderId
+            ]);
 
             return ['ok' => true];
 
@@ -296,7 +311,10 @@ class FinancialEscrowService extends \App\Services\BaseService
             }
 
             // ✅ Deduct from buyer
-            $this->wallet->withdraw($buyerId, $amount, 'vitrine_escrow', $listingId);
+            $this->wallet->withdraw($buyerId, $amount, 'usdt', [
+                'type' => 'vitrine_escrow',
+                'listing_id' => $listingId
+            ]);
 
             $this->db->commit();
             return ['ok' => true, 'escrow_id' => $result['escrow_id'] ?? null];
@@ -332,7 +350,10 @@ class FinancialEscrowService extends \App\Services\BaseService
             $commission = $amount * 0.05; // 5% commission
             $netAmount = $amount - $commission;
 
-            $this->wallet->deposit($sellerId, $netAmount, 'vitrine_sale', $listingId);
+            $this->wallet->deposit($sellerId, $netAmount, 'usdt', [
+                'type' => 'vitrine_sale',
+                'listing_id' => $listingId
+            ]);
 
             $this->db->commit();
             return ['ok' => true, 'net_amount' => $netAmount, 'commission' => $commission];
@@ -373,7 +394,10 @@ class FinancialEscrowService extends \App\Services\BaseService
                 return $result;
             }
 
-            $this->wallet->deposit($buyerId, $escrow->amount, 'vitrine_refund', $listingId);
+            $this->wallet->deposit($buyerId, $escrow->amount, 'usdt', [
+                'type' => 'vitrine_refund',
+                'listing_id' => $listingId
+            ]);
 
             $this->db->commit();
             return ['ok' => true, 'refund_amount' => $escrow->amount];
@@ -433,8 +457,11 @@ class FinancialEscrowService extends \App\Services\BaseService
                     $this->wallet->deposit(
                         $escrow->seller_id,
                         $releaseAmount,
-                        'dispute_release',
-                        $orderId
+                        $escrow->currency === 'USDT' ? 'usdt' : 'irt',
+                        [
+                            'type' => 'dispute_release',
+                            'order_id' => $orderId
+                        ]
                     );
                 }
             } else {
@@ -446,13 +473,20 @@ class FinancialEscrowService extends \App\Services\BaseService
                     'dispute_resolution'
                 );
                 if ($result['ok']) {
-                    $this->wallet->deposit($escrow->buyer_id, $refundAmount, 'dispute_refund', $orderId);
+                    $currency = $escrow->currency === 'USDT' ? 'usdt' : 'irt';
+                    $this->wallet->deposit($escrow->buyer_id, $refundAmount, $currency, [
+                        'type' => 'dispute_refund',
+                        'order_id' => $orderId
+                    ]);
                     if ($releaseAmount > 0) {
                         $this->wallet->deposit(
                             $escrow->seller_id,
                             $releaseAmount,
-                            'dispute_partial_release',
-                            $orderId
+                            $currency,
+                            [
+                                'type' => 'dispute_partial_release',
+                                'order_id' => $orderId
+                            ]
                         );
                     }
                 }

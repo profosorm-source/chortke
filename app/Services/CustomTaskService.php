@@ -48,6 +48,7 @@ class CustomTaskService extends \App\Services\BaseService
     private \App\Services\XPEngine $xpEngine;
     private \Core\RateLimiter $rateLimiter;
     private User $userModel;
+    private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
 
     public function __construct(
         Logger $logger,
@@ -68,7 +69,8 @@ class CustomTaskService extends \App\Services\BaseService
         SettingService $settingService,
         \App\Services\XPEngine $xpEngine,
         \Core\RateLimiter $rateLimiter,
-        User $userModel
+        User $userModel,
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -89,6 +91,7 @@ class CustomTaskService extends \App\Services\BaseService
         $this->settingService = $settingService;
         $this->xpEngine = $xpEngine;
         $this->rateLimiter = $rateLimiter;
+        $this->fraudGuard = $fraudGuard;
     }
 
     /**
@@ -519,6 +522,23 @@ class CustomTaskService extends \App\Services\BaseService
 
         public function startTask(int $taskId, int $workerId): array
     {
+        // 🛡️ گیت ضدتقلب تسک‌های سفارشی (Behavioral biometrics, IP, Velocity)
+        $risk = $this->fraudGuard->checkAction($workerId, 'task.custom', [
+            'task_id'    => $taskId,
+            'ip'         => $this->clientIp(),
+            'user_agent' => $this->userAgent(),
+            'session_id' => session_id() ?: ''
+        ]);
+
+        if (!$risk['allowed']) {
+            $this->logger->warning('task.custom_start_blocked_by_fraud_guard', [
+                'worker_id' => $workerId,
+                'task_id'   => $taskId,
+                'reason'    => $risk['reason']
+            ]);
+            return ['success' => false, 'message' => 'امکان شروع تسک به دلیل رفتارهای نامتعارف سیستمی مسدود شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از سقف فعالیت مجاز روزانه' : 'تشخیص فعالیت غیرمجاز')];
+        }
+
         $this->db->beginTransaction();
         
         if (!$this->rateLimiter->attempt('custom_task:start:' . $workerId, 15, 5)) {

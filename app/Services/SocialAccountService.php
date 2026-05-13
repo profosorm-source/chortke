@@ -331,4 +331,37 @@ $this->logger->info('social.account.registered', [
     {
         return $this->socialAccountModel->find($id);
     }
+
+    /**
+     * ادمن کے لیے تمام حسابات حاصل کریں (pagination کے ساتھ)
+     */
+    public function getAllForAdmin(array $filters = [], int $limit = 30, int $offset = 0): array
+    {
+        return $this->socialAccountModel->getAll($filters, $limit, $offset) ?? [];
+    }
+
+    /**
+     * ادمن کے لیے حسابات کی تعداد گنتی کریں
+     */
+    public function countForAdmin(array $filters = []): int
+    {
+        return $this->socialAccountModel->countAll($filters) ?? 0;
+    }
+
+    /**
+     * ادمن کے لیے حساب تلاش کریں
+     */
+    public function findForAdmin(int $id): ?object
+    {
+        return $this->socialAccountModel->find($id);
+    }
+
+    /**
+     * ادمن کے لیے حسابات تلاش کریں (filter کے ساتھ)
+     */
+    public function searchForAdmin(string $search, array $filters = [], int $limit = 30, int $offset = 0): array
+    {
+        $filters['search'] = $search;
+        return $this->getAllForAdmin($filters, $limit, $offset);
+    }
 }

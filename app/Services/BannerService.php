@@ -482,4 +482,58 @@ class BannerService extends \App\Services\BaseService
             'items' => (clone $query)->orderBy('created_at', 'DESC')->limit($limit)->offset($offset)->get() ?? []
         ];
     }
+
+    /**
+     * تمام Placements حاصل کریں
+     */
+    public function getAllPlacements(): array
+    {
+        return $this->placementModel->all() ?? [];
+    }
+
+    /**
+     * Placement کو ID سے تلاش کریں
+     */
+    public function findPlacement(int $id): ?object
+    {
+        return $this->placementModel->find($id);
+    }
+
+    /**
+     * Placement کو slug سے تلاش کریں
+     */
+    public function findPlacementBySlug(string $slug): ?object
+    {
+        return $this->placementModel->findBySlug($slug);
+    }
+
+    /**
+     * تمام فعال Placements حاصل کریں
+     */
+    public function getActivePlacements(): array
+    {
+        return $this->db->table('banner_placements')
+            ->where('is_active', '=', true)
+            ->orderBy('display_order', 'ASC')
+            ->get() ?? [];
+    }
+
+    /**
+     * Banner stats حاصل کریں
+     */
+    public function getStats(): array
+    {
+        $totalBanners = $this->db->table('ads')->where('type', '=', 'banner')->whereNull('deleted_at')->count();
+        $activeBanners = $this->db->table('ads')->where('type', '=', 'banner')->where('is_active', '=', true)->whereNull('deleted_at')->count();
+        $totalImpressions = $this->db->query("SELECT SUM(impression_count) as total FROM ads WHERE type = 'banner' AND deleted_at IS NULL")->fetch(\PDO::FETCH_OBJ)->total ?? 0;
+        $totalClicks = $this->db->query("SELECT SUM(click_count) as total FROM ads WHERE type = 'banner' AND deleted_at IS NULL")->fetch(\PDO::FETCH_OBJ)->total ?? 0;
+
+        return [
+            'total_banners' => $totalBanners,
+            'active_banners' => $activeBanners,
+            'total_impressions' => $totalImpressions,
+            'total_clicks' => $totalClicks,
+            'ctr' => $totalImpressions > 0 ? round(($totalClicks / $totalImpressions) * 100, 2) : 0,
+        ];
+    }
 }

@@ -27,6 +27,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     private AuditTrail $auditTrail;
     private DistributedLockService $lockService;
     private SettingService $settingService;
+    private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
 
     public function __construct(
         Database $db,
@@ -37,7 +38,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         AuditTrail $auditTrail,
         LedgerService $ledgerService,
         DistributedLockService $lockService,
-        SettingService $settingService
+        SettingService $settingService,
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -48,6 +50,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $this->ledgerService = $ledgerService;
         $this->lockService = $lockService;
         $this->settingService = $settingService;
+        $this->fraudGuard = $fraudGuard;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -836,6 +839,23 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
     public function transfer(int $fromUserId, int $toUserId, float $amount, string $currency = 'irt', string $description = ''): ?object
     {
+        // 🛡️ گیت ضدتقلب انتقال وجه (Velocity check & Global limits)
+        $risk = $this->fraudGuard->checkAction($fromUserId, 'wallet.transfer', [
+            'to_user_id' => $toUserId,
+            'amount'     => $amount,
+            'currency'   => $currency
+        ]);
+
+        if (!$risk['allowed']) {
+            $this->logger->warning('wallet.transfer_blocked_by_fraud_guard', [
+                'from_user_id' => $fromUserId,
+                'to_user_id'   => $toUserId,
+                'amount'       => $amount,
+                'reason'       => $risk['reason']
+            ]);
+            throw new \RuntimeException('انتقال وجه به دلایل امنیتی مسدود گردید. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از سقف جابجایی روزانه' : $risk['reason']));
+        }
+
         $this->assertWalletActive($fromUserId);
         $this->assertWalletActive($toUserId);
 

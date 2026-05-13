@@ -7,7 +7,7 @@ namespace App\Services;
 use App\Models\ActivityLog;
 use App\Models\Ads;
 use App\Models\CryptoDeposit;
-use App\Models\CustomTaskModel;
+use App\Models\CustomTaskSubmissionModel;
 use App\Models\EmailQueue;
 use App\Models\KYCVerification;
 use App\Models\SecurityModel;
@@ -33,7 +33,7 @@ class CronService extends \App\Services\BaseService
         private SecurityModel        $securityModel,
         private Transaction          $transactionModel,
         private User                 $userModel,
-        private CustomTaskModel       $taskModel,
+        private CustomTaskSubmissionModel $taskSubmissionModel,
         private WalletService        $walletService,
         protected LoggerInterface    $logger,
         private SettingService       $settingService
@@ -151,14 +151,14 @@ class CronService extends \App\Services\BaseService
 
     public function expireCustomTaskSubmissions(): array
     {
-        $expired = $this->taskModel->submission_getExpiredSubmissions();
+        $expired = $this->taskSubmissionModel->submission_getExpiredSubmissions();
         $count = 0;
 
         foreach ($expired as $item) {
             try {
                 $this->db->beginTransaction();
-                $this->taskModel->submission_markExpired($item->id);
-                $this->taskModel->decrementPendingCount($item->task_id);
+                $this->taskSubmissionModel->submission_markExpired($item->id);
+                $this->adModel->decrementPendingCount($item->task_id);
                 $this->db->commit();
                 $count++;
                 $this->logger->info('Submission expired by cron', ['submission_id' => $item->id, 'task_id' => $item->task_id]);
@@ -174,16 +174,16 @@ class CronService extends \App\Services\BaseService
     public function autoApproveCustomTaskSubmissions(): array
     {
         $autoApproveHours = (int) $this->settingService->get('custom_task_auto_approve_hours', 48);
-        $unreviewed = $this->taskModel->submission_getUnreviewedSubmissions($autoApproveHours);
+        $unreviewed = $this->taskSubmissionModel->submission_getUnreviewedSubmissions($autoApproveHours);
         $count = 0;
 
         foreach ($unreviewed as $item) {
             try {
-                $submission = $this->taskModel->submission_findWithTask($item->id);
+                $submission = $this->taskSubmissionModel->submission_findWithTask($item->id);
                 if (!$submission) continue;
 
                 $this->db->beginTransaction();
-                $this->taskModel->submission_markApproved($submission->id);
+                $this->taskSubmissionModel->submission_markApproved($submission->id);
 
                 $idempotencyKey = "ctask_auto_reward_{$submission->id}_" . time();
                 $this->walletService->deposit(
@@ -197,8 +197,8 @@ class CronService extends \App\Services\BaseService
                     ]
                 );
 
-                $this->taskModel->submission_markRewardPaid($submission->id);
-                $this->taskModel->incrementCompletedCountAndSpend($submission->task_id, $submission->reward_amount);
+                $this->taskSubmissionModel->submission_markRewardPaid($submission->id);
+                $this->adModel->incrementCustomTaskCompletion($submission->task_id, (float)$submission->reward_amount);
 
                 $this->db->commit();
                 $count++;
@@ -214,14 +214,19 @@ class CronService extends \App\Services\BaseService
 
     public function completeFullCustomTasks(): array
     {
-        $tasks = $this->taskModel->getFullyCompletedTasks();
+        $tasks = $this->db->fetchAll("
+            SELECT id, user_id as creator_id, total_budget, remaining_budget, currency 
+            FROM ads 
+            WHERE type = 'custom_task' AND status = 'active' AND (remaining_budget <= 0 OR (total_count > 0 AND completed_count >= total_count))
+        ");
         $count = 0;
 
         foreach ($tasks as $task) {
             try {
                 $this->db->beginTransaction();
-                $this->taskModel->markCompleted($task->id);
-                $remaining = $task->total_budget - $task->spent_budget;
+                $this->db->query("UPDATE ads SET status = 'completed', updated_at = NOW() WHERE id = ?", [$task->id]);
+                
+                $remaining = (float)($task->remaining_budget ?? 0);
                 if ($remaining > 0) {
                     $idempotencyKey = "ctask_refund_complete_{$task->id}_" . time();
                     $this->walletService->deposit($task->creator_id, $remaining, $task->currency, [

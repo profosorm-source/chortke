@@ -58,9 +58,10 @@ class CurrencyService extends \App\Services\BaseService implements CurrencyServi
     /**
      * فرمت کردن مبلغ
      */
-    public function formatAmount(float $amount): string
+    public function formatAmount(float $amount, ?string $currency = null): string
     {
-        if ($this->isIRT()) {
+        $cur = $currency ? \strtolower(\trim($currency)) : $this->getCurrentMode();
+        if ($cur === 'irt') {
             return number_format($amount, 0, '.', ',') . ' تومان';
         } else {
             return number_format($amount, 2, '.', ',') . ' USDT';

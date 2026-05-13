@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use Core\Cache;
+use App\Contracts\CacheInterface;
 use App\Contracts\LoggerInterface;
 
 /**
@@ -13,8 +13,8 @@ use App\Contracts\LoggerInterface;
  */
 class CacheAdminService extends \App\Services\BaseService
 {
-    private Cache $cache;
-    public function __construct(Cache $cache, LoggerInterface $logger)
+    private CacheInterface $cache;
+    public function __construct(CacheInterface $cache, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->cache = $cache;
@@ -30,8 +30,8 @@ class CacheAdminService extends \App\Services\BaseService
         try {
             if ($type === 'settings') {
                 // پاکسازی کلیدهای جدید و قدیم کش
-                $this->cache->forget('system:settings:v2');
-                $this->cache->forget('system:settings');
+                $this->cache->delete('system:settings:v2');
+                $this->cache->delete('system:settings');
 
                 // پاکسازی فایلهای باقیمانده و منسوخ جهت سبک‌سازی دیسک
                 $legacyJson = BASE_PATH . '/storage/cache/system_settings.json';
@@ -45,8 +45,8 @@ class CacheAdminService extends \App\Services\BaseService
                 
                 $cleared = 1;
             } elseif ($type === 'kpi') {
-                $this->cache->forget('kpi:dashboard:summary');
-                $this->cache->forget('kpi:weekly_report');
+                $this->cache->delete('kpi:dashboard:summary');
+                $this->cache->delete('kpi:weekly_report');
                 $cleared = 2;
             } elseif ($type === 'tags' && $tag !== '') {
                 $this->cache->tags([$tag])->flush();
@@ -69,7 +69,7 @@ class CacheAdminService extends \App\Services\BaseService
     public function forget(string $key): bool
     {
         try {
-            $this->cache->forget($key);
+            $this->cache->delete($key);
             return true;
         } catch (\Throwable $e) {
             $this->logger->error('cache.forget.failed', ['key' => $key, 'error' => $e->getMessage()]);

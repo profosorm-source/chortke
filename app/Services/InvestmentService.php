@@ -15,6 +15,7 @@ use Core\Database;
 use App\Services\AuditTrail;
 use App\Services\SettingService;
 use App\Services\PerformanceOptimizationService;
+use App\Contracts\CurrencyServiceInterface;
 
 class InvestmentService extends \App\Services\BaseService
 {
@@ -29,6 +30,7 @@ class InvestmentService extends \App\Services\BaseService
 	private \Core\Queue $queue;
     private SettingService       $settingService;
     private PerformanceOptimizationService $performance;
+    private CurrencyServiceInterface $currencyService;
     private const RISK_WARNING = <<<EOT
 ⚠️ هشدار ریسک سرمایه‌گذاری
 
@@ -55,7 +57,8 @@ EOT;
     LoggerInterface $logger,
     \Core\Queue $queue,
     SettingService $settingService,
-    PerformanceOptimizationService $performance
+    PerformanceOptimizationService $performance,
+    CurrencyServiceInterface $currencyService
 ) {
         parent::__construct($logger);
         $this->db                  = $db;
@@ -69,6 +72,7 @@ EOT;
         $this->queue = $queue;
         $this->settingService = $settingService;
         $this->performance = $performance;
+        $this->currencyService = $currencyService;
     }
 
     /**
@@ -85,10 +89,10 @@ EOT;
         $maxAmount = (float)$this->settingService->get('investment_max_amount', 10000);
 
         if ($amount < $minAmount) {
-            return ['success' => false, 'message' => "حداقل مبلغ سرمایه‌گذاری {$minAmount} تتر است."];
+            return ['success' => false, 'message' => "حداقل مبلغ سرمایه‌گذاری " . $this->currencyService->formatAmount($minAmount, 'usdt') . " است."];
         }
         if ($amount > $maxAmount) {
-            return ['success' => false, 'message' => "حداکثر مبلغ سرمایه‌گذاری {$maxAmount} تتر است."];
+            return ['success' => false, 'message' => "حداکثر مبلغ سرمایه‌گذاری " . $this->currencyService->formatAmount($maxAmount, 'usdt') . " است."];
         }
 
         $balance = $this->walletService->getBalance($userId, 'usdt');
@@ -151,7 +155,7 @@ EOT;
                 'amount' => $amount,
             ]);
 
-            $this->notify($userId, 'سرمایه‌گذاری جدید', "سرمایه‌گذاری {$amount} تتر با موفقیت ثبت شد.", 'investment_created');
+            $this->notify($userId, 'سرمایه‌گذاری جدید', "سرمایه‌گذاری " . $this->currencyService->formatAmount($amount, 'usdt') . " با موفقیت ثبت شد.", 'investment_created');
             $this->logger->info('investment_created', ['message' => "User {$userId} invested {$amount} USDT", 'id' => $investmentId]);
 
             return ['success' => true, 'message' => 'سرمایه‌گذاری با موفقیت انجام شد'];
@@ -368,10 +372,10 @@ EOT;
                 ], $adminId);
 
                 $typeLabel       = $isProfit ? 'سود' : 'ضرر';
-                $amountFormatted = number_format(abs($netAmount), 2);
+                $amountFormatted = $this->currencyService->formatAmount(abs($netAmount), 'usdt');
                 $this->notify($inv->user_id,
                     "گزارش هفتگی سرمایه‌گذاری",
-                    "دوره {$period}: {$typeLabel} {$amountFormatted} تتر | موجودی جدید: " . number_format($balanceAfter, 2) . " تتر",
+                    "دوره {$period}: {$typeLabel} {$amountFormatted} | موجودی جدید: " . $this->currencyService->formatAmount($balanceAfter, 'usdt'),
                     'investment_profit'
                 );
 
@@ -526,7 +530,7 @@ EOT;
             ], $adminId);
 
             $this->notify($withdrawal->user_id, 'برداشت سرمایه‌گذاری تأیید شد',
-                "مبلغ " . number_format((float)$withdrawal->amount, 2) . " تتر به کیف پول شما واریز شد",
+                "مبلغ " . $this->currencyService->formatAmount((float)$withdrawal->amount, 'usdt') . " به کیف پول شما واریز شد",
                 'investment_withdrawal_approved');
 
             $this->logger->info('investment_withdrawal_approved', ['message' => "Admin {$adminId} approved withdrawal #{$withdrawalId}"]);
