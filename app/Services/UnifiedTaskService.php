@@ -74,7 +74,8 @@ class UnifiedTaskService extends BaseService
 
         if (!empty($filters['q'])) {
             $where[] = "(a.title LIKE ? OR a.description LIKE ?)";
-            $like = '%' . $filters['q'] . '%';
+            $sanitizedQ = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], (string)$filters['q']);
+            $like = '%' . $sanitizedQ . '%';
             $params[] = $like;
             $params[] = $like;
         }
@@ -150,6 +151,13 @@ class UnifiedTaskService extends BaseService
         if (!empty($filters['max_price'])) {
             $where[] = "a.price_per_task <= ?";
             $params[] = (float)$filters['max_price'];
+        }
+        if (!empty($filters['q'])) {
+            $where[] = "(a.title LIKE ? OR a.description LIKE ?)";
+            $sanitizedQ = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], (string)$filters['q']);
+            $like = '%' . $sanitizedQ . '%';
+            $params[] = $like;
+            $params[] = $like;
         }
 
         $whereSql = implode(" AND ", $where);

@@ -121,6 +121,45 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     }
 
     /**
+     * افزایش موجودی درون یک تراکنش فعال — بدون قفل توزیع‌شده
+     */
+    public function depositInTransaction(int $userId, float $amount, string $currency = 'irt', array $metadata = []): array
+    {
+        $currency = strtolower($currency);
+        $this->validateDepositInput($userId, $amount, $currency, $metadata);
+
+        $requestId         = $metadata['request_id']         ?? get_request_id();
+        $ipAddress         = $metadata['ip_address']         ?? get_client_ip();
+        $deviceFingerprint = $metadata['device_fingerprint'] ?? generate_device_fingerprint();
+        $logId             = "DEP_TX_{$requestId}";
+
+        $idempotencyKey = $metadata['idempotency_key'] ?? hash('sha256', implode('|', [
+            $userId, 'deposit_tx', $amount, $currency,
+            $metadata['gateway_transaction_id'] ?? '',
+            $metadata['ref_id']                 ?? '',
+        ]));
+
+        $idempotencyService = $this->idempotencyKey;
+        $check = $idempotencyService->check($idempotencyKey, $userId, 'wallet_deposit_tx', [
+            'amount' => $amount, 'currency' => $currency, 'ip' => $ipAddress,
+        ]);
+
+        if ($check['is_duplicate']) {
+            $this->logger->warning('wallet.deposit_tx.duplicate', [
+                'channel' => 'wallet',
+                'log_id' => $logId,
+                'idempotency_key' => $idempotencyKey,
+            ]);
+            return $this->standardizeResponse($check['result']);
+        }
+
+        return $this->processDepositTransaction(
+            $userId, $amount, $currency, $metadata, $idempotencyKey,
+            $requestId, $ipAddress, $deviceFingerprint, $logId
+        );
+    }
+
+    /**
      * اعتبارسنجی ورودی‌های متد واریز
      */
     private function validateDepositInput(int $userId, float $amount, string $currency, array $metadata): void

@@ -216,8 +216,7 @@ class KYCService extends \App\Services\BaseService
             'user_id' => $userId,
             'error' => $e->getMessage(),
             'exception' => get_class($e),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
+            'file' => basename($e->getFile()) . ':' . $e->getLine(),
         ]);
 
         return ['success' => false, 'message' => 'خطای سیستمی در ثبت احراز هویت'];
@@ -280,8 +279,7 @@ class KYCService extends \App\Services\BaseService
                 'user_id' => (int)$kyc->user_id,
                 'error' => $e->getMessage(),
                 'exception' => get_class($e),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
+                'file' => basename($e->getFile()) . ':' . $e->getLine(),
             ]);
         }
 
@@ -295,8 +293,7 @@ class KYCService extends \App\Services\BaseService
             'admin_id' => $adminId,
             'error' => $e->getMessage(),
             'exception' => get_class($e),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
+            'file' => basename($e->getFile()) . ':' . $e->getLine(),
         ]);
 
         return ['success' => false, 'message' => 'خطای سیستمی در تایید KYC'];
@@ -366,8 +363,7 @@ class KYCService extends \App\Services\BaseService
                 'user_id' => (int)$kyc->user_id,
                 'error' => $e->getMessage(),
                 'exception' => get_class($e),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
+                'file' => basename($e->getFile()) . ':' . $e->getLine(),
             ]);
         }
 
@@ -381,8 +377,7 @@ class KYCService extends \App\Services\BaseService
             'admin_id' => $adminId,
             'error' => $e->getMessage(),
             'exception' => get_class($e),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
+            'file' => basename($e->getFile()) . ':' . $e->getLine(),
         ]);
 
         return ['success' => false, 'message' => 'خطای سیستمی در رد KYC'];

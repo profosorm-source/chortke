@@ -17,7 +17,7 @@ use App\Contracts\LoggerInterface;
  * - refunded:   returned to buyer
  * - disputed:   waiting for resolution
  */
-class EscrowServiceextends \App\Services\BaseService
+class EscrowService extends \App\Services\BaseService
 {
     private Escrow   $escrowModel;
     private Database $db;

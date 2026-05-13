@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\User;
 use App\Contracts\LoggerInterface;
+use Core\Database;
 
 /**
  * FinancialEscrowService - Unified escrow management for all financial modules
@@ -18,17 +19,20 @@ class FinancialEscrowService extends \App\Services\BaseService
     private EscrowService $escrow;
     private User         $userModel;
     private WalletService $wallet;
+    private Database     $db;
 
     public function __construct(
         EscrowService $escrow,
         User         $userModel,
         LoggerInterface       $logger,
-        WalletService $wallet
+        WalletService $wallet,
+        Database $db
     ) {
         parent::__construct($logger);
         $this->escrow = $escrow;
         $this->userModel = $userModel;
         $this->wallet = $wallet;
+        $this->db = $db;
     }
 
     // ──────────────────────────────────────────────────────────────────────────

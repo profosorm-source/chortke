@@ -38,6 +38,13 @@ class EscalationManager
 
     private function shouldEscalate(object $alert): bool
     {
+        // AL6: Prevent escalation if the alert is already acknowledged to eliminate spam
+        if (!empty($alert->acknowledged_at) || 
+            (isset($alert->status) && $alert->status === 'acknowledged') ||
+            !empty($alert->is_acknowledged)) {
+            return false;
+        }
+
         $age = time() - strtotime((string)$alert->created_at);
         
         $escalationTime = match($alert->severity) {

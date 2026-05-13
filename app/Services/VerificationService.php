@@ -147,18 +147,11 @@ class VerificationService extends \App\Services\BaseService
                 return ['ok' => false, 'error' => 'پروفایل اینفلوئنسر یافت نشد'];
             }
 
-            if ($profile->status === InfluencerModel::STATUS_VERIFIED) {
-                // Return to pending review if already verified
-                $this->profileModel->updateProfile($profileId, [
-                    'status' => InfluencerModel::STATUS_PENDING_ADMIN_REVIEW,
-                    'verification_post_url' => $proofUrl,
-                ]);
-            } else {
-                $this->profileModel->updateProfile($profileId, [
-                    'status' => InfluencerModel::STATUS_PENDING_ADMIN_REVIEW,
-                    'verification_post_url' => $proofUrl,
-                ]);
-            }
+            // Return to pending review / Update with proof URL
+            $this->profileModel->updateProfile($profileId, [
+                'status' => InfluencerModel::STATUS_PENDING_ADMIN_REVIEW,
+                'verification_post_url' => $proofUrl,
+            ]);
 
             $this->logger->info('verification.proof.submitted', [
                 'profile_id' => $profileId,

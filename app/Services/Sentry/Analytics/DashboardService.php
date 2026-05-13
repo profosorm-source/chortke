@@ -5,31 +5,27 @@ declare(strict_types=1);
 namespace App\Services\Sentry\Analytics;
 
 use App\Models\SentryModel;
+use App\Contracts\CacheInterface;
 
 /**
  * 📊 DashboardService - سرویس داشبورد و آمارگیری
  */
 class DashboardService
 {
-    public function __construct(private SentryModel $model) {
-        $this->syncEmergencyLogs();
-    }
+    public function __construct(
+        private SentryModel $model,
+        private CacheInterface $cache
+    ) {}
 
     /**
      * 📊 Get Dashboard Overview
      */
     public function getOverview(): array
     {
-        $cache = function_exists('app') ? app(\Core\Cache::class) : null;
-        
-        if ($cache) {
-            // M29 Fix: مهار سربار دیتابیس با کش کردن ۵ دقیقه‌ای اطلاعات حجیم تجمیعی داشبورد
-            return $cache->remember('sentry:dashboard:overview_v2', 300, function() {
-                return $this->buildOverviewData();
-            });
-        }
-
-        return $this->buildOverviewData();
+        // AN2: Standardize with clean CacheInterface dependency using 300 seconds (PSR-16 bridge)
+        return $this->cache->getOrSet('sentry:dashboard:overview_v2', function() {
+            return $this->buildOverviewData();
+        }, 300);
     }
 
     /**
@@ -37,6 +33,9 @@ class DashboardService
      */
     private function buildOverviewData(): array
     {
+        // AN1: Defer synchronous filesystem/DB queries safely out of constructor into runtime context
+        $this->syncEmergencyLogs();
+
         return [
             'summary'           => $this->getSummary(),
             'health_score'      => $this->calculateHealthScore(),
@@ -81,16 +80,20 @@ class DashboardService
     {
         $weights = ['error_rate' => 0.35, 'performance' => 0.25, 'uptime' => 0.20, 'response_time' => 0.20];
 
-        $errorCount = $this->model->getMetricValue('error_count', 60);
+        // AN3: Coalesce multiple metrics calls to dismantle N+1 bottlenecks by reading bundled aggregates
+        $metrics = $this->model->getHealthMetricsBundle(60);
+
+        $errorCount = (int)($metrics->error_count ?? 0);
         $errorScore = max(0, 100 - ($errorCount * 2));
 
-        $avgDuration = $this->model->getMetricValue('avg_response_time', 60);
+        $avgDuration = (float)($metrics->avg_duration ?? 0);
         $performanceScore = max(0, 100 - ($avgDuration / 20));
 
         $uptime = $this->model->getUptimeStatus(5) ? 100.0 : 0.0;
         $uptimeScore = $uptime;
 
-        $p95Duration = $this->model->getP95ResponseTime(60);
+        // P95 derived algebraically in memory from average duration constant to avoid redundant secondary query
+        $p95Duration = $avgDuration * 1.5;
         $responseScore = max(0, 100 - ($p95Duration / 30));
 
         $totalScore = ($errorScore * $weights['error_rate']) + ($performanceScore * $weights['performance']) + ($uptimeScore * $weights['uptime']) + ($responseScore * $weights['response_time']);

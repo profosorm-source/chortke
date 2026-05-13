@@ -129,7 +129,10 @@ class BannerService extends \App\Services\BaseService
 
             // ۳. کسر وجه از کیف پول
             if ($totalPrice > 0) {
-                $debit = $this->walletService->debit($userId, $totalPrice, 'irt', 'user_banner', "خرید بنر تبلیغاتی {$durationDays} روزه");
+                $debit = $this->walletService->withdraw($userId, (float)$totalPrice, 'irt', [
+                    'type' => 'user_banner',
+                    'description' => "خرید بنر تبلیغاتی {$durationDays} روزه"
+                ]);
                 if (!$debit['success']) {
                     // حذف فایل آپلود شده در صورت شکست تراکنش مالی
                     if ($imagePath) $this->deleteBannerImage($imagePath);
@@ -217,7 +220,10 @@ class BannerService extends \App\Services\BaseService
             // ۲. برگشت وجه
             $refundAmount = (float)($banner->total_budget ?? 0);
             if ($refundAmount > 0) {
-                $credit = $this->walletService->credit($userId, $refundAmount, 'irt', 'banner_refund', "برگشت هزینه لغو بنر #{$bannerId}");
+                $credit = $this->walletService->deposit($userId, $refundAmount, 'irt', [
+                    'type' => 'banner_refund',
+                    'description' => "برگشت هزینه لغو بنر #{$bannerId}"
+                ]);
                 if (!$credit['success']) {
                     throw new \Exception("خطا در واریز استرداد وجه: " . ($credit['message'] ?? 'Unknown'));
                 }

@@ -577,7 +577,7 @@ HTML;
             'host'       => $this->smtpHost,
             'port'       => $this->smtpPort,
             'encryption' => $this->smtpEncryption ?: 'none',
-            'username'   => $this->smtpUsername ?: '(empty)',
+            'username'   => $this->smtpUsername ? '****' : '(empty)',
             'from_email' => $this->fromEmail,
             'from_name'  => $this->fromName,
         ];

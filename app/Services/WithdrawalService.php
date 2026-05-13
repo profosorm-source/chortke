@@ -87,7 +87,6 @@ class WithdrawalService extends PaymentBaseService
         $this->performance      = $performance;
         $this->stateMachine     = $stateMachine;
         $this->reconciliation   = $reconciliation;
-        $this->logger           = $logger;
         $this->currencyService  = $currencyService;
         $this->fraudGuard       = $fraudGuard;
     }

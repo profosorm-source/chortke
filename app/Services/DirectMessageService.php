@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\DirectMessage;
 use Core\Redis;
+use Core\Database;
 use App\Services\SettingService;
 
 use App\Contracts\LoggerInterface;
@@ -26,6 +27,7 @@ class DirectMessageService extends \App\Services\BaseService
     private DirectMessage $directMessageModel;
     private Redis $redis;
     private SettingService $settingService;
+    private Database $db;
 
     // محدودیت‌های سرویس
     private const MAX_MESSAGE_LENGTH = 5000;
@@ -39,12 +41,13 @@ class DirectMessageService extends \App\Services\BaseService
     private const TYPING_PREFIX = 'typing:';
     private const UNREAD_PREFIX = 'unread:';
 
-    public function __construct(DirectMessage $directMessageModel, LoggerInterface $logger, Redis $redis, SettingService $settingService)
+    public function __construct(DirectMessage $directMessageModel, LoggerInterface $logger, Redis $redis, SettingService $settingService, Database $db)
     {
         parent::__construct($logger);
         $this->directMessageModel = $directMessageModel;
         $this->redis = $redis;
         $this->settingService = $settingService;
+        $this->db = $db;
     }
 
     /**
@@ -88,7 +91,7 @@ class DirectMessageService extends \App\Services\BaseService
                 return ['error' => 'ارسال هرگونه شماره تماس، آیدی شبکه‌های اجتماعی یا لینک خارجی خلاف قوانین است و مسدود شد.'];
             }
 
-            $this->directMessageModel->beginTransaction();
+            $this->db->beginTransaction();
 
             // ثبت پیام
             $messageId = $this->directMessageModel->createMessage(
@@ -113,7 +116,7 @@ class DirectMessageService extends \App\Services\BaseService
             // شمارشگر پیام‌های خوانده نشده
             $this->redis->incr(self::UNREAD_PREFIX . $recipientId . ':' . $senderId);
 
-            $this->directMessageModel->commit();
+            $this->db->commit();
 
             $this->logger->info('message.sent', [
                 'message_id' => $messageId,
@@ -128,7 +131,7 @@ class DirectMessageService extends \App\Services\BaseService
             ];
 
         } catch (\Exception $e) {
-            $this->directMessageModel->rollback();
+            $this->db->rollBack();
             $this->logger->error('message.send.failed', ['error' => $e->getMessage()]);
             return ['error' => 'خطا در ارسال پیام'];
         }
@@ -347,6 +350,13 @@ class DirectMessageService extends \App\Services\BaseService
         $english = ['0','1','2','3','4','5','6','7','8','9'];
         $msg = str_replace($persian, $english, $msg);
         $msg = str_replace($arabic, $english, $msg);
+
+        // Whitelist internal domain to avoid false positives
+        $appUrl = config('app.url', '');
+        $host = parse_url($appUrl, PHP_URL_HOST) ?: '';
+        if ($host !== '') {
+            $msg = str_replace(mb_strtolower($host, 'UTF-8'), 'whitelisted_domain', $msg);
+        }
 
         $patterns = [
             'url'    => '/https?:\/\/[^\s]+|\b[a-z0-9.-]+\.(ir|com|org|net|biz|info|me|online|tk)\b/i', // آدرس‌های وب

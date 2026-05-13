@@ -13,6 +13,8 @@ use App\Contracts\LoggerInterface;
  * 
  * این کلاس برای حفظ سازگاری با کنترلرها نگه داشته شده است.
  * لطفاً در کدهای جدید مستقیماً از App\Policies\RateLimitPolicy استفاده کنید.
+ * 
+ * @deprecated 2.0 Use App\Policies\RateLimitPolicy directly.
  */
 class ApiRateLimiter extends \App\Services\BaseService
 {

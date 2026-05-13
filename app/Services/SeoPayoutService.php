@@ -1,10 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
 use App\Models\Ads;
-
 use App\Contracts\LoggerInterface;
+
 /**
  * SeoPayoutService — محاسبه پرداخت پویا
  * 
@@ -14,8 +16,9 @@ class SeoPayoutService extends \App\Services\BaseService
 {
     private Ads $seoAdModel;
 
-    public function __construct(Ads $seoAdModel)
+    public function __construct(Ads $seoAdModel, LoggerInterface $logger)
     {
+        parent::__construct($logger);
         $this->seoAdModel = $seoAdModel;
     }
 

@@ -93,7 +93,7 @@ class LedgerService extends \App\Services\BaseService
         $debit = (float) ($row['total_debit'] ?? 0);
         $credit = (float) ($row['total_credit'] ?? 0);
 
-        return abs($debit - $credit) < 0.000001;
+        return bccomp((string)$debit, (string)$credit, 8) === 0;
     }
 
     public function isLedgerBalanced(): bool
@@ -105,6 +105,6 @@ class LedgerService extends \App\Services\BaseService
         $debit = (float) ($row['total_debit'] ?? 0);
         $credit = (float) ($row['total_credit'] ?? 0);
 
-        return abs($debit - $credit) < 0.000001;
+        return bccomp((string)$debit, (string)$credit, 8) === 0;
     }
 }

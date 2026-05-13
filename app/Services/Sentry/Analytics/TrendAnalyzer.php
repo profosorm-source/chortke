@@ -30,7 +30,7 @@ class TrendAnalyzer
 
     private function calculateTrend(array $data): array
     {
-        if (count($data) < 2) return ['direction' => 'stable', 'strength' => 0];
+        if (count($data) < 2) return ['direction' => 'stable', 'strength' => 0, 'slope' => 0.0];
 
         $n = count($data);
         $sumX = $sumY = $sumXY = $sumX2 = 0;
@@ -41,7 +41,9 @@ class TrendAnalyzer
             $sumX += $x; $sumY += $y; $sumXY += $x * $y; $sumX2 += $x * $x;
         }
 
-        $slope = ($n * $sumXY - $sumX * $sumY) / ($n * $sumX2 - $sumX * $sumX);
+        // AN4: Defensively verify denominator bounds to defeat Division by Zero runtime panics
+        $denominator = ($n * $sumX2 - $sumX * $sumX);
+        $slope = abs($denominator) > 0.000001 ? ($n * $sumXY - $sumX * $sumY) / $denominator : 0.0;
         
         return [
             'direction' => $slope > 0.1 ? 'increasing' : ($slope < -0.1 ? 'decreasing' : 'stable'),

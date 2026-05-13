@@ -11,6 +11,7 @@ use App\Utils\Sentry\StackTraceAnalyzer;
 use App\Utils\Sentry\BreadcrumbCollector;
 use App\Utils\Sentry\ContextEnricher;
 use App\Services\Sentry\Alerting\AlertDispatcher;
+use App\Contracts\CacheInterface;
 
 /**
  * 🔥 SentryErrorMonitor - سیستم مانیتورینگ خطا مشابه Sentry
@@ -35,6 +36,7 @@ class SentryErrorMonitor
         private Logger $logger,
         private AlertDispatcher $alertDispatcher,
         private AuditTrail $auditTrail,
+        private CacheInterface $cache,
         array $config = []
     ) {
         $this->config = array_merge($this->config, $config);
@@ -175,7 +177,16 @@ class SentryErrorMonitor
     private function storeEvent(array $event): string
     {
         try {
+            // EM2: Filter PII and mask secrets recursively prior to storage to secure persistence logs
+            $event = $this->sanitizeData($event);
+
             $fingerprint = $event['fingerprint'] ?? $this->generateSimpleFingerprint($event);
+
+            // EM1: Throttle and consolidate database writes under high-volume bursts
+            if ($this->isRateLimited($fingerprint)) {
+                return $event['event_id'] ?? 'rate_limited';
+            }
+
             $existingIssue = $this->model->findExistingIssue($fingerprint, $this->config['environment']);
 
             if ($existingIssue) {
@@ -212,6 +223,7 @@ class SentryErrorMonitor
                 'environment' => $this->config['environment'],
                 'release_version' => $this->config['release'],
                 'user_id' => $event['user']['id'] ?? null,
+                // Masked IP from request context mapped securely (EM2 enforced)
                 'ip_address' => $event['request']['ip'] ?? null,
                 'user_agent' => $event['request']['user_agent'] ?? null,
             ]);
@@ -368,7 +380,18 @@ class SentryErrorMonitor
 
     private function shouldCapture(): bool
     {
-        return (mt_rand() / mt_getrandmax()) <= $this->config['sample_rate'];
+        $sampleRate = (float)($this->config['sample_rate'] ?? 1.0);
+        if ($sampleRate >= 1.0) return true;
+        if ($sampleRate <= 0.0) return false;
+
+        // EM3: Guarantee deterministic reproducibility of probabilistic captures bounded to user/trace contexts
+        $traceId = $_SERVER['HTTP_X_REQUEST_ID'] ?? $_SERVER['UNIQUE_ID'] ?? (($_SERVER['REMOTE_ADDR'] ?? '') . ($_SERVER['HTTP_USER_AGENT'] ?? ''));
+        
+        // Derive deterministic 32-bit value from user trace signature
+        $hashValue = hexdec(substr(md5($traceId), 0, 8));
+        $maxLimit = 0xFFFFFFFF;
+
+        return ($hashValue / $maxLimit) <= $sampleRate;
     }
 
     private function shouldIgnore(\Throwable $exception): bool
@@ -403,5 +426,71 @@ class SentryErrorMonitor
             'error_count' => $stats->error_count ?? 0,
             'warning_count' => $stats->warning_count ?? 0,
         ];
+    }
+
+    /**
+     * EM1: Throttles event captures under rapid exception bursts to maintain DB responsiveness
+     */
+    private function isRateLimited(string $fingerprint): bool
+    {
+        $cacheKey = 'sentry:burst_limit:' . md5($fingerprint);
+        
+        try {
+            // Standard increment on PSR-16 (or simulation)
+            $current = (int)$this->cache->get($cacheKey, 0);
+            if ($current >= 10) {
+                // Block if limit exceeded (10 errors per 60s)
+                return true;
+            }
+            
+            $this->cache->set($cacheKey, $current + 1, 60);
+            return false;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * EM2: Recursive deep filtering of PII identifiers and sensitive secrets to enforce GDPR compliance
+     */
+    private function sanitizeData(array $data): array
+    {
+        $sensitiveKeys = ['password', 'passwd', 'secret', 'token', 'api_key', 'auth', 'authorization', 'cookie', 'session', 'card', 'credit', 'email'];
+        $result = [];
+
+        foreach ($data as $key => $value) {
+            $lowKey = strtolower((string)$key);
+            
+            $isSensitive = false;
+            foreach ($sensitiveKeys as $sKey) {
+                if (str_contains($lowKey, $sKey)) {
+                    $isSensitive = true;
+                    break;
+                }
+            }
+
+            if ($isSensitive) {
+                $result[$key] = '[FILTERED]';
+                continue;
+            }
+
+            if (is_array($value)) {
+                $result[$key] = $this->sanitizeData($value);
+            } elseif (in_array($lowKey, ['ip', 'ip_address', 'remote_addr'], true)) {
+                // Mask the last octet/segments of IP address to defend PII disclosure vectors
+                $ip = (string)$value;
+                if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                    $result[$key] = preg_replace('/\d+$/', 'XXX', $ip);
+                } elseif (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+                    $result[$key] = preg_replace('/:[0-9a-fA-F]+$/', ':XXXX', $ip);
+                } else {
+                    $result[$key] = '[MASKED]';
+                }
+            } else {
+                $result[$key] = $value;
+            }
+        }
+
+        return $result;
     }
 }

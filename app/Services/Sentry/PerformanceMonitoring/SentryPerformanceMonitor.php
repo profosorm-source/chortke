@@ -33,7 +33,9 @@ class SentryPerformanceMonitor
         array $config = []
     ) {
         $this->config = array_merge($this->config, $config);
-        $this->startTime = microtime(true);
+        
+        // PM1: Calibrate timing back to application bootstrap entry bounds to fully capture request boot cost
+        $this->startTime = $_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true);
         $this->startMemory = memory_get_usage(true);
     }
 
@@ -101,6 +103,11 @@ class SentryPerformanceMonitor
     {
         $spanId = $this->generateId();
 
+        // PM2: Enforce in-memory heap container limits to suppress potential memory allocation leaks
+        if (count($this->spans) >= 1000) {
+            return $spanId;
+        }
+
         $this->spans[$spanId] = [
             'span_id' => $spanId,
             'op' => $op,
@@ -136,6 +143,11 @@ class SentryPerformanceMonitor
      */
     public function trackQuery(string $query, float $duration, ?array $params = null): void
     {
+        // PM2: Restrict query logging limit bounds to safeguard system from memory exhaustion
+        if (count($this->queries) >= 1000) {
+            return;
+        }
+
         $this->queries[] = [
             'query' => $this->sanitizeQuery($query),
             'duration' => $duration,
@@ -330,10 +342,21 @@ class SentryPerformanceMonitor
 
     private function getQueryPattern(string $query): string
     {
-        $pattern = preg_replace('/\d+/', 'N', $query);
-        $pattern = preg_replace('/\'[^\']*\'/', '?', $pattern);
-        $pattern = preg_replace('/\s+/', ' ', $pattern);
-        return trim($pattern);
+        // PM3: Strengthen query pattern normalizer using strict multi-scanner regex heuristics
+        
+        // 1. Standardize string literal values (both double and single quoted literals)
+        $pattern = preg_replace('/([\'"])(.*?)(?<!\\\\)\1/', '?', $query);
+
+        // 2. Consolidate multiple numeric entries inside IN () structures into a singular symbol
+        $pattern = preg_replace('/\bIN\s*\([^)]*\)/i', 'IN (?)', $pattern ?: '');
+
+        // 3. Convert all remaining floating points and integer values to parameter tokens
+        $pattern = preg_replace('/\b\d+(\.\d+)?\b/', '?', $pattern ?: '');
+
+        // 4. Compress whitespace layouts down to standardized spaces
+        $pattern = preg_replace('/\s+/', ' ', $pattern ?: '');
+
+        return trim((string)$pattern);
     }
 
     private function getSlowQueries(float $threshold = 100): array

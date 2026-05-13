@@ -65,12 +65,22 @@ class AlertRulesEngine
     private function getMetricValue(string $metric, int $timeWindow): float
     {
         $cacheKey = "{$metric}_{$timeWindow}";
+        $now = \time();
+
+        // AL5: Introduce explicit 60s TTL on in-memory cache to suppress stale reads in persistent setups
         if (isset($this->cache[$cacheKey])) {
-            return $this->cache[$cacheKey];
+            $entry = $this->cache[$cacheKey];
+            if (($now - $entry['timestamp']) < 60) {
+                return (float)$entry['value'];
+            }
+            unset($this->cache[$cacheKey]);
         }
 
-        $value = $this->model->getMetricValue($metric, $timeWindow);
-        $this->cache[$cacheKey] = $value;
+        $value = (float)$this->model->getMetricValue($metric, $timeWindow);
+        $this->cache[$cacheKey] = [
+            'value' => $value,
+            'timestamp' => $now
+        ];
         
         return $value;
     }

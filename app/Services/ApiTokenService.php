@@ -203,10 +203,16 @@ class ApiTokenService extends \App\Services\BaseService
         }
         $name = mb_substr($name, 0, 80);
 
-        $scopes = preg_replace('/[^a-z0-9,_-]/i', '', trim($scopes));
-        if ($scopes === '') {
-            $scopes = 'read';
+        $requestedScopes = explode(',', preg_replace('/[^a-z0-9,_-]/i', '', trim($scopes)));
+        $validScopesList = ['read', 'write', 'admin'];
+        $finalScopes = [];
+        foreach ($requestedScopes as $s) {
+            $s = trim($s);
+            if (in_array($s, $validScopesList, true)) {
+                $finalScopes[] = $s;
+            }
         }
+        $scopes = !empty($finalScopes) ? implode(',', array_unique($finalScopes)) : 'read';
 
         $this->apiTokenModel->createToken($user->id, $hashedToken, $name, $scopes, $expiresAt);
 

@@ -132,6 +132,12 @@ class ReconciliationService extends \App\Services\BaseService
      */
     private function processSuccessfulPayment(object $transaction, array $webhookData): array
     {
+        // جلوگیری از Double-Entry: اگر کیف پول قبلاً بر اساس این تراکنش شارژ شده باشد
+        if (isset($transaction->balance_after) && isset($transaction->balance_before) && 
+            (float)$transaction->balance_after > (float)$transaction->balance_before) {
+            return ['success' => true, 'message' => 'Already processed'];
+        }
+
         $amount = (float)($webhookData['amount'] ?? $transaction->amount);
         $currency = strtolower((string)($webhookData['currency'] ?? $transaction->currency ?? 'irt'));
 
@@ -148,9 +154,9 @@ class ReconciliationService extends \App\Services\BaseService
             case 'deposit':
             case 'crypto_deposit':
             case 'payment':
-                // شارژ کیف پول
+                // شارژ کیف پول درون تراکنش موجود
                 if ($transaction->user_id) {
-                    $this->walletService->deposit(
+                    $this->walletService->depositInTransaction(
                         (int)$transaction->user_id,
                         $amount,
                         $currency,

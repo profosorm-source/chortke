@@ -57,12 +57,15 @@ class AdNotificationDispatcher extends \App\Services\BaseService
                     $where[] = "YEAR(CURDATE()) - YEAR(u.birth_date) <= ?";
                     $params[] = $restrictions['age_max'];
                 }
-                if (!empty($restrictions['regions'])) {
-                    $regionPlaceholders = array_fill(0, count($restrictions['regions']), '?');
-                    $where[] = "u.region IN (" . implode(',', $regionPlaceholders) . ")";
-                    $params = array_merge($params, $restrictions['regions']);
+                if (!empty($restrictions['regions']) && is_array($restrictions['regions'])) {
+                    $validRegions = array_values(array_filter($restrictions['regions'], fn($r) => is_string($r) || is_numeric($r)));
+                    if (!empty($validRegions)) {
+                        $regionPlaceholders = array_fill(0, count($validRegions), '?');
+                        $where[] = "u.region IN (" . implode(',', $regionPlaceholders) . ")";
+                        $params = array_merge($params, array_map('strval', $validRegions));
+                    }
                 }
-                if (!empty($restrictions['gender'])) {
+                if (!empty($restrictions['gender']) && is_string($restrictions['gender'])) {
                     $where[] = "u.gender = ?";
                     $params[] = $restrictions['gender'];
                 }

@@ -77,7 +77,8 @@ class CurrencyService extends \App\Services\BaseService implements CurrencyServi
             $uri = $this->request->uri() ?? '';
         }
         $uri = $uri ?? '';
-        return \strpos($uri, '/investment') !== false;
+        $uri = '/' . \ltrim($uri, '/');
+        return $uri === '/investment' || \str_starts_with($uri, '/investment/');
     }
     
     /**

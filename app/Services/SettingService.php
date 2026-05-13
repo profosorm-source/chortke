@@ -15,6 +15,7 @@ class SettingService extends \App\Services\BaseService
     private Cache $cache;
 
     // کش درون حافظه‌ای (Runtime Stack) برای پیشگیری از مراجعه مکرر در طول یک درخواست واحد
+    // WARNING: In long-running processes (Swoole/Octane), call clearCache() between requests.
     private static ?array $runtimeCache = null;
 
     // کلید کش مرکزی سیستم

@@ -14,6 +14,7 @@ use App\Models\LotteryDailyNumber;
 use App\Models\LotteryVote;
 use App\Models\LotteryChanceLog;
 use Core\Database;
+use Core\Cache;
 
 class LotteryService extends \App\Services\BaseService
 {
@@ -31,7 +32,7 @@ class LotteryService extends \App\Services\BaseService
     private const MAX_CODE_GENERATION_ATTEMPTS = 100;
     private const MAX_DAILY_VOTES_PER_USER = 1;
     
-    private array $cache = [];
+    private Cache $cache;
     private int $cacheTTL = 300;
 
     public function __construct(
@@ -44,6 +45,7 @@ class LotteryService extends \App\Services\BaseService
         \App\Models\LotteryVote $voteModel,
         \App\Models\LotteryChanceLog $chanceLogModel,
         FeatureFlagService $featureFlagService,
+        Cache $cache,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -56,6 +58,7 @@ class LotteryService extends \App\Services\BaseService
         $this->walletService = $walletService;
         $this->notificationService = $notificationService;
         $this->featureFlagService = $featureFlagService;
+        $this->cache = $cache;
     }
 
     public function createRound(int $adminId, array $data): array
@@ -623,7 +626,7 @@ class LotteryService extends \App\Services\BaseService
             ];
 
         } catch (\Throwable $e) {
-            $this->db->rollback();
+            $this->db->rollBack();
             $this->logger->error('lottery.select_winner.failed', [
                 'round_id' => $roundId,
                 'admin_id' => $adminId,
@@ -801,32 +804,20 @@ EOT;
 
     private function getCache(string $key)
     {
-        if (!isset($this->cache[$key])) {
-            return null;
-        }
-        
-        $item = $this->cache[$key];
-        
-        if (time() > $item['expires_at']) {
-            unset($this->cache[$key]);
-            return null;
-        }
-        
-        return $item['data'];
+        return $this->cache->get($key);
     }
 
     private function setCache(string $key, $data, int $ttl = null): void
     {
         $ttl = $ttl ?? $this->cacheTTL;
-        $this->cache[$key] = ['data' => $data, 'expires_at' => time() + $ttl];
+        $minutes = max(1, (int)ceil($ttl / 60));
+        $this->cache->put($key, $data, $minutes);
     }
 
     private function clearCache(string $key = null): void
     {
-        if ($key === null) {
-            $this->cache = [];
-        } else {
-            unset($this->cache[$key]);
+        if ($key !== null) {
+            $this->cache->forget($key);
         }
     }
 

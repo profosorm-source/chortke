@@ -60,13 +60,18 @@ abstract class BaseService
     protected function transaction(callable $callback): mixed
     {
         $db = db();
-        try {
+        $started = !$db->inTransaction();
+        if ($started) {
             $db->beginTransaction();
+        }
+        try {
             $result = $callback();
-            $db->commit();
+            if ($started) {
+                $db->commit();
+            }
             return $result;
         } catch (\Throwable $e) {
-            if ($db->inTransaction()) {
+            if ($started && $db->inTransaction()) {
                 $db->rollBack();
             }
             throw $e;

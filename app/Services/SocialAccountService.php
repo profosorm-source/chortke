@@ -191,7 +191,7 @@ $this->logger->info('social.account.registered', [
             return ['success' => false, 'message' => 'خطا در تایید حساب.'];
         }
 
-        $this->logger->info('social_account', "Admin {$adminId} verified social account #{$accountId}");
+        $this->logger->info("Admin {$adminId} verified social account #{$accountId}", ['channel' => 'social_account']);
 
         // نوتیفیکیشن به کاربر
         $this->notifyUser($account->user_id, 'حساب اجتماعی شما تایید شد', 
@@ -233,7 +233,7 @@ $this->logger->info('social.account.registered', [
             return ['success' => false, 'message' => 'خطا در رد حساب.'];
         }
 
-        $this->logger->info('social_account', "Admin {$adminId} rejected social account #{$accountId}: {$reason}");
+        $this->logger->info("Admin {$adminId} rejected social account #{$accountId}: {$reason}", ['channel' => 'social_account']);
 
         // نوتیفیکیشن به کاربر
         $this->notifyUser($account->user_id, 'حساب اجتماعی شما رد شد',
@@ -296,7 +296,7 @@ $this->logger->info('social.account.registered', [
 
         $this->socialAccountModel->softDelete($accountId);
 
-        $this->logger->info('social_account', "User {$userId} deleted social account #{$accountId}");
+        $this->logger->info("User {$userId} deleted social account #{$accountId}", ['channel' => 'social_account']);
 
         return ['success' => true, 'message' => 'حساب با موفقیت حذف شد.'];
     }
@@ -316,7 +316,7 @@ $this->logger->info('social.account.registered', [
                 ]);
             }
         } catch (\Throwable $e) {
-            $this->logger->info('notification_error', $e->getMessage());
+            $this->logger->info('notification_error', ['message' => $e->getMessage()]);
         }
     }
 

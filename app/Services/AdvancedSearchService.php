@@ -119,7 +119,7 @@ class AdvancedSearchService extends \App\Services\BaseService
         $total = array_sum(array_map('count', $results));
         $results['total'] = $total;
 
-        $this->cache->set($cacheKey, $results, self::CACHE_TTL);
+        $this->cache->set($cacheKey, $results, self::CACHE_TTL_SECONDS);
 
         return $results;
     }

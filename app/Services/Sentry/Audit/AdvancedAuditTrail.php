@@ -52,6 +52,10 @@ class AdvancedAuditTrail
      */
     public function search(array $filters): array
     {
+        // AU3: Explicit whitelist of permitted filter vectors to fully defeat arbitrary SQL Injection fields
+        $allowedKeys = ['user_id', 'event', 'category', 'date_from', 'date_to', 'ip_address', 'context_search', 'page', 'per_page'];
+        $filters = array_intersect_key($filters, array_flip($allowedKeys));
+
         $where = ['1=1'];
         $params = [];
 
@@ -143,21 +147,60 @@ class AdvancedAuditTrail
      */
     public function exportToCSV(array $filters, string $filename): string
     {
-        $data = $this->search(array_merge($filters, ['per_page' => 10000]));
-        $csv = fopen('php://temp', 'r+');
-        fputcsv($csv, ['ID', 'Event', 'Category', 'User', 'Actor', 'IP Address', 'Created At', 'Context']);
-
-        foreach ($data['records'] as $record) {
-            fputcsv($csv, [$record->id, $record->event, $record->category, $record->user_email ?? '-', $record->actor_email ?? '-', $record->ip_address, $record->created_at, $record->context]);
+        // AU1: Sanitize input to block directory traversal & restrict path disclosure
+        $filename = basename($filename);
+        $filename = preg_replace('/[^A-Za-z0-9_\-\.]/', '', $filename);
+        if (empty($filename)) {
+            $filename = 'audit_export_' . date('YmdHis') . '.csv';
         }
-
-        rewind($csv);
-        $content = stream_get_contents($csv);
-        fclose($csv);
+        if (!str_ends_with(strtolower($filename), '.csv')) {
+            $filename .= '.csv';
+        }
 
         $path = dirname(__DIR__, 4) . '/storage/exports/' . $filename;
         if (!is_dir(dirname($path))) mkdir(dirname($path), 0755, true);
-        file_put_contents($path, $content);
+
+        $csv = fopen($path, 'w');
+        fputcsv($csv, ['ID', 'Event', 'Category', 'User', 'Actor', 'IP Address', 'Created At', 'Context']);
+
+        // AU2: Execute incremental retrieval batches to suppress OOM overflows under 10,000 record loads
+        $page = 1;
+        $perPage = 500;
+        $totalLimit = 10000;
+        $fetchedCount = 0;
+
+        do {
+            $batchFilters = array_merge($filters, ['page' => $page, 'per_page' => $perPage]);
+            $data = $this->search($batchFilters);
+            
+            if (empty($data['records'])) {
+                break;
+            }
+
+            foreach ($data['records'] as $record) {
+                fputcsv($csv, [
+                    $record->id, 
+                    $record->event, 
+                    $record->category, 
+                    $record->user_email ?? '-', 
+                    $record->actor_email ?? '-', 
+                    $record->ip_address, 
+                    $record->created_at, 
+                    $record->context
+                ]);
+                $fetchedCount++;
+            }
+            
+            $page++;
+            $hasMore = $fetchedCount < $data['total'] && $fetchedCount < $totalLimit && count($data['records']) === $perPage;
+        } while ($hasMore);
+
+        fclose($csv);
+
+        // AU4: Compute SHA-256 integrity checksums on output export resources
+        $content = file_get_contents($path);
+        $checksum = hash('sha256', $content ?: '');
+        file_put_contents($path . '.sha256', $checksum);
 
         return $path;
     }
@@ -200,7 +243,11 @@ class AdvancedAuditTrail
             if (!is_dir(dirname($archivePath))) mkdir(dirname($archivePath), 0755, true);
             file_put_contents($archivePath, $compressed);
 
-            $this->logger->info("Archived " . count($oldRecords) . " records to {$archiveFile}");
+            // AU4: Store complementary SHA-256 hash of compressed binary payload for checksumming
+            $checksum = hash('sha256', $compressed ?: '');
+            file_put_contents($archivePath . '.sha256', $checksum);
+
+            $this->logger->info("Archived " . count($oldRecords) . " records with checksum validation to {$archiveFile}");
         } catch (\Throwable $e) {
             $this->logger->error('Archive failed', ['error' => $e->getMessage()]);
         }
@@ -231,7 +278,8 @@ class AdvancedAuditTrail
     private function enrichContext(array $context): array
     {
         return array_merge($context, [
-            '_timestamp' => microtime(true),
+            // AU5: Defeat sequential microtime identifier collisions under mass parallelism by injecting random byte suffixes
+            '_timestamp' => sprintf('%0.6f', microtime(true)) . '-' . bin2hex(random_bytes(4)),
             '_server_time' => date('Y-m-d H:i:s'),
             '_request_id' => $_SERVER['HTTP_X_REQUEST_ID'] ?? bin2hex(random_bytes(8)),
         ]);

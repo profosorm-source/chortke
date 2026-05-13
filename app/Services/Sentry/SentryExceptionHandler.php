@@ -57,7 +57,7 @@ class SentryExceptionHandler
             $this->errorMonitor->captureException($exception, $userId, [], $level);
         }
 
-        return false;
+        return true;
     }
 
     /**
@@ -80,12 +80,21 @@ class SentryExceptionHandler
      */
     public function handleShutdown(): void
     {
-        $error = error_get_last();
-        if ($error && in_array($error['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR])) {
-            $exception = new \ErrorException($error['message'], 0, $error['type'], $error['file'], $error['line']);
-            $userId = $this->getCurrentUserId();
-            $this->errorMonitor->captureException($exception, $userId, [], 'fatal');
+        @ignore_user_abort(true);
+        @set_time_limit(10);
+        
+        try {
+            $error = error_get_last();
+            if ($error && in_array($error['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR])) {
+                $exception = new \ErrorException($error['message'], 0, $error['type'], $error['file'], $error['line']);
+                $userId = $this->getCurrentUserId();
+                $this->errorMonitor->captureException($exception, $userId, [], 'fatal');
+            }
+        } catch (\Throwable $e) {
+            // Defensive logging to standard error fallback during shutdown
+            @error_log('Sentry Shutdown capture failed: ' . $e->getMessage());
         }
+
         $this->finishPerformanceTracking();
     }
 
@@ -130,9 +139,19 @@ class SentryExceptionHandler
     private function detailedDisplay(\Throwable $exception): void
     {
         $trace = mb_substr($exception->getTraceAsString(), 0, 12000);
+        $basePath = realpath(dirname(__DIR__, 3));
+        if ($basePath) {
+            $trace = str_replace($basePath, '[ROOT]', $trace);
+        }
+        
+        $file = $exception->getFile();
+        if ($basePath) {
+            $file = str_replace($basePath, '[ROOT]', $file);
+        }
+
         echo '<html><head><title>Error</title><style>body{font-family:sans-serif;padding:20px;background:#f5f5f5;}.error{background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}h1{color:#d32f2f;margin:0 0 10px;}pre{background:#f5f5f5;padding:15px;overflow:auto;}</style></head><body><div class="error">';
         echo '<h1>' . e(get_class($exception)) . '</h1><p>' . e($exception->getMessage()) . '</p>';
-        echo '<p><strong>File:</strong> ' . e($exception->getFile()) . ':' . $exception->getLine() . '</p><h3>Stack Trace:</h3><pre>' . e($trace) . '</pre></div></body></html>';
+        echo '<p><strong>File:</strong> ' . e($file) . ':' . $exception->getLine() . '</p><h3>Stack Trace:</h3><pre>' . e($trace) . '</pre></div></body></html>';
     }
 
     private function getCurrentUserId(): ?int
@@ -153,50 +172,52 @@ class SentryExceptionHandler
     {
         return $this->performanceMonitor;
     }
+
+    /**
+     * 🎯 Encapsulated Static Helper Interfaces for System Logging
+     */
+
+    public static function captureException(\Throwable $exception, ?int $userId = null, array $context = []): ?string
+    {
+        $handler = app(self::class);
+        return $handler->getErrorMonitor()->captureException($exception, $userId, $context);
+    }
+
+    public static function captureMessage(string $message, string $level = 'info', ?int $userId = null, array $context = []): ?string
+    {
+        $handler = app(self::class);
+        return $handler->getErrorMonitor()->captureMessage($message, $level, $userId, $context);
+    }
+
+    public static function addBreadcrumb(string $message, string $category = 'default', string $level = 'info', array $data = []): void
+    {
+        $handler = app(self::class);
+        $handler->getErrorMonitor()->addBreadcrumb($message, $category, $level, $data);
+    }
+
+    public static function startTransaction(string $name, string $op = 'http.request', array $data = []): ?string
+    {
+        $handler = app(self::class);
+        return $handler->getPerformanceMonitor()->startTransaction($name, $op, $data);
+    }
+
+    public static function startSpan(string $op, string $description, array $data = []): string
+    {
+        $handler = app(self::class);
+        return $handler->getPerformanceMonitor()->startSpan($op, $description, $data);
+    }
+
+    public static function finishSpan(string $spanId, array $data = []): void
+    {
+        $handler = app(self::class);
+        $handler->getPerformanceMonitor()->finishSpan($spanId, $data);
+    }
+
+    public static function trackQuery(string $query, float $duration, ?array $params = null): void
+    {
+        $handler = app(self::class);
+        $handler->getPerformanceMonitor()->trackQuery($query, $duration, $params);
+    }
 }
 
-/**
- * 🎯 Helper Functions
- */
 
-function sentry_capture_exception(\Throwable $exception, ?int $userId = null, array $context = []): ?string
-{
-    $handler = app(SentryExceptionHandler::class);
-    return $handler->getErrorMonitor()->captureException($exception, $userId, $context);
-}
-
-function sentry_capture_message(string $message, string $level = 'info', ?int $userId = null, array $context = []): ?string
-{
-    $handler = app(SentryExceptionHandler::class);
-    return $handler->getErrorMonitor()->captureMessage($message, $level, $userId, $context);
-}
-
-function sentry_add_breadcrumb(string $message, string $category = 'default', string $level = 'info', array $data = []): void
-{
-    $handler = app(SentryExceptionHandler::class);
-    $handler->getErrorMonitor()->addBreadcrumb($message, $category, $level, $data);
-}
-
-function sentry_start_transaction(string $name, string $op = 'http.request', array $data = []): ?string
-{
-    $handler = app(SentryExceptionHandler::class);
-    return $handler->getPerformanceMonitor()->startTransaction($name, $op, $data);
-}
-
-function sentry_start_span(string $op, string $description, array $data = []): string
-{
-    $handler = app(SentryExceptionHandler::class);
-    return $handler->getPerformanceMonitor()->startSpan($op, $description, $data);
-}
-
-function sentry_finish_span(string $spanId, array $data = []): void
-{
-    $handler = app(SentryExceptionHandler::class);
-    $handler->getPerformanceMonitor()->finishSpan($spanId, $data);
-}
-
-function sentry_track_query(string $query, float $duration, ?array $params = null): void
-{
-    $handler = app(SentryExceptionHandler::class);
-    $handler->getPerformanceMonitor()->trackQuery($query, $duration, $params);
-}

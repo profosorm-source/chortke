@@ -139,7 +139,7 @@ class DataExportService extends \App\Services\BaseService
     public function saveExportFile(int $exportId, string $format, string $content): ?string
     {
         try {
-            $timestamp = date('Ymdhis');
+            $timestamp = date('YmdHis');
             $filename = "export_{$exportId}_{$timestamp}.{$format}";
             $filepath = storage_path("exports/{$filename}");
 

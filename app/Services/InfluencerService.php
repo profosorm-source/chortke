@@ -11,6 +11,7 @@ use App\Services\AuditTrail;
 use App\Contracts\LoggerInterface;
 use App\Services\SettingService;
 use App\Services\XPEngine;
+use App\Services\Shared\ReferralService;
 
 class InfluencerService extends \App\Services\BaseService
 {
@@ -21,7 +22,7 @@ class InfluencerService extends \App\Services\BaseService
     private Database                    $db;
     private WalletService               $walletService;
     private NotificationService         $notificationService;
-    private ReferralCommissionService   $referralService;
+    private ReferralService             $referralService;
     private AuditTrail                 $auditTrail;
     private InfluencerReputationService $reputationService;
     private SettingService             $settingService;
@@ -32,7 +33,7 @@ class InfluencerService extends \App\Services\BaseService
         Database                    $db,
         WalletService               $walletService,
         NotificationService         $notificationService,
-        ReferralCommissionService   $referralService,
+        ReferralService             $referralService,
         AuditTrail                 $auditTrail,
         InfluencerModel           $profileModel,
         StoryOrder                  $orderModel,

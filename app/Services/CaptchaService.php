@@ -54,7 +54,7 @@ class CaptchaService extends \App\Services\BaseService
     /**
      * تأیید پاسخ کپچا
      */
-    public function verify(string $token, string $response, ?string $recaptchaResponse = null): bool
+    public function verify(string $token, string $response, ?string $recaptchaResponse = null, string $behavioralState = ''): bool
     {
         // ── reCAPTCHA (Google)
         if ($recaptchaResponse !== null && $recaptchaResponse !== '') {
@@ -69,7 +69,6 @@ class CaptchaService extends \App\Services\BaseService
         // ── behavioral stateless — قبل از session check
         // token آن با '.' جدا شده و شامل payload.signature است
         if (str_contains($token, '.')) {
-            $behavioralState = (string)($_POST['behavioral_state'] ?? '');
             return $this->verifyBehavioral($token, $behavioralState);
         }
 
@@ -109,7 +108,6 @@ class CaptchaService extends \App\Services\BaseService
 
         // ── مسیر behavioral — stateless، نیازی به session ندارد
         if ($type === 'behavioral') {
-            $behavioralState = (string)($_POST['behavioral_state'] ?? '');
             return $this->verifyBehavioral($token, $behavioralState);
         }
 
@@ -232,7 +230,10 @@ class CaptchaService extends \App\Services\BaseService
 
     private function signBehavioral(string $data): string
     {
-        $key = config('app.key', 'fallback-secret-key');
+        $key = config('app.key');
+        if (empty($key)) {
+            throw new \RuntimeException('app.key must be set in .env');
+        }
         return hash_hmac('sha256', $data, $key);
     }
 

@@ -144,37 +144,56 @@ class AlertDispatcher
             'disable_web_page_preview' => true,
         ];
 
+        $ch = null;
         try {
             $ch = curl_init($url);
             curl_setopt($ch, CURLOPT_POST, 1);
             curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+            
+            $response = curl_exec($ch);
+            if ($response === false) {
+                throw new \RuntimeException(curl_error($ch));
+            }
+
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
             return $httpCode === 200;
         } catch (\Throwable $e) {
             $this->logger->error('Telegram send failed', ['error' => $e->getMessage()]);
             return false;
+        } finally {
+            if ($ch !== null) {
+                curl_close($ch);
+            }
         }
     }
 
     private function sendEmail(array $config, array $alert): bool
     {
-        if (!isset($config['email'])) {
+        if (empty($config['email'])) {
             return false;
         }
 
-        $subject = "[{$alert['severity']}] {$alert['title']}";
+        $email = filter_var($config['email'], FILTER_VALIDATE_EMAIL);
+        if (!$email) {
+            $this->logger->warning('Invalid alert destination email', ['email' => $config['email']]);
+            return false;
+        }
+
+        // AL2: Strip any potential CRLF injections from the subject line
+        $subject = str_replace(["\r", "\n"], ' ', "[{$alert['severity']}] {$alert['title']}");
         $body = $this->formatEmailMessage($alert);
 
+        // AL2: Using array representation for headers is native protection against injection
+        $headers = [
+            'From' => 'noreply@chortke.com',
+            'Content-Type' => 'text/html; charset=UTF-8',
+            'X-Mailer' => 'PHP/' . phpversion()
+        ];
+
         try {
-            return mail(
-                $config['email'],
-                $subject,
-                $body,
-                "From: noreply@chortke.com\r\nContent-Type: text/html; charset=UTF-8"
-            );
+            return mail($email, $subject, $body, $headers);
         } catch (\Throwable $e) {
             $this->logger->error('Email send failed', ['error' => $e->getMessage()]);
             return false;
@@ -203,6 +222,12 @@ class AlertDispatcher
             ],
         ];
 
+        if (!$this->isSafeUrl($config['webhook_url'])) {
+            $this->logger->warning('Blocked SSRF vector or invalid URL in Slack dispatch', ['url' => $config['webhook_url']]);
+            return false;
+        }
+
+        $ch = null;
         try {
             $ch = curl_init($config['webhook_url']);
             curl_setopt($ch, CURLOPT_POST, 1);
@@ -210,12 +235,21 @@ class AlertDispatcher
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
             curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+            
+            $response = curl_exec($ch);
+            if ($response === false) {
+                throw new \RuntimeException(curl_error($ch));
+            }
+
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
             return $httpCode === 200;
         } catch (\Throwable $e) {
             $this->logger->error('Slack send failed', ['error' => $e->getMessage()]);
             return false;
+        } finally {
+            if ($ch !== null) {
+                curl_close($ch);
+            }
         }
     }
 
@@ -225,6 +259,12 @@ class AlertDispatcher
             return false;
         }
 
+        if (!$this->isSafeUrl($config['url'])) {
+            $this->logger->warning('Blocked SSRF vector or invalid URL in webhook dispatch', ['url' => $config['url']]);
+            return false;
+        }
+
+        $ch = null;
         try {
             $ch = curl_init($config['url']);
             curl_setopt($ch, CURLOPT_POST, 1);
@@ -232,12 +272,21 @@ class AlertDispatcher
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
             curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+            
+            $response = curl_exec($ch);
+            if ($response === false) {
+                throw new \RuntimeException(curl_error($ch));
+            }
+
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
             return $httpCode >= 200 && $httpCode < 300;
         } catch (\Throwable $e) {
             $this->logger->error('Webhook send failed', ['error' => $e->getMessage()]);
             return false;
+        } finally {
+            if ($ch !== null) {
+                curl_close($ch);
+            }
         }
     }
 
@@ -289,5 +338,37 @@ class AlertDispatcher
             'low' => '#28a745',
             default => '#6c757d',
         };
+    }
+
+    /**
+     * 🛡️ isSafeUrl - SSRF Mitigation by resolving host IP and filtering out local/private ranges.
+     */
+    private function isSafeUrl(string $url): bool
+    {
+        $parts = parse_url($url);
+        if (!$parts || !isset($parts['host']) || !in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true)) {
+            return false;
+        }
+
+        $host = $parts['host'];
+        
+        // Defensive local check before DNS resolution
+        $forbiddenHosts = ['localhost', '127.0.0.1', '::1', '0.0.0.0'];
+        if (in_array(strtolower($host), $forbiddenHosts, true)) {
+            return false;
+        }
+
+        $ip = gethostbyname($host);
+        if (!$ip || $ip === $host) {
+            // Could not resolve or matches original hostname (e.g. invalid IP or internal host)
+            return false;
+        }
+
+        // Enforce validation that IP is not in private or reserved ranges
+        return (bool) filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        );
     }
 }

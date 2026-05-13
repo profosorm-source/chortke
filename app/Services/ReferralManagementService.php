@@ -8,14 +8,17 @@ use App\Services\User\UserService;
 use Core\Database;
 
 use App\Contracts\LoggerInterface;
-class ReferralManagementServiceextends \App\Services\BaseService
+class ReferralManagementService extends \App\Services\BaseService
 {
-    public function __construct(
+        public function __construct(
         private ReferralService $referralService,
         private ReferralCommission $commissionModel,
         private UserService $userService,
-        private Database $db
-    ) {}
+        private Database $db,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+    }
 
     public function getDashboardData(int $leaderboardLimit = 10, string $currency = 'irt'): array
     {
