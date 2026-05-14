@@ -714,7 +714,10 @@ $container->singleton(ManualDepositService::class, function($c) {
         $c->make(\App\Models\BankCard::class),
         $c->make(\App\Models\User::class),
         $c->make(AuditTrail::class),
-        $c->make(Logger::class)
+        $c->make(Logger::class),
+        $c->make(ReconciliationService::class),
+        $c->make(UploadService::class),
+        $c->make(CurrencyService::class)
     );
 });
 
@@ -744,7 +747,8 @@ $container->singleton(\App\Services\Payment\PaymentService::class, function($c) 
         $c->make(\App\Services\CurrencyService::class),
         $c->make(\App\Services\ReconciliationService::class),
         $c->make(\App\Services\AntiFraud\FraudGuardService::class),
-        $c->make(\Core\EventDispatcher::class)
+        $c->make(\Core\EventDispatcher::class),
+        $c->make(\Core\Database::class)
     );
 });
 
@@ -1857,7 +1861,9 @@ $container->singleton(\App\Services\ManualDepositService::class, function($c) {
         $c->make(\App\Models\User::class),
         $c->make(\App\Services\AuditTrail::class),
         $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Services\ReconciliationService::class)
+        $c->make(\App\Services\ReconciliationService::class),
+        $c->make(\App\Services\UploadService::class),
+        $c->make(\App\Services\CurrencyService::class)
     );
 });
 
@@ -1866,7 +1872,8 @@ $container->singleton(\App\Services\MessageModerationService::class, function($c
         $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Models\InteractionModel::class),
-        $c->make(\App\Models\MessageModerationModel::class)
+        $c->make(\App\Models\MessageModerationModel::class),
+        $c->make(\Core\Cache::class)
     );
 });
 

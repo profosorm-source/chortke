@@ -10,7 +10,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap/app.php';
 
 use Core\Container;
-use App\Services\MigrationManager;
+use App\Commands\MigrationManager;
 
 echo "\n=== Chortke Migration Runner ===\n\n";
 
