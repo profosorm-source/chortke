@@ -125,14 +125,29 @@ abstract class BaseService
 
     /**
      * 🚀 UPG-02: اجرای توابع با منطق تلاش مجدد (Retry Logic) جهت مواجهه با خطاهای لحظه‌ای
+     * MED-02 Fix: ممانعت از تکرار بیهوده خطاهای منطقی غیرقابل جبران با فیلتر کردن کلاس‌های هدف
      */
-    protected function withRetry(callable $fn, int $times = 3, int $sleepMs = 100): mixed
+    protected function withRetry(callable $fn, int $times = 3, int $sleepMs = 100, array $retryOn = []): mixed
     {
         $attempts = 0;
         while ($attempts < $times) {
             try {
                 return $fn();
             } catch (\Throwable $e) {
+                // اگر کلاس‌های خاصی مشخص شده، در صورت عدم مطابقت فورا خطا را شلیک کن
+                if (!empty($retryOn)) {
+                    $matches = false;
+                    foreach ($retryOn as $class) {
+                        if ($e instanceof $class) {
+                            $matches = true;
+                            break;
+                        }
+                    }
+                    if (!$matches) {
+                        throw $e;
+                    }
+                }
+
                 $attempts++;
                 if ($attempts >= $times) {
                     $this->logger->error('operation_retry_failed', [
