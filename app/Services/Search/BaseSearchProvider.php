@@ -1,0 +1,85 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services\Search;
+
+use App\Contracts\LoggerInterface;
+use Core\Cache;
+use App\Models\AdvancedSearch;
+
+/**
+ * 🚀 UPG-01: BaseSearchProvider - کلاس پایه تأمین‌کنندگان جستجو با قابلیت بارگذاری تنبل سرویس‌ها
+ */
+abstract class BaseSearchProvider extends \App\Services\BaseService
+{
+    protected AdvancedSearch $searchModel;
+    protected Cache $cache;
+    protected LoggerInterface $logger;
+
+    protected const CACHE_TTL_SECONDS = 300;
+    protected const CACHE_TTL_MINUTES = 5;
+    protected const DEFAULT_LIMIT = 20;
+    protected const MAX_LIMIT = 100;
+    protected const MODULES = ['social_task', 'influencer', 'vitrine'];
+
+    public function __construct(
+        AdvancedSearch $searchModel,
+        Cache $cache,
+        LoggerInterface $logger
+    ) {
+        parent::__construct($logger);
+        $this->searchModel = $searchModel;
+        $this->cache = $cache;
+        $this->logger = $logger;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Lazy-loading Shared Services
+    // ─────────────────────────────────────────────────────────────
+    
+    protected function getService(string $class): mixed
+    {
+        return app($class);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Shared Helpers
+    // ─────────────────────────────────────────────────────────────
+
+    protected function sanitize(string $q): string
+    {
+        return trim(preg_replace('/[%_\\\\]/', '\\\\$0', $q));
+    }
+
+    protected function generateCacheKey(string $module, array $filters, int $limit, int $offset): string
+    {
+        $filterHash = md5(json_encode($filters));
+        return "search:{$module}:{$filterHash}:{$limit}:{$offset}";
+    }
+
+    protected function logSearch(string $type, string $query, ?int $userId): void
+    {
+        $this->logger->info('search.performed', [
+            'type' => $type,
+            'query' => $query,
+            'user_id' => $userId,
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+    }
+
+    protected function emptyGlobalResult(): array
+    {
+        return [
+            'users' => [], 'transactions' => [], 'tickets' => [],
+            'withdrawals' => [], 'deposits' => [], 'ads' => [], 'total' => 0
+        ];
+    }
+
+    protected function emptyUserResult(): array
+    {
+        return [
+            'transactions' => [], 'tickets' => [], 'ads' => [], 'tasks' => [], 'total' => 0
+        ];
+    }
+}
