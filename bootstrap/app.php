@@ -449,6 +449,7 @@ $container->singleton(\App\Services\Notification\NotificationService::class, fun
         $c->make(\App\Services\Notification\NotificationTracker::class),
         $c->make(\App\Services\Notification\NotificationAnalyticsService::class),
         $c->make(\App\Services\SettingService::class),
+        $c->make(\Core\Queue::class), // 🚀 UPG-03: تزریق سیستم صف جهت پردازش نامتقارن نوتیفیکیشن‌های انبوه
         $c->make(\App\Services\EmailService::class),
         $c->make(\App\Services\Notification\SmsNotificationService::class)
     );
@@ -1039,6 +1040,7 @@ $container->singleton(\App\Services\AntiFraud\FraudDetectionService::class, func
     return new \App\Services\AntiFraud\FraudDetectionService(
         $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
+        $c->make(\Core\EventDispatcher::class), // 🚀 UPG-05: تزریق دیسپچر رویدادها
         $c->make(\Core\Logger::class)
     );
 });
@@ -1193,6 +1195,7 @@ $container->singleton(\App\Services\AntiFraud\AccountTakeoverService::class, fun
         $c->make(\App\Services\AntiFraud\IPQualityService::class),
         $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
         $c->make(\App\Services\AntiFraud\BrowserFingerprintService::class),
+        $c->make(\Core\Session::class), // M34 Fix: تزریق مستقیم سشن منطبق با تغییر سازنده سرویس
         $c->make(\Core\Logger::class)
     );
 });
@@ -1259,11 +1262,14 @@ $container->singleton(\Core\EventDispatcher::class, function($c) {
 
 // ─── CLI Core framework ────────────────────────────────────────────────────
 $container->singleton(\Core\Console\CliDispatcher::class, function($c) {
-    $dispatcher = new \Core\Console\CliDispatcher();
+    // M40 Fix: ارسال صریح پارامتر کانتینر به سازنده دیسپچر جهت جلوگیری از خطای پارامتر در محیط CLI
+    $dispatcher = new \Core\Console\CliDispatcher($c);
     
     // ✅ ثبت مرکزی دستورات خط فرمان به جای Switch-Case های پراکنده
     $dispatcher->register('feature:*', \App\Commands\FeatureFlagCommand::class, 'Feature Flag Management');
-    // $dispatcher->register('user:ban', \App\Commands\UserBanCommand::class, 'Manage user bans'); // Example future registry
+    
+    // 🚀 UPG-04: ثبت دستور پیش‌گرمایش کش‌های سنگین داشبورد آماری
+    $dispatcher->register('analytics:warm', \App\Commands\AnalyticsCacheWarmupCommand::class, 'Warm up heavy analytics dashboards caches');
 
     return $dispatcher;
 });
@@ -1307,6 +1313,26 @@ $container->singleton('event.bootstrap', function($c) {
                         'ip' => $data['ip'] ?? 'unknown'
                     ]);
                 } catch (\Throwable $ignore) {}
+            }
+        }
+    });
+    // 🚀 UPG-05: شنود رویداد تغییر امتیاز فراد و به‌روزرسانی نهایی دیتابیس
+    $dispatcher->listen('fraud.score_updated', function($event) use ($c) {
+        $data = $event->getData();
+        $userId = (int)($data['user_id'] ?? 0);
+        $score = (int)($data['score'] ?? 0);
+        if ($userId > 0) {
+            try {
+                $model = $c->make(\App\Models\VelocityAndScoreModel::class);
+                $model->updateUserFraudScore($userId, $score);
+            } catch (\Throwable $e) {
+                if (function_exists('logger')) {
+                    logger()->error('event.fraud_score_updated.listener_failed', [
+                        'user_id' => $userId,
+                        'score'   => $score,
+                        'error'   => $e->getMessage()
+                    ]);
+                }
             }
         }
     });
@@ -1945,7 +1971,8 @@ $container->singleton(\App\Services\TicketService::class, function($c) {
         $c->make(\App\Models\TicketMessage::class),
         $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Services\Notification\NotificationService::class)
+        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\Core\RateLimiter::class) // 🛡️ مهار مقابله با سوءاستفاده: تزریق محدودیت نرخ ریکوئست
     );
 });
 
@@ -2025,14 +2052,13 @@ $container->singleton(\App\Services\AdminDashboard\SystemMonitoringService::clas
 
 $container->singleton(\App\Services\Analytics\AnalyticsDataRepository::class, function($c) {
     return new \App\Services\Analytics\AnalyticsDataRepository(
-        $c->make(\App\Services\Analytics\private::class),
-        $c->make(\App\Services\Analytics\private::class),
-        $c->make(\App\Services\Analytics\private::class),
-        $c->make(\App\Services\Analytics\private::class),
-        $c->make(\App\Services\Analytics\private::class),
-        $c->make(\App\Services\Analytics\private::class),
-        $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Services\Analytics\int::class)
+        $c->make(\App\Models\KpiStatistics::class),
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Models\CustomTaskAnalyticsModel::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\App\Models\KYCVerification::class),
+        $c->make(\App\Models\Transaction::class),
+        $c->make(\Core\Logger::class) // M35 Fix: اصلاح کامل نگاشت‌های اشتباه به private::class و رفع خطای تزریق وابستگی
     );
 });
 
