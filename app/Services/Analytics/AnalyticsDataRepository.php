@@ -31,8 +31,7 @@ class AnalyticsDataRepository extends \App\Services\BaseService
         private User $userModel,
         private KYCVerification $kycModel,
         private Transaction $transactionModel,
-        LoggerInterface $logger,
-        int $cacheTtl = 60 // Deprecated - استفاده نشود
+        LoggerInterface $logger
     ) {
         parent::__construct($logger);
     }

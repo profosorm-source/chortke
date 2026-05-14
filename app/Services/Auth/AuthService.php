@@ -101,6 +101,33 @@ class AuthService extends \App\Services\BaseService
         ];
     }
 
+    /**
+     * ورود مستقیم کاربر (برای سیستم‌های احراز هویت مکمل مانند OAuth)
+     * H19 Fix: تجمیع فرآیند ساخت Session و توزیع 2FA برای تضمین یکپارچگی ورودهای شخص‌ثالث
+     */
+    public function loginDirectly(object $user): array
+    {
+        if ($user->status === 'banned' || $user->status === 'suspended') {
+            return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.'];
+        }
+
+        $requires2FA = (bool)($user->two_factor_enabled ?? false);
+        if (!$requires2FA) {
+            $this->createSession($user, false);
+        } else {
+            $this->createPending2FASession($user);
+        }
+
+        $this->logger->activity('auth.direct_login', 'ورود مستقیم کاربر (OAuth)', (int)$user->id);
+        $this->auditTrail->record('auth.direct_login', (int)$user->id, ['ip' => get_client_ip()]);
+
+        return [
+            'success'      => true,
+            'user'         => $user,
+            'requires_2fa' => $requires2FA,
+        ];
+    }
+
     private function createPending2FASession(object $user): void
     {
         $this->session->regenerate();

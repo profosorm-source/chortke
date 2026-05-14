@@ -7,6 +7,7 @@ namespace App\Services\AntiFraud;
 use App\Models\VelocityAndScoreModel;
 use App\Services\AntiFraud\RiskPolicyService;
 use App\Contracts\LoggerInterface;
+use Core\Session;
 class AccountTakeoverService extends \App\Services\BaseService
 {
     private VelocityAndScoreModel $model;
@@ -14,12 +15,14 @@ class AccountTakeoverService extends \App\Services\BaseService
     private IPQualityService $ipQuality;
     private RiskPolicyService $policy;
     private BrowserFingerprintService $fingerprintService;
+    private Session $session;
     public function __construct(
         VelocityAndScoreModel $model,
         SessionAnomalyService $sessionAnomaly,
         IPQualityService $ipQuality,
         RiskPolicyService $policy,
         BrowserFingerprintService $fingerprintService,
+        Session $session,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -28,6 +31,7 @@ class AccountTakeoverService extends \App\Services\BaseService
         $this->ipQuality = $ipQuality;
         $this->policy = $policy;
         $this->fingerprintService = $fingerprintService;
+        $this->session = $session;
     }
 
     public function detect(int $userId, string $ip, string $userAgent, ?string $fingerprint = null): array
@@ -104,7 +108,8 @@ class AccountTakeoverService extends \App\Services\BaseService
         }
 
         // 🛡️ Session Behavioral & Impossible Travel Correlator
-        $sessionId = \session_id();
+        // M34 Fix: استفاده از شی سشن تزریق‌شده بجای تابع کمکی مستقیم سراسری
+        $sessionId = $this->session->getId();
         if ($sessionId) {
             try {
                 $sessionRes = $this->sessionAnomaly->analyze($userId, $sessionId);

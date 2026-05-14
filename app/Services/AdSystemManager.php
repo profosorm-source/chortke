@@ -34,7 +34,12 @@ class AdSystemManager extends \App\Services\BaseService
     public function getAdapter(string $type): AdSystemContract
     {
         if (!isset($this->adapters[$type])) {
-            throw new RuntimeException("نوع سیستم تبلیغاتی '{$type}' پشتیبانی نشده است. انواع پشتیبانی‌شده: " . implode(', ', array_keys($this->adapters)));
+            // M38 Fix: لاگ کردن محرمانه لیست پلتفرم‌های پشتیبانی‌شده جهت جلوگیری از افشای ساختار معماری به کاربر نهایی
+            $this->logger->error('ad_system.adapter_not_found', [
+                'requested_type' => $type,
+                'supported_types' => array_keys($this->adapters)
+            ]);
+            throw new RuntimeException("نوع سیستم تبلیغاتی نامعتبر است.");
         }
 
         $adapter = $this->adapters[$type];

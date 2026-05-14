@@ -32,6 +32,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         private NotificationTracker $tracker,
         private NotificationAnalyticsService $analyticsService,
         private SettingService $settingService,
+        private \Core\Queue $queue, // 🚀 UPG-03: تزریق مکانیزم صف سیستم
         private ?EmailService $emailService = null,
         private ?SmsNotificationService $smsService = null
     ) {
@@ -180,8 +181,13 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         ?string $scheduledAt = null
     ): ?int {
         $rendered = $this->templateService->renderTemplate($templateKey, $vars);
-        $type = explode('_', $templateKey)[0];
-        if (!defined(Notification::class . '::TYPE_' . strtoupper($type))) {
+        $prefix = explode('_', $templateKey)[0];
+        $constantName = Notification::class . '::TYPE_' . strtoupper($prefix);
+        
+        // M32 Fix: استفاده ایمن از تابع constant() برای استخراج دقیق مقدار رشته‌ای تعریف شده در مدل
+        if (defined($constantName)) {
+            $type = constant($constantName);
+        } else {
             $type = Notification::TYPE_SYSTEM;
         }
 
@@ -272,33 +278,64 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             $this->logger->error('notif.bulk_async_offload_failed', ['error' => $e->getMessage()]);
         }
 
-        // 2. Local Database Recording (Executed in chunks to avoid CPU spikes)
-        $sent = 0;
-        $skipped = 0;
-
+        // 🚀 UPG-03: 2. Local Database Recording (Offloaded completely to background queues to avoid HTTP timeout)
         $chunks = array_chunk($userIds, 100);
+        $pushedChunks = 0;
+
         foreach ($chunks as $chunk) {
-            foreach ($chunk as $uid) {
-                // Rate limits and resolving schedules
-                if (!$this->checkRateLimit($uid)) {
-                    $skipped++;
-                    continue;
-                }
-                
-                $resTime = $this->resolveScheduledTime($uid, $priority, $scheduledAt);
-                
-                // Persist database record locally only (skips repeated remote API dispatches)
-                $ok = $this->persistInAppNotification(
-                    $uid, $type, $title, $message, $data, 
-                    $actionUrl, $actionText, $priority, null, null, null, $resTime
+            try {
+                $this->queue->push(
+                    \App\Jobs\PersistBulkInAppNotificationJob::class,
+                    [
+                        'user_ids' => $chunk,
+                        'type' => $type,
+                        'title' => $title,
+                        'message' => $message,
+                        'data' => $data,
+                        'action_url' => $actionUrl,
+                        'action_text' => $actionText,
+                        'priority' => $priority,
+                        'scheduled_at' => $scheduledAt,
+                    ]
                 );
-                
-                $ok ? $sent++ : $skipped++;
+                $pushedChunks++;
+            } catch (\Throwable $e) {
+                $this->logger->error('notif.bulk_db_queue_failed', [
+                    'error' => $e->getMessage(),
+                    'chunk_size' => count($chunk)
+                ]);
             }
             unset($chunk); // Help GC cycle release memory segments
         }
 
-        return ['sent' => $sent, 'skipped' => $skipped];
+        $this->logger->info('notif.bulk_db_writing_queued', [
+            'total_users' => count($userIds),
+            'queued_chunks' => $pushedChunks
+        ]);
+
+        return ['sent' => count($userIds), 'skipped' => 0, 'queued' => true];
+    }
+
+    /**
+     * 🚀 UPG-03: متد کمکی برای ثبت تک‌نوتیفیکیشن در پس‌زمینه با ارزیابی ریت‌لیمیت و زمان‌بندی (توسط Job فراخوانی می‌شود)
+     */
+    public function processSinglePersist(
+        int $uid, string $type, string $title, string $message,
+        ?array $data, ?string $actionUrl, ?string $actionText, string $priority, ?string $scheduledAt
+    ): bool {
+        // ۱. ارزیابی محدودیت نرخ ارسال (Rate Limit)
+        if (!$this->checkRateLimit($uid)) {
+            return false;
+        }
+        
+        // ۲. ارزیابی و حل زمان ارسال زمان‌بندی شده
+        $resTime = $this->resolveScheduledTime($uid, $priority, $scheduledAt);
+        
+        // ۳. ثبت فیزیکی در دیتابیس
+        return (bool)$this->persistInAppNotification(
+            $uid, $type, $title, $message, $data,
+            $actionUrl, $actionText, $priority, null, null, null, $resTime
+        );
     }
 
     // --- Proxy Calls to Tracking Service ---

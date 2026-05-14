@@ -6,6 +6,7 @@ namespace App\Services\Auth;
 
 use Core\Cache;
 use App\Contracts\LoggerInterface;
+use App\Services\SettingService;
 
 /**
  * LoginRiskService — سرویس تشخیص ریسک لاگین
@@ -28,11 +29,13 @@ class LoginRiskService extends \App\Services\BaseService
     public const FAIL_LIMIT_4 = 4;
 
     private Cache $cache;
+    private SettingService $settingService;
 
-    public function __construct(Cache $cache, LoggerInterface $logger)
+    public function __construct(Cache $cache, SettingService $settingService, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->cache = $cache;
+        $this->settingService = $settingService;
     }
 
     /**
@@ -104,15 +107,16 @@ class LoginRiskService extends \App\Services\BaseService
         $score = 0;
 
         // 🔒 Dynamic System Tuning: Load failure limits and risk increments from application settings
-        $limit1 = (int)setting('login_risk_limit_1', self::FAIL_LIMIT_1);
-        $limit2 = (int)setting('login_risk_limit_2', self::FAIL_LIMIT_2);
-        $limit3 = (int)setting('login_risk_limit_3', self::FAIL_LIMIT_3);
-        $limit4 = (int)setting('login_risk_limit_4', self::FAIL_LIMIT_4);
+        // M29 Fix: ارتقا به استفاده از سرویس تنظیمات تزریق‌شده به جای تابع کمکی گلوبال
+        $limit1 = (int)$this->settingService->get('login_risk_limit_1', self::FAIL_LIMIT_1);
+        $limit2 = (int)$this->settingService->get('login_risk_limit_2', self::FAIL_LIMIT_2);
+        $limit3 = (int)$this->settingService->get('login_risk_limit_3', self::FAIL_LIMIT_3);
+        $limit4 = (int)$this->settingService->get('login_risk_limit_4', self::FAIL_LIMIT_4);
 
-        $score1 = (int)setting('login_risk_score_1', 25);
-        $score2 = (int)setting('login_risk_score_2', 40);
-        $score3 = (int)setting('login_risk_score_3', 65);
-        $score4 = (int)setting('login_risk_score_4', 85);
+        $score1 = (int)$this->settingService->get('login_risk_score_1', 25);
+        $score2 = (int)$this->settingService->get('login_risk_score_2', 40);
+        $score3 = (int)$this->settingService->get('login_risk_score_3', 65);
+        $score4 = (int)$this->settingService->get('login_risk_score_4', 85);
 
         if ($failCount === $limit1) {
             $score = $score1;

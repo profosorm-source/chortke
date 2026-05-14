@@ -50,11 +50,12 @@ class AdNotificationDispatcher extends \App\Services\BaseService
                 
                 // اعمال محدودیت‌های تبلیغ
                 if (!empty($restrictions['age_min'])) {
-                    $where[] = "YEAR(CURDATE()) - YEAR(u.birth_date) >= ?";
+                    // M27 Fix: محاسبه دقیق سن بر حسب تقویم روزانه به جای محاسبه خام اختلاف سال
+                    $where[] = "TIMESTAMPDIFF(YEAR, u.birth_date, CURDATE()) >= ?";
                     $params[] = $restrictions['age_min'];
                 }
                 if (!empty($restrictions['age_max'])) {
-                    $where[] = "YEAR(CURDATE()) - YEAR(u.birth_date) <= ?";
+                    $where[] = "TIMESTAMPDIFF(YEAR, u.birth_date, CURDATE()) <= ?";
                     $params[] = $restrictions['age_max'];
                 }
                 if (!empty($restrictions['regions']) && is_array($restrictions['regions'])) {

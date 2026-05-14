@@ -155,7 +155,8 @@ class OAuthService extends \App\Services\BaseService
                         'user_id' => $user->id,
                         'provider' => $provider
                     ]);
-                    return ['success' => true, 'user_id' => $user->id, 'is_new' => false];
+                    $login = $this->authService->loginDirectly($user);
+                    return array_merge($login, ['is_new' => false, 'user_id' => $user->id]);
                 }
             }
 
@@ -178,7 +179,9 @@ class OAuthService extends \App\Services\BaseService
                     'user_id' => $existingUser->id,
                     'provider' => $provider
                 ]);
-                return ['success' => true, 'user_id' => $existingUser->id, 'is_new' => false];
+                $user = $this->userModel->find((int)$existingUser->id);
+                $login = $this->authService->loginDirectly($user);
+                return array_merge($login, ['is_new' => false, 'user_id' => $user->id]);
             }
 
             // 🔒 No rows locked yet for new user creation - proceed safely
@@ -206,7 +209,9 @@ class OAuthService extends \App\Services\BaseService
                     'user_id' => $newUser,
                     'provider' => $provider
                 ]);
-                return ['success' => true, 'user_id' => $newUser, 'is_new' => true];
+                $user = $this->userModel->find((int)$newUser);
+                $login = $this->authService->loginDirectly($user);
+                return array_merge($login, ['is_new' => true, 'user_id' => $user->id]);
             }
 
             $this->db->rollBack();

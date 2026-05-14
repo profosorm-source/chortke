@@ -6,7 +6,7 @@ namespace App\Services\SocialTask;
 
 use App\Services\WalletService;
 use App\Services\Notification\NotificationService;
-use App\Services\ApiRateLimiter;
+use App\Policies\RateLimitPolicy;
 use App\Services\FinancialEscrowService;
 use App\Services\StateMachineService;
 use App\Services\WebSocketService;
@@ -44,7 +44,7 @@ class SocialTaskService extends \App\Services\BaseService
         private SilentAntiFraudService $antiFraud,
         private WalletService $wallet,
         private NotificationService $notification,
-        private ApiRateLimiter $rateLimiter,
+        private RateLimitPolicy $rateLimiter,
         protected LoggerInterface $logger,
         private FinancialEscrowService $escrow,
         private StateMachineService $stateMachine,
@@ -330,7 +330,8 @@ class SocialTaskService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'شما قبلاً این تسک را انجام داده‌اید یا در حال انجام آن هستید'];
             }
 
-            if (!$this->rateLimiter->check('task_submit', $userId, 50, 60)) {
+            // M36 Fix: جایگزینی فراخوانی ریت‌لیمیتر قدیمی با سیستم جدید و استاندارد سیاست محدودیت
+            if (!$this->rateLimiter->check('task_submit', $userId)) {
                 $this->model->rollBack();
                 return ['success' => false, 'message' => 'محدودیت تعداد تسک در ساعت'];
             }

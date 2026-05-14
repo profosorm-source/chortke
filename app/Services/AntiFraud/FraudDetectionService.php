@@ -7,6 +7,8 @@ namespace App\Services\AntiFraud;
 use App\Models\VelocityAndScoreModel;
 use App\Services\AntiFraud\RiskPolicyService;
 use App\Contracts\LoggerInterface;
+use Core\EventDispatcher; // 🚀 UPG-05: واردسازی ابزار دیسپچر رویدادها
+use App\Events\FraudScoreUpdatedEvent; // 🚀 UPG-05: واردسازی رویداد تغییر امتیاز فراد
 
 /**
  * FraudDetectionService - سیستم تشخیص تقلب پیشرفته
@@ -58,14 +60,17 @@ class FraudDetectionService extends \App\Services\BaseService
     private array $thresholds;
     private array $weights;
     private array $velocitySettings;
+    private EventDispatcher $eventDispatcher; // 🚀 UPG-05
 
     public function __construct(
         VelocityAndScoreModel $fraudModel,
         RiskPolicyService $policy,
+        EventDispatcher $eventDispatcher, // 🚀 UPG-05
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
         $this->fraudModel = $fraudModel;
+        $this->eventDispatcher = $eventDispatcher; // 🚀 UPG-05
         $this->policy = $policy;
         
         // 🛡️ Strict Fallback Merging: Ensures EVERY single required key exists, even if remote policy configuration returns an incomplete array.
@@ -100,11 +105,20 @@ class FraudDetectionService extends \App\Services\BaseService
 
         $finalScore = (int) min(100, max(0, round($score)));
 
-        // بروزرسانی امتیاز در دیتابیس
-        $this->updateFraudScore($userId, $finalScore);
+        try {
+            // 🚀 UPG-05: بجای ثبت مستقیم و همگام، شلیک رویداد جهت پردازش ناهمگام و کاهش سربار ریکوئست
+            $this->eventDispatcher->dispatch('fraud.score_updated', new FraudScoreUpdatedEvent($userId, $finalScore));
 
-        // لاگ کردن محاسبه
-        $this->logFraudCalculation($userId, $factors, $finalScore);
+            // لاگ کردن محاسبه
+            $this->logFraudCalculation($userId, $factors, $finalScore);
+        } catch (\Throwable $e) {
+            // M33 Fix: جلوگیری از کرش کل فرآیند در صورت بروز خطا در نوشتن سوابق آماری و لاگ‌های غیرضروری
+            $this->logger->error('fraud.score_persistence.failed', [
+                'user_id' => $userId,
+                'score'   => $finalScore,
+                'error'   => $e->getMessage()
+            ]);
+        }
 
         return $finalScore;
     }

@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Services\User;
 
@@ -8,6 +9,7 @@ use Core\Database;
 use App\Contracts\LoggerInterface;
 use App\Services\CustomTaskService;
 use Core\EventDispatcher;
+use App\Services\DistributedLockService;
 
 use App\Models\Wallet;
 
@@ -22,6 +24,7 @@ class AccountDeletionService extends \App\Services\BaseService
     private CustomTaskService $customTaskService;
     private EventDispatcher $eventDispatcher;
     private Wallet $walletModel;
+    private DistributedLockService $lockService;
 
     public function __construct(
         User $userModel,
@@ -30,7 +33,8 @@ class AccountDeletionService extends \App\Services\BaseService
         LoggerInterface $logger,
         CustomTaskService $customTaskService,
         EventDispatcher $eventDispatcher,
-        Wallet $walletModel
+        Wallet $walletModel,
+        DistributedLockService $lockService
     ) {
         parent::__construct($logger);
         $this->userModel = $userModel;
@@ -39,6 +43,7 @@ class AccountDeletionService extends \App\Services\BaseService
         $this->customTaskService = $customTaskService;
         $this->eventDispatcher = $eventDispatcher;
         $this->walletModel = $walletModel;
+        $this->lockService = $lockService;
     }
 
     /**
@@ -48,29 +53,24 @@ class AccountDeletionService extends \App\Services\BaseService
     public function processExpiredDeletionRequests(): int
     {
         try {
-            // LOW-01: Acquire specific session Mutex to block concurrent cron overlaps safely
-            $lock = $this->db->fetch("SELECT GET_LOCK('cron_account_deletion_lock', 10) as locked");
-            if (!$lock || !isset($lock->locked) || (int)$lock->locked !== 1) {
-                $this->logger->warning('account_deletion.cron_skipped_mutex_busy');
-                return 0;
-            }
+            // H23 Fix: ارتقای سیستم قفل به سرویس توزیع‌شده جهت تضمین ایمنی کلاستر و جلوگیری از Deadlock
+            return $this->lockService->synchronized('cron_account_deletion_lock', function() {
+                $expiredRequests = $this->deletionLogModel->getExpiredDeletionRequests();
+                $deletedCount = 0;
 
-            $expiredRequests = $this->deletionLogModel->getExpiredDeletionRequests();
-            $deletedCount = 0;
-
-            foreach ($expiredRequests as $request) {
-                if ($this->deleteUserAccount((int)$request['user_id'], 'Automated deletion after 7-day period')) {
-                    $deletedCount++;
+                foreach ($expiredRequests as $request) {
+                    if ($this->deleteUserAccount((int)$request['user_id'], 'Automated deletion after 7-day period')) {
+                        $deletedCount++;
+                    }
                 }
-            }
 
-            // Free locks
-            $this->db->query("SELECT RELEASE_LOCK('cron_account_deletion_lock')");
-
-            $this->logger->info('account_deletion.automated_completed', ['count' => $deletedCount]);
-            return $deletedCount;
+                $this->logger->info('account_deletion.automated_completed', ['count' => $deletedCount]);
+                return $deletedCount;
+            }, ttl: 60, waitTimeout: 0);
+        } catch (\RuntimeException $e) {
+            $this->logger->warning('account_deletion.cron_skipped_mutex_busy', ['reason' => $e->getMessage()]);
+            return 0;
         } catch (\Exception $e) {
-            try { $this->db->query("SELECT RELEASE_LOCK('cron_account_deletion_lock')"); } catch (\Throwable $t) {}
             $this->logger->error('account_deletion.automated_failed', ['error' => $e->getMessage()]);
             return 0;
         }

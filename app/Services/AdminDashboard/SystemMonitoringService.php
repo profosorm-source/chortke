@@ -80,7 +80,8 @@ class SystemMonitoringService extends \App\Services\BaseService
             }
 
             // ۴. مدت زمان روشن بودن (Uptime)
-            $uptimeStr = '۱۵ روز و ۴ ساعت';
+            // M37 Fix: جایگزینی مقدار هاردکد نادرست با مقدار خنثی و واقعی نامشخص در محیط‌های فاقد دسترسی
+            $uptimeStr = 'نامشخص';
             if (!stristr(PHP_OS, 'win')) {
                 if ($this->isContainerEnvironment()) {
                     // H18 Fix: عدم خواندن Uptime هاست در محفظه کانتینر جهت حفظ محرمانگی ساختار سرور
@@ -100,12 +101,9 @@ class SystemMonitoringService extends \App\Services\BaseService
 
             // ۵. وضعیت دیتابیس
             $dbStatus = 'فعال';
-            $conVal = '3';
             try {
-                $conCount = $this->db->fetch("SHOW STATUS LIKE 'Threads_connected'");
-                if ($conCount && isset($conCount->Value)) {
-                    $conVal = (string)$conCount->Value;
-                }
+                // H20 Fix: استفاده از کوئری استاندارد و کراس‌دیتابیس ANSI SQL جهت تضمین سازگاری با PostgreSQL و SQLite
+                $this->db->fetch("SELECT 1");
             } catch (\Throwable) {
                 $dbStatus = 'محدودشده';
             }
@@ -127,9 +125,9 @@ class SystemMonitoringService extends \App\Services\BaseService
                 'uptime' => $uptimeStr,
                 'database' => [
                     'status' => $dbStatus,
-                    'connections' => $conVal,
+                    'connections' => 'Hidden', // H21 Fix: پنهان‌سازی اطلاعات تکنیکال دیتابیس جهت مقابله با Timing Attack
                 ],
-                'php_version' => PHP_VERSION,
+                'php_version' => 'Hidden', // H22 Fix: ممانعت از افشای نسخه مفسر PHP جهت حفظ محرمانگی سرور
                 'server_software' => 'Hidden', // محافظت در برابر فاش شدن نوع سرور
             ];
         });

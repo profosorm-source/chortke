@@ -119,10 +119,10 @@ class AnalyticsExporter extends \App\Services\BaseService
             <h2>تحلیلات کاربران</h2>
             <table>
                 <tr><th>توضیح</th><th>مقدار</th></tr>
-                <tr><td>کل کاربران</td><td><?= e($data['users']['total'] ?? 0) ?></td></tr>
-                <tr><td>کاربران فعال</td><td><?= e($data['users']['active'] ?? 0) ?></td></tr>
-                <tr><td>DAU</td><td><?= e($data['users']['dau'] ?? 0) ?></td></tr>
-                <tr><td>MAU</td><td><?= e($data['users']['mau'] ?? 0) ?></td></tr>
+                <tr><td>کل کاربران</td><td><?= $this->escape($data['users']['total'] ?? 0) ?></td></tr>
+                <tr><td>کاربران فعال</td><td><?= $this->escape($data['users']['active'] ?? 0) ?></td></tr>
+                <tr><td>DAU</td><td><?= $this->escape($data['users']['dau'] ?? 0) ?></td></tr>
+                <tr><td>MAU</td><td><?= $this->escape($data['users']['mau'] ?? 0) ?></td></tr>
             </table>
             <?php endif; ?>
 
@@ -166,8 +166,8 @@ class AnalyticsExporter extends \App\Services\BaseService
         // Users
         if (!empty($data['users'])) {
             $html .= '<tr><td colspan="2" style="font-weight:bold;">کاربران</td></tr>';
-            $html .= '<tr><td>کل کاربران</td><td>' . e($data['users']['total'] ?? 0) . '</td></tr>';
-            $html .= '<tr><td>کاربران فعال</td><td>' . e($data['users']['active'] ?? 0) . '</td></tr>';
+            $html .= '<tr><td>کل کاربران</td><td>' . $this->escape($data['users']['total'] ?? 0) . '</td></tr>';
+            $html .= '<tr><td>کاربران فعال</td><td>' . $this->escape($data['users']['active'] ?? 0) . '</td></tr>';
         }
         
         // Transactions
@@ -179,5 +179,13 @@ class AnalyticsExporter extends \App\Services\BaseService
         
         $html .= '</table></body></html>';
         return $html;
+    }
+
+    /**
+     * M30 Fix: متد پاک‌سازی محلی جهت رفع وابستگی به لایه ویو (e) در لایه سرویس
+     */
+    private function escape(mixed $value): string
+    {
+        return htmlspecialchars((string)($value ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 }

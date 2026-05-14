@@ -91,156 +91,155 @@ class AuditTrail extends \App\Services\BaseService
         return $this->record($event, $userId, ['changes' => $changes]);
     }
 
-public function archiveOlderThan(int $days = 30, int $chunkSize = 2000): array
-{
-    try {
-        $cutoff = date('Y-m-d H:i:s', strtotime("-{$days} days"));
-        $archiveDir = dirname(__DIR__, 2) . '/storage/audit-archives';
-
-        if (!is_dir($archiveDir)) {
-            if (!mkdir($archiveDir, 0755, true) && !is_dir($archiveDir)) {
-                throw new \RuntimeException("Failed to create directory: {$archiveDir}");
-            }
-        }
-
-        // MED-05: اعمال File Lock برای جلوگیری از تضادی cron‌های همزمان
-        $lockFile = $archiveDir . '/.archive.lock';
-        $lock = fopen($lockFile, 'w');
-        if (!$lock) {
-            throw new \RuntimeException('Cannot create lock file');
-        }
-
-        // بگیرید exclusive non-blocking lock
-        if (!flock($lock, LOCK_EX | LOCK_NB)) {
-            fclose($lock);
-            return [
-                'archived' => 0,
-                'deleted' => 0,
-                'file' => null,
-                'error' => 'Archive already running - lock acquired by another process'
-            ];
-        }
-
+    public function archiveOlderThan(int $days = 30, int $chunkSize = 2000): array
+    {
         try {
-            $stamp = date('Ymd_His');
-            $jsonlFile = $archiveDir . "/audit_{$stamp}.jsonl";
-            $gzFile = $jsonlFile . '.gz';
+            $cutoff = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+            $archiveDir = dirname(__DIR__, 2) . '/storage/audit-archives';
 
-            $fp = fopen($jsonlFile, 'ab');
-            if (!$fp) {
-                throw new \RuntimeException('Cannot create archive file');
-            }
-
-            $total = 0;
-            $lastId = 0;
-
-            while (true) {
-                $rows = $this->auditTrailModel->fetchBatchOlderThan($cutoff, $lastId, $chunkSize);
-
-                if (empty($rows)) {
-                    break;
-                }
-
-                foreach ($rows as $row) {
-                    fwrite($fp, json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL);
-                    $total++;
-                    $lastId = (int)($row['id'] ?? $lastId);
+            if (!is_dir($archiveDir)) {
+                if (!mkdir($archiveDir, 0755, true) && !is_dir($archiveDir)) {
+                    throw new \RuntimeException("Failed to create directory: {$archiveDir}");
                 }
             }
 
-            fclose($fp);
+            // MED-05: اعمال File Lock برای جلوگیری از تضادی cron‌های همزمان
+            $lockFile = $archiveDir . '/.archive.lock';
+            $lock = fopen($lockFile, 'w');
+            if (!$lock) {
+                throw new \RuntimeException('Cannot create lock file');
+            }
 
-            if ($total === 0) {
-                if (file_exists($jsonlFile)) {
-                    unlink($jsonlFile);
-                }
+            // بگیرید exclusive non-blocking lock
+            if (!flock($lock, LOCK_EX | LOCK_NB)) {
+                fclose($lock);
                 return [
                     'archived' => 0,
                     'deleted' => 0,
                     'file' => null,
-                    'cutoff' => $cutoff,
+                    'error' => 'Archive already running - lock acquired by another process'
                 ];
             }
 
-            $in = fopen($jsonlFile, 'rb');
-            if (!$in) {
-                throw new \RuntimeException('Cannot open archive temp file');
-            }
+            try {
+                $stamp = date('Ymd_His');
+                $jsonlFile = $archiveDir . "/audit_{$stamp}.jsonl";
+                $gzFile = $jsonlFile . '.gz';
 
-            $out = gzopen($gzFile, 'wb9');
-            if (!$out) {
-                fclose($in);
-                throw new \RuntimeException('Cannot create gzip archive');
-            }
-
-            while (!feof($in)) {
-                $chunk = fread($in, 8192);
-                if ($chunk === false) {
-                    gzclose($out);
-                    fclose($in);
-                    throw new \RuntimeException('Cannot read archive temp chunk');
+                $fp = fopen($jsonlFile, 'ab');
+                if (!$fp) {
+                    throw new \RuntimeException('Cannot create archive file');
                 }
-                gzwrite($out, $chunk);
+
+                $total = 0;
+                $lastId = 0;
+
+                while (true) {
+                    $rows = $this->auditTrailModel->fetchBatchOlderThan($cutoff, $lastId, $chunkSize);
+
+                    if (empty($rows)) {
+                        break;
+                    }
+
+                    foreach ($rows as $row) {
+                        fwrite($fp, json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL);
+                        $total++;
+                        $lastId = (int)($row['id'] ?? $lastId);
+                    }
+                }
+
+                fclose($fp);
+
+                if ($total === 0) {
+                    if (file_exists($jsonlFile)) {
+                        unlink($jsonlFile);
+                    }
+                    return [
+                        'archived' => 0,
+                        'deleted' => 0,
+                        'file' => null,
+                        'cutoff' => $cutoff,
+                    ];
+                }
+
+                $in = fopen($jsonlFile, 'rb');
+                if (!$in) {
+                    throw new \RuntimeException('Cannot open archive temp file');
+                }
+
+                $out = gzopen($gzFile, 'wb9');
+                if (!$out) {
+                    fclose($in);
+                    throw new \RuntimeException('Cannot create gzip archive');
+                }
+
+                while (!feof($in)) {
+                    $chunk = fread($in, 8192);
+                    if ($chunk === false) {
+                        gzclose($out);
+                        fclose($in);
+                        throw new \RuntimeException('Cannot read archive temp chunk');
+                    }
+                    gzwrite($out, $chunk);
+                }
+
+                gzclose($out);
+                fclose($in);
+
+                if (file_exists($jsonlFile)) {
+                    unlink($jsonlFile);
+                }
+
+                if (!file_exists($gzFile) || filesize($gzFile) === 0) {
+                    throw new \RuntimeException('Archive gzip file is invalid');
+                }
+
+                $deleted = 0;
+                do {
+                    $batch = $this->auditTrailModel->deleteOlderThan($cutoff, 5000);
+                    $deleted += $batch;
+                } while ($batch === 5000);
+
+                $this->logger->info('audit_trail.archive.completed', [
+                    'channel' => 'audit_trail',
+                    'cutoff' => $cutoff,
+                    'archived' => $total,
+                    'deleted' => $deleted,
+                    'file' => basename($gzFile),
+                    'size' => filesize($gzFile),
+                    'sha256' => hash_file('sha256', $gzFile),
+                ]);
+
+                return [
+                    'archived' => $total,
+                    'deleted' => $deleted,
+                    'file' => $gzFile,
+                    'cutoff' => $cutoff,
+                    'size' => filesize($gzFile),
+                ];
+            } finally {
+                // MED-05: همیشه lock را release کن
+                flock($lock, LOCK_UN);
+                fclose($lock);
             }
-
-            gzclose($out);
-            fclose($in);
-
-            if (file_exists($jsonlFile)) {
-                unlink($jsonlFile);
-            }
-
-            if (!file_exists($gzFile) || filesize($gzFile) === 0) {
-                throw new \RuntimeException('Archive gzip file is invalid');
-            }
-
-            $deleted = 0;
-            do {
-                $batch = $this->auditTrailModel->deleteOlderThan($cutoff, 5000);
-                $deleted += $batch;
-            } while ($batch === 5000);
-
-            $this->logger->info('audit_trail.archive.completed', [
+        } catch (\Throwable $e) {
+            $this->logger->error('audit_trail.archive.failed', [
                 'channel' => 'audit_trail',
-                'cutoff' => $cutoff,
-                'archived' => $total,
-                'deleted' => $deleted,
-                'file' => basename($gzFile),
-                'size' => filesize($gzFile),
-                'sha256' => hash_file('sha256', $gzFile),
+                'days' => $days,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
             ]);
 
             return [
-                'archived' => $total,
-                'deleted' => $deleted,
-                'file' => $gzFile,
-                'cutoff' => $cutoff,
-                'size' => filesize($gzFile),
+                'archived' => 0,
+                'deleted' => 0,
+                'file' => null,
+                'error' => $e->getMessage(),
             ];
-        } finally {
-            // MED-05: همیشه lock را release کن
-            flock($lock, LOCK_UN);
-            fclose($lock);
         }
-    } catch (\Throwable $e) {
-        $this->logger->error('audit_trail.archive.failed', [
-            'channel' => 'audit_trail',
-            'days' => $days,
-            'error' => $e->getMessage(),
-            'exception' => get_class($e),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
-        ]);
-
-        return [
-            'archived' => 0,
-            'deleted' => 0,
-            'file' => null,
-            'error' => $e->getMessage(),
-        ];
     }
-
-}
     public function getForUser(int $userId, int $limit = 50): array
     {
         try {

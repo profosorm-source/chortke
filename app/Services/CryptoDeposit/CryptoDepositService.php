@@ -141,6 +141,7 @@ class CryptoDepositService extends \App\Services\BaseService
                 'exception' => \get_class($e),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
+            ]);
             return ['success' => false, 'message' => ($e instanceof \RuntimeException) ? $e->getMessage() : 'خطای سیستمی در ساخت درخواست'];
         }
 

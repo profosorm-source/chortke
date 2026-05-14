@@ -214,7 +214,11 @@ class UserService extends \App\Services\BaseService
 
     public function quickSearch(string $term, int $limit = 5): array
     {
-        $cleanTerm = \trim($term);
+        // M39 Fix: محدود کردن طول عبارت جستجو جهت کاهش فشار پردازشی و فیلتر کاراکترهای کنترلی دیتابیس
+        $cleanTerm = \mb_strimwidth(\trim($term), 0, 80, '');
+        // حذف کاراکترهای کلیدی وایلدکارد دیتابیس (% و _) جهت پیشگیری از کوئری‌های غیربهینه
+        $cleanTerm = \str_replace(['%', '_'], '', $cleanTerm);
+
         if ($cleanTerm === '') {
             return [];
         }

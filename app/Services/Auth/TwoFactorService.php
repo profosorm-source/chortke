@@ -63,8 +63,8 @@ class TwoFactorService extends \App\Services\BaseService
             }
         }
 
-        // ⏰ Enhanced Tolerance: Increased verification loop to ±2 slices (±60 seconds) to absorb client clock drift.
-        for ($i = -2; $i <= 2; $i++) {
+        // M31 Fix: کاهش محدوده تحمل به ±1 تایم اسلایس (±۳۰ ثانیه) جهت انطباق کامل با استاندارد امنیت جهانی RFC 6238
+        for ($i = -1; $i <= 1; $i++) {
             $sliceToCheck = $timeSlice + $i;
 
             // 🛡️ CRITICAL ANTI-REPLAY GUARD: به کارگیری مجدد کدی که یک بار در بازه‌ی زمانی فعلی یا قبلی مصرف شده است ممنوع است.

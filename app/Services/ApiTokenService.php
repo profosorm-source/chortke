@@ -240,7 +240,10 @@ class ApiTokenService extends \App\Services\BaseService
             ->leftJoin('users as u', 'u.id', '=', 'api_tokens.user_id');
 
         if (!empty($q)) {
-            $like = "%{$q}%";
+            // HIGH-01 Fix: فرآیند پاکسازی کاراکترهای ویژه مانند % و _ جهت ممانعت از اسکن سنگین جداول (DoS)
+            $escapedQ = addcslashes(trim($q), '%_');
+            $like = "%{$escapedQ}%";
+            
             $query->where(function($sub) use ($like, $q) {
                 $sub->where('api_tokens.name', 'LIKE', $like)
                     ->orWhere('api_tokens.token', '=', $q)

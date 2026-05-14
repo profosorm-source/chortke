@@ -24,6 +24,13 @@ class ApiRateLimiter extends \App\Services\BaseService
     {
         parent::__construct($logger);
         $this->policy = $policy;
+        
+        // M28 Fix: تولید اخطار رسمی و ثبت در لاگ به منظور آگاهی‌رسانی به توسعه‌دهندگان جهت مهاجرت به کلاس جدید
+        @trigger_error(
+            'Class App\Services\ApiRateLimiter is deprecated and scheduled for removal in v2.1. ' .
+            'Please inject App\Policies\RateLimitPolicy directly instead.', 
+            E_USER_DEPRECATED
+        );
     }
 
     public function check(string $action, int $userId, ?string $limitKey = null): bool
