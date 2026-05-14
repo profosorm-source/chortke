@@ -14,6 +14,8 @@ abstract class BaseService
 
     protected LoggerInterface $logger;
 
+    protected ?\Core\Database $db = null; // M26 Fix: به سازنده تزریق نمی‌شود تا تمام subclassها خراب نشوند، اما در تست‌ها قابل تنظیم است
+
     public function __construct(LoggerInterface $logger)
     {
         $this->logger = $logger;
@@ -59,7 +61,7 @@ abstract class BaseService
      */
     protected function transaction(callable $callback): mixed
     {
-        $db = db();
+        $db = $this->db ?? app(\Core\Database::class);
         $started = !$db->inTransaction();
         if ($started) {
             $db->beginTransaction();
@@ -119,5 +121,29 @@ abstract class BaseService
             'errors' => $errors,
             'status_code' => $statusCode,
         ];
+    }
+
+    /**
+     * 🚀 UPG-02: اجرای توابع با منطق تلاش مجدد (Retry Logic) جهت مواجهه با خطاهای لحظه‌ای
+     */
+    protected function withRetry(callable $fn, int $times = 3, int $sleepMs = 100): mixed
+    {
+        $attempts = 0;
+        while ($attempts < $times) {
+            try {
+                return $fn();
+            } catch (\Throwable $e) {
+                $attempts++;
+                if ($attempts >= $times) {
+                    $this->logger->error('operation_retry_failed', [
+                        'attempts' => $attempts,
+                        'error' => $e->getMessage()
+                    ]);
+                    throw $e;
+                }
+                usleep($sleepMs * 1000);
+            }
+        }
+        return null;
     }
 }

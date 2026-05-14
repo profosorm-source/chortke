@@ -16,19 +16,22 @@ class TicketService extends \App\Services\BaseService
     private Ticket $ticketModel;
     private TicketMessage $messageModel;
     private NotificationService $notificationService;
+    private \Core\RateLimiter $rateLimiter; // 🛡️ مقابله با سوءاستفاده
     
     public function __construct(
         Ticket $ticketModel,
         TicketMessage $messageModel,
         Database $db,
         LoggerInterface $logger,
-        NotificationService $notificationService
+        NotificationService $notificationService,
+        \Core\RateLimiter $rateLimiter // 🛡️
     ) {
         parent::__construct($logger);
         $this->ticketModel = $ticketModel;
         $this->messageModel = $messageModel;
         $this->db = $db;
         $this->notificationService = $notificationService;
+        $this->rateLimiter = $rateLimiter;
     }
     
     /**
@@ -40,6 +43,27 @@ class TicketService extends \App\Services\BaseService
             return [
                 'success' => false,
                 'message' => 'موضوع و متن پیام تیکت الزامی می‌باشند.'
+            ];
+        }
+
+        // 🛡️ مقابله با سوءاستفاده: ارزیابی طول فیلدهای متنی
+        $subjectLen = mb_strlen((string)$data['subject'], 'UTF-8');
+        $messageLen = mb_strlen((string)$data['message'], 'UTF-8');
+        
+        if ($subjectLen > 150) {
+            return ['success' => false, 'message' => 'موضوع تیکت نباید بیشتر از ۱۵۰ کاراکتر باشد.'];
+        }
+        if ($messageLen > 5000) {
+            return ['success' => false, 'message' => 'متن پیام تیکت نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
+        }
+        
+        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم ربات‌ها)
+        $rateKey = "ticket_creation_limit:{$userId}";
+        if (!$this->rateLimiter->attempt($rateKey, 3, 3600)) {
+            $this->logger->warning('ticket.rate_limit_exceeded', ['user_id' => $userId]);
+            return [
+                'success' => false,
+                'message' => 'شما اخیراً تیکت‌های زیادی ایجاد کرده‌اید. لطفاً کمی صبر کرده و مجدداً امتحان کنید.'
             ];
         }
 
@@ -133,6 +157,24 @@ class TicketService extends \App\Services\BaseService
         // بررسی وضعیت
         if ($ticket->status === 'closed' && !$isAdmin) {
             return ['success' => false, 'message' => 'تیکت بسته شده است.'];
+        }
+
+        // 🛡️ مقابله با سوءاستفاده: ارزیابی طول پیام
+        $msgLen = mb_strlen($message, 'UTF-8');
+        if ($msgLen > 5000) {
+            return ['success' => false, 'message' => 'متن پاسخ نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
+        }
+        
+        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت پاسخ‌ها (حداکثر ۱۰ پاسخ در ساعت برای کاربران عادی)
+        if (!$isAdmin) {
+            $rateKey = "ticket_reply_limit:{$userId}";
+            if (!$this->rateLimiter->attempt($rateKey, 10, 3600)) {
+                $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
+                return [
+                    'success' => false,
+                    'message' => 'تعداد پیام‌های ارسالی شما بیش از حد مجاز ساعتی است. لطفا کمی صبر کنید.'
+                ];
+            }
         }
         
         $this->db->beginTransaction();
