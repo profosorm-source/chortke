@@ -231,6 +231,20 @@ class NotificationPreference extends Model
     }
 
     /**
+     * دریافت تنظیمات برای گروهی از کاربران (🚀 BUG-10 Fix)
+     */
+    public function getByUsers(array $userIds): array
+    {
+        if (empty($userIds)) return [];
+        
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        return $this->db->fetchAll(
+            "SELECT * FROM " . static::$table . " WHERE user_id IN ($placeholders)",
+            $userIds
+        ) ?: [];
+    }
+
+    /**
      * لیست فیلدهای مجاز (برای admin UI)
      */
     public function getAllowedFields(): array

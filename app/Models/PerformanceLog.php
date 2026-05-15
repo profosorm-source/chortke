@@ -24,11 +24,12 @@ class PerformanceLog extends Model
         try {
             $stmt = $this->db->prepare(
                 "INSERT INTO performance_logs 
-                (metric, value, context, created_at)
-                VALUES (?, ?, ?, NOW())"
+                (request_id, metric, value, context, created_at)
+                VALUES (?, ?, ?, ?, NOW())"
             );
 
             return $stmt->execute([
+                $data['request_id'] ?? null,
                 $data['metric'] ?? 'unknown',
                 $data['value'] ?? 0,
                 $data['context'] ?? null,

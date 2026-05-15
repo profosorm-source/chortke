@@ -50,7 +50,7 @@ class AccountDeletionLog extends Model
     public function getPendingDeletions(): array
     {
         return $this->db->fetchAll(
-            "SELECT d.*, u.username, u.email FROM `account_deletion_logs` d
+            "SELECT d.id, d.user_id, d.status, d.requested_at, d.expires_at, u.username, u.email FROM `account_deletion_logs` d
              JOIN users u ON d.user_id = u.id
              WHERE d.status = 'requested'
              ORDER BY d.expires_at ASC"
@@ -63,7 +63,7 @@ class AccountDeletionLog extends Model
     public function getDeletedAccounts(int $limit = 100, int $offset = 0): array
     {
         return $this->db->fetchAll(
-            "SELECT d.*, u.username, u.email, u.deleted_at AS user_deleted_at FROM `account_deletion_logs` d
+            "SELECT d.id, d.user_id, d.status, d.requested_at, d.deleted_at, d.deleted_by, u.username, u.email, u.deleted_at AS user_deleted_at FROM `account_deletion_logs` d
              LEFT JOIN users u ON d.user_id = u.id
              WHERE d.status = 'deleted'
              ORDER BY d.deleted_at DESC LIMIT ? OFFSET ?",

@@ -37,9 +37,9 @@ class AdvancedSearch extends Model
         $sql = "SELECT * FROM " . static::$table . " WHERE 1=1";
         $params = [];
 
-        $keyword = addcslashes($keyword, '%_\\');
+        $escaped = $this->escapeLikeValue($keyword);
         $sql .= " AND (title LIKE :keyword OR description LIKE :keyword OR content LIKE :keyword)";
-        $params['keyword'] = "%{$keyword}%";
+        $params['keyword'] = "%{$escaped}%";
 
         // Apply filters if provided
         if (!empty($filters['user_id'])) {
@@ -70,6 +70,10 @@ class AdvancedSearch extends Model
         if (empty($term)) {
             return false;
         }
+
+        // H-02 Fix: Sanitize term before saving to prevent potential issues in trending queries
+        $term = htmlspecialchars(strip_tags($term), ENT_QUOTES, 'UTF-8');
+        if (strlen($term) > 100) $term = substr($term, 0, 100);
 
         $sql = "INSERT INTO " . static::$table . " (user_id, term, created_at)
                 VALUES (:user_id, :term, NOW())

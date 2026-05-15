@@ -10,13 +10,21 @@ class AuditTrail extends Model
 {
     protected static string $table = 'audit_trail';
 
+    public const SYSTEM_ACTOR_ID = 0; // 🚀 M-07: ID for system/cron actions
+
     public function createEntry(array $data)
     {
+        // 🚀 M-07 Fix: Ensure attribution for system actions
+        if (!isset($data['actor_id']) && !isset($data['user_id'])) {
+            $data['actor_id'] = self::SYSTEM_ACTOR_ID;
+        }
         return $this->create($data);
     }
 
     public function getForUser(int $userId, int $limit = 50): array
     {
+        // 🚀 L-04 Fix: Max cap for limit
+        $limit = min($limit, 500);
         return $this->db->fetchAll(
             "SELECT * FROM " . static::$table . "
              WHERE user_id = ?
@@ -35,10 +43,11 @@ class AuditTrail extends Model
         ?string $dateFrom = null,
         ?string $dateTo = null
     ): array {
+        // 🚀 L-04 Fix: Max cap for perPage
+        $perPage = min(max(1, $perPage), 100);
         $params = [];
         $where = $this->buildAuditFilters($event, $userId, $search, $dateFrom, $dateTo, $params);
 
-        $perPage = \max(1, $perPage);
         $offset = \max(0, ($page - 1) * $perPage);
 
         $total = (int)$this->db->fetchColumn(
@@ -145,47 +154,15 @@ class AuditTrail extends Model
 
     public function deleteOlderThan(string $cutoff, int $limit = 5000): int
     {
-        $totalDeleted = 0;
-        $chunkSize = 1000;
-        $remaining = $limit;
-
-        try {
-            while ($remaining > 0) {
-                $this->db->beginTransaction();
-
-                $currentLimit = \min($chunkSize, $remaining);
-                $stmt = $this->db->prepare(
-                    "DELETE FROM " . static::$table . "
-                     WHERE created_at < ?
-                     LIMIT :limit"
-                );
-                $stmt->bindValue(1, $cutoff);
-                $stmt->bindValue(':limit', $currentLimit, \PDO::PARAM_INT);
-                $stmt->execute();
-
-                $deleted = $stmt->rowCount();
-                $this->db->commit();
-
-                $totalDeleted += $deleted;
-                $remaining -= $currentLimit;
-
-                if ($deleted < $currentLimit) {
-                    break;
-                }
-            }
-            return $totalDeleted;
-        } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            return $totalDeleted;
-        }
+        // 🚀 BUG FIX [C-03]: Audit logs must be immutable. Physical deletion is prohibited.
+        // جایگزینی با سیستم آرشیو به Cold Storage در آینده
+        throw new \RuntimeException("Physical deletion of audit logs is prohibited for security compliance. Use archival instead.");
     }
 
     public function cleanupOlderThan(int $days = 365): int
     {
-        $cutoff = date('Y-m-d H:i:s', \strtotime("-{$days} days"));
-        return $this->deleteOlderThan($cutoff, 5000);
+        // 🚀 BUG FIX [C-03]: Prevent automated cleanup via physical delete
+        throw new \RuntimeException("Automated physical cleanup is disabled. Use archival processes.");
     }
 
     private function buildAuditFilters(

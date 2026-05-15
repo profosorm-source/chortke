@@ -71,25 +71,9 @@ class InfluencerVerification extends Model
      */
     public function findByIdForUpdate(int $verificationId): ?object
     {
-        $startedTransaction = false;
-        if (!$this->db->inTransaction()) {
-            $this->db->beginTransaction();
-            $startedTransaction = true;
-        }
-        try {
-            $stmt = $this->db->prepare("SELECT * FROM influencer_verifications WHERE id = ? FOR UPDATE");
-            $stmt->execute([$verificationId]);
-            $result = $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
-            if ($startedTransaction) {
-                $this->db->commit();
-            }
-            return $result;
-        } catch (\Throwable $e) {
-            if ($startedTransaction && $this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            throw $e;
-        }
+        $stmt = $this->db->prepare("SELECT * FROM influencer_verifications WHERE id = ? FOR UPDATE");
+        $stmt->execute([$verificationId]);
+        return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
     }
 
     /**

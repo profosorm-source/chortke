@@ -27,7 +27,7 @@ class BackupLog extends Model
     public function findById(int $backupId): ?array
     {
         return $this->db->table(self::$table)
-            ->select('filename')
+            ->select('file_path', 'checksum', 'request_id')
             ->where('id', '=', $backupId)
             ->first();
     }
@@ -49,7 +49,7 @@ class BackupLog extends Model
     public function getOlderThan(string $cutoffDate): array
     {
         return $this->db->table(self::$table)
-            ->select('filename')
+            ->select('file_path')
             ->where('created_at', '<', $cutoffDate)
             ->get() ?? [];
     }
@@ -66,7 +66,7 @@ class BackupLog extends Model
         $stats = $this->db->fetch(
             "SELECT
                 COUNT(*) AS total_backups,
-                SUM(size) AS total_size,
+                SUM(size_bytes) AS total_size,
                 MAX(created_at) AS last_backup,
                 MIN(created_at) AS first_backup
              FROM " . self::$table

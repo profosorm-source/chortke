@@ -62,22 +62,25 @@ class SettingsAuditTrail extends Model
         ) ?: [];
     }
 
+    private const SENSITIVE_KEYS = [
+        'profile_visibility',
+        'allow_messages',
+        'session_timeout',
+        'login_alerts'
+    ];
+
     /**
      * دریافت تغییرات حساس (مثل privacy settings)
      */
     public function getSensitiveChanges(int $userId): array
     {
-        $sensitiveKeys = [
-            'profile_visibility',
-            'allow_messages',
-            'session_timeout',
-            'login_alerts'
-        ];
+        $placeholders = implode(',', array_fill(0, count(self::SENSITIVE_KEYS), '?'));
+        $params = array_merge([$userId], self::SENSITIVE_KEYS);
 
-        return $this->db->query(
-            "SELECT * FROM " . static::$table . " WHERE user_id = ? AND setting_key IN ('" . implode("','", $sensitiveKeys) . "')
+        return $this->db->fetchAll(
+            "SELECT * FROM " . static::$table . " WHERE user_id = ? AND setting_key IN ($placeholders)
              ORDER BY changed_at DESC",
-            [$userId]
+            $params
         ) ?: [];
     }
 }

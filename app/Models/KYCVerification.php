@@ -48,6 +48,16 @@ class KYCVerification extends Model {
     }
 
     /**
+     * یافتن KYC بر اساس ID با قفل تراکنشی
+     */
+    public function findForUpdate(int $id): ?object
+    {
+        $stmt = $this->db->query("SELECT * FROM kyc_verifications WHERE id = ? FOR UPDATE", [$id]);
+        $row = $stmt ? $stmt->fetch(\PDO::FETCH_OBJ) : false;
+        return $row ?: null;
+    }
+
+    /**
      * یافتن KYC بر اساس user_id
      */
     public function findByUserId(int $userId): ?object

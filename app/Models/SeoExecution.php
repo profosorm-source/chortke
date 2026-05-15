@@ -42,6 +42,15 @@ class SeoExecution extends Model
         return $row ? $this->hydrate($row) : null;
     }
 
+    /** یافتن با قفل تراکنشی */
+    public function findByIdForUpdate(int $id): ?self
+    {
+        $stmt = $this->db->prepare("SELECT * FROM seo_executions WHERE id = ? FOR UPDATE");
+        $stmt->execute([$id]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        return $row ? $this->hydrate($row) : null;
+    }
+
     /** پیدا کردن با تایید مالکیت */
     public function findByUser(int $id, int $userId): ?self
     {

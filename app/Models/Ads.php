@@ -26,6 +26,16 @@ class Ads extends Model
     ];
 
     /**
+     * یافتن با قفل تراکنشی
+     */
+    public function findByIdForUpdate(int $id): ?object
+    {
+        $stmt = $this->db->prepare("SELECT * FROM ads WHERE id = ? FOR UPDATE");
+        $stmt->execute([$id]);
+        return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
+    }
+
+    /**
      * دریافت بر اساس شناسه مالک تبلیغ (یکدست‌سازی به user_id)
      */
     public function getByAdvertiser(int $userId, int $limit = 20, int $offset = 0, string $type = null, ?string $status = null): array

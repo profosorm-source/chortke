@@ -34,6 +34,17 @@ class CouponRedemption extends Model
     }
 
     /**
+     * بررسی مصرف قبلی کاربر با قفل بدبینانه (برای استفاده در تراکنش)
+     */
+    public function hasUserUsedCouponForUpdate(int $userId, int $couponId): bool
+    {
+        return $this->db->query(
+            "SELECT 1 FROM " . static::$table . " WHERE user_id = ? AND coupon_id = ? FOR UPDATE",
+            [$userId, $couponId]
+        )->fetch() !== false;
+    }
+
+    /**
      * بررسی مصرف قبلی کاربر برای یک کوپن خاص
      */
     public function hasUserUsedCoupon(int $userId, int $couponId): bool

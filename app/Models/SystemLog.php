@@ -24,11 +24,12 @@ class SystemLog extends Model
         try {
             $stmt = $this->db->prepare(
                 "INSERT INTO system_logs 
-                (level, type, message, context, user_id, ip_address, user_agent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())"
+                (request_id, level, type, message, context, user_id, ip_address, user_agent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())"
             );
 
             return $stmt->execute([
+                $data['request_id'] ?? null,
                 $data['level'] ?? 'INFO',
                 $data['type'] ?? 'system',
                 $data['message'] ?? '',

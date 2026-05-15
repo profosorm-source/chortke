@@ -13,8 +13,8 @@ use Core\Database;
  */
 class FeatureFlag extends Model 
 {
-    private static array $cachedFeatures = [];
-    private static bool $loaded = false;
+    private array $cachedFeatures = [];
+    private bool $loaded = false;
     
     private const ALLOWED_UPDATE_FIELDS = [
         'enabled', 'description', 'enabled_percentage',
@@ -33,7 +33,7 @@ class FeatureFlag extends Model
      */
     private function loadAll(): void
     {
-        if (self::$loaded) {
+        if ($this->loaded) {
             return;
         }
         
@@ -55,10 +55,10 @@ class FeatureFlag extends Model
             $feature->target_age_min = $feature->target_age_min ?? null;
             $feature->target_age_max = $feature->target_age_max ?? null;
             $feature->percentage_rollout = $feature->percentage_rollout ?? 100;
-            self::$cachedFeatures[$feature->name] = $feature;
+            $this->cachedFeatures[$feature->name] = $feature;
         }
         
-        self::$loaded = true;
+        $this->loaded = true;
     }
     
     /**
@@ -75,8 +75,8 @@ class FeatureFlag extends Model
      */
     public function clearCache(): void
     {
-        self::$cachedFeatures = [];
-        self::$loaded = false;
+        $this->cachedFeatures = [];
+        $this->loaded = false;
         
         // پاکسازی فیزیکی کش جدول دیتابیس
         $this->db->query("DELETE FROM feature_flag_cache");
@@ -94,13 +94,13 @@ class FeatureFlag extends Model
     public function getAll(): array
     {
         $this->loadAll();
-        return array_values(self::$cachedFeatures);
+        return array_values($this->cachedFeatures);
     }
     
     public function findByName(string $name): ?object
     {
         $this->loadAll();
-        return self::$cachedFeatures[$name] ?? null;
+        return $this->cachedFeatures[$name] ?? null;
     }
     
     public function toggle(string $name): bool

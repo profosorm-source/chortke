@@ -8,8 +8,8 @@ class Permission extends Model
 {
     protected static string $table = 'permissions';
     
-    private static array $userPermissionsCache = [];
-    private static array $isSuperAdminCache = [];
+    private array $userPermissionsCache = [];
+    private array $isSuperAdminCache = [];
 
     /**
      * یافتن دسترسی با ID
@@ -102,11 +102,11 @@ class Permission extends Model
             return true;
         }
 
-        if (!isset(self::$userPermissionsCache[$userId])) {
-            self::$userPermissionsCache[$userId] = $this->getUserPermissions($userId);
+        if (!isset($this->userPermissionsCache[$userId])) {
+            $this->userPermissionsCache[$userId] = $this->getUserPermissions($userId);
         }
 
-        return \in_array($permSlug, self::$userPermissionsCache[$userId], true);
+        return \in_array($permSlug, $this->userPermissionsCache[$userId], true);
     }
 
     /**
@@ -114,8 +114,8 @@ class Permission extends Model
      */
     public function isSuperAdmin(int $userId): bool
     {
-        if (isset(self::$isSuperAdminCache[$userId])) {
-            return self::$isSuperAdminCache[$userId];
+        if (isset($this->isSuperAdminCache[$userId])) {
+            return $this->isSuperAdminCache[$userId];
         }
 
         $stmt = $this->db->prepare("
@@ -128,7 +128,7 @@ class Permission extends Model
         $stmt->execute([$userId]);
         $isSuper = (int)$stmt->fetchColumn() > 0;
 
-        self::$isSuperAdminCache[$userId] = $isSuper;
+        $this->isSuperAdminCache[$userId] = $isSuper;
         return $isSuper;
     }
 

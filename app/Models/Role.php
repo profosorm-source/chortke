@@ -78,7 +78,7 @@ class Role extends Model {
             (string)($data['name'] ?? ''),
             (string)($data['slug'] ?? ''),
             $data['description'] ?? null,
-            (int)($data['is_system'] ?? 0),
+            0, // 🚀 BUG FIX [L-02]: Force is_system = 0. System roles should only be created via migrations.
             (int)($data['is_active'] ?? 1),
         ]);
 
@@ -192,6 +192,15 @@ class Role extends Model {
             $permissionIds = \array_values(\array_unique(\array_map('intval', $permissionIds)));
 
             if (!empty($permissionIds)) {
+                // 🚀 BUG FIX [M-04]: Validate permission IDs existence
+                $placeholders = implode(',', array_fill(0, count($permissionIds), '?'));
+                $sql = "SELECT COUNT(*) FROM permissions WHERE id IN ($placeholders)";
+                $count = (int)$this->db->fetchColumn($sql, $permissionIds);
+                
+                if ($count !== count($permissionIds)) {
+                    throw new \InvalidArgumentException("One or more permission IDs are invalid.");
+                }
+
                 $inserts = [];
                 foreach ($permissionIds as $permId) {
                     $inserts[] = [

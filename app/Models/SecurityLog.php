@@ -24,11 +24,12 @@ class SecurityLog extends Model
         try {
             $stmt = $this->db->prepare(
                 "INSERT INTO security_logs 
-                (level, type, message, context, user_id, ip_address, user_agent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())"
+                (request_id, level, type, message, context, user_id, ip_address, user_agent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())"
             );
 
             return $stmt->execute([
+                $data['request_id'] ?? null,
                 $data['level'] ?? 'WARNING',
                 $data['type'] ?? 'security',
                 $data['message'] ?? '',

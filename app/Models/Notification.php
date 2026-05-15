@@ -804,11 +804,12 @@ class Notification extends Model
     }
 
     /**
-     * دریافت شناسه‌های کاربران یک سگمنت با کوئری دیتابیس (DB Decoupling)
+     * پردازش سگمنت کاربران به صورت تکه‌تکه (🚀 BUG-04 Fix)
+     * برای جلوگیری از Memory OOM در تعداد کاربران بالا (مثلاً ۱۰۰ هزار نفر)
      */
-    public function getUsersBySegment(string $segment, array $filters = []): array
+    public function chunkUsersBySegment(string $segment, int $chunkSize, callable $callback, array $filters = []): void
     {
-        $sql    = "SELECT id FROM users WHERE deleted_at IS NULL";
+        $sql = "SELECT id FROM users WHERE deleted_at IS NULL";
         $params = [];
 
         switch ($segment) {
@@ -861,6 +862,24 @@ class Notification extends Model
                 $sql .= " AND status = 'active'";
         }
 
-        return $this->getUsersByFilter($sql, $params);
+        $offset = 0;
+        while (true) {
+            $chunkSql = $sql . " ORDER BY id ASC LIMIT ? OFFSET ?";
+            $chunkParams = array_merge($params, [$chunkSize, $offset]);
+            
+            $rows = $this->db->fetchAll($chunkSql, $chunkParams);
+            
+            if (empty($rows)) {
+                break;
+            }
+
+            $callback(array_column($rows, 'id'));
+            
+            if (count($rows) < $chunkSize) {
+                break;
+            }
+            
+            $offset += $chunkSize;
+        }
     }
 }

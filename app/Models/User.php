@@ -144,10 +144,11 @@ class User extends Model
         return $this->db->fetch(
             "SELECT
                 COUNT(*) AS total_count,
-                SUM(CASE WHEN deleted_at IS NULL AND status = 'active' THEN 1 ELSE 0 END) AS active_count,
-                SUM(CASE WHEN deleted_at IS NULL AND status = 'suspended' THEN 1 ELSE 0 END) AS suspended_count,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_count,
+                SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) AS suspended_count,
                 SUM(CASE WHEN status = 'banned' THEN 1 ELSE 0 END) AS banned_count
-             FROM users"
+             FROM users
+             WHERE deleted_at IS NULL"
         ) ?: (object)[];
     }
 

@@ -71,13 +71,14 @@ class SentryModel extends Model
     {
         $this->db->query(
             "INSERT INTO sentry_events (
-                event_id, issue_id, level, message, exception_type,
+                event_id, request_id, issue_id, level, message, exception_type,
                 stack_trace, breadcrumbs, user_context, request_context,
                 device_context, tags, extra, environment, release_version,
                 user_id, ip_address, user_agent, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
             [
                 $data['event_id'],
+                $_SERVER['REQUEST_ID'] ?? null,
                 $data['issue_id'],
                 $data['level'],
                 $data['message'],
@@ -135,12 +136,13 @@ class SentryModel extends Model
     {
         return (bool)$this->db->query(
             "INSERT INTO performance_transactions (
-                transaction_id, name, op, duration, memory_used,
+                transaction_id, request_id, name, op, duration, memory_used,
                 peak_memory, query_count, slow_queries_count,
                 status, spans, queries, issues, context, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
             [
                 $data['transaction_id'],
+                $_SERVER['REQUEST_ID'] ?? null,
                 $data['name'],
                 $data['op'],
                 $data['duration'],
