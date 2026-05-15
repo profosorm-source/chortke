@@ -137,6 +137,9 @@ class AuthController extends BaseController
             return;
         }
 
+        // MED-05 Fix: Regenerate session ID after successful login to prevent fixation
+        $this->session->regenerate();
+        
         $this->loginRiskService->clearFailures('login');
         $this->session->setFlash('success', 'خوش آمدید!');
         $this->response->redirect(url('dashboard'));

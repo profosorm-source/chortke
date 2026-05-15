@@ -11,17 +11,20 @@ class ProfileController extends BaseUserController
     private UploadService $uploadService;
     private UserService $userService;
     private \App\Services\User\ProfileService $profileService;
+    private \App\Services\Auth\SessionService $sessionService;
 
     public function __construct(
         UserService $userService,
         \App\Services\UploadService $uploadService,
-        \App\Services\User\ProfileService $profileService
+        \App\Services\User\ProfileService $profileService,
+        \App\Services\Auth\SessionService $sessionService
     )
     {
         parent::__construct();
         $this->userService = $userService;
         $this->uploadService = $uploadService;
         $this->profileService = $profileService;
+        $this->sessionService = $sessionService;
     }
 
     public function index(): void
@@ -131,7 +134,7 @@ $result = $this->profileService->updateProfile($userId, [
         return;
     }
 
-    $this->logger->info('Avatar uploaded', ['user_id' => $userId, 'filename' => $filename]);
+    $this->logger->info('Avatar uploaded', ['user_id' => $userId]);
 
     $this->response->json([
         'success' => true,
@@ -219,6 +222,9 @@ $result = $this->profileService->updateProfile($userId, [
             // ✅ اصلاح logger
             $this->logger->info('Password changed', ['user_id' => $userId]);
             
+            // ✅ Invalidate other sessions after password change
+            $this->sessionService->invalidateAllUserSessions($userId, session_id());
+
             $this->session->setFlash('success', 'رمز عبور با موفقیت تغییر یافت');
         } else {
             $this->session->setFlash('error', 'خطا در تغییر رمز عبور');

@@ -23,30 +23,40 @@ class BugReportController extends BaseUserController
         $this->uploadService = $uploadService;
     }
 
-    /**
-     * ثبت گزارش باگ (AJAX)
-     */
     public function store(): void
     {
-                
-        if (!auth()) {
-    $this->response->json(['success' => false, 'message' => 'لطفاً وارد حساب خود شوید']);
-    return;
-}
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
 
+        $userId = user_id();
+        if (!$userId) {
+            $this->response->json(['success' => false, 'message' => 'لطفاً وارد حساب خود شوید'], 401);
+            return;
+        }
+
+        // H-08: Spam Flood Protection
+        try {
+            rate_limit('bug_report', 'store', "user_{$userId}");
+        } catch (\Exception $e) {
+            if ($e->getCode() === 429) {
+                $this->response->json(['success' => false, 'message' => $e->getMessage()], 429);
+                return;
+            }
+        }
+
+        // C-05: Input Sanitization (XSS Protection)
         $data = [
-            'page_url' => $this->request->post('page_url'),
-            'page_title' => $this->request->post('page_title'),
-            'category' => $this->request->post('category') ?: 'other',
-            'description' => $this->request->post('description'),
-            'screen_resolution' => $this->request->post('screen_resolution'),
-            'device_fingerprint' => $this->request->post('device_fingerprint'),
-            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? get_user_agent(),
-            'ip_address' => $_SERVER['REMOTE_ADDR'] ?? get_client_ip(),
+            'page_url'           => filter_var($this->request->post('page_url'), FILTER_SANITIZE_URL),
+            'page_title'         => htmlspecialchars($this->request->post('page_title') ?? '', ENT_QUOTES, 'UTF-8'),
+            'category'           => htmlspecialchars($this->request->post('category') ?: 'other', ENT_QUOTES, 'UTF-8'),
+            'description'        => htmlspecialchars($this->request->post('description') ?? '', ENT_QUOTES, 'UTF-8'),
+            'screen_resolution'  => htmlspecialchars($this->request->post('screen_resolution') ?? '', ENT_QUOTES, 'UTF-8'),
+            'device_fingerprint' => htmlspecialchars($this->request->post('device_fingerprint') ?? '', ENT_QUOTES, 'UTF-8'),
+            'user_agent'         => substr($this->request->header('User-Agent') ?? '', 0, 512),
+            'ip_address'         => $this->request->ip(),
         ];
 
         if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] !== UPLOAD_ERR_NO_FILE) {
-            // استفاده از UploadService (Sprint 6)
             $uploadResult = $this->uploadService->upload(
                 $_FILES['screenshot'],
                 'bug-reports',
@@ -59,10 +69,8 @@ class BugReportController extends BaseUserController
             }
         }
 
-        $service = $this->ticketService;
-        $result = $service->submitBugReport(user_id(), $data, $this->uploadService);
+        $result = $this->ticketService->submitBugReport($userId, $data, $this->uploadService);
 
-        // Match client-expected response message structure
         if ($result['success']) {
             $result['message'] = 'گزارش شما با موفقیت در سیستم ثبت شد.';
         }
@@ -113,20 +121,30 @@ class BugReportController extends BaseUserController
         ]);
     }
 
-    /**
-     * افزودن کامنت توسط کاربر (AJAX)
-     */
     public function addComment(): void
     {
-                        $id = (int)$this->request->param('id');
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
 
-        $rawData = \file_get_contents('php://input');
-        $data = \json_decode($rawData, true) ?? [];
+        $userId = user_id();
+        $id = (int)$this->request->param('id');
 
-        $comment = $data['comment'] ?? '';
+        // C-03: Ownership Verification (IDOR Protection)
+        $report = $this->ticketService->findBugReport($id);
+        if (!$report || (int)$report->user_id !== $userId) {
+            $this->response->json(['success' => false, 'message' => 'گزارش یافت نشد یا دسترسی غیرمجاز است'], 403);
+            return;
+        }
 
-        $service = $this->ticketService;
-        $result = $service->reply($id, user_id(), $comment, false);
+        $data = $this->request->json() ?? [];
+        $comment = trim($data['comment'] ?? '');
+
+        if (empty($comment)) {
+            $this->response->json(['success' => false, 'message' => 'متن نظر نمی‌تواند خالی باشد']);
+            return;
+        }
+
+        $result = $this->ticketService->reply($id, $userId, $comment, false);
 
         $this->response->json($result);
     }

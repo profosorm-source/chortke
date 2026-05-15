@@ -27,7 +27,11 @@ class BannerController extends BaseController
         $result = $service->trackClick($id);
 
         if ($result['success'] && !empty($result['redirect'])) {
-            return redirect($result['redirect']);
+            $url = $result['redirect'];
+            // C-02: Final Safety Check for Open Redirect/XSS
+            if (filter_var($url, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $url)) {
+                return redirect($url);
+            }
         }
 
         return redirect(url('/'));

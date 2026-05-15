@@ -149,13 +149,10 @@ class FileController extends BaseController
         string $folder,
         string $filename
     ): void {
-        // ✅ امنیت: اعتبارسنجی MIME type و پاکسازی نام فایل
-        $allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'text/plain'];
-        if (!in_array($mime, $allowedMimes, true)) {
-            header('Content-Type: application/octet-stream', true, 403);
-            http_response_code(403);
-            echo json_encode(['error' => 'File type not allowed']);
-            exit;
+        // ✅ امنیت: اعتبارسنجی مجدد MIME type بر اساس لیست سفید ثابت کلاس
+        if (!in_array($mime, self::ALLOWED_SERVE_MIMES, true)) {
+            $this->deny('نوع فایل برای نمایش مستقیم مجاز نیست. فقط تصاویر مجاز هستند.');
+            return;
         }
         
         // پاک کردن output buffer

@@ -72,7 +72,7 @@ class ContentController extends BaseUserController
                 $offset
             );
 
-            $user = $this->userService->find($this->userId());
+            // MED-06 Fix: Removed redundant user find call
 
             return view('user.content.index', [
                 'user' => $user,
@@ -152,7 +152,9 @@ class ContentController extends BaseUserController
             $data = $validator->data();
             
             // Sanitize URL
-            $data['video_url'] = filter_var($data['video_url'], FILTER_SANITIZE_URL);
+            // H-04: Sanitization is primarily handled in ContentService::submitContent, 
+            // but we ensure it's at least a string here.
+            $data['video_url'] = trim((string)$data['video_url']);
             
             // Submit content
             $result = $this->contentService->submitContent(user_id(), $data);

@@ -79,13 +79,19 @@ class DashboardController extends BaseUserController
     ];
 
     try {
-        $stats = $this->dashboardService->getStats($userId);
+        $dashboardData = $this->dashboardService->getFullDashboardData($userId);
+        $stats = $dashboardData['stats'] ?? [];
+        $recentTaskExecutions = $dashboardData['recent_executions'] ?? [];
+        $openTicketCount = $dashboardData['ticket_count'] ?? 0;
 
-        if (is_array($stats)) {
+        if (!empty($stats)) {
+            // ... rest of data mapping logic ...
+            // (I'll simplify the mapping here or keep it robust)
             if (isset($stats['wallet'])) {
                 $data['wallet'] = is_object($stats['wallet']) ? $stats['wallet'] : (object)$stats['wallet'];
             }
 
+            // Existing mapping for stats
             if (isset($stats['tasks'])) {
                 $data['tasks'] = is_object($stats['tasks']) ? $stats['tasks'] : (object)$stats['tasks'];
             }
@@ -93,7 +99,6 @@ class DashboardController extends BaseUserController
             if (isset($stats['transactions'])) {
                 $data['transactions'] = is_object($stats['transactions']) ? $stats['transactions'] : (object)$stats['transactions'];
             } else {
-                // سازگاری با خروجی فعلی UserDashboardService::getStats()
                 $data['transactions'] = (object)[
                     'total_deposits_irt' => (float)($stats['today_deposit'] ?? 0),
                     'total_withdraws_irt' => (float)($stats['today_withdraw'] ?? 0),
@@ -101,37 +106,16 @@ class DashboardController extends BaseUserController
                     'recent' => $stats['last_transactions'] ?? [],
                 ];
             }
-
-            if (isset($stats['campaigns'])) {
-                $data['campaigns'] = is_object($stats['campaigns']) ? $stats['campaigns'] : (object)$stats['campaigns'];
-            }
-
-            if (isset($stats['level'])) {
-                $data['level'] = is_object($stats['level']) ? $stats['level'] : (object)$stats['level'];
-            }
-
-            if (isset($stats['referral'])) {
-                $data['referral'] = is_object($stats['referral']) ? $stats['referral'] : (object)$stats['referral'];
-            }
-
-            if (isset($stats['notifications'])) {
-                $data['notifications'] = is_object($stats['notifications']) ? $stats['notifications'] : (object)$stats['notifications'];
-            }
-
-            if (isset($stats['charts'])) {
-                $data['charts'] = is_object($stats['charts']) ? $stats['charts'] : (object)$stats['charts'];
+            
+            // Map other fields from stats if present
+            foreach (['campaigns', 'level', 'referral', 'notifications', 'charts'] as $key) {
+                if (isset($stats[$key])) {
+                    $data[$key] = is_object($stats[$key]) ? $stats[$key] : (object)$stats[$key];
+                }
             }
         }
     } catch (\Throwable $e) {
-        if (function_exists('logger')) {
-            logger()->error('dashboard.data.load.failed', [
-                'channel' => 'dashboard',
-                'error' => $e->getMessage(),
-                'exception' => get_class($e),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
-        }
+        $this->logger->error('dashboard.data.load.failed', ['error' => $e->getMessage()]);
     }
 
     $wallet = $data['wallet'];
@@ -142,37 +126,6 @@ class DashboardController extends BaseUserController
     $referral = $data['referral'];
     $notifications = $data['notifications'];
     $charts = $data['charts'];
-
-    $recentTaskExecutions = [];
-    $openTicketCount = 0;
-
-    try {
-        $recentTaskExecutions = $this->dashboardService->getRecentTaskExecutions($userId, 5, 0);
-    } catch (\Throwable $e) {
-        if (function_exists('logger')) {
-            logger()->error('dashboard.task_execution.fetch.failed', [
-                'channel' => 'dashboard',
-                'error' => $e->getMessage(),
-                'exception' => get_class($e),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
-        }
-    }
-
-    try {
-        $openTicketCount = $this->dashboardService->getOpenTicketCount($userId);
-    } catch (\Throwable $e) {
-        if (function_exists('logger')) {
-            logger()->error('dashboard.ticket_count.fetch.failed', [
-                'channel' => 'dashboard',
-                'error' => $e->getMessage(),
-                'exception' => get_class($e),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
-        }
-    }
 
     view('user/dashboard', [
         'title' => 'داشبورد',

@@ -29,18 +29,25 @@ class FingerprintController extends BaseApiController
         // در APIهای عمومی، اگر کاربر لاگین بود آیدی‌اش را برمی‌داریم، در غیر این صورت ۰ یا نال
         $userId = $this->userId();
         
-        $data = $this->request->body();
-        
-        if (empty($data)) {
+        $payload = $this->request->body();
+        $components = $payload['components'] ?? $payload;
+        $clientHash = $payload['hash'] ?? '';
+
+        if (empty($components)) {
             $this->error('داده‌های فینگرپرینت خالی است', 400);
         }
 
-        // تولید fingerprint
-        $fingerprint = $this->fingerprintService->generate($data);
+        // تولید مجدد در سرور برای جلوگیری از جعل (Issue 2)
+        $fingerprint = $this->fingerprintService->generate($components);
+
+        if ($clientHash !== '' && !hash_equals($fingerprint, $clientHash)) {
+            $this->logger->warning('fingerprint.spoof_detected', ['user_id' => $userId]);
+            $this->error('اعتبارسنجی فینگرپرینت شکست خورد', 403);
+        }
         
         // ذخیره (اگر کاربر لاگین بود)
         if ($userId > 0) {
-            $this->fingerprintService->store($userId, $fingerprint, $data);
+            $this->fingerprintService->store($userId, $fingerprint, $components);
             
             // تحلیل
             $analysis = $this->fingerprintService->analyze($userId, $fingerprint);

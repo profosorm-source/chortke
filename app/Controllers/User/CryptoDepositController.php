@@ -135,7 +135,15 @@ class CryptoDepositController extends BaseUserController
             $data['wallet_address'] = $walletAddress;
             $data['verification_status'] = 'pending';
 
-            $deposit = $this->depositModel->create($data);
+            try {
+                $deposit = $this->depositModel->create($data);
+            } catch (\Exception $e) {
+                // If it's a PDOException with code 23000 (Integrity constraint violation), it's likely a duplicate hash
+                if ($e instanceof \PDOException && $e->getCode() === '23000') {
+                    throw new \RuntimeException('این هش تراکنش قبلاً در سیستم ثبت شده است و امکان ثبت مجدد وجود ندارد.');
+                }
+                throw $e;
+            }
 
             if (!$deposit) {
                 throw new \RuntimeException('خطا در ثبت درخواست');

@@ -36,6 +36,7 @@ abstract class BaseController
     protected Response $response;
     protected PolicyService $policyService;
     protected LoggerInterface $logger;
+    protected \Core\CSRF $csrf;
 
     /**
      * وابستگی‌ها از طریق Constructor Dependency Injection
@@ -48,13 +49,23 @@ abstract class BaseController
         ?Request $request = null,
         ?Response $response = null,
         ?PolicyService $policyService = null,
-        ?LoggerInterface $logger = null
+        ?LoggerInterface $logger = null,
+        ?\Core\CSRF $csrf = null
     ) {
         $this->session = $session ?? $this->resolveFromContainer(\Core\Session::class);
         $this->request = $request ?? $this->resolveFromContainer(\Core\Request::class);
         $this->response = $response ?? $this->resolveFromContainer(\Core\Response::class);
         $this->policyService = $policyService ?? $this->resolveFromContainer(\App\Services\Shared\PolicyService::class);
         $this->logger = $logger ?? $this->resolveFromContainer(\App\Contracts\LoggerInterface::class);
+        $this->csrf = $csrf ?? $this->resolveFromContainer(\Core\CSRF::class);
+    }
+    
+    /**
+     * اعتبارسنجی توکن CSRF
+     */
+    protected function validateCsrf(): void
+    {
+        $this->csrf->validate();
     }
     
     /**

@@ -42,7 +42,8 @@ abstract class BaseUserController extends BaseController
         ?\App\Contracts\LoggerInterface $logger = null,
         ?AuthService $authService = null,
         ?UserService $userService = null,
-        ?CaptchaService $captchaService = null
+        ?CaptchaService $captchaService = null,
+        ?\Core\CSRF $csrf = null
     ) {
         // اگر parent parameters null باشند، Container آنها را resolve می‌کند
         parent::__construct(
@@ -50,7 +51,8 @@ abstract class BaseUserController extends BaseController
             $request ?? $this->resolveFromContainer(\Core\Request::class),
             $response ?? $this->resolveFromContainer(\Core\Response::class),
             $policyService ?? $this->resolveFromContainer(\App\Services\Shared\PolicyService::class),
-            $logger ?? $this->resolveFromContainer(\App\Contracts\LoggerInterface::class)
+            $logger ?? $this->resolveFromContainer(\App\Contracts\LoggerInterface::class),
+            $csrf ?? $this->resolveFromContainer(\Core\CSRF::class)
         );
         
         $this->authService = $authService ?? $this->resolveFromContainer(AuthService::class);

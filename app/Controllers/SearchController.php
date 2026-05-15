@@ -14,14 +14,16 @@ use App\Controllers\BaseController;
 class SearchController extends BaseController
 {
     private AdvancedSearchService $searchService;
+    private \Core\RateLimiter $rateLimiter;
 
     public function __construct(
-        
-        AdvancedSearchService $searchService
+        AdvancedSearchService $searchService,
+        \Core\RateLimiter $rateLimiter
     )
     {
-parent::__construct();
+        parent::__construct();
         $this->searchService = $searchService;
+        $this->rateLimiter = $rateLimiter;
     }
 
     /**
@@ -29,10 +31,17 @@ parent::__construct();
      */
     public function adminSearch(): void
     {
-                        $query    = trim($this->request->get('q') ?? '');
+        $query = trim($this->request->get('q') ?? '');
+
+        // Rate Limit برای ادمین (مثلاً ۵۰ جستجو در دقیقه)
+        $rateKey = 'admin_search:' . user_id();
+        if (!$this->rateLimiter->attempt($rateKey, 50, 1)) {
+            $this->response->json(['success' => false, 'message' => 'Too many requests'], 429);
+            return;
+        }
 
         if (strlen($query) < 2) {
-            $this->response->json(['success' => true, 'query' => $query, 'results' => []]);
+            $this->response->json(['success' => true, 'query' => htmlspecialchars($query), 'results' => []]);
             return;
         }
 
@@ -44,7 +53,7 @@ parent::__construct();
 
         $this->response->json([
             'success' => true,
-            'query'   => $query,
+            'query'   => htmlspecialchars($query),
             'results' => $results,
         ]);
     }
@@ -54,11 +63,18 @@ parent::__construct();
      */
     public function userSearch(): void
     {
-                        $userId   = (int)user_id();
-        $query    = trim($this->request->get('q') ?? '');
+        $userId = (int)user_id();
+        $query = trim($this->request->get('q') ?? '');
+
+        // Rate Limit برای کاربر (۲۰ جستجو در دقیقه)
+        $rateKey = 'user_search:' . ($userId ?: get_client_ip());
+        if (!$this->rateLimiter->attempt($rateKey, 20, 1)) {
+            $this->response->json(['success' => false, 'message' => 'Too many requests'], 429);
+            return;
+        }
 
         if (strlen($query) < 2) {
-            $this->response->json(['success' => true, 'results' => []]);
+            $this->response->json(['success' => true, 'query' => htmlspecialchars($query), 'results' => []]);
             return;
         }
 
@@ -68,7 +84,7 @@ parent::__construct();
 
         $this->response->json([
             'success' => true,
-            'query'   => $query,
+            'query'   => htmlspecialchars($query),
             'results' => $results,
         ]);
     }
@@ -78,13 +94,21 @@ parent::__construct();
      */
     public function fullResults(): void
     {
-                $userId  = (int)user_id();
-        $query   = trim($this->request->get('q') ?? '');
+        $userId = (int)user_id();
+        $query = trim($this->request->get('q') ?? '');
 
         // اگر AJAX / JSON بخواند
         $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
         if (str_contains($accept, 'application/json')) {
             $this->userSearch();
+            return;
+        }
+
+        // Rate Limit برای صفحه کامل (۳۰ بار در دقیقه)
+        $rateKey = 'full_search:' . ($userId ?: get_client_ip());
+        if (!$this->rateLimiter->attempt($rateKey, 30, 1)) {
+            $this->session->setFlash('error', 'تعداد درخواست‌های شما بیش از حد مجاز است.');
+            $this->response->redirect(url('/'));
             return;
         }
 
@@ -94,7 +118,7 @@ parent::__construct();
 
         view('user.search.results', [
             'title'   => 'نتایج جستجو',
-            'query'   => $query,
+            'query'   => htmlspecialchars($query),
             'results' => $results,
         ]);
     }

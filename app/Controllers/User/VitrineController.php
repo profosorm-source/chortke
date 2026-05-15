@@ -16,20 +16,14 @@ use App\Services\FeatureFlagService;
  */
 class VitrineController extends BaseUserController
 {
-    private VitrineListing  $listing;
-    private VitrineRequest  $requestModel;
     private VitrineService  $service;
     private FeatureFlagService $flags;
 
     public function __construct(
-        VitrineListing     $listing,
-        VitrineRequest     $requestModel,
         VitrineService     $service,
         FeatureFlagService $flags
     ) {
         parent::__construct();
-        $this->listing      = $listing;
-        $this->requestModel = $requestModel;
         $this->service      = $service;
         $this->flags        = $flags;
 
@@ -58,19 +52,15 @@ class VitrineController extends BaseUserController
 
         $page     = max(1, (int) ($this->request->get('page') ?? 1));
         $perPage  = 20;
-        $listings = $this->listing->getActive($filters, $perPage, ($page - 1) * $perPage);
-        $total    = $this->listing->countActive($filters);
+        
+        $data = $this->service->getListings($filters, $perPage, ($page - 1) * $perPage);
 
-        view('user.vitrine.index', [
+        view('user.vitrine.index', array_merge($data, [
             'title'      => 'ویترین — بازار دیجیتال',
-            'listings'   => $listings,
             'filters'    => $filters,
             'page'       => $page,
-            'pages'      => (int) ceil($total / $perPage),
-            'total'      => $total,
-            'categories' => $this->listing->categories(),
-            'platforms'  => $this->listing->platforms(),
-        ]);
+            'pages'      => (int) ceil($data['total'] / $perPage)
+        ]));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -86,16 +76,15 @@ class VitrineController extends BaseUserController
         ];
 
         $page     = max(1, (int) ($this->request->get('page') ?? 1));
-        $listings = $this->listing->getWantedListings($filters, 20, ($page - 1) * 20);
+        $perPage  = 20;
+        
+        $data = $this->service->getWantedListings($filters, $perPage, ($page - 1) * $perPage);
 
-        view('user.vitrine.wanted', [
+        view('user.vitrine.wanted', array_merge($data, [
             'title'      => 'ویترین — خریداران (متقاضیان)',
-            'listings'   => $listings,
             'filters'    => $filters,
-            'page'       => $page,
-            'categories' => $this->listing->categories(),
-            'platforms'  => $this->listing->platforms(),
-        ]);
+            'page'       => $page
+        ]));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -194,15 +183,15 @@ class VitrineController extends BaseUserController
             return;
         }
 
-        // ✅ XSS prevention - escape HTML
+        // ✅ Store raw data (Escaping should be done in the View layer)
         $result = $this->service->createListing($userId, [
             'listing_type'   => in_array($data['listing_type'] ?? 'sell', ['sell', 'buy'], true) ? $data['listing_type'] : 'sell',
-            'category'       => e($data['category'] ?? '', ENT_QUOTES, 'UTF-8'),
-            'platform'       => e($data['platform'] ?? '', ENT_QUOTES, 'UTF-8'),
-            'title'          => e(trim($data['title']), ENT_QUOTES, 'UTF-8'),
-            'description'    => e(trim($data['description']), ENT_QUOTES, 'UTF-8'),
-            'specs'          => !empty($data['specs']) ? e(trim($data['specs']), ENT_QUOTES, 'UTF-8') : null,
-            'username'       => !empty($data['username']) ? e(trim($data['username']), ENT_QUOTES, 'UTF-8') : null,
+            'category'       => $data['category'] ?? '',
+            'platform'       => $data['platform'] ?? '',
+            'title'          => trim($data['title']),
+            'description'    => trim($data['description']),
+            'specs'          => !empty($data['specs']) ? trim($data['specs']) : null,
+            'username'       => !empty($data['username']) ? trim($data['username']) : null,
             'member_count'   => max(0, (int)($data['member_count'] ?? 0)),
             'creation_date'  => !empty($data['creation_date']) ? $data['creation_date'] : null,
             'price_usdt'     => $price,
@@ -225,10 +214,11 @@ class VitrineController extends BaseUserController
     public function show(): void
     {
         $id      = (int) $this->request->param('id');
-        $listing = $this->listing->find($id);
         $userId  = (int) user_id();
+        
+        $data = $this->service->getListingDetails($id, $userId);
 
-        if (!$listing || in_array($listing->status, [
+        if (!$data || in_array($data['listing']->status, [
             VitrineListing::STATUS_REJECTED,
             VitrineListing::STATUS_CANCELLED,
         ])) {
@@ -237,25 +227,9 @@ class VitrineController extends BaseUserController
             exit;
         }
 
-        $isSeller  = (int) $listing->seller_id === $userId;
-        $isBuyer   = (int) ($listing->buyer_id ?? 0) === $userId;
-        $isWatched = $this->listing->isWatched($userId, $id);
-        $watchCount= $this->listing->watchCount($id);
-        $requests  = $isSeller ? $this->requestModel->getAllByListing($id) : [];
-        $myRequest = !$isSeller ? $this->requestModel->getByRequester($userId, 1, 0) : [];
-
-        view('user.vitrine.show', [
-            'title'      => $listing->title . ' — ویترین',
-            'listing'    => $listing,
-            'isSeller'   => $isSeller,
-            'isBuyer'    => $isBuyer,
-            'isWatched'  => $isWatched,
-            'watchCount' => $watchCount,
-            'requests'   => $requests,
-            'statuses'   => $this->listing->statuses(),
-            'categories' => $this->listing->categories(),
-            'platforms'  => $this->listing->platforms(),
-        ]);
+        view('user.vitrine.show', array_merge($data, [
+            'title' => $data['listing']->title . ' — ویترین'
+        ]));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -264,28 +238,22 @@ class VitrineController extends BaseUserController
 
     public function myListings(): void
     {
-        $userId   = (int) user_id();
-        $listings = $this->listing->getBySeller($userId);
+        $userId = (int) user_id();
+        $data   = $this->service->getUserDashboard($userId);
 
-        view('user.vitrine.my-listings', [
-            'title'      => 'آگهی‌های من — ویترین',
-            'listings'   => $listings,
-            'statuses'   => $this->listing->statuses(),
-            'categories' => $this->listing->categories(),
-        ]);
+        view('user.vitrine.my-listings', array_merge($data, [
+            'title' => 'آگهی‌های من — ویترین'
+        ]));
     }
 
     public function myPurchases(): void
     {
-        $userId   = (int) user_id();
-        $listings = $this->listing->getByBuyer($userId);
+        $userId = (int) user_id();
+        $data   = $this->service->getUserPurchases($userId);
 
-        view('user.vitrine.my-purchases', [
-            'title'      => 'خریدهای من — ویترین',
-            'listings'   => $listings,
-            'statuses'   => $this->listing->statuses(),
-            'categories' => $this->listing->categories(),
-        ]);
+        view('user.vitrine.my-purchases', array_merge($data, [
+            'title' => 'خریدهای من — ویترین'
+        ]));
     }
 
     public function myRequests(): void
@@ -375,20 +343,8 @@ class VitrineController extends BaseUserController
     {
         $userId    = (int) user_id();
         $listingId = (int) $this->request->param('id');
-        $listing   = $this->listing->find($listingId);
-
-        if (!$listing) {
-            $this->response->json(['success' => false, 'message' => 'آگهی یافت نشد.']);
-            return;
-        }
-
-        $alreadyWatched = $this->listing->isWatched($userId, $listingId);
-        if ($alreadyWatched) {
-            $this->listing->removeWatch($userId, $listingId);
-            $this->response->json(['success' => true, 'watched' => false, 'message' => 'از لیست علاقه‌مندی‌ها حذف شد.']);
-        } else {
-            $this->listing->addWatch($userId, $listingId);
-            $this->response->json(['success' => true, 'watched' => true, 'message' => 'به لیست علاقه‌مندی‌ها اضافه شد.']);
-        }
+        
+        $result = $this->service->toggleWatch($userId, $listingId);
+        $this->response->json($result);
     }
 }

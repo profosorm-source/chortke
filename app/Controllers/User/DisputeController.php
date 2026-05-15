@@ -83,23 +83,12 @@ class DisputeController extends BaseController
             return;
         }
 
-        $dispute = $this->disputeModel->find($id);
-        if (!$dispute || ((int)$dispute->user_id !== $userId && (int)($dispute->target_user_id ?? 0) !== $userId)) {
-             $this->response->redirect(url('/disputes'));
-             exit;
-        }
-
-        // Auto determine role
-        $role = ((int)$dispute->user_id === $userId) ? 'creator' : 'opponent';
-
-        $ok = $this->disputeModel->addMessage($id, $userId, $text, null, $role);
-
-        if ($ok) {
-            // Mark updated
-            $this->db->query("UPDATE disputes SET updated_at = NOW() WHERE id = ?", [$id]);
+        $result = $this->disputeService->addMessageWithContext($id, $userId, $text);
+        
+        if ($result['success']) {
             $this->session->setFlash('success', 'پیام شما ثبت شد.');
         } else {
-            $this->session->setFlash('error', 'خطا در ثبت پیام.');
+            $this->session->setFlash('error', $result['message'] ?? 'خطا در ثبت پیام.');
         }
 
         $this->response->redirect(url("/disputes/{$id}"));

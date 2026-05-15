@@ -13,9 +13,11 @@ use App\Services\DirectMessageService;
 class MessageController extends BaseUserController
 {
     private DirectMessageService $messageService;
+    private \App\Services\UploadService $uploadService;
 
     public function __construct(
         DirectMessageService $messageService,
+        \App\Services\UploadService $uploadService,
         \Core\Session $session,
         \Core\Request $request,
         \Core\Response $response,
@@ -27,6 +29,7 @@ class MessageController extends BaseUserController
     ) {
         parent::__construct($session, $request, $response, $policyService, $logger, $authService, $userService, $captchaService);
         $this->messageService = $messageService;
+        $this->uploadService = $uploadService;
     }
 
     /**
@@ -206,10 +209,8 @@ class MessageController extends BaseUserController
         $this->requireAuth();
 
         try {
-            if (!check_csrf($this->request)) {
-                $this->jsonError('CSRF token invalid', [], 403);
-                return;
-            }
+            // CORE-036: CSRF Protection
+            $this->validateCsrf();
 
             $userId = $this->userId();
             $messageId = (int)$this->request->param('id');
@@ -255,29 +256,29 @@ class MessageController extends BaseUserController
     }
 
     /**
-     * مدیریت پیوست‌ها
+     * مدیریت پیوست‌ها با استفاده از UploadService
      */
     private function handleAttachments(array $files): array
     {
         $attachments = [];
-        $uploadDir = storage_path('messages');
-
-        if (!is_dir($uploadDir)) {
-            mkdir($uploadDir, 0755, true);
+        
+        // اگر چند فایل باشد
+        if (isset($files['name']) && !is_array($files['name'])) {
+            $files = [$files];
         }
 
         foreach ($files as $file) {
-            if ($file['size'] > 10 * 1024 * 1024) { // 10MB
-                continue;
-            }
+            $result = $this->uploadService->upload(
+                $file, 
+                'messages', 
+                ['jpg', 'png', 'jpeg', 'pdf', 'zip'], 
+                10 * 1024 * 1024 // 10MB
+            );
 
-            $filename = uniqid('msg_') . '_' . $file['name'];
-            $filepath = $uploadDir . '/' . $filename;
-
-            if (move_uploaded_file($file['tmp_name'], $filepath)) {
+            if ($result['success']) {
                 $attachments[] = [
-                    'filename' => $filename,
-                    'file_path' => '/uploads/messages/' . $filename,
+                    'filename' => $file['name'],
+                    'file_path' => $result['path'],
                     'file_size' => $file['size'],
                     'mime_type' => $file['type']
                 ];
