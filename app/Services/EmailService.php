@@ -532,8 +532,11 @@ class EmailService extends \App\Services\BaseService
     {
         $templatePath = __DIR__ . '/../../views/emails/' . $template . '.php';
 
+        // 🔒 Secure Fix: XSS Protection on Dynamic Email Content from Database Source
+        $safeVars = array_map(fn($v) => is_string($v) ? htmlspecialchars($v, ENT_QUOTES, 'UTF-8') : $v, $vars);
+
         if (!file_exists($templatePath)) {
-            return $this->getDefaultTemplate($vars);
+            return $this->getDefaultTemplate($safeVars);
         }
 
         // کپسوله‌سازی فرآیند اجرای قالب در یک تابع استاتیک منزوی جهت پیشگیری کامل از Variable Injection
@@ -550,13 +553,13 @@ class EmailService extends \App\Services\BaseService
         };
 
         try {
-            return $render($templatePath, $vars);
+            return $render($templatePath, $safeVars);
         } catch (\Throwable $e) {
             $this->logger->error('email.template_render.failed', [
                 'template' => $template,
                 'error' => $e->getMessage()
             ]);
-            return $this->getDefaultTemplate($vars);
+            return $this->getDefaultTemplate($safeVars);
         }
     }
 
@@ -601,6 +604,10 @@ HTML;
 
     public function getSmtpInfo(): array
     {
+        if (!config('app.debug')) {
+            throw new \LogicException('SMTP debug parameters are strictly withheld outside of explicit staging/debug environments.');
+        }
+
         return [
             'host'       => $this->smtpHost,
             'port'       => $this->smtpPort,

@@ -416,6 +416,10 @@ class BulkOperationsService extends \App\Services\BaseService
                     $results['success']++;
                 } catch (\Exception $e) {
                     $results['failed']++;
+                    $this->logError('bulk_notify.send_failed', [
+                        'user_id' => $userId,
+                        'error' => $e->getMessage()
+                    ]);
                 }
             }
         }

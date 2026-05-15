@@ -95,7 +95,9 @@ class AuditTrail extends \App\Services\BaseService
     {
         try {
             $cutoff = date('Y-m-d H:i:s', strtotime("-{$days} days"));
-            $archiveDir = dirname(__DIR__, 2) . '/storage/audit-archives';
+            $archiveDir = function_exists('storage_path') 
+                ? storage_path('audit-archives') 
+                : dirname(__DIR__, 2) . '/storage/audit-archives';
 
             if (!is_dir($archiveDir)) {
                 if (!mkdir($archiveDir, 0755, true) && !is_dir($archiveDir)) {

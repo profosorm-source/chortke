@@ -14,8 +14,6 @@ abstract class BaseService
 
     protected LoggerInterface $logger;
 
-    protected ?\Core\Database $db = null; // M26 Fix: به سازنده تزریق نمی‌شود تا تمام subclassها خراب نشوند، اما در تست‌ها قابل تنظیم است
-
     public function __construct(LoggerInterface $logger)
     {
         $this->logger = $logger;
@@ -54,41 +52,6 @@ abstract class BaseService
             'line' => $e->getLine(),
             'trace' => config('app.debug') ? array_slice($e->getTrace(), 0, 5) : '[hidden in production]',
         ]);
-    }
-
-    /**
-     * Assert that database connection is injected.
-     */
-    protected function assertDbInjected(): void
-    {
-        if ($this->db === null) {
-            throw new \LogicException("Database connection has not been injected into " . static::class);
-        }
-    }
-
-    /**
-     * Wrap closures within isolated, safe database transactions.
-     */
-    protected function transaction(callable $callback): mixed
-    {
-        $this->assertDbInjected();
-        $db = $this->db;
-        $started = !$db->inTransaction();
-        if ($started) {
-            $db->beginTransaction();
-        }
-        try {
-            $result = $callback();
-            if ($started) {
-                $db->commit();
-            }
-            return $result;
-        } catch (\Throwable $e) {
-            if ($started && $db->inTransaction()) {
-                $db->rollBack();
-            }
-            throw $e;
-        }
     }
 
     /**

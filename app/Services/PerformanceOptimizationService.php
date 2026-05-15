@@ -197,8 +197,8 @@ extends \App\Services\BaseService
         ];
         $this->queryCount++;
 
-        // ⚠️ Flag slow queries
-        if ($executionTime > 1000) { // Over 1 second
+        // ⚠️ Flag slow queries based on dynamically configured thresholds
+        if ($executionTime > $this->slowQueryThreshold * 1000) {
             $this->logger->warning('performance.slow_query', [
                 'query' => substr($query, 0, 100),
                 'time_ms' => $executionTime

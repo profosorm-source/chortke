@@ -207,7 +207,7 @@ class ApiTokenService extends \App\Services\BaseService
             ];
         }
 
-        if (!in_array($user->status, ['active', 1, '1'], true)) {
+        if ((string)$user->status !== 'active') {
             return [
                 'success' => false,
                 'message' => 'حساب کاربری غیرفعال است',
