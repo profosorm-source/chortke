@@ -235,6 +235,13 @@ class ApiTokenService extends \App\Services\BaseService
                 $finalScopes[] = $s;
             }
         }
+
+        // H20 Fix: فقط ادمین یا سوپرادمین مجاز به دریافت توکن با اسکوپ admin هستند
+        $isAdmin = in_array($user->role, ['admin', 'super_admin'], true);
+        if (in_array('admin', $finalScopes, true) && !$isAdmin) {
+            $finalScopes = array_diff($finalScopes, ['admin']);
+        }
+
         $scopes = !empty($finalScopes) ? implode(',', array_unique($finalScopes)) : 'read';
 
         $this->apiTokenModel->createToken($user->id, $hashedToken, $name, $scopes, $expiresAt);
