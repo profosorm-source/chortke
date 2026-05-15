@@ -60,7 +60,9 @@ class SecurityHeadersMiddleware
         $response->header('Cross-Origin-Resource-Policy', 'same-site'); 
 
         // حذف هدرهای افشاکننده
-        header_remove('X-Powered-By');
+        if (!headers_sent()) {
+            header_remove('X-Powered-By');
+        }
         $response->header('Server', 'Chortke');
         
         return $response;

@@ -16,10 +16,12 @@ use Closure;
 class AdminMiddleware extends BaseMiddleware
 {
     private Session $session;
+    private \App\Models\User $userModel;
 
-    public function __construct(Session $session)
+    public function __construct(Session $session, \App\Models\User $userModel)
     {
         $this->session = $session;
+        $this->userModel = $userModel;
     }
 
     public function handle(Request $request, Closure $next): Response
@@ -35,7 +37,28 @@ class AdminMiddleware extends BaseMiddleware
             return $response->redirect(url('login'));
         }
 
+        $userId = (int)$session->get('user_id');
         $role = (string)($session->get('user_role') ?? '');
+        $lastVerify = (int)$session->get('admin_verify_time');
+
+        // 🚀 BUG FIX [H-01]: Periodic DB re-validation (Every 5 minutes)
+        // جلوگیری از دسترسی ادمین‌های اخراج شده یا تغییر نقش یافته
+        if (time() - $lastVerify > 300) {
+            $user = $this->userModel->find($userId);
+            if (!$user || !RolePolicy::isAdmin($user->role_slug ?? '')) {
+                $session->destroy();
+                $response = new Response();
+                if ($request->isAjax()) {
+                    return $response->json(['success' => false, 'message' => 'دسترسی شما منقضی شده است.'], 403);
+                }
+                return $response->redirect(url('login'));
+            }
+            
+            // Sync session with DB
+            $session->set('user_role', $user->role_slug);
+            $session->set('admin_verify_time', time());
+            $role = $user->role_slug;
+        }
 
         if (!RolePolicy::isAdmin($role)) {
             $response = new Response();

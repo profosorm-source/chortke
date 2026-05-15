@@ -156,9 +156,9 @@ class RateLimitMiddleware
             return 'rl_user_' . $userId . '_' . md5($cleanUri);
         }
         
-        $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-        $ip = trim($ip);
+        $ip = function_exists('get_client_ip') ? get_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+        $ua = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
         
-        return 'rl_ip_' . md5($ip) . '_' . md5($cleanUri);
+        return 'rl_ip_' . md5($ip) . '_ua_' . md5($ua) . '_' . md5($cleanUri);
     }
 }

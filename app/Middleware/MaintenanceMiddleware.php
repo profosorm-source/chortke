@@ -59,7 +59,7 @@ class MaintenanceMiddleware
         }
         
         // استثناء برای IPهای مجاز (Strict check)
-        $clientIP = get_client_ip();
+        $clientIP = $request->ip();
         
         if (in_array($clientIP, $allowedIPs, true)) {
             return $this->toResponse($next($request));

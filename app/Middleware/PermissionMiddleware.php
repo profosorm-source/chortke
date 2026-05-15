@@ -60,29 +60,26 @@ class PermissionMiddleware extends BaseMiddleware
      */
     public function hasPermission(string $permission): bool
     {
-        if (function_exists('is_admin') && is_admin()) {
-            return true;
+        $userId = (int)$this->session->get('user_id');
+        
+        if ($userId <= 0) {
+            return false;
         }
 
-        $userId = $this->session->get('user_id');
-        
-        if (!$userId) {
-            return false;
+        // 🚀 BUG FIX [C-02]: DB-backed Super Admin check (instance-cached in model)
+        // جایگزین چک کردن از سشن که قابل دستکاری بود
+        if ($this->permissionModel->isSuperAdmin($userId)) {
+            return true;
         }
         
         $cachedPermissions = $this->session->get('user_permissions');
         $cacheTime = $this->session->get('permissions_cache_time');
         
-        // TTL کش مجوزها: ۳۰۰ ثانیه (۵ دقیقه)
-        if ($cachedPermissions === null || $cacheTime === null || (time() - (int)$cacheTime) > 300) {
-            $cachedPermissions = $this->permissionModel->getUserPermissions((int)$userId);
+        // 🚀 BUG FIX [M-01]: کاهش TTL کش سشن به ۶۰ ثانیه برای Revocation سریع‌تر
+        if ($cachedPermissions === null || $cacheTime === null || (time() - (int)$cacheTime) > 60) {
+            $cachedPermissions = $this->permissionModel->getUserPermissions($userId);
             $this->session->set('user_permissions', $cachedPermissions);
             $this->session->set('permissions_cache_time', time());
-        }
-        
-        $userRole = $this->session->get('user_role');
-        if ($userRole === 'super_admin') {
-            return true;
         }
         
         return in_array($permission, (array)$cachedPermissions, true);
@@ -96,6 +93,9 @@ class PermissionMiddleware extends BaseMiddleware
     | جلوگیری شود. در آینده پیشنهاد می‌شود دسترسی‌ها از طریق تزریق کلاسی کنترل شوند.
     */
 
+    /**
+     * @deprecated به جای متدهای استاتیک از تزریق وابستگی Middleware استفاده کنید.
+     */
     public static function check(string $permission): bool
     {
         // هدایت فراخوانی قدیمی به سیستم داینامیک جدید جهت یکپارچه‌سازی و ممیزی راحت کدهای برنامه

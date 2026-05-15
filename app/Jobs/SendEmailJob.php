@@ -36,6 +36,12 @@ class SendEmailJob
             return;
         }
 
+        // 🚀 BUG-01 Fix: Claim the email ID before processing
+        // این کار باعث می‌شود اگر processQueue همزمان در حال اجرا باشد، تداخلی پیش نیاید.
+        if ($emailId && !$this->redisQueue->claim($emailId)) {
+            return; // قبلاً توسط پردازشگر دیگری (مثلاً کرون) برداشته شده است
+        }
+
         // ارسال واقعی ایمیل از طریق SMTP
         $sent = $this->emailService->sendDirect($toEmail, $toName, $subject, $bodyHtml);
 

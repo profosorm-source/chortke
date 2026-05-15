@@ -59,13 +59,14 @@ class RequireFeature
         $isAjax = $request->isAjax();
         $mode = $mode ?? ($isAjax ? 'json' : 'redirect');
         
-        // لاگ کردن تلاش دسترسی
+        // لاگ کردن تلاش دسترسی (🚀 M-02 Fix: Better Attribution)
         $this->logger->warning('feature_flag.access_denied', [
             'channel' => 'feature_flag',
             'feature' => $feature,
-            'user_id' => user_id(),
+            'user_id' => $userId ?: 'guest',
             'ip' => $request->ip(),
             'path' => $request->uri(),
+            'method' => $request->method(),
         ]);
         
         // حالت‌های مختلف پاسخ
@@ -78,14 +79,16 @@ class RequireFeature
                 ], 403);
                 
             case '404':
+                // در محیط‌های API ممکن است بخواهیم خطای 404 برگردانیم تا وجود مسیر لو نرود
                 abort(404);
-                break;
+                return $this->response;
                 
             case 'redirect':
             default:
-                // Redirect به صفحه اصلی با پیام
+                // 🚀 M-02 Fix: استفاده از تنظیمات به جای هارد-کد
+                $fallbackUrl = (string)config('feature_flags.fallback_url', '/dashboard');
                 flash_error('این ویژگی در حال حاضر در دسترس نیست.');
-                return redirect('/dashboard');
+                return redirect($fallbackUrl);
         }
     }
 }

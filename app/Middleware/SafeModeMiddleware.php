@@ -20,7 +20,22 @@ class SafeModeMiddleware
         if ($isSafeMode && in_array($request->method(), ['POST', 'PUT', 'PATCH', 'DELETE'])) {
             // ✅ Fix L4: لیست سفید مسیرها از کانفیگ لوادشده
             $allowedPaths = config('app.safe_mode_whitelist', ['/login', '/logout', '/verify-2fa']);
-            if (!in_array($request->uri(), $allowedPaths)) {
+            
+            // 🚀 BUG FIX [M-05]: جلوگیری از دور زدن لیست سفید با Path Overrides
+            $pathsToVerify = [$request->uri()];
+            if ($override = $_SERVER['HTTP_OVERRIDE_PATH'] ?? $_SERVER['HTTP_X_REWRITE_URL'] ?? null) {
+                $pathsToVerify[] = '/' . ltrim(strtok($override, '?'), '/');
+            }
+
+            $isWhitelisted = false;
+            foreach ($pathsToVerify as $path) {
+                if (in_array($path, $allowedPaths)) {
+                    $isWhitelisted = true;
+                    break;
+                }
+            }
+
+            if (!$isWhitelisted) {
                 $response = new Response();
                 
                 if ($request->isAjax() || str_contains($request->uri(), '/api/')) {

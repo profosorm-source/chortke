@@ -163,10 +163,21 @@ class FeatureFlagSDK
     }
     
     /**
+     * بررسی سطح دسترسی مدیریت (🚀 H-03 Fix)
+     */
+    private function checkAdmin(): void
+    {
+        if (!\App\Policies\RolePolicy::isAdmin((string)$this->role)) {
+            throw new \Core\Exceptions\UnauthorizedException("Access denied: Admin role required for this operation.");
+        }
+    }
+
+    /**
      * Toggle فیچر (فقط برای Admin)
      */
     public function toggle(string $feature): bool
     {
+        $this->checkAdmin();
         return $this->featureService->toggle($feature);
     }
     
@@ -175,6 +186,7 @@ class FeatureFlagSDK
      */
     public function enable(string $feature): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, ['enabled' => true]);
     }
     
@@ -183,6 +195,7 @@ class FeatureFlagSDK
      */
     public function disable(string $feature): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, ['enabled' => false]);
     }
     
@@ -191,6 +204,7 @@ class FeatureFlagSDK
      */
     public function rollout(string $feature, int $percentage): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, ['enabled_percentage' => $percentage]);
     }
     
@@ -199,6 +213,7 @@ class FeatureFlagSDK
      */
     public function schedule(string $feature, string $from, string $until): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, [
             'enabled_from' => $from,
             'enabled_until' => $until,
@@ -210,6 +225,7 @@ class FeatureFlagSDK
      */
     public function dependsOn(string $feature, array $dependencies): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, ['depends_on' => $dependencies]);
     }
     
@@ -218,6 +234,7 @@ class FeatureFlagSDK
      */
     public function limitToEnvironments(string $feature, array $environments): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, ['environments' => $environments]);
     }
     
@@ -226,6 +243,7 @@ class FeatureFlagSDK
      */
     public function limitToRoles(string $feature, array $roles): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, ['enabled_for_roles' => $roles]);
     }
     
@@ -234,6 +252,7 @@ class FeatureFlagSDK
      */
     public function limitToUsers(string $feature, array $userIds): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, ['enabled_for_users' => $userIds]);
     }
     
@@ -256,6 +275,7 @@ class FeatureFlagSDK
      */
     public function setMetadata(string $feature, array $metadata): bool
     {
+        $this->checkAdmin();
         return $this->featureService->update($feature, ['metadata' => $metadata]);
     }
     
@@ -280,6 +300,7 @@ class FeatureFlagSDK
      */
     public function create(string $name, string $description, array $options = []): bool
     {
+        $this->checkAdmin();
         $data = array_merge([
             'name' => $name,
             'description' => $description,
@@ -293,6 +314,7 @@ class FeatureFlagSDK
      */
     public function delete(string $feature): bool
     {
+        $this->checkAdmin();
         return $this->featureService->delete($feature);
     }
     
@@ -301,6 +323,7 @@ class FeatureFlagSDK
      */
     public function bulkEnable(array $features): array
     {
+        $this->checkAdmin();
         $results = [];
         
         foreach ($features as $feature) {
@@ -312,6 +335,7 @@ class FeatureFlagSDK
     
     public function bulkDisable(array $features): array
     {
+        $this->checkAdmin();
         $results = [];
         
         foreach ($features as $feature) {
@@ -326,12 +350,14 @@ class FeatureFlagSDK
      */
     public function enableSet(string $tag): array
     {
+        $this->checkAdmin();
         $features = $this->getFeaturesByTag($tag);
         return $this->bulkEnable($features);
     }
     
     public function disableSet(string $tag): array
     {
+        $this->checkAdmin();
         $features = $this->getFeaturesByTag($tag);
         return $this->bulkDisable($features);
     }

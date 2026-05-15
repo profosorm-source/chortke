@@ -34,20 +34,4 @@ class RolePolicy
         return in_array($role, self::FULL_ADMIN_ROLES, true);
     }
 
-    /**
-     * آیا نقش مجاز برای دسترسی خاص است
-     */
-    public static function hasPermission(string $role, string $permission): bool
-    {
-        if ($role === 'super_admin') {
-            return true;
-        }
-
-        $permissions = [
-            'admin' => ['manage_users', 'manage_withdrawals', 'view_reports'],
-            'support' => ['view_users', 'view_reports'],
-        ];
-
-        return in_array($permission, $permissions[$role] ?? [], true);
-    }
 }
