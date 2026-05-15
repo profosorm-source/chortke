@@ -1543,6 +1543,11 @@ $container->singleton(\App\Contracts\FeatureFlagRepositoryInterface::class, func
     return $c->make(\App\Models\FeatureFlagUltimate::class);
 });
 
+// Search Service Interface
+$container->singleton(\App\Contracts\SearchServiceInterface::class, function($c) {
+    return $c->make(\App\Services\AdvancedSearchService::class);
+});
+
 // ─── Policies ─────────────────────────────────────────────────────
 $container->singleton(\App\Policies\FeatureFlagPolicy::class, function($c) {
     return new \App\Policies\FeatureFlagPolicy();
@@ -2046,12 +2051,13 @@ $container->singleton(\App\Services\AdminDashboard\AdminDashboardService::class,
 $container->singleton(\App\Services\AdminDashboard\SystemMonitoringService::class, function($c) {
     return new \App\Services\AdminDashboard\SystemMonitoringService(
         $c->make(\Core\Database::class),
+        $c->make(\Core\Cache::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
-$container->singleton(\App\Services\Analytics\AnalyticsDataRepository::class, function($c) {
-    return new \App\Services\Analytics\AnalyticsDataRepository(
+$container->singleton(\App\Services\Analytics\AnalyticsQueryService::class, function($c) {
+    return new \App\Services\Analytics\AnalyticsQueryService(
         $c->make(\App\Models\KpiStatistics::class),
         $c->make(\Core\Cache::class),
         $c->make(\App\Models\CustomTaskAnalyticsModel::class),

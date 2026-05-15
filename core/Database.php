@@ -20,6 +20,7 @@ class Database
     private static bool $fallbackLogging = false;
 	private static ?array $lastSqlErrorContext = null;
     private ?\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor $sentryMonitor = null; // M3 Fix: کش کلاینت مانیتورینگ جهت افزایش پرفورمنس کوئری‌ها
+    private int $transactionLevel = 0; // H24 Fix: شمارنده پشته تراکنش‌ها جهت جلوگیری از Partial Commit در معماری تودرتو
 
     /**
      * Constructor (Private)
@@ -429,43 +430,60 @@ public function lastInsertId(): int
 
     /**
      * شروع Transaction
+     * H24 Upgrade: پشتیبانی هوشمند از تراکنش‌های تو در تو (Nested Transactions)
      */
     public function beginTransaction()
     {
-        if ($this->pdo->inTransaction()) {
-            return true;
+        $this->transactionLevel++;
+        if ($this->transactionLevel === 1) {
+            return $this->pdo->beginTransaction();
         }
-        return $this->pdo->beginTransaction();
+        return true;
     }
 
     /**
      * Commit
+     * H24 Upgrade: فقط زمانی به دیتابیس اعمال می‌شود که بالاترین سطح تراکنش خاتمه یابد
      */
     public function commit()
     {
-        if (!$this->pdo->inTransaction()) {
+        if ($this->transactionLevel <= 0) {
+            $this->transactionLevel = 0;
             return true;
         }
-        try {
-            return $this->pdo->commit();
-        } catch (\PDOException $e) {
-            return false;
+
+        $this->transactionLevel--;
+        if ($this->transactionLevel === 0) {
+            try {
+                return $this->pdo->commit();
+            } catch (\PDOException $e) {
+                return false;
+            }
         }
+        return true;
     }
 
     /**
      * Rollback
+     * H24 Upgrade: هر کجای زنجیره رخ دهد، بلافاصله کل زنجیره تراکنش باطل می‌شود
      */
     public function rollback()
     {
-        if (!$this->pdo->inTransaction()) {
+        if ($this->transactionLevel <= 0) {
+            $this->transactionLevel = 0;
             return true;
         }
-        try {
-            return $this->pdo->rollBack();
-        } catch (\PDOException $e) {
-            return false;
+
+        $this->transactionLevel = 0; // بازنشانی فوری کل زنجیره
+        
+        if ($this->pdo->inTransaction()) {
+            try {
+                return $this->pdo->rollBack();
+            } catch (\PDOException $e) {
+                return false;
+            }
         }
+        return true;
     }
 
     /**
@@ -473,7 +491,7 @@ public function lastInsertId(): int
      */
     public function inTransaction(): bool
     {
-        return $this->pdo->inTransaction();
+        return $this->transactionLevel > 0 || $this->pdo->inTransaction();
     }
 
     /**
