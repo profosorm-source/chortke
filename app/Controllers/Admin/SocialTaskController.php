@@ -80,7 +80,7 @@ class SocialTaskController extends BaseAdminController
         }
 
         $executions  = $this->service->getAdExecutions($id, 50, 0);
-        $adStats     = $this->service->getAdvertiserAdStats((int)$ad->advertiser_id, $id);
+        $adStats     = $this->service->getAdvertiserAdStats((int)$ad->adS_id, $id);
 
         view('admin.social-tasks.show', [
             'title'      => 'جزئیات آگهی #' . $id,
