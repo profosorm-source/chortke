@@ -837,122 +837,177 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
     public function completeWithdrawal(int $userId, float $amount, string $currency, ?string $transactionId): bool
     {
-        $this->assertWalletActive($userId);
-        
-        try {
-            if ($transactionId) {
-                $transaction = $this->transactionModel->findByTransactionId($transactionId);
-                if ($transaction && $transaction->type === 'withdraw') {
-                    if (!$this->walletModel->deductLocked($userId, $amount, $currency)) {
-                        $this->logger->warning('wallet.complete_withdrawal.locked_deduction_failed', [
-                            'transaction_id' => $transactionId,
-                            'user_id' => $userId,
-                            'amount' => $amount,
-                            'currency' => $currency,
-                        ]);
-                    } else {
-                        $this->ledger()->recordDoubleEntry(
-                            $transactionId,
-                            'platform_cash',
-                            'withdrawal_pending',
-                            $amount,
-                            'Withdrawal completed',
-                            ['user_id' => $userId]
-                        );
-                    }
+        return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $transactionId) {
+            $this->assertWalletActive($userId);
+            
+            $startedTransaction = !$this->db->inTransaction();
+            try {
+                if ($startedTransaction) {
+                    $this->db->beginTransaction();
                 }
 
-                $this->transactionModel->updateStatusByTransactionId($transactionId, $userId, 'completed');
+                // 🔒 قفل سطر کیف پول در دیتابیس
+                $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+                if (!$wallet) {
+                    throw new \RuntimeException("کیف پول کاربر یافت نشد.");
+                }
+                
+                if ($transactionId) {
+                    $transaction = $this->transactionModel->findByTransactionId($transactionId);
+                    if ($transaction) {
+                        // Idempotency check
+                        if ($transaction->status === 'completed') {
+                            if ($startedTransaction) { $this->db->commit(); }
+                            return true;
+                        }
+
+                        if ($transaction->type === 'withdraw') {
+                            if (!$this->walletModel->deductLocked($userId, $amount, $currency)) {
+                                throw new \RuntimeException('خطا در کسر موجودی قفل‌شده از کیف پول');
+                            }
+
+                            $this->ledger()->recordDoubleEntry(
+                                $transactionId,
+                                'platform_cash',
+                                'withdrawal_pending',
+                                $amount,
+                                'Withdrawal completed',
+                                ['user_id' => $userId]
+                            );
+                        }
+                    }
+
+                    $this->transactionModel->updateStatusByTransactionId($transactionId, $userId, 'completed');
+                }
+
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                return true;
+
+            } catch (\Exception $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                $this->logger->error('wallet.complete_withdrawal.failed', [
+                    'channel' => 'wallet',
+                    'user_id' => $userId,
+                    'transaction_id' => $transactionId,
+                    'error' => $e->getMessage(),
+                ]);
+                return false;
             }
-            return true;
-        } catch (\Exception $e) {
-            $this->logger->error('wallet.complete_withdrawal.failed', [
-    'channel' => 'wallet',
-    'error' => $e->getMessage(),
-]);
-            return false;
-        }
+        }, 15, 10);
     }
 
     public function cancelWithdrawal(int $userId, float $amount, string $currency, ?string $transactionId): bool
     {
-        try {
-            $transaction = null;
-            if ($transactionId) {
-                $transaction = $this->transactionModel->findByTransactionId($transactionId);
-            }
+        $currency = strtolower($currency);
+        return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $transactionId) {
+            $startedTransaction = !$this->db->inTransaction();
+            try {
+                if ($startedTransaction) {
+                    $this->db->beginTransaction();
+                }
 
-            if ($transaction && $transaction->type === 'withdraw') {
-                $balanceBefore = $this->walletModel->getBalance($userId, $currency);
-                $lockedBefore  = $this->walletModel->getLockedBalance($userId, $currency);
-                $unlockResult  = $this->walletModel->unlockBalance($userId, $amount, $currency);
-                if ($unlockResult) {
-                    $balanceAfter = (float)bcadd((string)$balanceBefore, (string)$amount, 2);
+                // 🔒 قفل سطر دیتابیس و دریافت آخرین موجودی واقعی
+                $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+                if (!$wallet) {
+                    throw new \RuntimeException("کیف پول کاربر یافت نشد.");
+                }
 
-                    $refundTx = $this->transactionModel->create([
-                        'user_id' => $userId,
-                        'type' => 'withdrawal_refund',
-                        'currency' => $currency,
-                        'amount' => $amount,
-                        'balance_before' => $balanceBefore,
-                        'balance_after' => $balanceAfter,
-                        'status' => 'completed',
-                        'description' => 'بازگشت وجه برداشت لغو شده',
-                        'metadata' => json_encode(['ref_transaction_id' => $transactionId], JSON_UNESCAPED_UNICODE),
-                    ]);
+                $transaction = null;
+                if ($transactionId) {
+                    $transaction = $this->transactionModel->findByTransactionId($transactionId);
+                }
 
-                    if ($refundTx) {
-                        $this->ledger()->recordDoubleEntry(
-                            $refundTx->transaction_id,
-                            "wallet:{$userId}",
-                            'withdrawal_pending',
-                            $amount,
-                            'Withdrawal refund',
-                            ['original_transaction' => $transactionId]
-                        );
+                // Idempotency Check: اگر قبلاً لغو شده رد کنیم
+                if ($transaction && $transaction->status === 'cancelled') {
+                    if ($startedTransaction) { $this->db->commit(); }
+                    return true;
+                }
+
+                if ($transaction && $transaction->type === 'withdraw') {
+                    $balanceField  = $this->balanceField($currency);
+                    $balanceBefore = (float)$wallet->$balanceField;
+                    
+                    // آنلاک اتمیک روی دیتابیس (ردیف قفل شده است)
+                    $unlockResult  = $this->walletModel->unlockBalance($userId, $amount, $currency);
+                    if ($unlockResult) {
+                        $balanceAfter = (float)bcadd((string)$balanceBefore, (string)$amount, 2);
+
+                        $refundTx = $this->transactionModel->create([
+                            'user_id' => $userId,
+                            'type' => 'withdrawal_refund',
+                            'currency' => $currency,
+                            'amount' => $amount,
+                            'balance_before' => $balanceBefore,
+                            'balance_after' => $balanceAfter,
+                            'status' => 'completed',
+                            'description' => 'بازگشت وجه برداشت لغو شده',
+                            'metadata' => json_encode(['ref_transaction_id' => $transactionId], JSON_UNESCAPED_UNICODE),
+                        ]);
+
+                        if ($refundTx) {
+                            $this->ledger()->recordDoubleEntry(
+                                $refundTx->transaction_id,
+                                "wallet:{$userId}",
+                                'withdrawal_pending',
+                                $amount,
+                                'Withdrawal refund',
+                                ['original_transaction' => $transactionId]
+                            );
+                        }
+                    } else {
+                        $transaction = null; // در صورت شکست آنلاک، به فال‌بک مراجعه کند
                     }
-                } else {
-                    $transaction = null;
                 }
-            }
 
-            if (!$transaction) {
-                $result = $this->deposit($userId, $amount, $currency, [
-                    'type'               => 'withdrawal_refund',
-                    'description'        => 'بازگشت وجه برداشت لغو شده',
-                    'ref_transaction_id' => $transactionId,
-                ]);
-
-                if (!$result['success']) {
-                    $this->logger->error('wallet.cancel_withdrawal.deposit_failed', [
-                        'channel' => 'wallet',
-                        'message' => $result['message'] ?? null,
+                if (!$transaction) {
+                    // نکته: به جای deposit از depositInTransaction استفاده می‌کنیم تا با قفل توزیع‌شده‌ی تو در تو ددلاک پیش نیاید
+                    $result = $this->depositInTransaction($userId, $amount, $currency, [
+                        'type'               => 'withdrawal_refund',
+                        'description'        => 'بازگشت وجه برداشت لغو شده',
+                        'ref_transaction_id' => $transactionId,
+                        'idempotency_key'    => 'withdraw_cancel_' . ($transactionId ?? uniqid()),
                     ]);
-                    return false;
+
+                    if (!$result['success']) {
+                        throw new \RuntimeException('خطا در افزایش اعتبار فال‌بک در لغو برداشت: ' . ($result['message'] ?? 'خطای ناشناخته'));
+                    }
                 }
-            }
 
-            if ($transactionId) {
-                $this->transactionModel->recordStatusChange(
-                    $transactionId,
-                    'cancelled',
-                    'Withdrawal cancelled and funds returned',
-                    null,
-                    [
-                        'refund_transaction_id' => $transactionId,
-                        'ip_address' => $this->clientIp()
-                    ]
-                );
-            }
+                if ($transactionId) {
+                    $this->transactionModel->recordStatusChange(
+                        $transactionId,
+                        'cancelled',
+                        'Withdrawal cancelled and funds returned',
+                        null,
+                        [
+                            'refund_transaction_id' => $transactionId,
+                            'ip_address' => $this->clientIp()
+                        ]
+                    );
+                }
 
-            return true;
-        } catch (\Exception $e) {
-            $this->logger->error('wallet.cancel_withdrawal.failed', [
-                'channel' => 'wallet',
-                'error' => $e->getMessage(),
-            ]);
-            return false;
-        }
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                return true;
+
+            } catch (\Exception $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                $this->logger->error('wallet.cancel_withdrawal.failed', [
+                    'channel' => 'wallet',
+                    'user_id' => $userId,
+                    'transaction_id' => $transactionId,
+                    'error' => $e->getMessage(),
+                ]);
+                return false;
+            }
+        }, 15, 10);
     }
 
     public function canWithdraw(int $userId, float $amount, string $currency = 'irt'): array
@@ -1171,71 +1226,110 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             return false;
         }
 
-        $amount = (float)$transaction->amount;
-        $currency = strtolower($transaction->currency ?? 'irt');
         $userId = (int)$transaction->user_id;
-        $balanceBefore = $this->walletModel->getBalance($userId, $currency);
-        $balanceAfter = $balanceBefore;
-        $reversalType = 'transaction_reversal';
-        $description = $reason ?? 'Reversal of transaction ' . $transactionId;
 
-        $transactionDelta = bcsub((string)$transaction->balance_after, (string)$transaction->balance_before, 4);
-        $reversalAmount = abs($amount);
+        return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($transaction, $transactionId, $performedBy, $reason, $userId) {
+            $amount = (float)$transaction->amount;
+            $currency = strtolower($transaction->currency ?? 'irt');
+            $reversalType = 'transaction_reversal';
+            $description = $reason ?? 'Reversal of transaction ' . $transactionId;
 
-        if (bccomp($transactionDelta, '0', 4) < 0) {
-            // Original transaction reduced wallet balance, reversal should credit user wallet.
-            $balanceAfter = (float)bcadd((string)$balanceBefore, (string)$reversalAmount, 2);
-            $this->walletModel->updateBalance($userId, $reversalAmount, $currency);
-            $debitAccount = 'transaction_reversal';
-            $creditAccount = "wallet:{$userId}";
-        } else {
-            // Original transaction increased wallet balance, reversal should debit user wallet.
-            if (bccomp((string)$balanceBefore, (string)$reversalAmount, 2) < 0) {
+            $startedTransaction = !$this->db->inTransaction();
+            try {
+                if ($startedTransaction) {
+                    $this->db->beginTransaction();
+                }
+
+                // 🔒 قفل سطر دیتابیس برای ممانعت از مغایرت‌های محاسباتی موازی
+                $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+                if (!$wallet) {
+                    throw new \RuntimeException("کیف پول یافت نشد.");
+                }
+
+                // بررسی همزمان: شاید در کسری از ثانیه توسط نخ دیگری ریورس شده باشد
+                $freshTx = $this->transactionModel->findByTransactionId($transactionId);
+                if ($freshTx && $freshTx->status === 'reversed') {
+                    if ($startedTransaction) { $this->db->commit(); }
+                    return true;
+                }
+
+                $balanceField = $this->balanceField($currency);
+                $balanceBefore = (float)$wallet->$balanceField;
+
+                $transactionDelta = bcsub((string)$transaction->balance_after, (string)$transaction->balance_before, 4);
+                $reversalAmount = abs($amount);
+
+                if (bccomp($transactionDelta, '0', 4) < 0) {
+                    // Original transaction reduced wallet balance, reversal should credit user wallet.
+                    $balanceAfter = (float)bcadd((string)$balanceBefore, (string)$reversalAmount, 2);
+                    $this->walletModel->updateBalance($userId, $reversalAmount, $currency);
+                    $debitAccount = 'transaction_reversal';
+                    $creditAccount = "wallet:{$userId}";
+                } else {
+                    // Original transaction increased wallet balance, reversal should debit user wallet.
+                    if (bccomp((string)$balanceBefore, (string)$reversalAmount, 2) < 0) {
+                        throw new \RuntimeException("موجودی کافی برای معکوس کردن تراکنش وجود ندارد.");
+                    }
+                    $balanceAfter = (float)bcsub((string)$balanceBefore, (string)$reversalAmount, 2);
+                    $this->walletModel->updateBalance($userId, -$reversalAmount, $currency);
+                    $debitAccount = "wallet:{$userId}";
+                    $creditAccount = 'transaction_reversal';
+                }
+
+                $reversal = $this->transactionModel->create([
+                    'user_id' => $userId,
+                    'type' => $reversalType,
+                    'currency' => $currency,
+                    'amount' => ($transactionDelta < 0 ? $reversalAmount : -$reversalAmount),
+                    'balance_before' => $balanceBefore,
+                    'balance_after' => $balanceAfter,
+                    'status' => 'completed',
+                    'description' => $description,
+                    'metadata' => json_encode(['original_transaction' => $transactionId], JSON_UNESCAPED_UNICODE),
+                ]);
+
+                if (!$reversal) {
+                    throw new \RuntimeException("خطا در ایجاد تراکنش بازگشتی.");
+                }
+
+                $this->ledger()->recordDoubleEntry(
+                    $reversal->transaction_id,
+                    $debitAccount,
+                    $creditAccount,
+                    $reversalAmount,
+                    $description,
+                    ['original_transaction' => $transactionId]
+                );
+
+                $this->transactionModel->recordStatusChange(
+                    $transactionId,
+                    'reversed',
+                    $reason,
+                    $performedBy,
+                    [
+                        'reversal_transaction_id' => $reversal->transaction_id,
+                        'ip_address' => $this->clientIp()
+                    ]
+                );
+
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                return true;
+
+            } catch (\Exception $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                $this->logger->error('wallet.reverse_transaction.failed', [
+                    'channel' => 'wallet',
+                    'user_id' => $userId,
+                    'transaction_id' => $transactionId,
+                    'error' => $e->getMessage(),
+                ]);
                 return false;
             }
-            $balanceAfter = (float)bcsub((string)$balanceBefore, (string)$reversalAmount, 2);
-            $this->walletModel->updateBalance($userId, -$reversalAmount, $currency);
-            $debitAccount = "wallet:{$userId}";
-            $creditAccount = 'transaction_reversal';
-        }
-
-        $reversal = $this->transactionModel->create([
-            'user_id' => $userId,
-            'type' => $reversalType,
-            'currency' => $currency,
-            'amount' => ($transactionDelta < 0 ? $reversalAmount : -$reversalAmount),
-            'balance_before' => $balanceBefore,
-            'balance_after' => $balanceAfter,
-            'status' => 'completed',
-            'description' => $description,
-            'metadata' => json_encode(['original_transaction' => $transactionId], JSON_UNESCAPED_UNICODE),
-        ]);
-
-        if (!$reversal) {
-            return false;
-        }
-
-        $this->ledger()->recordDoubleEntry(
-            $reversal->transaction_id,
-            $debitAccount,
-            $creditAccount,
-            $reversalAmount,
-            $description,
-            ['original_transaction' => $transactionId]
-        );
-
-        $this->transactionModel->recordStatusChange(
-            $transactionId,
-            'reversed',
-            $reason,
-            $performedBy,
-            [
-                'reversal_transaction_id' => $reversal->transaction_id,
-                'ip_address' => $this->clientIp()
-            ]
-        );
-
-        return true;
+        }, 15, 10);
     }
 
     public function updateLedgerStatusByIdempotency(string $idempotencyKey, string $newStatus): bool

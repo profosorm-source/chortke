@@ -26,6 +26,7 @@ use App\Contracts\LoggerInterface;
  */
 class LogService extends BaseService
 {
+    private Database $db;
     private ActivityLog $activityLog;
     private SystemLog $systemLog;
     private SecurityLog $securityLog;
