@@ -41,6 +41,17 @@ class Router
         'HEAD'    => [], // M10 Fix: پشتیبانی از درخواست‌های صرفاً هدر HEAD
     ];
 
+    // CORE-027: Middleware Priority Registry
+    protected array $middlewarePriority = [
+        \App\Middleware\RequestIdMiddleware::class,
+        \App\Middleware\HttpsMiddleware::class,
+        \App\Middleware\SecurityHeadersMiddleware::class,
+        \App\Middleware\CorsMiddleware::class,
+        \App\Middleware\MaintenanceMiddleware::class,
+        \App\Middleware\SafeModeMiddleware::class,
+        \App\Middleware\LoggingMiddleware::class,
+    ];
+
     public function __construct(Request $request, Response $response, Container $container)
     {
         $this->request   = $request;
@@ -180,6 +191,9 @@ class Router
             \App\Middleware\SafeModeMiddleware::class         // سپر نهایی محافظت فقط خواندنی (Read-only)
         ];
 
+        // CORE-027: Sort middlewares according to the policy priority registry
+        $globalMiddlewares = $this->sortMiddlewares($globalMiddlewares);
+
         // H10 Fix: کپسوله کردن پایپ‌لاین روت‌ها در try/catch برای گرفتن Exceptionهای پاسخدهی استاندارد
         try {
             // اجرای حلقه اصلی مسیریابی از میان Pipeline سراسری
@@ -191,8 +205,14 @@ class Router
                     $method = $request->method();
                     $uri    = $this->normalizeUri($_SERVER['REQUEST_URI'] ?? '/');
 
+                    // CORE-029: HEAD fallback to GET
+                    $routesToMatch = $this->routes[$method] ?? [];
+                    if ($method === 'HEAD' && empty($routesToMatch)) {
+                        $routesToMatch = $this->routes['GET'] ?? [];
+                    }
+
                     // ① جستجوی مسیر منطبق (Route Matching)
-                    foreach ($this->routes[$method] ?? [] as $routeData) {
+                    foreach ($routesToMatch as $routeData) {
                         $params = $this->matchRoute($routeData['uri'], $uri);
 
                         if ($params === false) {
@@ -343,9 +363,36 @@ class Router
 
         $paramNames = [];
 
-        $pattern = preg_replace_callback('/\{([a-zA-Z0-9_]+)\}/', function ($m) use (&$paramNames) {
-            $paramNames[] = $m[1];
-            return '([^\/]+)';
+        // CORE-028 & CORE-062: Route param type validation with strict defaults and inferences
+        $pattern = preg_replace_callback('/\{([a-zA-Z0-9_]+)(?::([a-zA-Z0-9_]+))?\}/', function ($m) use (&$paramNames) {
+            $name = $m[1];
+            $paramNames[] = $name;
+            $type = $m[2] ?? null;
+            
+            // CORE-062: Automatically infer constraint type based on parameter names if omitted
+            if ($type === null) {
+                $lowerName = strtolower($name);
+                if ($lowerName === 'id' || str_ends_with($lowerName, '_id')) {
+                    $type = 'int';
+                } elseif (str_contains($lowerName, 'slug')) {
+                    $type = 'slug';
+                } else {
+                    $type = 'safe_string';
+                }
+            }
+            
+            if ($type === 'int') {
+                return '([0-9]+)';
+            }
+            if ($type === 'slug') {
+                return '([a-z0-9\-]+)';
+            }
+            if ($type === 'alpha') {
+                return '([a-zA-Z]+)';
+            }
+            
+            // Safe fallback (alphanumeric plus basic safe url characters, not wild arbitrary symbols)
+            return '([a-zA-Z0-9\-\_\.\%\@]+)';
         }, $routeUri);
 
         $pattern = '#^' . $pattern . '$#u';
@@ -440,8 +487,21 @@ class Router
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Debug
+    // Helpers
     // ─────────────────────────────────────────────────────────────
+
+    protected function sortMiddlewares(array $middlewares): array
+    {
+        $priority = array_flip($this->middlewarePriority);
+        
+        usort($middlewares, function($a, $b) use ($priority) {
+            $aPrio = $priority[$a] ?? 999;
+            $bPrio = $priority[$b] ?? 999;
+            return $aPrio <=> $bPrio;
+        });
+        
+        return $middlewares;
+    }
 
     public function getRoutes(): array
     {

@@ -33,35 +33,41 @@ class SlidingWindowStrategy implements RateLimitStrategy
     public function attempt(string $key, int $maxAttempts, int $decayMinutes): bool
     {
         $cacheKey = $this->prefix . $key;
-        $now = time();
-        $windowStart = $now - ($decayMinutes * 60);
+        
+        // CORE-041: Enforce atomicity using centralized lock to prevent race conditions
+        $result = $this->cache->withLock('lock:' . $cacheKey, function() use ($cacheKey, $maxAttempts, $decayMinutes) {
+            $now = time();
+            $windowStart = $now - ($decayMinutes * 60);
 
-        // لیست timestamps را دریافت کن
-        $timestamps = $this->cache->get($cacheKey, []);
-        if (!is_array($timestamps)) {
-            $timestamps = [];
-        }
+            // لیست timestamps را دریافت کن
+            $timestamps = $this->cache->get($cacheKey, []);
+            if (!is_array($timestamps)) {
+                $timestamps = [];
+            }
 
-        // timestamps قدیم‌تر از window را حذف کن
-        $timestamps = array_filter(
-            $timestamps,
-            fn($ts) => $ts > $windowStart
-        );
+            // timestamps قدیم‌تر از window را حذف کن
+            $timestamps = array_filter(
+                $timestamps,
+                fn($ts) => $ts > $windowStart
+            );
 
-        // تعداد درخواست‌های معتبر
-        $count = count($timestamps);
+            // تعداد درخواست‌های معتبر
+            $count = count($timestamps);
 
-        if ($count >= $maxAttempts) {
-            return false;
-        }
+            if ($count >= $maxAttempts) {
+                return false;
+            }
 
-        // timestamp جدید را اضافه کن
-        $timestamps[] = $now;
+            // timestamp جدید را اضافه کن
+            $timestamps[] = $now;
 
-        // ذخیره کن
-        $this->cache->put($cacheKey, $timestamps, $decayMinutes);
+            // ذخیره کن
+            $this->cache->put($cacheKey, $timestamps, $decayMinutes);
 
-        return true;
+            return true;
+        }, 5);
+
+        return $result === true;
     }
 
     public function getAttempts(string $key): int

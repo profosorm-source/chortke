@@ -141,9 +141,22 @@ class RateLimiter
      */
     public function checkLoginAttempt(string $identifier): array
     {
-        $key = 'login:' . $identifier;
+        // CORE-043: Normalize rate limiter identifiers (trim, lowercase)
+        $normalized = strtolower(trim($identifier));
+        $key = 'login:' . $normalized;
 
-        if (!$this->attempt($key, 5, 15)) {
+        // CORE-042: Enforce high-fidelity TokenBucket for sensitive login pathways
+        $originalStrategy = $this->getStrategy();
+        $this->setStrategy('token_bucket');
+
+        try {
+            $allowed = $this->attempt($key, 5, 15);
+        } finally {
+            // Restore previous strategy
+            $this->setStrategy($originalStrategy);
+        }
+
+        if (!$allowed) {
             $seconds = $this->availableIn($key);
             $minutes = (int) ceil($seconds / 60);
 

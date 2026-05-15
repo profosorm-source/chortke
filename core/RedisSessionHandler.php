@@ -28,6 +28,9 @@ class RedisSessionHandler implements \SessionHandlerInterface
     {
         // H13 Fix: اگر قبلاً فیل شده، مستقیماً برو روی فایل
         if (self::$hasFailed) {
+            if (config('app.env') === 'production') {
+                throw new \RuntimeException('سرویس ردیز سشن قبلاً با خطا مواجه شده است و امکان ادامه وجود ندارد.');
+            }
             $this->useRedis = false;
             return;
         }
@@ -36,14 +39,30 @@ class RedisSessionHandler implements \SessionHandlerInterface
         $cache = \Core\Cache::getInstance();
 
         if ($cache->driver() === 'redis') {
-            $this->redis = $cache->redis();
-            $this->useRedis = true;
+            try {
+                $this->redis = $cache->redis();
+                if (!$this->redis) {
+                    throw new \RuntimeException('Redis connection could not be established.');
+                }
+                $this->useRedis = true;
 
-            if (function_exists('logger')) {
-                try {
-                    logger()->info('Session handler: Redis connected via Cache', []);
-                } catch (\Throwable $e) {
-                    // ignore logger errors
+                if (function_exists('logger')) {
+                    try {
+                        logger()->info('Session handler: Redis connected via Cache', []);
+                    } catch (\Throwable $e) {
+                        // ignore logger errors
+                    }
+                }
+            } catch (\Throwable $e) {
+                self::$hasFailed = true;
+                if (config('app.env') === 'production') {
+                    throw new \RuntimeException('Redis session store is unavailable on production.', 500, $e);
+                }
+                $this->useRedis = false;
+                if (function_exists('logger')) {
+                    try {
+                        logger()->error('Session handler: Redis connection failed, falling back to file in development.', ['error' => $e->getMessage()]);
+                    } catch (\Throwable $ignore) {}
                 }
             }
         } else {
@@ -193,6 +212,11 @@ class RedisSessionHandler implements \SessionHandlerInterface
     {
         self::$hasFailed = true; // ثبت وضعیت خرابی سیستمی برای بقیه درخواست یا لوپ
         
+        // CORE-032: جلوگیری از Session Split-Brain در محیط Production
+        if (config('app.env') === 'production') {
+            throw new \RuntimeException('Redis session store connection was lost. Terminating request to prevent split-brain.', 500, $e);
+        }
+
         if ($this->useRedis) {
             $this->useRedis = false;
             $this->redis = null;

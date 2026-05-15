@@ -15,7 +15,6 @@ class Database
 {
     private static $instance = null;
     private $pdo;
-    private $queryBuilder;
 	private static int $queryDepth = 0;
     private static bool $fallbackLogging = false;
 	private static ?array $lastSqlErrorContext = null;
@@ -45,8 +44,6 @@ class Database
             // M5 Fix: استفاده از RuntimeException به جای کلاس والد اکسپشن جهت رعایت تمیزی در سلسله مراتب خطاها
             throw new \RuntimeException("Database connection failed: " . $e->getMessage(), (int)$e->getCode(), $e);
         }
-        
-        $this->queryBuilder = new QueryBuilder($this->pdo);
     }
 
     public function setSentryMonitor(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor $monitor): void
@@ -184,6 +181,15 @@ private static function recordSqlFailure(string $event, array $context): void
         
         return self::$instance;
     }
+
+    /**
+     * ریست کردن اتصال پایگاه داده
+     * برای استفاده در محیط تست یا چرخه‌های طولانی دمون با پیکربندی‌های مختلف
+     */
+    public static function reset(): void
+    {
+        self::$instance = null;
+    }
 	
 public function prepare(string $sql): \PDOStatement
 {
@@ -206,9 +212,9 @@ public function prepare(string $sql): \PDOStatement
     /**
      * دریافت Query Builder
      */
-    public function table($table)
+    public function table(string $table): QueryBuilder
     {
-        return $this->queryBuilder->table($table);
+        return (new QueryBuilder($this->pdo))->table($table);
     }
 	
 	
@@ -305,19 +311,40 @@ private function interpolateSql(string $sql, array $params): string
         return $sql;
     }
 
-    $isPositional = array_keys($params) === range(0, count($params) - 1);
+    // ── پالایش اطلاعات حساس برای جلوگیری از نشت در لاگ‌ها ──────────────────
+    $sensitiveKeys = ['pass', 'password', 'token', 'key', 'card', 'iban', 'national_id', 'secret', 'cvv', 'auth'];
+    $redactedParams = [];
+    foreach ($params as $key => $val) {
+        $isSensitive = false;
+        if (!is_numeric($key)) {
+            $stringKey = strtolower((string)$key);
+            foreach ($sensitiveKeys as $sensitiveKey) {
+                if (str_contains($stringKey, $sensitiveKey)) {
+                    $isSensitive = true;
+                    break;
+                }
+            }
+        }
+        $redactedParams[$key] = $isSensitive ? '***[REDACTED]***' : $val;
+    }
+
+    $isPositional = array_keys($redactedParams) === range(0, count($redactedParams) - 1);
 
     if ($isPositional) {
-        foreach ($params as $value) {
+        foreach ($redactedParams as $value) {
             $sql = preg_replace('/\?/', $this->formatParamValue($value), $sql, 1);
         }
-        return $sql;
+    } else {
+        foreach ($redactedParams as $key => $value) {
+            $name = ltrim((string)$key, ':');
+            $sql = preg_replace('/:' . preg_quote($name, '/') . '\b/', $this->formatParamValue($value), $sql);
+        }
     }
 
-    foreach ($params as $key => $value) {
-        $name = ltrim((string)$key, ':');
-        $sql = preg_replace('/:' . preg_quote($name, '/') . '\b/', $this->formatParamValue($value), $sql);
-    }
+    // پسا-پالایش: فیلتر جفت‌های کلید/مقدار در عبارات SQL (مانند شرط‌های UPDATE/WHERE)
+    $sensitiveKeywords = 'pass|password|token|key|card|iban|national_id|secret|cvv|auth';
+    $pattern = '/\b(' . $sensitiveKeywords . ')\b\s*=\s*(\'[^\']*\'|"[^"]*"|\d+)/i';
+    $sql = preg_replace($pattern, '$1 = \'***[REDACTED]***\'', $sql);
 
     return $sql;
 }
@@ -432,58 +459,60 @@ public function lastInsertId(): int
      * شروع Transaction
      * H24 Upgrade: پشتیبانی هوشمند از تراکنش‌های تو در تو (Nested Transactions)
      */
-    public function beginTransaction()
+    public function beginTransaction(): void
     {
-        $this->transactionLevel++;
-        if ($this->transactionLevel === 1) {
-            return $this->pdo->beginTransaction();
+        if ($this->transactionLevel === 0) {
+            try {
+                $this->pdo->beginTransaction();
+            } catch (\Throwable $e) {
+                $this->transactionLevel = 0;
+                throw new \RuntimeException("PDO BeginTransaction failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+            }
         }
-        return true;
+        $this->transactionLevel++;
     }
 
     /**
      * Commit
      * H24 Upgrade: فقط زمانی به دیتابیس اعمال می‌شود که بالاترین سطح تراکنش خاتمه یابد
      */
-    public function commit()
+    public function commit(): void
     {
         if ($this->transactionLevel <= 0) {
             $this->transactionLevel = 0;
-            return true;
+            throw new \RuntimeException('No active transaction to commit');
         }
 
         $this->transactionLevel--;
         if ($this->transactionLevel === 0) {
             try {
-                return $this->pdo->commit();
-            } catch (\PDOException $e) {
-                return false;
+                if (!$this->pdo->commit()) {
+                    throw new \RuntimeException('PDO Commit returned false');
+                }
+            } catch (\Throwable $e) {
+                $this->transactionLevel = 0;
+                throw new \RuntimeException("PDO Commit failed: " . $e->getMessage(), (int)$e->getCode(), $e);
             }
         }
-        return true;
     }
 
     /**
      * Rollback
      * H24 Upgrade: هر کجای زنجیره رخ دهد، بلافاصله کل زنجیره تراکنش باطل می‌شود
      */
-    public function rollback()
+    public function rollback(): void
     {
-        if ($this->transactionLevel <= 0) {
-            $this->transactionLevel = 0;
-            return true;
-        }
-
         $this->transactionLevel = 0; // بازنشانی فوری کل زنجیره
         
         if ($this->pdo->inTransaction()) {
             try {
-                return $this->pdo->rollBack();
-            } catch (\PDOException $e) {
-                return false;
+                if (!$this->pdo->rollBack()) {
+                     throw new \RuntimeException('PDO Rollback returned false');
+                }
+            } catch (\Throwable $e) {
+                throw new \RuntimeException("PDO Rollback failed: " . $e->getMessage(), (int)$e->getCode(), $e);
             }
         }
-        return true;
     }
 
     /**

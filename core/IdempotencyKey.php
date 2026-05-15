@@ -56,19 +56,20 @@ class IdempotencyKey
      */
     public static function generateFromPayload(string $action, array $context): string
     {
-        // پاک کردن نویزهای احتمالی مثل توکن‌های لحظه‌ای یا مقادیر تصادفی
+        // CORE-049: Auto-incorporate request URI and Method in context to prevent collision bypass
+        $uri = $_SERVER['REQUEST_URI'] ?? '';
+        $method = $_SERVER['REQUEST_METHOD'] ?? '';
+        
         $safeContext = array_filter($context, function($v) {
              return is_scalar($v) || is_null($v);
         });
         
-        // مرتب‌سازی کلیدها برای تضمین تطابق هش حتی با جابجایی پارامترها
         ksort($safeContext);
-        
         $payloadStr = serialize($safeContext);
         $appKey = config('app.key', 'fallback');
         
-        // ترکیب امن: اکشن + داده‌های فیلتر شده + اپ‌کی
-        $finalSeed = $action . '|' . $payloadStr . '|' . $appKey;
+        // ترکیب امن: اکشن + مسیر + متد + داده‌ها + اپ‌کی
+        $finalSeed = $action . '|' . $uri . '|' . $method . '|' . $payloadStr . '|' . $appKey;
         
         return hash('sha256', $finalSeed);
     }
@@ -94,6 +95,17 @@ class IdempotencyKey
         $logId = uniqid('IDEM_', true);
 
         try {
+            // CORE-048: Start a dedicated DB transaction so SELECT FOR UPDATE holds a real row lock
+            $this->db->beginTransaction();
+
+            // CORE-049: Enrich payload tracking with structural request signatures to block cross-endpoint key reuse
+            $payloadSignature = [
+                'uri'    => $_SERVER['REQUEST_URI'] ?? '',
+                'method' => $_SERVER['REQUEST_METHOD'] ?? '',
+                'data'   => $requestData ?? [],
+            ];
+            $encodedSignature = json_encode($payloadSignature, JSON_UNESCAPED_UNICODE);
+
             // FIX C-1: ابتدا INSERT IGNORE می‌کنیم تا ردیف وجود داشته باشد
             // سپس با SELECT FOR UPDATE قفل می‌گیریم — این race condition را حذف می‌کند.
             $insertSql = "INSERT IGNORE INTO {$this->table}
@@ -106,7 +118,7 @@ class IdempotencyKey
                 'key'          => $key,
                 'user_id'      => $userId,
                 'action'       => $action,
-                'request_data' => $requestData ? json_encode($requestData, JSON_UNESCAPED_UNICODE) : null,
+                'request_data' => $encodedSignature,
             ]);
 
             $wasInserted = $stmt->rowCount() > 0;
@@ -121,28 +133,51 @@ class IdempotencyKey
             $existing = $stmt->fetch(\PDO::FETCH_ASSOC);
 
             if (!$existing) {
-                // نباید اتفاق بیفتد — اگر INSERT IGNORE کار کرد ردیف وجود دارد
+                $this->db->commit();
                 throw new \RuntimeException("Idempotency key not found after insert: {$key}");
+            }
+
+            // CORE-049: Verify signature exact matches if the row pre-existed (stops payload manipulation)
+            if (!$wasInserted) {
+                $storedSignature = json_decode($existing['request_data'] ?? '', true);
+                if (is_array($storedSignature)) {
+                    $storedUri = $storedSignature['uri'] ?? '';
+                    $storedMethod = $storedSignature['method'] ?? '';
+                    $storedPayload = $storedSignature['data'] ?? [];
+
+                    if ($storedUri !== ($payloadSignature['uri']) || $storedMethod !== ($payloadSignature['method'])) {
+                        $this->db->commit();
+                        throw new \RuntimeException("Idempotency Collision: Reusing key '{$key}' for a different URI/Method footprint.", 409);
+                    }
+
+                    if (json_encode($storedPayload) !== json_encode($payloadSignature['data'])) {
+                        $this->db->commit();
+                        throw new \RuntimeException("Idempotency Collision: Reusing key '{$key}' with modified payload data.", 409);
+                    }
+                }
             }
 
             // ردیف جدید درج شد — درخواست اول
             if ($wasInserted) {
                 $this->logEvent('idempotency.key.created', [
-    'log_id' => $logId,
-    'key' => $key,
-    'action' => $action,
-]);
+                    'log_id' => $logId,
+                    'key'    => $key,
+                    'action' => $action,
+                ]);
+                $this->db->commit();
                 return ['is_duplicate' => false];
             }
 
             // ردیف قبلاً وجود داشت — بررسی وضعیت
             $this->logEvent('idempotency.key.exists', [
-    'log_id' => $logId,
-    'key' => $key,
-    'status' => $existing['status'] ?? null,
-]);
+                'log_id' => $logId,
+                'key'    => $key,
+                'status' => $existing['status'] ?? null,
+            ]);
+
             if ($existing['status'] === 'completed') {
                 $result = json_decode($existing['result'], true) ?? ['error' => 'Invalid result format'];
+                $this->db->commit();
                 return [
                     'is_duplicate' => true,
                     'result'       => $result,
@@ -154,15 +189,18 @@ class IdempotencyKey
                 $elapsed = time() - strtotime($existing['created_at']);
                 if ($elapsed > 60) {
                     $this->updateStatus($key, $userId, 'processing');
+                    $this->db->commit();
                     return ['is_duplicate' => false];
                 }
                 $result = json_decode($existing['result'], true) ?? ['error' => 'Unknown error'];
+                $this->db->commit();
                 return ['is_duplicate' => true, 'result' => $result, 'is_error' => true];
             }
 
             if ($existing['status'] === 'processing') {
                 $elapsed = time() - strtotime($existing['created_at']);
                 if ($elapsed < self::TIMEOUT_SECONDS) {
+                    $this->db->commit();
                     return [
                         'is_duplicate'  => true,
                         'result'        => [
@@ -176,31 +214,39 @@ class IdempotencyKey
                 }
                 // Timeout — اجازه retry
                 $this->updateStatus($key, $userId, 'processing', ['timeout_occurred' => true]);
+                $this->db->commit();
                 return ['is_duplicate' => false];
             }
 
+            $this->db->commit();
             return ['is_duplicate' => false];
 
         } catch (\PDOException $e) {
+            // Rollback active transaction safely
+            if ($this->db->inTransaction()) {
+                $this->db->rollback();
+            }
+
             // FIX C-3: Fail-Closed — فقط duplicate key خطا را retry می‌کنیم.
             // سایر خطاهای DB را به بالا پرتاب می‌کنیم تا عملیات مالی
             // بدون چک idempotency اجرا نشود (fail-open خطرناک است).
             if ($e->getCode() == 23000 || str_contains($e->getMessage(), 'Duplicate entry')) {
                 $this->logEvent('idempotency.key.race_retry', [
-    'log_id' => $logId,
-    'key' => $key,
-    'retry' => $retryCount,
-], 'warning');
+                    'log_id' => $logId,
+                    'key'    => $key,
+                    'retry'  => $retryCount,
+                ], 'warning');
                 usleep(50000 * ($retryCount + 1)); // backoff تدریجی
                 return $this->check($key, $userId, $action, $requestData, $retryCount + 1);
             }
 
             // FIX C-3: خطای واقعی DB — throw می‌کنیم، fail-open نیستیم
             $this->logEvent('idempotency.check.database_error', [
-    'log_id' => $logId,
-    'key' => $key,
-    'error' => $e->getMessage(),
-], 'error');
+                'log_id' => $logId,
+                'key'    => $key,
+                'error'  => $e->getMessage(),
+            ], 'error');
+            
             throw new \RuntimeException(
                 "Idempotency check failed due to database error: " . $e->getMessage(),
                 (int)$e->getCode(),

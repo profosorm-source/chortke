@@ -37,6 +37,10 @@ class Container
 
     /** @var array<string, array<\Closure>> */
     private array $extenders = [];
+
+    // CORE-030: Scoped dependencies for long-running workers
+    private array $scopedBindings = [];
+    private array $scopedInstances = [];
     // ─────────────────────────────────────────────────────────────
     // Singleton Access
     // ─────────────────────────────────────────────────────────────
@@ -88,6 +92,24 @@ class Container
         $this->singletons[$abstract] = $object;
     }
 
+    /**
+     * CORE-030: ثبت وابستگی محدود به حوزه ریکوئست یا کار (Scoped)
+     */
+    public function scoped(string $abstract, $concrete = null): void
+    {
+        $this->bindings[$abstract] = $concrete ?? $abstract;
+        $this->scopedBindings[$abstract] = true;
+        unset($this->singletons[$abstract], $this->scopedInstances[$abstract]);
+    }
+
+    /**
+     * CORE-030: پاکسازی تمامی اشیاء Scoped برای شروع پردازش کار/ریکوئست جدید
+     */
+    public function flushScoped(): void
+    {
+        $this->scopedInstances = [];
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Resolution
     // ─────────────────────────────────────────────────────────────
@@ -114,6 +136,15 @@ class Container
         }
         self::$traceStack[] = $abstract;
         try {
+            // Scoped cache (CORE-030)
+            if (isset($this->scopedBindings[$abstract])) {
+                if (!isset($this->scopedInstances[$abstract])) {
+                    $instance = $this->resolve($abstract);
+                    $this->scopedInstances[$abstract] = $this->applyExtenders($abstract, $instance);
+                }
+                return $this->scopedInstances[$abstract];
+            }
+
             // Singleton cache
             if (array_key_exists($abstract, $this->singletons)) {
                 if ($this->singletons[$abstract] === null) {
@@ -255,6 +286,11 @@ class Container
                 try {
                     $dependencies[] = $this->make($typeName);
                 } catch (\RuntimeException $e) {
+                    // CORE-031: Do not hide misconfiguration on production
+                    if (config('app.env') === 'production') {
+                        throw $e;
+                    }
+                    
                     // M7 Fix: ثبت در لاگ سیستمی جهت سهولت در دیباگ زمانی که سیستم قادر به حل یک وابستگی Nullable نیست
                     if (function_exists('logger')) {
                         try {

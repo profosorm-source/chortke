@@ -42,11 +42,16 @@ class Session
         try {
             $config = config('session');
 
+            // CORE-033: Enforce strict mode and safe cookie settings
+            ini_set('session.use_strict_mode', '1');
+            ini_set('session.use_only_cookies', '1');
+            ini_set('session.cookie_httponly', '1');
+
             // Set Redis session handler
             $handler = new \Core\RedisSessionHandler();
             session_set_save_handler($handler, true);
 
-        session_name($config['name']);
+            session_name($config['name']);
 
         // H12 Fix: جلوگیری از ست شدن نامعتبر دامین در localhost و محافظت در برابر پارس نادرست
         $host = parse_url(config('app.url', ''), PHP_URL_HOST);
@@ -292,6 +297,8 @@ private function invalidateSession(): void
         }
 
         session_destroy();
+        $this->started = false;
+        $this->oldInputCache = null;
     }
 
     public function getId(): string

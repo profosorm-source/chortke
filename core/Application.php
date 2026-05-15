@@ -7,7 +7,7 @@ class Application
     private static ?Application $instance = null;
 
     public Container $container;
-    public Database  $db;
+    private ?Database $dbInstance = null;
     public Router    $router;
     public Request   $request;
     public Response  $response;
@@ -39,24 +39,8 @@ class Application
         $this->router   = new Router($this->request, $this->response, $this->container);
 
         // ── ۵. Database ──────────────────────────────────────────
-       try {
-    $this->db = Database::getInstance();
-} catch (\Throwable $e) {
-    try {
-        // M2 Fix: استفاده از هلپر داینامیک base_path برای دسترسی پویا به دایرکتوری لاگ‌ها
-        $emergencyFile = base_path('storage/logs/sentry_emergency.jsonl');
-        $logData = [
-            'timestamp' => time(),
-            'message' => $e->getMessage(),
-            'trace' => mb_substr($e->getTraceAsString(), 0, 2000),
-            'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
-        ];
-        @file_put_contents($emergencyFile, json_encode($logData) . "\n", FILE_APPEND);
-    } catch (\Throwable $ignore) {}
-
-    // خطای عمومی به ExceptionHandler منتقل می‌شود (بدون نشت جزئیات به کاربر)
-    throw new \RuntimeException('System bootstrap failed', 0, $e);
-}
+        // Moved to Lazy Loading via db() getter to prevent early connection failure 
+        // and allow DB connection on-demand.
 
         // ── ۶. Container — ثبت singletonهای هسته ────────────────
         $this->registerCoreBindings();
@@ -80,7 +64,6 @@ class Application
         $c->instance(Request::class,     $this->request);
         $c->instance(Response::class,    $this->response);
         $c->instance(Session::class,     $this->session);
-        $c->instance(Database::class,    $this->db);
         $c->instance(Router::class,      $this->router);
 
         // ── Cache bound to singleton ──
@@ -108,6 +91,44 @@ class Application
         // همین instance را دریافت می\u200cکند (نه instance جدید)
         $c->singleton(\App\Services\Auth\AuthService::class);
         $c->bind(\App\Models\User::class);
+    }
+
+    /**
+     * Lazy loaded helper for database connection instance
+     */
+    public function db(): Database
+    {
+        if ($this->dbInstance === null) {
+            try {
+                $this->dbInstance = $this->container->make(Database::class);
+            } catch (\Throwable $e) {
+                try {
+                    $emergencyFile = base_path('storage/logs/sentry_emergency.jsonl');
+                    $logData = [
+                        'timestamp' => time(),
+                        'message' => 'Lazy DB resolution failed: ' . $e->getMessage(),
+                        'trace' => mb_substr($e->getTraceAsString(), 0, 2000),
+                        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+                    ];
+                    @file_put_contents($emergencyFile, json_encode($logData) . "\n", FILE_APPEND);
+                } catch (\Throwable $ignore) {}
+
+                throw new \RuntimeException('System database resolution failed', 0, $e);
+            }
+        }
+        return $this->dbInstance;
+    }
+
+    /**
+     * Magic getter to support backward compatibility for accessing typed properties dynamically
+     */
+    public function __get(string $name)
+    {
+        if ($name === 'db') {
+            return $this->db();
+        }
+        trigger_error("Undefined property: " . static::class . "::$$name", E_USER_NOTICE);
+        return null;
     }
     /**
      * دریافت کاربر لاگین‌شده (کش‌شده در هر request)
@@ -140,6 +161,15 @@ class Application
 
         $this->userResolved = true;
         return $this->cachedUser;
+    }
+
+    /**
+     * ابطال حافظه کش محلی کاربر لاگین شده در این ریکوئست
+     */
+    public function forgetUser(): void
+    {
+        $this->cachedUser = null;
+        $this->userResolved = false;
     }
 
     public static function getInstance(): self

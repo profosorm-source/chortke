@@ -46,7 +46,12 @@ class RetryPolicy
                     throw $exception;
                 }
 
-                usleep(min($delayMs, $this->maxDelayMs) * 1000);
+                // CORE-051: Apply random jitter (0.8x to 1.2x) to avoid synchronized retry storms
+                $sleepMs = min($delayMs, $this->maxDelayMs);
+                $jitterFactor = mt_rand(800, 1200) / 1000.0;
+                $sleepWithJitter = max(1, (int)($sleepMs * $jitterFactor));
+
+                usleep($sleepWithJitter * 1000);
                 $delayMs = min($delayMs * $this->multiplier, $this->maxDelayMs);
             }
         }
@@ -54,8 +59,17 @@ class RetryPolicy
 
     private function shouldRetry(Throwable $exception, ?array $retryOnExceptions): bool
     {
+        // CORE-050: Hard exclusions — Never retry unrecoverable logic/engine errors
+        if ($exception instanceof \Error || 
+            $exception instanceof \TypeError || 
+            $exception instanceof \ParseError || 
+            $exception instanceof \InvalidArgumentException) {
+            return false;
+        }
+
         if ($retryOnExceptions === null) {
-            return true;
+            // Allow retrying generic user-level Exceptions but not internal fatal faults
+            return $exception instanceof \Exception;
         }
 
         foreach ($retryOnExceptions as $type) {

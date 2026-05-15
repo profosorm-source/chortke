@@ -13,8 +13,8 @@ class QueryBuilder
     private $pdo;
     private $table;
     private $select = ['*'];
+    private $selectRaw = [];
     private $where = [];
-    private $bindings = [];
     private $orderBy = [];
     private $groupBy = [];
     private $limit;
@@ -22,6 +22,7 @@ class QueryBuilder
     private $join = [];
     private $forUpdate = false;
     private $distinct = false;
+    private bool $allowGlobalUpdate = false;
     
     public function __construct(\PDO $pdo)
     {
@@ -44,8 +45,11 @@ class QueryBuilder
      */
     private function validateColumnName($column)
     {
-        if (!preg_match('/^[a-zA-Z0-9_.*\'"()]+(?:\s+(?:as\s+)?[a-zA-Z0-9_]+)?$/i', $column)) {
-            throw new \InvalidArgumentException("نام ستون غیرمجاز: {$column}");
+        // ── Regex امنیتی سخت‌گیرانه: تطبیق کامل الگوهای مجاز نظیر identifier, table.identifier, *, table.*, aliasing
+        // هرگونه وجود پرانتز یا نقل قول صراحتاً مسدود شده و منجر به خطا می‌شود.
+        $pattern = '/^([a-zA-Z_][a-zA-Z0-9_]*|\*)(\.([a-zA-Z_][a-zA-Z0-9_]*|\*))?(?:\s+(?:[aA][sS]\s+)?[a-zA-Z_][a-zA-Z0-9_]*)?$/';
+        if (!preg_match($pattern, $column)) {
+            throw new \InvalidArgumentException("نام ستون غیرمجاز یا مشکوک: {$column}");
         }
         return $column;
     }
@@ -76,6 +80,24 @@ class QueryBuilder
         }
         
         $this->select = $columns;
+        return $this;
+    }
+
+    /**
+     * افزودن عبارت SQL خام در بخش SELECT
+     */
+    public function selectRaw(string $expression)
+    {
+        $this->selectRaw[] = $expression;
+        return $this;
+    }
+
+    /**
+     * فعال کردن مجاز بودن Update کلی بدون WHERE (مشابه Delete پیش‌فرض غیرمجاز است)
+     */
+    public function allowGlobalUpdate()
+    {
+        $this->allowGlobalUpdate = true;
         return $this;
     }
 
@@ -365,11 +387,12 @@ class QueryBuilder
         $this->select = ["AVG(`{$column}`) as avg"];
         $this->limit = null;
         
-        $sql = $this->buildSelectQuery();
+        $bindings = [];
+        $sql = $this->buildSelectQuery($bindings);
         
         try {
             $stmt = $this->pdo->prepare($sql);
-            $stmt->execute($this->bindings);
+            $stmt->execute($bindings);
             $result = $stmt->fetch(\PDO::FETCH_OBJ);
             return (float)($result->avg ?? 0);
         } finally {
@@ -393,11 +416,12 @@ class QueryBuilder
      */
     public function get()
     {
-        $sql = $this->buildSelectQuery();
+        $bindings = [];
+        $sql = $this->buildSelectQuery($bindings);
         
         try {
             $stmt = $this->pdo->prepare($sql);
-            $stmt->execute($this->bindings);
+            $stmt->execute($bindings);
             return $stmt->fetchAll();
         } catch (\PDOException $e) {
             // ✅ Safe logging
@@ -406,7 +430,7 @@ class QueryBuilder
                     logger()->error('database.builder.query.failed', [
                         'channel' => 'database',
                         'sql' => $sql ?? null,
-                        'bindings' => $this->bindings ?? [],
+                        'bindings' => $bindings,
                         'error' => $e->getMessage(),
                         'exception' => get_class($e),
                         'file' => $e->getFile(),
@@ -459,11 +483,12 @@ class QueryBuilder
         $this->select = ['COUNT(*) as count'];
         $this->limit  = null;
 
-        $sql = $this->buildSelectQuery();
+        $bindings = [];
+        $sql = $this->buildSelectQuery($bindings);
 
         try {
             $stmt = $this->pdo->prepare($sql);
-            $stmt->execute($this->bindings);
+            $stmt->execute($bindings);
             $result = $stmt->fetch(\PDO::FETCH_OBJ);
         } catch (\PDOException $e) {
             $this->select = $originalSelect;
@@ -554,6 +579,11 @@ class QueryBuilder
             $bindings[] = $value;
         }
         
+        // جلوگیری از UPDATE بدون WHERE (به روز رسانی تمام رکوردها) مگر اینکه اجازه صریح داده شده باشد
+        if (empty($this->where) && !$this->allowGlobalUpdate) {
+            throw new \RuntimeException('UPDATE بدون WHERE clause مجاز نیست مگر اینکه صریحاً از allowGlobalUpdate() استفاده کنید.');
+        }
+
         $sql = "UPDATE `{$this->table}` SET " . implode(', ', $sets);
         
         if (!empty($this->where)) {
@@ -637,33 +667,50 @@ class QueryBuilder
     /**
      * ساخت SELECT Query
      */
-    private function buildSelectQuery()
+    private function buildSelectQuery(&$bindings = [])
     {
-        // استفاده از backticks برای جلوگیری از SQL Injection
-        $selectCols = implode(', ', array_map(function($col) {
-            if (strpos($col, '*') !== false) {
-                return $col;
-            }
-            $aliasParts = preg_split('/\s+as\s+/i', $col);
-            if (count($aliasParts) === 1) {
-                $aliasParts = preg_split('/\s+/', $col);
-            }
-            
-            $mainCol = trim($aliasParts[0]);
-            $alias = isset($aliasParts[1]) ? trim($aliasParts[1]) : null;
+        $mappedCols = [];
+        // اگر فیلدهای select تعریف شده باشند یا هیچ عبارت selectRaw ای وجود نداشته باشد
+        $hasColumns = count($this->select) > 1 || ($this->select !== ['*']);
+        
+        if ($hasColumns || empty($this->selectRaw)) {
+            $mappedCols = array_map(function($col) {
+                if ($col === '*') {
+                    return '*';
+                }
+                
+                $aliasParts = preg_split('/\s+as\s+/i', $col);
+                if (count($aliasParts) === 1) {
+                    $aliasParts = preg_split('/\s+/', $col);
+                }
+                
+                $mainCol = trim($aliasParts[0]);
+                $alias = isset($aliasParts[1]) ? trim($aliasParts[1]) : null;
 
-            if (strpos($mainCol, '.') !== false) {
-                $parts = explode('.', $mainCol);
-                $wrappedMain = '`' . trim($parts[0]) . '`.`' . trim($parts[1]) . '`';
-            } else {
-                $wrappedMain = '`' . $mainCol . '`';
-            }
+                if ($mainCol === '*') {
+                    $wrappedMain = '*';
+                } elseif (strpos($mainCol, '.') !== false) {
+                    $parts = explode('.', $mainCol);
+                    $p0 = trim($parts[0]);
+                    $p1 = trim($parts[1]);
+                    
+                    $wrappedMain = ($p0 === '*' ? '*' : '`' . $p0 . '`') . '.' . ($p1 === '*' ? '*' : '`' . $p1 . '`');
+                } else {
+                    $wrappedMain = '`' . $mainCol . '`';
+                }
 
-            if ($alias) {
-                return $wrappedMain . ' as `' . $alias . '`';
-            }
-            return $wrappedMain;
-        }, $this->select));
+                if ($alias) {
+                    return $wrappedMain . ' as `' . $alias . '`';
+                }
+                return $wrappedMain;
+            }, $this->select);
+        }
+
+        if (!empty($this->selectRaw)) {
+            $mappedCols = array_merge($mappedCols, $this->selectRaw);
+        }
+
+        $selectCols = implode(', ', $mappedCols);
 
         $tableSql = $this->table;
         if (strpos($tableSql, ' ') !== false) {
@@ -700,7 +747,16 @@ class QueryBuilder
         
         // WHERE
         if (!empty($this->where)) {
-            $sql .= $this->buildWhereClause($this->bindings);
+            $sql .= $this->buildWhereClause($bindings);
+        }
+
+        // GROUP BY
+        if (!empty($this->groupBy)) {
+            $sql .= " GROUP BY " . implode(', ', array_map(function($col) {
+                return strpos($col, '.') !== false 
+                    ? str_replace('.', '`.`', '`' . $col . '`')
+                    : '`' . $col . '`';
+            }, $this->groupBy));
         }
         
         // ORDER BY
@@ -708,7 +764,6 @@ class QueryBuilder
             $sql .= " ORDER BY ";
             $orders = [];
             foreach ($this->orderBy as $order) {
-                // اضافه کردن backticks برای ستون
                 $col = strpos($order[0], '.') !== false 
                     ? str_replace('.', '`.`', '`' . $order[0] . '`')
                     : '`' . $order[0] . '`';
@@ -737,9 +792,9 @@ class QueryBuilder
     /**
      * ساخت SELECT Query (بدون DISTINCT)
      */
-    private function buildSelectQuerySimple()
+    private function buildSelectQuerySimple(&$bindings = [])
     {
-        return $this->buildSelectQuery();
+        return $this->buildSelectQuery($bindings);
     }
 
     /**
@@ -796,13 +851,23 @@ class QueryBuilder
                     $bindings[] = $condition['value'];
                 }
             } elseif ($op === 'IN') {
-                $placeholders = array_fill(0, count($condition['value']), '?');
-                $conditions[] = $type . "{$col} IN (" . implode(', ', $placeholders) . ")";
-                $bindings = array_merge($bindings, $condition['value']);
+                if (empty($condition['value'])) {
+                    // IN () نامعتبر است، شرط 0 = 1 (همیشه غلط) قرار داده می‌شود
+                    $conditions[] = $type . "0 = 1";
+                } else {
+                    $placeholders = array_fill(0, count($condition['value']), '?');
+                    $conditions[] = $type . "{$col} IN (" . implode(', ', $placeholders) . ")";
+                    $bindings = array_merge($bindings, $condition['value']);
+                }
             } elseif ($op === 'NOT IN') {
-                $placeholders = array_fill(0, count($condition['value']), '?');
-                $conditions[] = $type . "{$col} NOT IN (" . implode(', ', $placeholders) . ")";
-                $bindings = array_merge($bindings, $condition['value']);
+                if (empty($condition['value'])) {
+                    // NOT IN () به معنی انتخاب همه است، شرط 1 = 1 (همیشه راست) قرار داده می‌شود
+                    $conditions[] = $type . "1 = 1";
+                } else {
+                    $placeholders = array_fill(0, count($condition['value']), '?');
+                    $conditions[] = $type . "{$col} NOT IN (" . implode(', ', $placeholders) . ")";
+                    $bindings = array_merge($bindings, $condition['value']);
+                }
             } else {
                 $conditions[] = $type . "{$col} {$op} ?";
                 $bindings[] = $condition['value'];
@@ -820,8 +885,8 @@ class QueryBuilder
     private function reset()
     {
         $this->select = ['*'];
+        $this->selectRaw = [];
         $this->where = [];
-        $this->bindings = [];
         $this->orderBy = [];
         $this->groupBy = [];
         $this->limit = null;
@@ -829,5 +894,6 @@ class QueryBuilder
         $this->join = [];
         $this->forUpdate = false;
         $this->distinct = false;
+        $this->allowGlobalUpdate = false;
     }
 }

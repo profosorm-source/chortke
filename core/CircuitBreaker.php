@@ -22,27 +22,47 @@ class CircuitBreaker
 
     public function call(string $name, callable $operation)
     {
-        $state = $this->getState($name);
+        $lockKey = "cb_state_{$name}";
+
+        // CORE-052: Wrap state fetching & window-transition in an atomic lock to prevent concurrent race conditions
+        $state = $this->cache->withLock($lockKey, function() use ($name) {
+            $st = $this->getState($name);
+            if ($st['status'] === 'open') {
+                if ($this->isRetryWindowExpired($st)) {
+                    $this->setState($name, 'half_open', 0);
+                    return $this->getState($name);
+                }
+            }
+            return $st;
+        }, 5);
 
         if ($state['status'] === 'open') {
-            if ($this->isRetryWindowExpired($state)) {
-                $this->setState($name, 'half_open', 0);
-            } else {
-                throw new RuntimeException("Circuit breaker '{$name}' is open");
-            }
+            throw new RuntimeException("Circuit breaker '{$name}' is open");
         }
 
         try {
             $result = $operation();
-            $this->setState($name, 'closed', 0);
+            
+            // Fast atomic success reset
+            $this->cache->withLock($lockKey, function() use ($name) {
+                $this->setState($name, 'closed', 0);
+            }, 5);
+            
             return $result;
         } catch (\Throwable $exception) {
-            $failures = $state['failures'] + 1;
-            if ($failures >= $this->failureThreshold) {
-                $this->setState($name, 'open', $failures);
-            } else {
-                $this->setState($name, 'closed', $failures);
-            }
+            // Fast atomic failure counter increment
+            $this->cache->withLock($lockKey, function() use ($name) {
+                $st = $this->getState($name);
+                $failures = ($st['failures'] ?? 0) + 1;
+                
+                if ($failures >= $this->failureThreshold) {
+                    $this->setState($name, 'open', $failures);
+                } else {
+                    // Keep in current mode but track count
+                    $this->setState($name, $st['status'] === 'half_open' ? 'half_open' : 'closed', $failures);
+                }
+            }, 5);
+            
             throw $exception;
         }
     }
@@ -66,12 +86,15 @@ class CircuitBreaker
     private function setState(string $name, string $status, int $failures): void
     {
         $state = [
-            'status' => $status,
-            'failures' => $failures,
+            'status'    => $status,
+            'failures'  => $failures,
             'opened_at' => $status === 'open' ? time() : null,
         ];
 
-        $this->cache->put($this->stateKey($name), $state, $this->retryTimeoutSeconds);
+        // CORE-053: Convert timeout seconds to ceil-rounded minutes to prevent massive unit-leak TTL in Cache::put
+        $minutes = max(1, (int) ceil($this->retryTimeoutSeconds / 60));
+
+        $this->cache->put($this->stateKey($name), $state, $minutes);
     }
 
     private function stateKey(string $name): string

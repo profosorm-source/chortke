@@ -135,11 +135,40 @@ $scheduler->everyMinute(function () {
         $jobClass = $job['job'];
         $data = $job['data'];
         
-        // SECURITY: Whitelist of allowed Job classes to prevent arbitrary class instantiation exploits
-        $allowedJobs = [
+        // ✅ UPG-04: پشتیبانی از رویدادهای ناهمگام (Async Events) سیستم EventDispatcher چورتکه
+        if ($jobClass === 'dispatch_event') {
+            try {
+                Container::resetTraceStack();
+                $dispatcher = Container::getInstance()->make(\Core\EventDispatcher::class);
+                $dispatcher->processQueuedEvent($job);
+                
+                $queue->delete($job['id']);
+                $processed++;
+                continue;
+            } catch (\Throwable $e) {
+                $attempts = (int)($job['attempts'] ?? 0) + 1;
+                logger()->error('queue_async_event_failed', [
+                    'job_id' => $job['id'],
+                    'attempts' => $attempts,
+                    'error' => $e->getMessage()
+                ]);
+                
+                if ($attempts >= 3) {
+                    // ارسال به DLQ
+                    $queue->markAsFailed($job['id'], $e->getMessage());
+                } else {
+                    $queue->incrementAttempts($job['id']);
+                }
+                continue;
+            }
+        }
+
+        // CORE-045: Whitelist of allowed Job classes from config or default stack
+        $allowedJobs = config('queue.allowed_jobs') ?? [
             \App\Jobs\ApplyWeeklyProfitLossJob::class,
             \App\Jobs\LogPerformanceJob::class,
             \App\Jobs\SendBulkNotificationJob::class,
+            \App\Jobs\PersistBulkInAppNotificationJob::class, 
             \App\Jobs\SendEmailJob::class,
             \App\Jobs\UpdateFraudScoreJob::class,
         ];
@@ -177,6 +206,39 @@ $scheduler->everyMinute(function () {
                 $logData['trace'] = substr($e->getTraceAsString(), 0, 2048);
             }
             logger()->error('queue_job_failed', $logData);
+
+            // UPG-04: مدیریت هوشمند شکست جاب و انتقال به DLQ یا رهاسازی (رفع انباشتگی)
+            try {
+                $attempts = (int)($job['attempts'] ?? 0);
+                $maxAttempts = $queue->getMaxAttempts();
+                
+                if ($attempts >= $maxAttempts) {
+                    // ارسال نهایی به Dead Letter Queue و حذف از صف اصلی
+                    $queue->fail((int)$job['id'], $e);
+                    logger()->warning('queue_job_sent_to_dlq', ['job' => $jobClass, 'id' => $job['id']]);
+                } else {
+                    // CORE-047: Exponential backoff (base * attempts^2) with random jitter
+                    $baseDelay = 60; // 60 seconds
+                    $exponential = $baseDelay * pow(2, $attempts - 1);
+                    $jitter = rand(5, 45);
+                    $delay = min($exponential + $jitter, 14400); // Max 4 hours
+
+                    $queue->release((int)$job['id'], (int)$delay);
+                    
+                    // CORE-044: Explicit releasing warning log for audit
+                    logger()->warning('queue_job_released_retry', [
+                        'job' => $jobClass,
+                        'id' => $job['id'],
+                        'delay' => (int)$delay,
+                        'attempts' => $attempts
+                    ]);
+                }
+            } catch (\Throwable $failError) {
+                logger()->critical('queue_dlq_handler_critical_error', [
+                    'error' => $failError->getMessage(),
+                    'job_id' => $job['id']
+                ]);
+            }
         }
     }
     

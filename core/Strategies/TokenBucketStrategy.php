@@ -35,19 +35,25 @@ class TokenBucketStrategy implements RateLimitStrategy
     public function attempt(string $key, int $maxAttempts, int $decayMinutes): bool
     {
         $cacheKey = $this->prefix . $key;
-        $bucket = $this->getBucket($cacheKey, $maxAttempts, $decayMinutes);
+        
+        // CORE-041: Wrap TokenBucket processing inside atomic lock
+        $result = $this->cache->withLock('lock:' . $cacheKey, function() use ($cacheKey, $maxAttempts, $decayMinutes) {
+            $bucket = $this->getBucket($cacheKey, $maxAttempts, $decayMinutes);
 
-        if ($bucket['tokens'] <= 0) {
-            return false;
-        }
+            if ($bucket['tokens'] <= 0) {
+                return false;
+            }
 
-        // کاهش یک توکن
-        $bucket['tokens']--;
-        $bucket['updated_at'] = time();
+            // کاهش یک توکن
+            $bucket['tokens']--;
+            $bucket['updated_at'] = time();
 
-        $this->cache->forever($cacheKey, $bucket);
+            $this->cache->forever($cacheKey, $bucket);
 
-        return true;
+            return true;
+        }, 5);
+
+        return $result === true;
     }
 
     public function getAttempts(string $key): int

@@ -1271,6 +1271,9 @@ $container->singleton(\Core\Console\CliDispatcher::class, function($c) {
     // 🚀 UPG-04: ثبت دستور پیش‌گرمایش کش‌های سنگین داشبورد آماری
     $dispatcher->register('analytics:warm', \App\Commands\AnalyticsCacheWarmupCommand::class, 'Warm up heavy analytics dashboards caches');
 
+    // CORE-063: Formal CLI Command for Route auditing & integrity validation
+    $dispatcher->register('route:audit', \App\Commands\RouteAuditCommand::class, 'Perform standard controller and integrity audit for routing tables');
+
     return $dispatcher;
 });
 
@@ -1369,13 +1372,7 @@ $container->singleton(\App\Services\User\UserScoreService::class);
 
 $container->singleton(\App\Services\AntiFraud\RiskPolicyService::class);
 $container->singleton(\App\Services\AntiFraud\RiskDecisionService::class);
-$container->singleton(\App\Services\AntiFraud\FraudGuardService::class, function($c) {
-    return new \App\Services\AntiFraud\FraudGuardService(
-        $c->make(\App\Services\AntiFraud\RiskDecisionService::class),
-        $c->make(\App\Services\AntiFraud\FraudDetectionService::class),
-        $c->make(\App\Contracts\LoggerInterface::class)
-    );
-});
+$container->singleton(\App\Services\AntiFraud\FraudGuardService::class);
 $container->singleton(\App\Services\AntiFraud\VelocityCheckService::class, function($c) {
     return new \App\Services\AntiFraud\VelocityCheckService(
         $c->make(\App\Models\VelocityAndScoreModel::class),
@@ -1916,19 +1913,21 @@ $container->singleton(\App\Commands\MigrationManager::class, function($c) {
 
 $container->singleton(\App\Services\PredictionService::class, function($c) {
     return new \App\Services\PredictionService(
-        $c->make(\App\Services\private::class),
-        $c->make(\App\Services\private::class),
-        $c->make(\App\Services\private::class),
-        $c->make(\App\Services\private::class)
+        $c->make(\Core\Database::class),
+        $c->make(\App\Models\PredictionGame::class),
+        $c->make(\App\Models\PredictionBet::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
 $container->singleton(\App\Services\ReferralManagementService::class, function($c) {
     return new \App\Services\ReferralManagementService(
-        $c->make(\App\Services\private::class),
-        $c->make(\App\Services\private::class),
-        $c->make(\App\Services\private::class),
-        $c->make(\App\Services\private::class)
+        $c->make(\App\Services\Shared\ReferralService::class),
+        $c->make(\App\Models\ReferralCommission::class),
+        $c->make(\App\Services\User\UserService::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -1939,11 +1938,11 @@ $container->singleton(\App\Policies\RolePolicy::class, function($c) {
 
 $container->singleton(\App\Services\ScheduledPaymentService::class, function($c) {
     return new \App\Services\ScheduledPaymentService(
-        $c->make(\App\Services\private::class),
-        $c->make(\App\Services\private::class),
-        $c->make(\App\Services\private::class),
+        $c->make(\App\Models\ScheduledPayment::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Services\private::class)
+        $c->make(\App\Services\ReconciliationService::class)
     );
 });
 
@@ -2167,29 +2166,30 @@ $container->singleton(\App\Services\Payment\ZarinPalGateway::class, function($c)
 
 $container->singleton(\App\Services\Sentry\Alerting\AlertRulesEngine::class, function($c) {
     return new \App\Services\Sentry\Alerting\AlertRulesEngine(
-        $c->make(\App\Services\Sentry\Alerting\private::class),
-        $c->make(\App\Services\Sentry\Alerting\private::class),
-        $c->make(\App\Services\Sentry\Alerting\private::class)
+        $c->make(\App\Models\SentryModel::class),
+        $c->make(\Core\Logger::class),
+        $c->make(\App\Services\Sentry\Alerting\AlertDispatcher::class)
     );
 });
 
 $container->singleton(\App\Services\Sentry\Alerting\EscalationManager::class, function($c) {
     return new \App\Services\Sentry\Alerting\EscalationManager(
-        $c->make(\App\Services\Sentry\Alerting\private::class),
-        $c->make(\App\Services\Sentry\Alerting\private::class),
-        $c->make(\App\Services\Sentry\Alerting\private::class)
+        $c->make(\App\Models\SentryModel::class),
+        $c->make(\Core\Logger::class),
+        $c->make(\App\Services\Sentry\Alerting\AlertDispatcher::class)
     );
 });
 
 $container->singleton(\App\Services\Sentry\Analytics\DashboardService::class, function($c) {
     return new \App\Services\Sentry\Analytics\DashboardService(
-        $c->make(\App\Services\Sentry\Analytics\private::class)
+        $c->make(\App\Models\SentryModel::class),
+        $c->make(\App\Contracts\CacheInterface::class)
     );
 });
 
 $container->singleton(\App\Services\Sentry\Analytics\TrendAnalyzer::class, function($c) {
     return new \App\Services\Sentry\Analytics\TrendAnalyzer(
-        $c->make(\App\Services\Sentry\Analytics\private::class)
+        $c->make(\App\Models\SentryModel::class)
     );
 });
 
@@ -2205,10 +2205,10 @@ $container->singleton(\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor::c
 
 $container->singleton(\App\Services\Sentry\PerformanceMonitoring\SentryPerformanceMonitor::class, function($c) {
     return new \App\Services\Sentry\PerformanceMonitoring\SentryPerformanceMonitor(
-        $c->make(\App\Services\Sentry\PerformanceMonitoring\private::class),
-        $c->make(\App\Services\Sentry\PerformanceMonitoring\private::class),
-        $c->make(\App\Services\Sentry\PerformanceMonitoring\private::class),
-        $c->make(\App\Services\Sentry\PerformanceMonitoring\array::class)
+        $c->make(\App\Models\SentryModel::class),
+        $c->make(\Core\Logger::class),
+        $c->make(\App\Services\Sentry\Alerting\AlertDispatcher::class),
+        (array)config('sentry.performance', [])
     );
 });
 
@@ -2270,7 +2270,34 @@ try {
     if ($container->has(\App\Services\Sentry\SentryExceptionHandler::class)) {
         $container->make(\App\Services\Sentry\SentryExceptionHandler::class)->register();
     }
-} catch (\Throwable $ignore) {}
+} catch (\Throwable $e) {
+    // fallback
+}
+
+// =========================================================================
+// 🔄 Event-Driven Configuration: ثبت شنوندگان رویدادهای اصلی سیستم چورتکه
+// =========================================================================
+try {
+    $dispatcher = $container->make(\Core\EventDispatcher::class);
+    
+    // شنونده‌های ماژول احراز هویت (احراز، لاگ، ردپا به صورت پس‌زمینه)
+    $dispatcher->listen('auth.login', \App\Listeners\LogUserLoggedInActivity::class);
+    $dispatcher->listen('auth.register', \App\Listeners\LogUserRegisteredActivity::class);
+    
+    // فعال‌سازی شنونده فراموش‌شده تاریخچه تغییر فیچرفلگ‌ها
+    $dispatcher->listen('feature_flag.changed', \App\Listeners\LogFeatureFlagChange::class);
+    
+    // ثبت شنونده هوشمند پردازش امتیازهای بحرانی فِراد به صورت پس‌زمینه (🚀 UPG-06)
+    $dispatcher->listen('fraud.score_updated', \App\Listeners\ProcessFraudAlert::class);
+    
+} catch (\Throwable $e) {
+    if (function_exists('logger')) {
+        logger()->error('bootstrap.events_registration_failed', [
+            'channel' => 'event',
+            'error' => $e->getMessage()
+        ]);
+    }
+}
 
 // Application — باید آخرین خط باشد
 $app = Application::getInstance();

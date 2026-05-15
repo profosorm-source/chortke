@@ -141,8 +141,15 @@ class Scheduler
             }
 
             // ۲. دریافت قفل همزمانی کوتاه‌مدت (جلوگیری از تداخل لحظه‌ای)
-            if (!Cache::getInstance()->lock($mutexKey, 300)) { // قفل ۵ دقیقه‌ای
-                $results[$job['name']] = ['status' => 'skipped', 'reason' => 'concurrent_mutex'];
+            try {
+                if (!Cache::getInstance()->lock($mutexKey, 300)) { // قفل ۵ دقیقه‌ای
+                    $results[$job['name']] = ['status' => 'skipped', 'reason' => 'concurrent_mutex'];
+                    continue;
+                }
+            } catch (\Throwable $e) {
+                // CORE-055: Gracefully skip execution if the locking mechanism fails (e.g., Redis down or file lock disabled in prod)
+                $this->logger->warning("Cron [{$job['name']}] lock mechanism failure: " . $e->getMessage());
+                $results[$job['name']] = ['status' => 'skipped', 'reason' => 'lock_failure_skipped'];
                 continue;
             }
 
@@ -160,7 +167,10 @@ class Scheduler
                     'output'   => $output,
                 ];
 
-                $this->logger->info("Cron [{$job['name']}] OK in {$duration}ms", $output ?? []);
+                // CORE-056: Redact sensitive details from execution output before storing in persistent log files
+                $loggedOutput = is_array($output) ? $this->redactSensitiveData($output) : ($output ?? []);
+
+                $this->logger->info("Cron [{$job['name']}] OK in {$duration}ms", is_array($loggedOutput) ? $loggedOutput : []);
 
                 // ثبت لاگ در activity_logs برای نمایش در پنل مدیریت
                 try {
@@ -169,7 +179,7 @@ class Scheduler
                         $job['name'] . ' [' . $job['key'] . ']',
                         null,
                         array_merge(
-                            is_array($output) ? $output : [],
+                            is_array($loggedOutput) ? $loggedOutput : [],
                             [
                                 'job_key'        => $job['key'],
                                 'execution_time' => $duration . 'ms',
@@ -216,5 +226,30 @@ class Scheduler
             'interval' => $intervalSeconds,
         ];
         return $this;
+    }
+
+    /**
+     * CORE-056: Recursively sanitizes and redacts potentially sensitive keys inside telemetry payloads
+     */
+    private function redactSensitiveData(array $data): array
+    {
+        static $sensitiveKeywords = ['pass', 'pwd', 'token', 'secret', 'key', 'auth', 'card', 'phone', 'email', 'wallet', 'hash'];
+        
+        foreach ($data as $key => $value) {
+            if (is_array($value)) {
+                $data[$key] = $this->redactSensitiveData($value);
+                continue;
+            }
+
+            $lowerKey = strtolower((string)$key);
+            foreach ($sensitiveKeywords as $word) {
+                if (str_contains($lowerKey, $word)) {
+                    $data[$key] = '[REDACTED]';
+                    break;
+                }
+            }
+        }
+
+        return $data;
     }
 }

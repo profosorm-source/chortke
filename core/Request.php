@@ -41,11 +41,26 @@ class Request
 
     public function __construct()
     {
-        $this->method  = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+        
+        // CORE-023: Support method override
+        if ($method === 'POST') {
+            $methodOverride = $_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE'] ?? $_POST['_method'] ?? 'POST';
+            $method = strtoupper($methodOverride);
+        }
+        
+        $this->method  = $method;
         $this->uri     = $this->parseUri();
         $this->query   = $_GET;
         $this->files   = $_FILES;
         $this->headers = $this->parseHeaders();
+
+        // CORE-021: Read php://input with limit
+        $maxBody = (int) config('request.max_body_bytes', 1048576);
+        $contentLength = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+        if ($contentLength > $maxBody) {
+            throw new \Core\Exceptions\PayloadTooLargeException();
+        }
 
         // FIX C-6: php://input یک stream است و فقط یک بار قابل خواندن است.
         // مقدار را یک‌بار اینجا می‌خوانیم و در $this->rawInput کش می‌کنیم.
@@ -184,12 +199,25 @@ private function parseBody(): array
         return $this->parsedBody;
     }
 
-    if ($this->isJson() && !empty($this->rawInput)) {
-        $data = json_decode($this->rawInput, true);
-        if (is_array($data)) {
-            $this->parsedBody = array_merge($this->body, $data);
+    // CORE-022: JSON parse failure validation
+    if ($this->isJson()) {
+        if (!empty($this->rawInput)) {
+            $data = json_decode($this->rawInput, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new \Core\Exceptions\ValidationException(['body' => 'Invalid JSON body'], 'Invalid JSON body');
+            }
+            $this->parsedBody = array_merge($this->body, is_array($data) ? $data : []);
             return $this->parsedBody;
         }
+    }
+
+    // CORE-023: Parse application/x-www-form-urlencoded for PUT/PATCH/DELETE
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? '';
+    if (str_contains(strtolower($contentType), 'application/x-www-form-urlencoded') 
+        && in_array($this->method, ['PUT', 'PATCH', 'DELETE'])) {
+        parse_str($this->rawInput, $parsedParams);
+        $this->parsedBody = array_merge($this->body, $parsedParams);
+        return $this->parsedBody;
     }
 
     $this->parsedBody = $this->body;

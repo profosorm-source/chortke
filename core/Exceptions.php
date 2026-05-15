@@ -10,6 +10,14 @@ class AppException extends RuntimeException
 {
 }
 
+class PayloadTooLargeException extends AppException
+{
+    public function __construct(string $message = 'Payload too large', int $code = 413)
+    {
+        parent::__construct($message, $code);
+    }
+}
+
 class ValidationException extends AppException
 {
     private array $errors;

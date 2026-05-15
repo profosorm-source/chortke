@@ -64,16 +64,45 @@ class TransactionWrapper
             } catch (Throwable $e) {
                 $lastException = $e;
 
-                // اگر آخرین تلاش بود، exception را throw کن
-                if ($attempt === $maxRetries) {
+                // CORE-054: Enforce fail-safe transient error checking. Fast abort on non-transient errors.
+                if (!$this->isTransientDatabaseError($e) || $attempt === $maxRetries) {
                     throw $e;
                 }
 
-                // در غیر این صورت، retry کن
-                usleep(100000 * $attempt); // exponential backoff
+                // Apply a short exponential backoff wait (between 100ms and 300ms base) before trying again
+                usleep(100000 * $attempt);
             }
         }
 
         throw $lastException;
+    }
+
+    /**
+     * CORE-054: Identify transient database lock/deadlock faults safe to retry
+     */
+    private function isTransientDatabaseError(Throwable $e): bool
+    {
+        $message = $e->getMessage();
+        
+        // Check if message explicitly notes deadlock or lock timeout
+        if (stripos($message, 'Deadlock found') !== false || stripos($message, 'Lock wait timeout') !== false) {
+            return true;
+        }
+
+        if ($e instanceof \PDOException) {
+            // SQLSTATE 40001 indicates serialization failures/deadlocks
+            if ($e->getCode() === '40001') {
+                return true;
+            }
+
+            // Evaluate MySQL-specific numeric error codes (1205, 1213)
+            $errorInfo = $e->errorInfo ?? [];
+            $driverCode = (int)($errorInfo[1] ?? 0);
+            if (in_array($driverCode, [1205, 1213], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -140,11 +140,14 @@ class Cache
 
     public function put(string $key, mixed $value, int $minutes = 60): bool
     {
+        // CORE-040: JSON encoding preferentially to mitigate deserialization risk
+        $payload = is_object($value) ? serialize($value) : json_encode($value, JSON_UNESCAPED_UNICODE);
+        
         if ($this->driver === 'redis') {
             return (bool) $this->redis->setEx(
                 $this->redisKey($key),
                 $minutes * 60,
-                serialize($value)
+                $payload
             );
         }
 
@@ -223,13 +226,31 @@ class Cache
 
     public function remember(string $key, int $minutes, callable $callback): mixed
     {
-        if ($this->has($key)) {
-            return $this->get($key);
+        $value = $this->get($key);
+        if ($value !== null) {
+            return $value;
         }
 
-        $value = $callback();
-        $this->put($key, $value, $minutes);
-        return $value;
+        // CORE-039: Cache Stampede mitigation using distributed double-check lock
+        $lockKey = 'remember:' . $key;
+        if ($this->lock($lockKey, 30, 5)) {
+            try {
+                // Double check
+                $value = $this->get($key);
+                if ($value !== null) {
+                    return $value;
+                }
+                
+                $value = $callback();
+                $this->put($key, $value, $minutes);
+                return $value;
+            } finally {
+                $this->unlock($lockKey);
+            }
+        }
+
+        // Fallback if lock could not be acquired
+        return $callback();
     }
 
     public function rememberForever(string $key, callable $callback): mixed
@@ -245,13 +266,14 @@ class Cache
 
     public function forever(string $key, mixed $value): bool
     {
+        $payload = is_object($value) ? serialize($value) : json_encode($value, JSON_UNESCAPED_UNICODE);
         if ($this->driver === 'redis') {
             // یک سال به ثانیه: ۳۱۵۳۶۰۰۰ (همسان با رانر فایل برای جلوگیری از انباشت بی‌نهایت حافظه)
             $oneYear = 31536000;
             return (bool) $this->redis->setex(
                 $this->redisKey($key),
                 $oneYear,
-                serialize($value)
+                $payload
             );
         }
 
@@ -264,6 +286,11 @@ class Cache
 
     public function increment(string $key, int $step = 1, int $ttlSeconds = 0): int|false
     {
+        // CORE-038: Fail-closed if distributed state operations called without real-time central store
+        if ($this->driver !== 'redis' && config('app.env') === 'production') {
+            throw new \RuntimeException('Atomic counters/limiters require Redis driver in production to prevent split-brain.', 500);
+        }
+
         if ($this->driver === 'redis') {
             // اسکریپت لوآ برای اتمیک اینکریمنت + تنظیم انقضا در صورتی که از قبل ندارد
             $script = <<<'LUA'
@@ -340,6 +367,10 @@ LUA;
 
     public function incrementFloat(string $key, float $step = 1.0, int $ttlSeconds = 0): float|false
     {
+        if ($this->driver !== 'redis' && config('app.env') === 'production') {
+            throw new \RuntimeException('Atomic float counters require Redis driver in production.', 500);
+        }
+
         if ($this->driver === 'redis') {
             $script = <<<'LUA'
 local current = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])
@@ -479,6 +510,11 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
      */
     public function lock(string $key, int $ttl = 30, int $wait = 1): bool
     {
+        // CORE-038: Prevent unsafe local lock fallback on production
+        if ($this->driver !== 'redis' && config('app.env') === 'production') {
+            throw new \RuntimeException('Distributed locking functionality requires the Redis driver in production.', 500);
+        }
+
         $lockKey = 'lock:' . $key;
 
         if ($this->driver === 'redis') {
@@ -647,7 +683,15 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
             'expire_at' => time() + ($minutes * 60),
             'value'     => $value,
         ];
-        return (bool) file_put_contents($this->cacheFile($key), serialize($data));
+        
+        // CORE-040: Write as JSON to avoid dangerous deserialization payload risk.
+        $encoded = json_encode($data, JSON_UNESCAPED_UNICODE);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            // Fallback safe serialization only for objects
+            $encoded = serialize($data);
+        }
+        
+        return (bool) file_put_contents($this->cacheFile($key), $encoded);
     }
 
     private function fileGet(string $key, mixed $default): mixed
@@ -658,8 +702,17 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
         }
 
         $raw = file_get_contents($file);
-$data = $this->safeUnserialize($raw === false ? null : $raw);
-        if ($data === false || $data['expire_at'] < time()) {
+        if ($raw === false) {
+            return $default;
+        }
+
+        // CORE-040: Try json_decode first to enforce secure formats
+        $data = json_decode($raw, true);
+        if ($data === null) {
+            $data = $this->safeUnserialize($raw);
+        }
+
+        if ($data === false || $data === null || $data['expire_at'] < time()) {
             @unlink($file);
             return $default;
         }
@@ -674,8 +727,16 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
             return false;
         }
         $raw = file_get_contents($file);
-$data = $this->safeUnserialize($raw === false ? null : $raw);
-        if ($data === false || $data['expire_at'] < time()) {
+        if ($raw === false) {
+            return false;
+        }
+        
+        $data = json_decode($raw, true);
+        if ($data === null) {
+            $data = $this->safeUnserialize($raw);
+        }
+        
+        if ($data === false || $data === null || $data['expire_at'] < time()) {
             @unlink($file);
             return false;
         }

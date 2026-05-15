@@ -59,8 +59,9 @@ class Queue
             $this->db->beginTransaction();
 
             $nowStr = date('Y-m-d H:i:s');
-            // H22 Fix: زمان انقضا برای بازگرداندن جاب‌های یتیم شده (مثلاً 90 ثانیه پیش)
-            $timeoutThreshold = date('Y-m-d H:i:s', time() - 90);
+            // CORE-046: Use configurable visibility timeout from configs, fallback to 90s.
+            $visibilityTimeout = (int)config('queue.visibility_timeout', 90);
+            $timeoutThreshold = date('Y-m-d H:i:s', time() - $visibilityTimeout);
 
             // SELECT ... FOR UPDATE قفل امن برای جلوگیری از همپوشانی در سیستم‌های توزیع شده
             // الحاق شرط بازیابی جاب‌های استاک‌شده در وضعیت reserved_at
@@ -166,5 +167,49 @@ class Queue
         return (int) $this->db->table('queues')
             ->where('queue', '=', $queue)
             ->count();
+    }
+
+    /**
+     * انتقال جاب شکست خورده نهایی به Dead Letter Queue (DLQ) و حذف از صف اصلی
+     */
+    public function fail(int $id, \Throwable $exception): bool
+    {
+        try {
+            $this->db->beginTransaction();
+
+            // ۱. دریافت اطلاعات جاب برای کپی به DLQ
+            $job = $this->db->selectOne("SELECT * FROM queues WHERE id = :id", ['id' => $id]);
+            if (!$job) {
+                $this->db->commit();
+                return false;
+            }
+
+            // ۲. درج در جدول failed_jobs
+            $exceptionStr = get_class($exception) . ': ' . $exception->getMessage() . "\n" . $exception->getTraceAsString();
+            
+            $this->db->table('failed_jobs')->insert([
+                'queue' => $job->queue,
+                'payload' => $job->payload,
+                'exception' => $exceptionStr,
+                'failed_at' => date('Y-m-d H:i:s')
+            ]);
+
+            // ۳. حذف از جدول اصلی صف‌ها
+            $this->delete($id);
+
+            $this->db->commit();
+            return true;
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * دریافت حداکثر تعداد مجاز تلاش‌ها
+     */
+    public function getMaxAttempts(): int
+    {
+        return $this->maxAttempts;
     }
 }

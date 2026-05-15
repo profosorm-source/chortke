@@ -17,9 +17,6 @@ if (!defined('BASE_PATH')) {
     define('BASE_PATH', __DIR__);
 }
 
-// Autoloader داخلی پروژه
-require_once BASE_PATH . '/core/Autoloader.php';
-\Core\Autoloader::register();
-
 // App bootstrap bindings and application init
 return require_once BASE_PATH . '/bootstrap/app.php';
+

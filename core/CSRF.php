@@ -25,6 +25,30 @@ class CSRF
         return $this->session->get('_csrf_token');
     }
 
+    // CORE-036: Action-specific CSRF tokens for enhanced security on destructive actions
+    public function generateTokenFor(string $action): string
+    {
+        $key = '_csrf_token_' . hash('sha256', $action);
+        if (!$this->session->has($key)) {
+            $this->session->set($key, bin2hex(random_bytes(32)));
+        }
+        return $this->session->get($key);
+    }
+
+    public function verifyTokenFor(string $action, ?string $token): bool
+    {
+        $key = '_csrf_token_' . hash('sha256', $action);
+        $sessionToken = $this->session->get($key);
+        if (!$sessionToken || !$token) {
+            return false;
+        }
+        $isValid = hash_equals($sessionToken, $token);
+        if ($isValid) {
+            $this->session->remove($key); // One-time usage
+        }
+        return $isValid;
+    }
+
     public function getToken(): ?string
     {
         return $this->session->get('_csrf_token');

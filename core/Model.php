@@ -98,7 +98,7 @@ abstract class Model
             ->where('id', '=', $id)
             ->update($data);
 
-        return $affected >= 0;
+        return $affected > 0;
     }
 
     /** Soft Delete */
@@ -247,8 +247,8 @@ abstract class Model
             // Bind parameters plus the chunkSize
             $allParams = array_merge($params, [$chunkSize]);
             
-            // Execute using the statement wrapper
-            $stmt->execute();
+            // Execute using the statement wrapper with bound parameters
+            $stmt->execute($allParams);
             $affected = $stmt->rowCount();
             $totalAffected += $affected;
             

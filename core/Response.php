@@ -47,6 +47,9 @@ class Response
 
     public function setStatusCode(int $code): void
     {
+        if ($code < 100 || $code > 599) {
+            throw new \InvalidArgumentException("کد وضعیت HTTP نامعتبر است: {$code}");
+        }
         $this->statusCode = $code;
     }
     
@@ -117,7 +120,7 @@ class Response
             $options |= JSON_PRETTY_PRINT;
         }
         
-        $this->content = json_encode($data, $options);
+        $this->content = json_encode($data, $options | JSON_THROW_ON_ERROR);
         $this->send();
     }
 
@@ -372,7 +375,7 @@ class Response
      */
     public function status(int $code): self
     {
-        $this->statusCode = $code;
+        $this->setStatusCode($code);
         return $this;
     }
 
