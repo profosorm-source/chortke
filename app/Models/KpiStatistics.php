@@ -10,7 +10,7 @@ use Core\Model;
  * KpiStatistics Model — KPI Dashboard Data Access Layer
  * 
  * مسئولیت: محاسبه KPI های سیستم و داشبورد کلی.
- * استفاده می‌شود در: AnalyticsDataRepository
+ * استفاده می‌شود در: AnalyticsQueryService
  */
 class KpiStatistics extends Model
 {

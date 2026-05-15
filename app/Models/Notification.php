@@ -767,6 +767,31 @@ class Notification extends Model
         return array_column($rows, 'id');
     }
 
+    public function getActiveUsersIdsInBatches(int $batchSize = 200): iterable
+    {
+        if ($batchSize <= 0) {
+            throw new \InvalidArgumentException('Batch size must be positive');
+        }
+
+        $offset = 0;
+        while (true) {
+            $rows = $this->db->table('users')
+                ->select('id')
+                ->whereNull('deleted_at')
+                ->where('status', '=', 'active')
+                ->limit($batchSize)
+                ->offset($offset)
+                ->get();
+
+            if (empty($rows)) {
+                break;
+            }
+
+            yield array_column($rows, 'id');
+            $offset += $batchSize;
+        }
+    }
+
     public function getAdminUsersIds(): array
     {
         $rows = $this->db->table('users')

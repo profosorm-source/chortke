@@ -23,7 +23,7 @@ class AdvancedAnalytics extends Model
     private array $allowedColumns = [
         'id', 'created_at', 'updated_at', 'completed_at', 'verified_at',
         'status', 'type', 'platform', 'currency', 'user_id', 'amount',
-        'executor_id', 'advertiser_id', 'reward_amount', 'rating', 'value', 'price_usdt',
+        'executor_id', 'adS_id', 'reward_amount', 'rating', 'value', 'price_usdt',
         'level_id', 'stars', 'rated_id', 'decision', 'task_score'
     ];
 

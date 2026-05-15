@@ -34,6 +34,14 @@ class SecurityModel extends Model
         );
     }
 
+    public function getValidRecoveryCodes(int $userId): array
+    {
+        return $this->db->fetchAll(
+            "SELECT id, code FROM two_factor_codes WHERE user_id = ? AND used = 0 AND expires_at > NOW()",
+            [$userId]
+        ) ?: [];
+    }
+
     public function markTwoFactorCodeAsUsed(int $id): bool
     {
         return (bool)$this->db->query("UPDATE two_factor_codes SET used = 1 WHERE id = ?", [$id]);
