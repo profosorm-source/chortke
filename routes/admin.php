@@ -61,6 +61,8 @@ $r     = app()->router;
 // ── ورود/خروج ──────────────────────────────────────────────────────────────
 $r->get('/admin/login',   [AdminAuthController::class, 'showLogin']);
 $r->post('/admin/login',  [AdminAuthController::class, 'login'], [CSRFMiddleware::class]);
+$r->get('/admin/verify-2fa',  [AdminAuthController::class, 'showVerify2FA']);
+$r->post('/admin/verify-2fa', [AdminAuthController::class, 'verify2FA'], [CSRFMiddleware::class]);
 $r->post('/admin/logout', [AdminAuthController::class, 'logout'], [AuthMiddleware::class, AdminMiddleware::class, CSRFMiddleware::class]);
 
 // ── داشبورد ────────────────────────────────────────────────────────────────
