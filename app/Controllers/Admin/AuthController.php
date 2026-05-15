@@ -141,6 +141,12 @@ class AuthController extends BaseController
                 (int)$user->id
             );
 
+            if (!empty($result['requires_2fa'])) {
+                // H22 Fix: مدیریت صحیح لاگین ادمین با احراز هویت دو مرحله ای
+                $this->session->set('pending_2fa_user_id', (int)$user->id);
+                return redirect('/admin/verify-2fa');
+            }
+
             return redirect('/admin/dashboard');
         } catch (\Throwable $e) {
             $this->logger->error('admin.login.exception', [
@@ -159,6 +165,56 @@ class AuthController extends BaseController
 
     return view('admin/login');
 }
+    /**
+     * نمایش صفحه تایید دو مرحله ای ادمین
+     */
+    public function showVerify2FA()
+    {
+        $userId = $this->session->get('pending_2fa_user_id');
+        if (!$userId) {
+            return redirect('/admin/login');
+        }
+
+        return view('admin/verify-2fa', ['title' => 'تایید هویت دو مرحله ای']);
+    }
+
+    /**
+     * پردازش تایید دو مرحله ای ادمین
+     */
+    public function verify2FA()
+    {
+        $userId = $this->session->get('pending_2fa_user_id');
+        if (!$userId) {
+            return $this->json(false, 'نشست نامعتبر است.', [], 401);
+        }
+
+        $code = trim((string)$this->request->post('code'));
+        if (empty($code)) {
+            return $this->json(false, 'لطفاً کد ۶ رقمی را وارد کنید.');
+        }
+
+        // استفاده از TwoFactorService از طریق AuthService یا مستقیم
+        // در اینجا TwoFactorService در AuthService در دسترس است
+        // اما verify2FA در AuthService قبلاً پیاده سازی شده است
+        
+        $result = $this->authService->verify2FA($code);
+
+        if ($result['success']) {
+            $this->session->remove('pending_2fa_user_id');
+            
+            $this->logger->activity(
+                'admin.2fa.verified',
+                'تایید موفق 2FA پنل مدیریت',
+                (int)$userId,
+                ['channel' => 'admin_auth']
+            );
+
+            return $this->json(true, 'ورود موفقیت‌آمیز بود.', ['redirect' => url('/admin/dashboard')]);
+        }
+
+        return $this->json(false, $result['message'] ?? 'کد وارد شده نامعتبر است.');
+    }
+
     /**
      * خروج
      */
