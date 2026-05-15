@@ -280,6 +280,12 @@ class AuthService extends \App\Services\BaseService
             $errors[] = 'این ایمیل قبلاً ثبت شده است.';
         }
 
+        // H23 Fix: اعمال سیاست پیچیدگی رمز عبور (Password Policy)
+        $policyErrors = \App\Validators\PasswordPolicy::validate($data['password'] ?? '');
+        if (!empty($policyErrors)) {
+            $errors = array_merge($errors, $policyErrors);
+        }
+
         return $errors;
     }
 
