@@ -175,6 +175,12 @@ class SessionService extends \App\Services\BaseService
         return ['success' => true, 'message' => 'نشست با موفقیت حذف شد'];
     }
 
+    public function invalidateAllUserSessions(int $userId, ?string $excludeSessionId = null): bool
+    {
+        $this->logger->info('session.invalidate_all', ['user_id' => $userId, 'exclude' => $excludeSessionId]);
+        return $this->model->deactivateUserSessions($userId, $excludeSessionId);
+    }
+
     public function cleanupSessions(): void
     {
         $this->model->expireOldSessions(7);

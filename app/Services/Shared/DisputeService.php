@@ -328,11 +328,38 @@ class DisputeService extends \App\Services\BaseService
     }
 
     /**
-     * ارسال پیام در پرونده
+     * ارسال پیام در پرونده با تعیین خودکار نقش و آپدیت تاریخچه
      */
-    public function addMessage(int $caseId, int $userId, string $message, ?string $attachment = null): bool
+    public function addMessageWithContext(int $disputeId, int $userId, string $message, ?string $attachment = null): array
     {
-        return $this->disputeModel->addMessage($caseId, $userId, $message, $attachment);
+        $dispute = $this->disputeModel->find($disputeId);
+        if (!$dispute) {
+            return ['success' => false, 'message' => 'پرونده یافت نشد.'];
+        }
+
+        // Security check
+        if ((int)$dispute->user_id !== $userId && (int)($dispute->target_user_id ?? 0) !== $userId) {
+            return ['success' => false, 'message' => 'شما دسترسی به این پرونده ندارید.'];
+        }
+
+        // Auto determine role
+        $role = ((int)$dispute->user_id === $userId) ? 'creator' : 'opponent';
+
+        $this->db->beginTransaction();
+        try {
+            $ok = $this->disputeModel->addMessage($disputeId, $userId, $message, $attachment, $role);
+            if (!$ok) throw new \Exception('خطا در ثبت پیام');
+
+            $this->db->query("UPDATE disputes SET updated_at = NOW() WHERE id = ?", [$disputeId]);
+            
+            $this->logger->info('dispute.message_added', ['dispute_id' => $disputeId, 'user_id' => $userId, 'role' => $role]);
+            
+            $this->db->commit();
+            return ['success' => true];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
     }
 
     /**

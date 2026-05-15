@@ -178,7 +178,9 @@ class ZarinPalGateway extends BasePaymentGateway
             $result = $response['data'];
 
             // 🕵️ Strictly verify existence of ref_id ensuring settlement security
-            if (isset($result['data']['code']) && $result['data']['code'] == 100 && isset($result['data']['ref_id']) && !empty($result['data']['ref_id'])) {
+            // H24 Fix (Problem 2): پذیرفتن کد 101 (قبلاً تایید شده) جهت جلوگیری از سوخت شدن پول در صورت Timeout تراکنش اول
+            $code = isset($result['data']['code']) ? (int)$result['data']['code'] : 0;
+            if (in_array($code, [100, 101]) && isset($result['data']['ref_id']) && !empty($result['data']['ref_id'])) {
                 $this->logger->info('payment.zarinpal.verified', [
                     'authority' => $authority,
                     'ref_id' => $result['data']['ref_id']

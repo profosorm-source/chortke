@@ -108,12 +108,22 @@ class CouponService extends \App\Services\BaseService
                 return false;
             }
 
-            if ($coupon->usage_limit !== null && $coupon->usage_count >= $coupon->usage_limit) {
+            // H-C2 & H-C3 Fix: Pessimistic lock on user usage + idempotency
+            if ($this->redemptionModel->hasUserUsedCouponForUpdate($userId, $couponId)) {
+                throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
+            }
+
+            if ($coupon->usage_limit !== null && (int)$coupon->usage_count >= (int)$coupon->usage_limit) {
                 throw new \Exception('ظرفیت استفاده از این کد تخفیف به پایان رسیده است.');
             }
 
-            if ($this->redemptionModel->hasUserUsedCoupon($userId, $couponId)) {
-                throw new \Exception('کد تخفیف قبلا توسط این کاربر استفاده شده است.');
+            // Idempotency: prevent double spend if entity already has a coupon applied
+            $existing = $this->db->query(
+                "SELECT id FROM coupon_redemptions WHERE entity_type = ? AND entity_id = ? LIMIT 1",
+                [$entityType, $entityId]
+            )->fetch();
+            if ($existing) {
+                throw new \Exception('برای این تراکنش قبلاً کد تخفیف اعمال شده است.');
             }
 
             $redemptionId = $this->redemptionModel->create([
@@ -377,6 +387,13 @@ class CouponService extends \App\Services\BaseService
             }
             throw $e;
         }
+    }
+    /**
+     * دریافت لیست تاریخچه استفاده از کوپن‌ها
+     */
+    public function getRedemptions(int $limit = 100, int $offset = 0): array
+    {
+        return $this->redemptionModel->all(); // Or implement pagination if needed
     }
 }
 

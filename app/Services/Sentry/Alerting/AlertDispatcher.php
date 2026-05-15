@@ -25,6 +25,48 @@ class AlertDispatcher
     ) {}
 
     /**
+     * 🤖 Process Rules - بررسی خودکار تمام قوانین هشدار
+     */
+    public function processRules(): int
+    {
+        $rules = $this->model->getActiveRules();
+        $triggeredCount = 0;
+
+        foreach ($rules as $rule) {
+            try {
+                $value = $this->model->getMetricValue($rule->rule_type, (int)($rule->time_window ?: 60));
+                
+                if ($value >= (float)$rule->threshold) {
+                    $alert = [
+                        'type' => 'automated_rule',
+                        'severity' => $rule->severity,
+                        'title' => "Rule: {$rule->rule_name}",
+                        'message' => "Threshold reached: {$value} >= {$rule->threshold} (Window: {$rule->time_window} min)",
+                        'metadata' => [
+                            'rule_id' => $rule->id,
+                            'metric' => $rule->rule_type,
+                            'value' => $value,
+                            'threshold' => $rule->threshold
+                        ]
+                    ];
+
+                    if ($this->dispatch($alert)) {
+                        $this->model->updateRuleLastTriggered((int)$rule->id);
+                        $triggeredCount++;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('alert.rule_processing.failed', [
+                    'rule_id' => $rule->id,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+
+        return $triggeredCount;
+    }
+
+    /**
      * 📤 Dispatch Alert - ارسال alert
      */
     public function dispatch(array $alert): bool

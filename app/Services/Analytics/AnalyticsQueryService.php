@@ -25,6 +25,7 @@ class AnalyticsQueryService extends \App\Services\BaseService
     private const CACHE_TTL_COLD = 86400;   // Historical: 24 ساعت (آمار تاریخی)
 
     public function __construct(
+        private \Core\Database $db,
         private KpiStatistics $kpiStats,
         private Cache $cache,
         private CustomTaskAnalyticsModel $customTaskAnalyticsModel,
@@ -266,6 +267,68 @@ class AnalyticsQueryService extends \App\Services\BaseService
     {
         $cacheKey = "daily_completed_tasks_{$days}";
         return $this->cache->remember($cacheKey, self::CACHE_TTL_HOT, fn() => $this->kpiStats->getDailyCompletedTasks($days));
+    }
+
+    /**
+     * بررسی جامع سلامت سیستم (Health Check V2)
+     */
+    public function getSystemHealth(): array
+    {
+        $health = [
+            'status' => 'healthy',
+            'timestamp' => date('Y-m-d H:i:s'),
+            'checks' => []
+        ];
+
+        // 1. Database Check
+        try {
+            $this->db->query("SELECT 1");
+            $health['checks']['database'] = ['status' => 'ok'];
+        } catch (\Throwable $e) {
+            $health['checks']['database'] = ['status' => 'fail', 'message' => $e->getMessage()];
+            $health['status'] = 'unhealthy';
+        }
+
+        // 2. Cache/Redis Check
+        try {
+            $this->cache->set('health_check', 1, 10);
+            if ($this->cache->get('health_check') == 1) {
+                $health['checks']['cache'] = ['status' => 'ok'];
+            } else {
+                throw new \Exception('Cache value mismatch');
+            }
+        } catch (\Throwable $e) {
+            $health['checks']['cache'] = ['status' => 'fail', 'message' => $e->getMessage()];
+            $health['status'] = 'warning';
+        }
+
+        // 3. Storage Check
+        $storagePath = BASE_PATH . '/storage';
+        if (is_writable($storagePath)) {
+            $freeSpace = disk_free_space($storagePath);
+            $totalSpace = disk_total_space($storagePath);
+            $usagePercent = round(100 - ($freeSpace / $totalSpace * 100), 2);
+            
+            $health['checks']['storage'] = [
+                'status' => $usagePercent > 90 ? 'warning' : 'ok',
+                'usage' => $usagePercent . '%',
+                'free' => round($freeSpace / 1024 / 1024 / 1024, 2) . ' GB'
+            ];
+            if ($usagePercent > 95) $health['status'] = 'warning';
+        } else {
+            $health['checks']['storage'] = ['status' => 'fail', 'message' => 'Storage not writable'];
+            $health['status'] = 'unhealthy';
+        }
+
+        // 4. Logs Check
+        $logPath = $storagePath . '/logs/system.log';
+        if (file_exists($logPath) && filesize($logPath) > 100 * 1024 * 1024) { // 100MB
+            $health['checks']['logs'] = ['status' => 'warning', 'message' => 'Log file too large'];
+        } else {
+            $health['checks']['logs'] = ['status' => 'ok'];
+        }
+
+        return $health;
     }
 
     /**

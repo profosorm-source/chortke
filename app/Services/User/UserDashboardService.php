@@ -28,35 +28,19 @@ class UserDashboardService extends \App\Services\BaseService
             return $cached;
         }
 
-        // MED-02: Replace index-breaking DATE(created_at) function with optimized range filters
+        // Optimized: Consolidated transaction statistics into a single query
         $todayStart = \date('Y-m-d 00:00:00');
         $todayEnd   = \date('Y-m-d 00:00:00', \strtotime('+1 day'));
 
-        $todayDeposit = (float)$this->db->fetchColumn(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions 
-             WHERE user_id = :uid AND type = 'deposit' AND status = 'completed' 
-               AND created_at >= :start AND created_at < :end",
+        $summary = $this->db->fetch("
+            SELECT 
+                SUM(CASE WHEN type = 'deposit' AND status = 'completed' AND created_at >= :start AND created_at < :end THEN amount ELSE 0 END) as today_deposit,
+                SUM(CASE WHEN type = 'withdraw' AND status = 'completed' AND created_at >= :start AND created_at < :end THEN amount ELSE 0 END) as today_withdraw,
+                COUNT(CASE WHEN status IN ('pending', 'processing') THEN 1 END) as pending_tx,
+                SUM(CASE WHEN type IN ('task_reward', 'commission') AND status = 'completed' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN amount ELSE 0 END) as earnings_30d
+            FROM transactions 
+            WHERE user_id = :uid",
             ['uid' => $userId, 'start' => $todayStart, 'end' => $todayEnd]
-        );
-
-        $todayWithdraw = (float)$this->db->fetchColumn(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions 
-             WHERE user_id = :uid AND type = 'withdraw' AND status = 'completed' 
-               AND created_at >= :start AND created_at < :end",
-            ['uid' => $userId, 'start' => $todayStart, 'end' => $todayEnd]
-        );
-
-        $pendingTx = (int)$this->db->fetchColumn(
-            "SELECT COUNT(*) FROM transactions 
-             WHERE user_id = :uid AND status IN ('pending', 'processing')",
-            ['uid' => $userId]
-        );
-
-        $totalEarningsMonth = (float)$this->db->fetchColumn(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions
-             WHERE user_id = :uid AND type IN ('task_reward', 'commission') AND status = 'completed'
-               AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)",
-             ['uid' => $userId]
         );
 
         $lastTransactions = $this->db->fetchAll(
@@ -69,19 +53,30 @@ class UserDashboardService extends \App\Services\BaseService
         );
 
         $stats = [
-            'today_deposit'      => $todayDeposit,
-            'today_withdraw'     => $todayWithdraw,
-            'pending_tx'         => $pendingTx,
-            'earnings_30d'       => $totalEarningsMonth,
+            'today_deposit'      => (float)($summary->today_deposit ?? 0),
+            'today_withdraw'     => (float)($summary->today_withdraw ?? 0),
+            'pending_tx'         => (int)($summary->pending_tx ?? 0),
+            'earnings_30d'       => (float)($summary->earnings_30d ?? 0),
             'last_transactions'  => $lastTransactions,
         ];
 
-        // HIGH-01: Cache dashboard analytical aggregator for a light 60s duration
         if ($this->cache) {
             $this->cache->set($cacheKey, $stats, 60);
         }
 
         return $stats;
+    }
+
+    /**
+     * Get all dashboard data in a single call to minimize round-trips
+     */
+    public function getFullDashboardData(int $userId): array
+    {
+        return [
+            'stats' => $this->getStats($userId),
+            'recent_executions' => $this->getRecentTaskExecutions($userId, 5),
+            'ticket_count' => $this->getOpenTicketCount($userId)
+        ];
     }
 
     public function getRecentTaskExecutions(int $userId, int $limit = 5, int $offset = 0): array

@@ -14,7 +14,8 @@ class DashboardService
 {
     public function __construct(
         private SentryModel $model,
-        private CacheInterface $cache
+        private CacheInterface $cache,
+        private \Core\Database $db
     ) {}
 
     /**
@@ -320,8 +321,7 @@ class DashboardService
     private function getCronHeartbeatStatus(): array
     {
         try {
-            $db = \Core\Database::getInstance();
-            $lastLog = $db->query("SELECT created_at FROM activity_logs WHERE action = 'cron' ORDER BY id DESC LIMIT 1")->fetch();
+            $lastLog = $this->db->query("SELECT created_at FROM activity_logs WHERE action = 'cron' ORDER BY id DESC LIMIT 1")->fetch();
             
             if (!$lastLog || !isset($lastLog->created_at)) {
                 return ['status' => 'inactive', 'message' => 'بدون اجرای اخیر', 'delay_minutes' => null];

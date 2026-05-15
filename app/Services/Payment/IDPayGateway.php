@@ -205,7 +205,8 @@ class IDPayGateway extends BasePaymentGateway
 
             $result = $response['data'];
 
-            if (isset($result['status']) && $result['status'] == 100) {
+            $status = isset($result['status']) ? (int)$result['status'] : 0;
+            if (in_array($status, [100, 101])) {
                 $this->logger->info('payment.idpay.verified', [
                     'authority' => $authority,
                     'track_id' => $result['track_id'] ?? 'unknown'

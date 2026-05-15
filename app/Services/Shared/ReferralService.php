@@ -72,19 +72,25 @@ class ReferralService extends \App\Services\BaseService
         $commission = bcmul((string)$amount, $commissionRatio, 8);
         $commission = bcdiv($commission, '1', 2); // Round to 2 decimal places
 
+        // H-R3: Self-referral check
+        if ($referrerId === (int)($context['investor_id'] ?? 0) || $referrerId === (int)($context['user_id'] ?? 0)) {
+            return ['success' => false, 'message' => 'امکان واریز پورسانت به خود وجود ندارد.'];
+        }
+
         try {
             $this->db->beginTransaction();
 
-            // 🛡️ H18 Fix (CRITICAL): Pessimistic lock for referrer row
-            $stmt = $this->db->prepare("SELECT id FROM users WHERE id = ? FOR UPDATE");
-            $stmt->execute([$referrerId]);
+            // 🛡️ H-R1 Fix: Remove users FOR UPDATE here. WalletService::depositInTransaction already locks the wallet row.
+            // Excessive locking across different tables in different orders leads to Deadlocks.
+            
+            // ...
 
             $this->commissionModel->create([
                 'referrer_id' => $referrerId,
                 'amount' => $amount,
                 'commission_amount' => $commission,
                 'currency' => $currency,
-                'status' => 'pending',
+                'status' => 'paid', // H-R5 Fix: Status should be 'paid' if we are depositing now
                 'context' => json_encode(array_merge($context, [
                     'percentage' => $percentage,
                 ])),
@@ -118,6 +124,11 @@ class ReferralService extends \App\Services\BaseService
 
         $referrerId = (int)$referrerUser->referred_by;
 
+        // H-R3: Self-referral check
+        if ($referrerId === (int)$referredUserId) {
+            return ['success' => false, 'message' => 'Self-referral detected'];
+        }
+
         // دریافت درصد پورسانت بر اساس نوع ماژول
         if ($module === 'influencer') {
             // بررسی اینکه آیا معرف خودش به عنوان اینفلوئنسر ثبت‌نام شده یا خیر
@@ -129,8 +140,10 @@ class ReferralService extends \App\Services\BaseService
                     ->count();
                 $isInfluencer = $count > 0;
             } catch (\Throwable $t) {
-                // اگر جدول influencer_profiles هنوز ساخته نشده یا با فیلد دیگری است
-                $isInfluencer = false;
+                // H-R6 Fix: Silent fail is dangerous. Log it at least. 
+                // However, in this system, if the table is missing, it's a structural error.
+                $this->logger->error('influencer_check_failed', ['error' => $t->getMessage()]);
+                $isInfluencer = false; 
             }
 
             if ($isInfluencer) {
@@ -156,7 +169,7 @@ class ReferralService extends \App\Services\BaseService
                 'amount' => $amount,
                 'commission_amount' => $commission,
                 'currency' => $currency,
-                'status' => 'pending',
+                'status' => 'paid', // H-R5 Fix: Consistent status
                 'context' => json_encode(array_merge($context, [
                     'module' => $module,
                     'percentage' => $percentage,

@@ -98,7 +98,7 @@ class ProfileService extends \App\Services\BaseService
     /**
      * اعتبارسنجی بروزرسانی اطلاعات پروفایل
      */
-    public function validateProfileUpdate(array $data): array
+    public function validateProfileUpdate(array $data, int $userId): array
     {
         $errors = [];
 
@@ -119,6 +119,12 @@ class ProfileService extends \App\Services\BaseService
             $mobile = trim($data['mobile']);
             if (!preg_match('/^09[0-9]{9}$/', $mobile)) {
                 $errors['mobile'] = 'شماره موبایل نامعتبر است (باید با 09 شروع شود)';
+            } else {
+                // Check mobile uniqueness
+                $existing = $this->model->where('mobile', '=', $mobile)->where('id', '!=', $userId)->first();
+                if ($existing) {
+                    $errors['mobile'] = 'این شماره موبایل قبلاً ثبت شده است';
+                }
             }
         }
 
@@ -127,22 +133,33 @@ class ProfileService extends \App\Services\BaseService
             $nationalId = trim($data['national_id']);
             if (!preg_match('/^[0-9]{10}$/', $nationalId)) {
                 $errors['national_id'] = 'کد ملی باید 10 رقم باشد';
+            } else {
+                // Checksum validation
+                $check = (int)$nationalId[9];
+                $sum = 0;
+                for ($i = 0; $i < 9; $i++) {
+                    $sum += (int)$nationalId[$i] * (10 - $i);
+                }
+                $remainder = $sum % 11;
+                if (!($remainder < 2 && $check == $remainder) && !($remainder >= 2 && $check == (11 - $remainder))) {
+                    $errors['national_id'] = 'کد ملی وارد شده معتبر نیست';
+                }
             }
         }
 
         // Birth date validation
         if (isset($data['birth_date']) && $data['birth_date'] !== '') {
-            if (!strtotime($data['birth_date'])) {
-                $errors['birth_date'] = 'تاریخ تولد نامعتبر است';
+            $date = \DateTime::createFromFormat('Y-m-d', $data['birth_date']);
+            if (!$date || $date->format('Y-m-d') !== $data['birth_date']) {
+                $errors['birth_date'] = 'تاریخ تولد نامعتبر است (فرمت صحیح: YYYY-MM-DD)';
             } else {
                 // Check if birth date is in the future
-                if (strtotime($data['birth_date']) > time()) {
+                if ($date->getTimestamp() > time()) {
                     $errors['birth_date'] = 'تاریخ تولد نمی‌تواند در آینده باشد';
                 }
                 // Check if user is at least 13 years old
-                $birthDate = new \DateTime($data['birth_date']);
                 $today = new \DateTime();
-                $age = $today->diff($birthDate)->y;
+                $age = $today->diff($date)->y;
                 if ($age < 13) {
                     $errors['birth_date'] = 'شما باید حداقل 13 سال داشته باشید';
                 }
@@ -181,7 +198,7 @@ class ProfileService extends \App\Services\BaseService
     public function updateProfileWithValidation(int $userId, array $data): array
     {
         // Validate
-        $errors = $this->validateProfileUpdate($data);
+        $errors = $this->validateProfileUpdate($data, $userId);
         if (!empty($errors)) {
             return ['success' => false, 'errors' => $errors];
         }

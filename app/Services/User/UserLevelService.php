@@ -220,7 +220,8 @@ class UserLevelService extends \App\Services\BaseService
         }
 
         // Ensure safe idempotency token and boundary check to block concurrent duplicate execution rolls
-        $idempotencyKey = "level_purch_{$userId}_{$levelSlug}_" . \date('Ymd');
+        // Ensure safe idempotency token - include hour to allow retry later in day if previous expired
+        $idempotencyKey = "level_purch_{$userId}_{$levelSlug}_" . \date('YmdH');
 
         // MED-05: Enforce strong validation overlap: Block duplicate purchases of levels that haven't expired yet
         $stmt = $this->db->prepare("SELECT level_slug, level_expires_at, level_type FROM users WHERE id = ?");
@@ -527,6 +528,7 @@ class UserLevelService extends \App\Services\BaseService
         $user = $stmt->fetch(\PDO::FETCH_OBJ);
         if (!$user) return false;
 
+        $reason = htmlspecialchars(trim($reason), ENT_QUOTES, 'UTF-8');
         return $this->changeLevel($userId, $user->level_slug, $newSlug, 'admin', $reason);
     }
 

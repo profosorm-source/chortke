@@ -286,6 +286,11 @@ class AnalyticsService extends \App\Services\BaseService
         $this->logger->info("Analytics event: {$eventType}", $data);
     }
 
+    public function getSystemHealth(): array
+    {
+        return $this->repository->getSystemHealth();
+    }
+
     /**
      * دریافت آمار کلی تسک‌ها جهت انطباق با نسخه‌های قدیمی
      */

@@ -324,23 +324,38 @@ class CryptoDepositService extends \App\Services\BaseService
         }
 
         if (($result['status'] ?? '') === 'verified') {
+            $this->db->beginTransaction();
             try {
-                $ok = $this->wallet->deposit((int)$d->user_id, (float)$d->amount, 'usdt', [
+                // Issue 4: Lock the record to prevent race conditions during auto-verify
+                $stmt = $this->db->prepare("SELECT verification_status FROM crypto_deposits WHERE id = ? FOR UPDATE");
+                $stmt->execute([$depositId]);
+                $lockedStatus = $stmt->fetchColumn();
+
+                if ($lockedStatus === 'verified') {
+                    $this->db->rollBack();
+                    $this->logger->warning('crypto.verify.already_verified', ['deposit_id' => $depositId]);
+                    return ['auto' => true, 'message' => 'این تراکنش قبلاً تأیید شده است'];
+                }
+
+                // Use depositInTransaction to ensure atomic updates with the lock
+                $okResult = $this->wallet->depositInTransaction((int)$d->user_id, (float)$d->amount, 'usdt', [
                     'type' => 'crypto_deposit',
                     'deposit_id' => $depositId,
                     'network' => (string)$d->network,
                     'tx_hash' => (string)$d->tx_hash,
                 ]);
 
-                if ($ok) {
+                if ($okResult['success'] ?? false) {
                     $this->depositModel->update($depositId, [
                         'verification_status' => 'verified',
                         'reviewed_at' => \date('Y-m-d H:i:s'),
                         'auto_verified' => 1,
+                        'wallet_transaction_id' => $okResult['transaction_id'] ?? null,
                     ]);
 
+                    $this->db->commit();
+
                     // ✅ **تطبیق crypto deposit با blockchain و wallet**
-                    // تأیید: آیا crypto deposit واقعاً به wallet رسید؟
                     $reconciliation = $this->reconciliationService->reconcilePayment([
                         'transaction_id' => (string)$d->tx_hash,
                         'reference_id' => 'crypto_deposit_' . $depositId,
@@ -348,7 +363,7 @@ class CryptoDepositService extends \App\Services\BaseService
                         'amount' => (float)$d->amount,
                         'currency' => 'usdt',
                         'status' => 'success',
-                        'gateway' => 'crypto_' . strtolower($d->network),
+                        'gateway' => 'crypto_' . strtolower((string)$d->network),
                         'description' => "تطبیق crypto deposit - Network: {$d->network}, Tx: {$d->tx_hash}",
                         'timestamp' => time(),
                     ]);
@@ -373,19 +388,24 @@ class CryptoDepositService extends \App\Services\BaseService
 
                     return ['auto' => true, 'message' => 'تأیید خودکار موفق'];
                 } else {
+                    $this->db->rollBack();
                     $this->logger->error('crypto.verify.wallet_deposit_failed', [
                         'deposit_id' => $depositId,
-                        'user_id' => $d->user_id
+                        'user_id' => $d->user_id,
+                        'reason' => $okResult['message'] ?? 'Unknown wallet error'
                     ]);
-                    return $this->moveToManualReview($depositId, 'خطا در واریز به کیف پول');
+                    return $this->moveToManualReview($depositId, 'خطا در واریز به کیف پول: ' . ($okResult['message'] ?? 'نامشخص'));
                 }
             } catch (\Exception $e) {
+                if ($this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 $this->logger->error('crypto.verify.auto_deposit_failed', [
                     'deposit_id' => $depositId,
                     'user_id' => $d->user_id,
                     'error' => $e->getMessage()
                 ]);
-                return $this->moveToManualReview($depositId, 'خطا در واریز خودکار');
+                return $this->moveToManualReview($depositId, 'خطا در واریز خودکار: ' . $e->getMessage());
             }
         } elseif (($result['status'] ?? '') === 'mismatch') {
             return $this->moveToManualReview($depositId, $result['reason'] ?? 'عدم تطابق داده‌ها');

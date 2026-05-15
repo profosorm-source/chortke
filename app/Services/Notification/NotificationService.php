@@ -271,10 +271,21 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         ?string $scheduledAt = null,
         array   $filters     = []
     ): array {
-        $users = $this->getUsersBySegment($segment, $filters);
-        $result = $this->sendBulkToUsers($users, $type, $title, $message, $data, $actionUrl, $actionText, $priority, $scheduledAt);
-        $this->logger->info('notif.send_to_segment', array_merge($result, ['segment' => $segment, 'type' => $type]));
-        return $result;
+        $totalSent = 0;
+        $totalQueued = 0;
+
+        // 🚀 BUG-04 Fix: Use chunked processing to avoid memory OOM
+        $this->model->chunkUsersBySegment($segment, 500, function(array $userIds) use (
+            $type, $title, $message, $data, $actionUrl, $actionText, $priority, $scheduledAt, &$totalSent, &$totalQueued
+        ) {
+            $result = $this->sendBulkToUsers($userIds, $type, $title, $message, $data, $actionUrl, $actionText, $priority, $scheduledAt);
+            $totalSent += $result['sent'] ?? 0;
+            if ($result['queued'] ?? false) {
+                $totalQueued++;
+            }
+        }, $filters);
+
+        return ['sent' => $totalSent, 'queued_batches' => $totalQueued, 'segment' => $segment];
     }
 
     public function sendBulk(
@@ -296,17 +307,15 @@ class NotificationService extends \App\Services\BaseService implements Notificat
     }
 
     private function sendBulkToUsers(
-        array $users, string $type, string $title, string $message, 
+        array $userIds, string $type, string $title, string $message, 
         ?array $data, ?string $actionUrl, ?string $actionText, string $priority, ?string $scheduledAt
     ): array {
-        $userIds = [];
-        foreach ($users as $u) {
-            $userIds[] = (int)$u->id;
-        }
-
         if (empty($userIds)) {
             return ['sent' => 0, 'skipped' => 0];
         }
+
+        // 🚀 BUG-10 Fix: Pre-fetch preferences to avoid N+1 queries in background jobs
+        $this->preferenceService->prefetchPreferences($userIds);
 
         // HIGH-02: 1. Push Dispatch Offloading to System Queue (Fully Async)
         try {

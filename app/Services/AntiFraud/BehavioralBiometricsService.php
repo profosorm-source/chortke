@@ -14,10 +14,13 @@ use App\Contracts\LoggerInterface;
 class BehavioralBiometricsService extends \App\Services\BaseService
 {
     private VelocityAndScoreModel $model;
-    public function __construct(VelocityAndScoreModel $model, LoggerInterface $logger)
+    private \Core\Cache $cache;
+
+    public function __construct(VelocityAndScoreModel $model, \Core\Cache $cache, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->model = $model;
+        $this->cache = $cache;
     }
 
     /**
@@ -25,7 +28,13 @@ class BehavioralBiometricsService extends \App\Services\BaseService
      */
     public function analyzeTypingPattern(int $userId, array $keystrokes): array
     {
-        // Performance Guard: Cap evaluation depth to preserve CPU cycles
+        // Performance Guard: Check Redis cache first to avoid redundant heavy O(N) calculations
+        $cacheKey = "biometrics:typing:{$userId}";
+        $cached = $this->cache->get($cacheKey);
+        if ($cached && count($keystrokes) <= ($cached['keystroke_count'] ?? 0)) {
+            return $cached;
+        }
+
         if (count($keystrokes) > 250) {
             $keystrokes = \array_slice($keystrokes, 0, 250);
         }
@@ -43,10 +52,13 @@ class BehavioralBiometricsService extends \App\Services\BaseService
         $downEvents = [];
         
         foreach ($keystrokes as $event) {
+            // Privacy Guard (Issue 5): Do not use actual key character, use a hash for matching down/up pairs
+            $keyId = md5((string)($event['key'] ?? 'unknown'));
+            
             if ($event['type'] === 'down') {
-                $downEvents[$event['key']] = $event['timestamp'];
-            } elseif ($event['type'] === 'up' && isset($downEvents[$event['key']])) {
-                $holdTime = $event['timestamp'] - $downEvents[$event['key']];
+                $downEvents[$keyId] = $event['timestamp'];
+            } elseif ($event['type'] === 'up' && isset($downEvents[$keyId])) {
+                $holdTime = $event['timestamp'] - $downEvents[$keyId];
                 $holdTimes[] = $holdTime;
             }
         }
@@ -105,7 +117,7 @@ class BehavioralBiometricsService extends \App\Services\BaseService
             'keystroke_count' => count($keystrokes)
         ]);
         
-        return [
+        $result = [
             'is_suspicious' => $riskScore >= 50,
             'risk_score' => min(100, $riskScore),
             'reasons' => $suspiciousReasons,
@@ -116,14 +128,25 @@ class BehavioralBiometricsService extends \App\Services\BaseService
                 'keystroke_count' => count($keystrokes)
             ]
         ];
+
+        // Cache the result for 5 minutes to reduce CPU load (Issue 4)
+        $this->cache->put($cacheKey, $result, 5);
+
+        return $result;
     }
 
     /**
      * تحلیل الگوی حرکت موس (Mouse Movement Pattern)
      */
-    public function analyzeMousePattern(array $movements): array
+    public function analyzeMousePattern(int $userId, array $movements): array
     {
-        // Performance Guard: Limit coordinate tracking density to protect server rendering speeds
+        // Performance Guard (Issue 4): Cache results to prevent O(N) overhead on repeated requests
+        $cacheKey = "biometrics:mouse:{$userId}";
+        $cached = $this->cache->get($cacheKey);
+        if ($cached && count($movements) <= ($cached['movement_count'] ?? 0)) {
+            return $cached;
+        }
+
         if (count($movements) > 250) {
             $movements = \array_slice($movements, 0, 250);
         }
@@ -199,7 +222,7 @@ class BehavioralBiometricsService extends \App\Services\BaseService
             $riskScore += 30;
         }
         
-        return [
+        $result = [
             'is_suspicious' => $riskScore >= 50,
             'risk_score' => min(100, $riskScore),
             'reasons' => $suspiciousReasons,
@@ -211,6 +234,11 @@ class BehavioralBiometricsService extends \App\Services\BaseService
                 'pause_count' => $pauseCount
             ]
         ];
+
+        // Cache for 5 minutes
+        $this->cache->put($cacheKey, $result, 5);
+
+        return $result;
     }
 
     /**
@@ -381,7 +409,7 @@ class BehavioralBiometricsService extends \App\Services\BaseService
         }
         
         if (isset($behaviorData['mouse_movements'])) {
-            $results['mouse'] = $this->analyzeMousePattern($behaviorData['mouse_movements']);
+            $results['mouse'] = $this->analyzeMousePattern($userId, $behaviorData['mouse_movements']);
         }
         
         if (isset($behaviorData['clicks'])) {

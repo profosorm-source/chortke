@@ -297,6 +297,23 @@ public function callback(string $gatewayName, array $callbackData): array
             return ['success' => false, 'message' => 'درگاه نامعتبر است'];
         }
 
+        // H22 Fix (Problem 1): ابتدا عملیات تایید پرداخت از درگاه را خارج از تراکنش دیتابیس انجام می‌دهیم 
+        // تا از نگه داشتن طولانی مدت کانکشن دیتابیس (Database Connection Exhaustion) جلوگیری شود.
+        $status = $this->normalizeCallbackStatus($callbackData['Status'] ?? $callbackData['status'] ?? null);
+        $verify = null;
+
+        if (!in_array($status, ['nok', 'cancel', '0', 'failed'], true)) {
+            try {
+                $verify = $gw->verifyPayment($authority, (float)$pay->amount);
+            } catch (\Throwable $e) {
+                $this->logger->error('payment.verify.exception_outside_tx', [
+                    'gateway' => $gatewayName,
+                    'authority' => $authority,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+
         // شروع تراکنش اتمیک برای کل عملیات callback
         $this->db->beginTransaction();
 
@@ -330,8 +347,7 @@ public function callback(string $gatewayName, array $callbackData): array
             }
 
             // بررسی وضعیت پرداخت (لغو یا عدم تایید)
-            $status = $this->normalizeCallbackStatus($callbackData['Status'] ?? $callbackData['status'] ?? null);
-            if (in_array($status, ['nok', 'cancel', '0', 'failed'], true)) {
+            if ($verify === null || in_array($status, ['nok', 'cancel', '0', 'failed'], true)) {
                 $this->log->update((int)$pay->id, [
                     'status' => 'cancelled',
                     'response_data' => \json_encode($callbackData, JSON_UNESCAPED_UNICODE),
@@ -346,13 +362,10 @@ public function callback(string $gatewayName, array $callbackData): array
                     'amount' => $pay->amount
                 ]);
 
-                return ['success' => false, 'message' => 'پرداخت لغو شد'];
+                return ['success' => false, 'message' => 'پرداخت لغو شد یا در انتظار تایید باقی ماند'];
             }
 
-            // عملیات تأیید پرداخت
-            $verify = $gw->verifyPayment($authority, (float)$pay->amount);
-
-            // به‌روزرسانی وضعیت پرداخت در سیستم
+            // به‌روزرسانی وضعیت پرداخت در سیستم (بر اساس نتیجه verify که قبلاً انجام شده)
             $this->log->update((int)$pay->id, [
                 'status' => $verify['success'] ? 'verified' : 'failed',
                 'ref_id' => $verify['ref_id'] ?? null,
@@ -374,16 +387,17 @@ public function callback(string $gatewayName, array $callbackData): array
             }
 
             // واریز مبلغ به کیف پول
+            // H23 Fix (Problem 3): ارسال gateway_transaction_id جهت جلوگیری از ایجاد Orphan Payment در ReconciliationService
             $ok = $this->wallet->deposit(
                 (int) $pay->user_id,
                 (float) $pay->amount,
                 'irt',
                 [
-                    'type'                  => 'gateway_deposit',
-                    'gateway'               => $gatewayName,
-                    'authority'             => $authority,
-                    'ref_id'                => $verify['ref_id'] ?? null,
-                    'description'           => 'واریز آنلاین (درگاه)'
+                    'type'                   => 'gateway_deposit',
+                    'gateway'                => $gatewayName,
+                    'gateway_transaction_id' => $authority, // کلید حیاتی برای Reconciliation
+                    'ref_id'                 => $verify['ref_id'] ?? null,
+                    'description'            => 'واریز آنلاین (درگاه)'
                 ]
             );
 
