@@ -124,19 +124,30 @@ class InfluencerReputationService extends \App\Services\BaseService
      */
     public function scoreOrderRejectedByInfluencer(int $profileId, int $orderId): void
     {
-        $profile = $this->profileModel->find($profileId);
-        $influencerUserId = $profile ? (int)$profile->user_id : $profileId;
+        try {
+            $this->db->beginTransaction();
 
-        $pts = (int) $this->settingService->get('influencer_rep_reject_points', -3);
-        $this->reputationModel->addEvent([
-            'profile_id' => $profileId,
-            'user_id'    => $influencerUserId,
-            'order_id'   => $orderId,
-            'event_type' => 'order_rejected',
-            'points'     => $pts,
-            'note'       => 'رد سفارش یا عدم پاسخ',
-        ]);
-        $this->refreshProfileRating($profileId);
+            $profile = $this->profileModel->find($profileId);
+            $influencerUserId = $profile ? (int)$profile->user_id : $profileId;
+
+            $pts = (int) $this->settingService->get('influencer_rep_reject_points', -3);
+            $this->reputationModel->addEvent([
+                'profile_id' => $profileId,
+                'user_id'    => $influencerUserId,
+                'order_id'   => $orderId,
+                'event_type' => 'order_rejected',
+                'points'     => $pts,
+                'note'       => 'رد سفارش یا عدم پاسخ',
+            ]);
+            $this->refreshProfileRating($profileId);
+
+            $this->db->commit();
+        } catch (\Exception $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -144,10 +155,47 @@ class InfluencerReputationService extends \App\Services\BaseService
      */
     public function refreshProfileRating(int $profileId): void
     {
-        $stats = $this->reputationModel->getProfileStats($profileId);
-        $this->profileModel->update($profileId, [
-            'average_rating' => $stats->total_points,
-        ]);
+        $startedTransaction = false;
+        if (!$this->db->inTransaction()) {
+            $this->db->beginTransaction();
+            $startedTransaction = true;
+        }
+
+        try {
+            // قفل ردیف پروفایل برای جلوگیری از Race Condition در زمان بروزرسانی امتیاز
+            // فرض بر این است که متد findByIdForUpdate در مدل وجود دارد یا از prepare استفاده می‌کنیم
+            $stmt = $this->db->prepare("SELECT id FROM influencer_profiles WHERE id = ? FOR UPDATE");
+            $stmt->execute([$profileId]);
+            if (!$stmt->fetch()) {
+                if ($startedTransaction) $this->db->rollBack();
+                return;
+            }
+
+            $stats = $this->reputationModel->getProfileStats($profileId);
+            
+            // امتیازدهی باید نرمالایز شده باشد (بازه ۰ تا ۵) نه جمع کل امتیازات خام
+            // منطق: میانگین امتیاز به ازای هر سفارش با ضریب تعدیل
+            $totalPoints = (float)($stats->total_points ?? 0);
+            $totalOrders = (int)($stats->total_orders ?? 0);
+            
+            // فرمول پیشنهادی: میانگین امتیازات تقسیم بر ۲ (برای نگاشت به بازه ۵ ستاره) با رعایت سقف و کف
+            $normalizedRating = min(5.0, max(0.0, 
+                ($totalOrders > 0 ? ($totalPoints / $totalOrders) : 0) * 0.5
+            ));
+
+            $this->profileModel->update($profileId, [
+                'average_rating' => $normalizedRating,
+            ]);
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+        } catch (\Exception $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**

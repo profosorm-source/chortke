@@ -18,6 +18,7 @@ class BannerService extends \App\Services\BaseService
     private WalletService $walletService;
     private UploadService $uploadService;
     private Database $db;
+    private \Core\Cache $cache;
 
     public function __construct(
         Ads $bannerModel,
@@ -25,6 +26,7 @@ class BannerService extends \App\Services\BaseService
         WalletService $walletService,
         UploadService $uploadService,
         Database $db,
+        \Core\Cache $cache,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -33,6 +35,7 @@ class BannerService extends \App\Services\BaseService
         $this->walletService = $walletService;
         $this->uploadService = $uploadService;
         $this->db = $db;
+        $this->cache = $cache;
     }
 
     /**
@@ -51,9 +54,15 @@ class BannerService extends \App\Services\BaseService
             $banners = \array_slice($banners, 0, $placementObj->max_banners);
         }
 
-        // به‌روزرسانی دسته‌جمعی بازدیدها (Bulk Update) جهت جلوگیری از N+1 Updates
+        // H-06 Fix: به‌روزرسانی بافر شده بازدیدها در Redis جهت جلوگیری از Lock Contention در دیتابیس
         $bannerIds = array_map(fn($b) => (int)$b->id, $banners);
-        if (!empty($bannerIds)) {
+        if (!empty($bannerIds) && $this->cache->driver() === 'redis') {
+            $redis = $this->cache->redis();
+            foreach ($bannerIds as $id) {
+                $redis->hIncrBy($this->cache->redisKey('banner_impressions_buffer'), (string)$id, 1);
+            }
+        } elseif (!empty($bannerIds)) {
+            // Fallback به آپدیت مستقیم اگر Redis در دسترس نباشد
             $this->bannerModel->bulkIncrementImpressions($bannerIds);
         }
 
@@ -369,7 +378,27 @@ class BannerService extends \App\Services\BaseService
             ]);
         }
 
-        return ['success' => true, 'redirect' => $banner->link ?: '/'];
+        $redirectUrl = $banner->link ?: '/';
+        if (!$this->validateRedirectUrl($redirectUrl)) {
+            $this->logger->warning('banner.unsafe_redirect', ['url' => $redirectUrl, 'banner_id' => $bannerId]);
+            $redirectUrl = '/';
+        }
+
+        return ['success' => true, 'redirect' => $redirectUrl];
+    }
+
+    /**
+     * بررسی امنیت URL هدایت برای جلوگیری از Open Redirect و XSS (javascript: و غیره)
+     */
+    private function validateRedirectUrl(string $url): bool
+    {
+        if (empty($url) || $url === '/') {
+            return true;
+        }
+
+        $parsed = parse_url($url);
+        // فقط اجازه استفاده از پروتکل‌های وب استاندارد
+        return in_array(strtolower($parsed['scheme'] ?? ''), ['http', 'https'], true);
     }
 
     public function deactivateExpired(): int
@@ -445,8 +474,10 @@ class BannerService extends \App\Services\BaseService
             $errors['title'] = 'عنوان حداکثر 255 کاراکتر';
         }
 
-        if (!empty($data['link']) && !\filter_var($data['link'], FILTER_VALIDATE_URL)) {
-            $errors['link'] = 'لینک معتبر نیست';
+        if (!empty($data['link'])) {
+            if (!filter_var($data['link'], FILTER_VALIDATE_URL) || !$this->validateRedirectUrl($data['link'])) {
+                $errors['link'] = 'لینک معتبر نیست (باید با http یا https شروع شود)';
+            }
         }
 
         $validPlacements = ['header', 'footer', 'sidebar', 'homepage', 'dashboard_user', 'dashboard_admin'];
@@ -522,6 +553,48 @@ class BannerService extends \App\Services\BaseService
             ->where('is_active', '=', true)
             ->orderBy('display_order', 'ASC')
             ->get() ?? [];
+    }
+
+    /**
+     * تخلیه بافر بازدیدها از Redis به دیتابیس
+     * باید توسط کرون‌جاب دوره‌ای (مثلاً هر ۵ دقیقه) صدا زده شود
+     */
+    public function flushImpressionsBuffer(): int
+    {
+        if ($this->cache->driver() !== 'redis') {
+            return 0;
+        }
+
+        $redis = $this->cache->redis();
+        $key = $this->cache->redisKey('banner_impressions_buffer');
+        $data = $redis->hGetAll($key);
+        
+        if (empty($data)) {
+            return 0;
+        }
+
+        $processed = 0;
+        foreach ($data as $bannerId => $count) {
+            $count = (int)$count;
+            if ($count <= 0) continue;
+
+            // تلاش برای ثبت در دیتابیس
+            $sql = "UPDATE ads SET 
+                    impressions = impressions + ?,
+                    ctr = CASE WHEN (impressions + ?) > 0 THEN ROUND((clicks / (impressions + ?)) * 100, 2) ELSE 0 END,
+                    updated_at = NOW()
+                    WHERE id = ?";
+            
+            $stmt = $this->db->prepare($sql);
+            if ($stmt->execute([$count, $count, $count, (int)$bannerId])) {
+                // اگر با موفقیت در دیتابیس ثبت شد، از بافر کم کن
+                // HINCRBY با مقدار منفی برای کم کردن (اتمیک)
+                $redis->hIncrBy($key, (string)$bannerId, -$count);
+                $processed++;
+            }
+        }
+
+        return $processed;
     }
 
     /**

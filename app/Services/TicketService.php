@@ -236,9 +236,14 @@ class TicketService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'شما امروز حداکثر تعداد گزارش مجاز (2 بار) را ثبت کرده‌اید.'];
         }
 
-        // اعتبارسنجی اولیه متن
-        if (empty(trim($data['description'] ?? ''))) {
-            return ['success' => false, 'message' => 'توضیحات گزارش الزامی است'];
+        // H-05: Description Length Validation (10 to 5000 chars)
+        $desc = trim($data['description'] ?? '');
+        $descLen = mb_strlen($desc);
+        if ($descLen < 10) {
+            return ['success' => false, 'message' => 'توضیحات گزارش باید حداقل ۱۰ کاراکتر باشد.'];
+        }
+        if ($descLen > 5000) {
+            return ['success' => false, 'message' => 'توضیحات گزارش نمی‌تواند بیش از ۵۰۰۰ کاراکتر باشد.'];
         }
 
         // استخراج متادیتا از مرورگر
@@ -391,6 +396,36 @@ class TicketService extends \App\Services\BaseService
              $c->attachment_path = null; // if needed
         }
         return $comments;
+    }
+
+    /**
+     * بروزرسانی وضعیت تیکت توسط ادمین
+     */
+    public function updateStatus(int $ticketId, string $status, int $adminId): bool
+    {
+        $ticket = $this->ticketModel->findById($ticketId);
+        if (!$ticket) return false;
+
+        $ok = $this->ticketModel->updateStatus($ticketId, $status);
+        if ($ok) {
+            $this->logger->activity('ticket_status_updated', "وضعیت تیکت #{$ticketId} به {$status} تغییر یافت", $adminId, ['status' => $status]);
+        }
+        return $ok;
+    }
+
+    /**
+     * بروزرسانی اولویت تیکت توسط ادمین
+     */
+    public function updatePriority(int $ticketId, string $priority, int $adminId): bool
+    {
+        $ticket = $this->ticketModel->findById($ticketId);
+        if (!$ticket) return false;
+
+        $ok = $this->ticketModel->update($ticketId, ['priority' => $priority]);
+        if ($ok) {
+            $this->logger->activity('ticket_priority_updated', "اولویت تیکت #{$ticketId} به {$priority} تغییر یافت", $adminId, ['priority' => $priority]);
+        }
+        return $ok;
     }
 
     /**

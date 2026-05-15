@@ -418,6 +418,19 @@ class CustomTaskService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
+            // قفل‌گذاری روی سابمیشن برای جلوگیری از تایید مضاعف (Double-click / Race Condition)
+            $sub = $this->db->query("SELECT * FROM custom_task_submissions WHERE id = ? FOR UPDATE", [$submission->id])->fetch(\PDO::FETCH_OBJ);
+            
+            if (!$sub) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'درخواست یافت نشد.'];
+            }
+
+            if ($sub->status === 'approved') {
+                $this->db->rollBack();
+                return ['success' => true, 'message' => 'این درخواست قبلاً تایید شده است.'];
+            }
+
             // Ø¨Ù‡â€ŒØ±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ ÙˆØ¶Ø¹ÛŒØª
             $this->submissionModel->submission_update($submission->id, [
                 'status' => 'approved',
@@ -600,7 +613,8 @@ class CustomTaskService extends \App\Services\BaseService
 
     private function payWorkerReward(object $submission): void
     {
-        $idempotencyKey = "ctask_reward_{$submission->id}_" . time();
+        // Stable idempotency key without time() to prevent duplicate payouts across multiple attempts
+        $idempotencyKey = "ctask_reward_{$submission->id}";
 
         $txId = $this->walletService->deposit(
             $submission->worker_id,

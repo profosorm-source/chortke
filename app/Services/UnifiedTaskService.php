@@ -37,18 +37,11 @@ class UnifiedTaskService extends BaseService
         // ۲. استثنا قائل شدن برای Adtube (طبق دستور کاربر: یوتیوب باید از لیست اصلی مستثنی باشد و جدا مدیریت شود)
         $where[] = "(a.platform != 'youtube' OR a.platform IS NULL)";
 
-        // ۳. فیلتر هوشمند: عدم نمایش تسک‌هایی که کاربر قبلاً انجام داده است (جلوگیری از تکرار)
-        // این کوئری ترکیبی، تمامی جداول اجرا (Executions) را در یک NOT EXISTS هوشمند چک می‌کند.
-        $where[] = "NOT EXISTS (
-            SELECT 1 FROM (
-                SELECT ad_id, executor_id FROM social_task_executions WHERE status NOT IN ('cancelled','expired')
-                UNION ALL
-                SELECT ad_id, user_id as executor_id FROM seo_executions WHERE status NOT IN ('rejected')
-                UNION ALL
-                SELECT task_id as ad_id, user_id as executor_id FROM custom_task_submissions WHERE status NOT IN ('rejected')
-            ) AS executions
-            WHERE executions.ad_id = a.id AND executions.executor_id = ?
-        )";
+        $where[] = "NOT EXISTS (SELECT 1 FROM social_task_executions WHERE ad_id = a.id AND executor_id = ? AND status NOT IN ('cancelled','expired'))";
+        $where[] = "NOT EXISTS (SELECT 1 FROM seo_executions WHERE ad_id = a.id AND user_id = ? AND status != 'rejected')";
+        $where[] = "NOT EXISTS (SELECT 1 FROM custom_task_submissions WHERE task_id = a.id AND worker_id = ? AND status != 'rejected')";
+        $params[] = $userId;
+        $params[] = $userId;
         $params[] = $userId;
 
         // ۴. اعمال فیلترهای درخواستی کاربر (Smart Filters)
@@ -124,16 +117,11 @@ class UnifiedTaskService extends BaseService
 
         $where[] = "(a.platform != 'youtube' OR a.platform IS NULL)";
 
-        $where[] = "NOT EXISTS (
-            SELECT 1 FROM (
-                SELECT ad_id, executor_id FROM social_task_executions WHERE status NOT IN ('cancelled','expired')
-                UNION ALL
-                SELECT ad_id, user_id as executor_id FROM seo_executions WHERE status NOT IN ('rejected')
-                UNION ALL
-                SELECT task_id as ad_id, user_id as executor_id FROM custom_task_submissions WHERE status NOT IN ('rejected')
-            ) AS executions
-            WHERE executions.ad_id = a.id AND executions.executor_id = ?
-        )";
+        $where[] = "NOT EXISTS (SELECT 1 FROM social_task_executions WHERE ad_id = a.id AND executor_id = ? AND status NOT IN ('cancelled','expired'))";
+        $where[] = "NOT EXISTS (SELECT 1 FROM seo_executions WHERE ad_id = a.id AND user_id = ? AND status != 'rejected')";
+        $where[] = "NOT EXISTS (SELECT 1 FROM custom_task_submissions WHERE task_id = a.id AND worker_id = ? AND status != 'rejected')";
+        $params[] = $userId;
+        $params[] = $userId;
         $params[] = $userId;
 
         if (!empty($filters['type'])) {

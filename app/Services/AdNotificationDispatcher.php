@@ -28,6 +28,15 @@ class AdNotificationDispatcher extends \App\Services\BaseService
     public function processAdNotifications(): array
     {
         $stats = ['ads_processed' => 0, 'total_sent' => 0];
+        
+        // 🚀 BUG-09 Fix: Distributed Lock to prevent overlapping runs
+        $lockKey = 'lock:ad_notification_process';
+        $redis = $this->performanceService->redis();
+        
+        if ($redis && !$redis->set($lockKey, '1', ['nx', 'ex' => 300])) {
+            $this->logInfo('ad_process_locked', 'Another ad process is already running.');
+            return $stats;
+        }
 
         try {
             // 1. Find active notification ads that are approved and not yet completed
@@ -36,6 +45,7 @@ class AdNotificationDispatcher extends \App\Services\BaseService
             );
 
             if (empty($activeAds)) {
+                if ($redis) $redis->del($lockKey);
                 return $stats;
             }
 
@@ -138,6 +148,8 @@ class AdNotificationDispatcher extends \App\Services\BaseService
 
         } catch (\Throwable $e) {
             $this->logError('ad_push_cron_fail', $e->getMessage());
+        } finally {
+            if ($redis) $redis->del($lockKey);
         }
 
         return $stats;

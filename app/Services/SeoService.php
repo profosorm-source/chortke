@@ -149,27 +149,29 @@ class SeoService extends \App\Services\BaseService
      public function completeTask(int $executionId, int $userId, array $engagementData): array
     {
         $this->db->beginTransaction();
-        // قفل گذاری روی سطر اجرا و آگهی برای جلوگیری از Double Payout
-        $execution = $this->db->query("SELECT * FROM seo_executions WHERE id = ? AND user_id = ? FOR UPDATE", [$executionId, $userId])->fetch(\PDO::FETCH_OBJ);
         
-        if (!$execution) {
-            $this->db->rollBack();
-            return ['success' => false, 'message' => 'تسک یافت نشد'];
-        }
-
-        if ($execution->status !== 'started') {
-            $this->db->rollBack();
-            return ['success' => false, 'message' => 'این تسک قبلاً پردازش شده است'];
-        }
-
-        $ad = $this->db->query("SELECT * FROM ads WHERE id = ? FOR UPDATE", [$execution->ad_id])->fetch(\PDO::FETCH_OBJ);
-        
-        if (!$ad) {
-            $this->db->rollBack();
-            return ['success' => false, 'message' => 'آگهی یافت نشد'];
-        }
-
         try {
+            // قفل گذاری روی سطر اجرا برای جلوگیری از Double Payout
+            $execution = $this->executionModel->findByIdForUpdate($executionId);
+            
+            if (!$execution || $execution->user_id !== $userId) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'تسک یافت نشد'];
+            }
+    
+            if ($execution->status !== 'started') {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'این تسک قبلاً پردازش شده است'];
+            }
+    
+            // قفل گذاری روی آگهی برای بررسی و کسر بودجه
+            $ad = $this->adModel->findByIdForUpdate($execution->ad_id);
+            
+            if (!$ad) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'آگهی یافت نشد'];
+            }
+
             // 1. اعتبارسنجی داده‌ها
             if (!isset($engagementData['duration'], $engagementData['scroll_depth'], $engagementData['interactions'])) {
                 $this->db->rollBack();
@@ -426,6 +428,63 @@ class SeoService extends \App\Services\BaseService
         } catch (\Throwable $e) {
             return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
         }
+    }
+    /**
+     * تایید آگهی توسط ادمین
+     */
+    public function approveAd(int $adId): bool
+    {
+        $ad = $this->adModel->find($adId);
+        if (!$ad) return false;
+
+        $ok = $this->adModel->update($adId, [
+            'status' => 'active',
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
+
+        if ($ok) {
+            $this->logger->activity('seo_ad.approved', "آگهی SEO #{$adId} تایید شد", user_id(), ['ad_id' => $adId]);
+        }
+        return $ok;
+    }
+
+    /**
+     * رد آگهی توسط ادمین
+     */
+    public function rejectAd(int $adId, string $reason): bool
+    {
+        $ad = $this->adModel->find($adId);
+        if (!$ad) return false;
+
+        $ok = $this->adModel->update($adId, [
+            'status' => 'rejected',
+            'rejection_reason' => $reason ?: 'مدیر رد کرد',
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
+
+        if ($ok) {
+            $this->logger->activity('seo_ad.rejected', "آگهی SEO #{$adId} رد شد", user_id(), ['ad_id' => $adId, 'reason' => $reason]);
+        }
+        return $ok;
+    }
+
+    /**
+     * متوقف کردن آگهی توسط ادمین
+     */
+    public function pauseAd(int $adId): bool
+    {
+        $ad = $this->adModel->find($adId);
+        if (!$ad) return false;
+
+        $ok = $this->adModel->update($adId, [
+            'status' => 'paused',
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
+
+        if ($ok) {
+            $this->logger->activity('seo_ad.paused', "آگهی SEO #{$adId} متوقف شد", user_id(), ['ad_id' => $adId]);
+        }
+        return $ok;
     }
 }
 

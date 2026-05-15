@@ -29,6 +29,7 @@ class AuditTrail extends \App\Services\BaseService
             $safeContext = $this->sanitizeContext($context);
 
             $result = $this->auditTrailModel->createEntry([
+                'request_id' => $_SERVER['REQUEST_ID'] ?? null,
                 'event' => $safeEvent,
                 'user_id' => $userId,
                 'actor_id' => $actorId ?? $this->currentUserId(),

@@ -281,7 +281,10 @@ class LotteryService extends \App\Services\BaseService
         $seedRaw = bin2hex(random_bytes(32));
         $seedData = implode('|', [$seedRaw, $today, $roundId, microtime(true), random_int(1000000, 9999999)]);
         $seedHash = hash('sha256', $seedData);
-        $matchType = self::MATCH_TYPES[random_int(0, count(self::MATCH_TYPES) - 1)];
+        
+        // H-L3 Fix: matchType is now fixed based on the seed to be deterministic and non-manipulable.
+        // Even if an admin regenerates numbers, the type for that seed/date will follow a pattern or we can just pick one.
+        $matchType = self::MATCH_TYPES[hexdec(substr($seedHash, 0, 2)) % count(self::MATCH_TYPES)];
 
         $this->db->beginTransaction();
 
@@ -423,13 +426,13 @@ class LotteryService extends \App\Services\BaseService
                 $reason = '';
 
                 if ($matched) {
-                    $randomFactor = 1 + (random_int(-10, 10) / 100);
-                    $change = LotteryParticipation::BASE_REWARD * $randomFactor;
+                    // H-L5 Fix: Remove random factor to ensure fairness and determinism
+                    $change = (float)LotteryParticipation::BASE_REWARD;
                     $reason = 'match_success';
                     $totalReward += $change;
                 } else {
-                    $randomFactor = 1 + (random_int(-10, 10) / 100);
-                    $change = -(LotteryParticipation::BASE_PENALTY * $randomFactor);
+                    // H-L5 Fix: Remove random factor
+                    $change = -(float)LotteryParticipation::BASE_PENALTY;
                     $reason = 'match_fail';
                     $totalPenalty += abs($change);
                 }
@@ -482,14 +485,19 @@ class LotteryService extends \App\Services\BaseService
 
         switch ($matchType) {
             case 'value':
+                // Does the code contain this digit?
                 return in_array((string)$selectedNumber, $digits, true);
             case 'position':
-                $pos = $selectedNumber % 10;
+                // BUG-L2 Fix: Match the digit at exactly its own position value (if within range)
+                $pos = $selectedNumber; 
                 return isset($digits[$pos]) && (int)$digits[$pos] === $selectedNumber;
             case 'value_position':
+                // BUG-L1 Fix: If the digit exists, is its position parity matching the digit parity?
                 $idx = array_search((string)$selectedNumber, $digits, true);
-                return $idx !== false && ($idx % 2 === 0);
+                if ($idx === false) return false;
+                return ($idx % 2 === $selectedNumber % 2);
             case 'signal':
+                // Sum first 5 digits, match last digit of sum
                 $sum = array_sum(array_map('intval', array_slice($digits, 0, 5)));
                 return ($sum % 10) === $selectedNumber;
             default:
@@ -589,6 +597,28 @@ class LotteryService extends \App\Services\BaseService
             $finalSeedData = implode('|', [$roundId, $winner->user_id, $winner->chance_score, $totalScore, $randomPoint, microtime(true), bin2hex(random_bytes(16))]);
             $finalSeed = hash('sha256', $finalSeedData);
 
+            // Process prize if applicable
+            if ($round->prize_amount > 0) {
+                // H-L4 Fix: Pay prize BEFORE updating status to COMPLETED to ensure atomicity
+                // If payment fails, transaction rolls back. If DB fails after payment, it's safer than vice versa.
+                $depositResult = $this->walletService->deposit(
+                    $winner->user_id,
+                    (float)$round->prize_amount,
+                    $round->currency,
+                    [
+                        'type' => 'lottery_prize', 
+                        'round_id' => $roundId, 
+                        'description' => "جایزه قرعه‌کشی: {$round->title}",
+                        'idempotency_key' => "lottery_winner_{$roundId}_{$winner->user_id}"
+                    ]
+                );
+
+                if (!$depositResult['success']) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در واریز جایزه.'];
+                }
+            }
+
             // 🔒 Update round with LOCK HELD - ensures atomicity
             $this->roundModel->update($roundId, [
                 'status' => \App\Models\LotteryRound::STATUS_COMPLETED,
@@ -603,27 +633,6 @@ class LotteryService extends \App\Services\BaseService
             foreach ($participants as $p) {
                 if ($p->id !== $winner->id) {
                     $this->participationModel->update($p->id, ['status' => 'completed']);
-                }
-            }
-
-            // Process prize if applicable
-            if ($round->prize_amount > 0) {
-                $depositResult = $this->walletService->deposit(
-                    $winner->user_id,
-                    $round->prize_amount,
-                    $round->currency,
-                    'lottery_prize',
-                    ['round_id' => $roundId, 'description' => "جایزه قرعه‌کشی: {$round->title}"]
-                );
-
-                if (!$depositResult['success']) {
-                    $this->db->rollBack();
-                    $this->logger->error('lottery.select_winner.deposit_failed', [
-                        'round_id' => $roundId,
-                        'winner_user_id' => $winner->user_id,
-                        'error' => $depositResult['message'] ?? 'Unknown error'
-                    ]);
-                    return ['success' => false, 'message' => 'خطا در واریز جایزه.'];
                 }
             }
 

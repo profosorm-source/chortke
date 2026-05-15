@@ -153,6 +153,11 @@ class VerificationService extends \App\Services\BaseService
                 'verification_post_url' => $proofUrl,
             ]);
 
+            // Issue 1 Fix: Update the verification record status to 'submitted'
+            $this->verificationModel->updateStatus($verification->id, 'submitted', [
+                'submitted_at' => date('Y-m-d H:i:s')
+            ]);
+
             $this->logger->info('verification.proof.submitted', [
                 'profile_id' => $profileId,
                 'user_id' => $userId,

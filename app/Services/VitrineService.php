@@ -78,6 +78,63 @@ class VitrineService extends \App\Services\BaseService
         return ['ok' => true];
     }
 
+    public function getListings(array $filters, int $perPage, int $offset): array
+    {
+        return [
+            'listings'   => $this->listing->getActive($filters, $perPage, $offset),
+            'total'      => $this->listing->countActive($filters),
+            'categories' => $this->listing->categories(),
+            'platforms'  => $this->listing->platforms()
+        ];
+    }
+
+    public function getWantedListings(array $filters, int $perPage, int $offset): array
+    {
+        return [
+            'listings'   => $this->listing->getWantedListings($filters, $perPage, $offset),
+            'categories' => $this->listing->categories(),
+            'platforms'  => $this->listing->platforms()
+        ];
+    }
+
+    public function getListingDetails(int $id, int $userId): ?array
+    {
+        $listing = $this->listing->find($id);
+        if (!$listing) return null;
+
+        $isSeller = (int) $listing->seller_id === $userId;
+        
+        return [
+            'listing'    => $listing,
+            'isSeller'   => $isSeller,
+            'isBuyer'    => (int) ($listing->buyer_id ?? 0) === $userId,
+            'isWatched'  => $this->listing->isWatched($userId, $id),
+            'watchCount' => $this->listing->watchCount($id),
+            'requests'   => $isSeller ? $this->request->getAllByListing($id) : [],
+            'statuses'   => $this->listing->statuses(),
+            'categories' => $this->listing->categories(),
+            'platforms'  => $this->listing->platforms()
+        ];
+    }
+
+    public function getUserDashboard(int $userId): array
+    {
+        return [
+            'listings'   => $this->listing->getBySeller($userId),
+            'statuses'   => $this->listing->statuses(),
+            'categories' => $this->listing->categories()
+        ];
+    }
+
+    public function getUserPurchases(int $userId): array
+    {
+        return [
+            'listings'   => $this->listing->getByBuyer($userId),
+            'statuses'   => $this->listing->statuses(),
+            'categories' => $this->listing->categories()
+        ];
+    }
+
 public function adminApproveListing(int $listingId, int $adminId): array
 {
     $this->db->beginTransaction();
@@ -758,5 +815,39 @@ public function adminRefundListing(int $listingId, int $adminId): array
 
         // Optimized centralized model delegation
         return $this->listing->searchNative($q, $filters, $limit, $offset, $sortCol, $sortDir);
+    }
+
+    /**
+     * علاقه‌مندی / نشانه‌گذاری
+     */
+    public function toggleWatch(int $userId, int $listingId): array
+    {
+        $listing = $this->listing->find($listingId);
+        if (!$listing) {
+            return ['success' => false, 'message' => 'آگهی یافت نشد.'];
+        }
+
+        $alreadyWatched = $this->listing->isWatched($userId, $listingId);
+        if ($alreadyWatched) {
+            $this->listing->removeWatch($userId, $listingId);
+            return ['success' => true, 'watched' => false, 'message' => 'از لیست علاقه‌مندی‌ها حذف شد.'];
+        } else {
+            $this->listing->addWatch($userId, $listingId);
+            return ['success' => true, 'watched' => true, 'message' => 'به لیست علاقه‌مندی‌ها اضافه شد.'];
+        }
+    }
+
+    /**
+     * مدیریت: لیست و آمار
+     */
+    public function getAdminIndexData(array $filters, int $perPage, int $offset): array
+    {
+        return [
+            'listings'   => $this->listing->adminList($filters, $perPage, $offset),
+            'total'      => $this->listing->adminCount($filters),
+            'stats'      => $this->listing->adminStats(),
+            'statuses'   => $this->listing->statuses(),
+            'categories' => $this->listing->categories()
+        ];
     }
 }

@@ -83,9 +83,34 @@ class SitemapService extends \App\Services\BaseService
 
     public function getXml(): string
     {
-        return $this->cache->remember(self::CACHE_KEY, 1800, function () {
-            return $this->generate();
-        });
+        // H-05 Fix: پیاده‌سازی Mutex Lock اختصاصی برای جلوگیری از Cache Stampede
+        // برخلاف remember پیش‌فرض، اینجا در صورت قفل بودن منتظر می‌مانیم یا کش قدیمی را برمی‌گردانیم
+        
+        $xml = $this->cache->get(self::CACHE_KEY);
+        if ($xml !== null) {
+            return $xml;
+        }
+
+        // تلاش برای گرفتن قفل به مدت ۱۰ ثانیه
+        $lockKey = 'sitemap_gen_mutex';
+        if ($this->cache->lock($lockKey, 60, 10)) {
+            try {
+                // Double check
+                $xml = $this->cache->get(self::CACHE_KEY);
+                if ($xml !== null) {
+                    return $xml;
+                }
+
+                $xml = $this->generate();
+                $this->cache->put(self::CACHE_KEY, $xml, 30); // ۳۰ دقیقه کش
+                return $xml;
+            } finally {
+                $this->cache->unlock($lockKey);
+            }
+        }
+
+        // اگر بعد از ۱۰ ثانیه قفل آزاد نشد، آخرین مقدار موجود را برگردان (حتی اگر خالی باشد)
+        return (string)($this->cache->get(self::CACHE_KEY) ?? '');
     }
     
     /**

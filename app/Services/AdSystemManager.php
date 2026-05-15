@@ -121,4 +121,98 @@ class AdSystemManager extends \App\Services\BaseService
     {
         return isset($this->adapters[$type]);
     }
+    /**
+     * دریافت آگهی‌های کاربر به همراه خلاصه
+     */
+    public function getUserAds(int $userId): array
+    {
+        $adModel = new \App\Models\Ads();
+        $ads = $adModel->where('user_id', '=', $userId)
+            ->whereNull('deleted_at')
+            ->orderBy('created_at', 'DESC')
+            ->get();
+            
+        return $ads ?? [];
+    }
+
+    /**
+     * دریافت خلاصه آمار آگهی‌های کاربر
+     */
+    public function getAdSummary(int $userId): array
+    {
+        $adModel = new \App\Models\Ads();
+        $summary = $adModel->where('user_id', '=', $userId)
+            ->whereNull('deleted_at')
+            ->select(['id', 'budget', 'impressions', 'clicks'])
+            ->get() ?? [];
+
+        return [
+            'total_count' => count($summary),
+            'total_invested' => array_sum(array_column((array)$summary, 'budget')),
+            'total_impressions' => array_sum(array_column((array)$summary, 'impressions')),
+            'total_clicks' => array_sum(array_column((array)$summary, 'clicks'))
+        ];
+    }
+
+    /**
+     * دریافت جزئیات و تاریخچه اجرای آگهی
+     */
+    public function getAdExecutions(int $adId, string $type): array
+    {
+        $db = \Core\Database::getInstance();
+        $executions = [];
+        
+        switch ($type) {
+            case 'social_task':
+                $executions = $db->table('social_task_executions as e')
+                    ->select('e.id', 'e.status', 'e.created_at', 'u.full_name as executor')
+                    ->join('users u', 'u.id', '=', 'e.executor_id', 'LEFT')
+                    ->where('e.ad_id', '=', $adId)
+                    ->orderBy('e.created_at', 'DESC')
+                    ->limit(50)
+                    ->get();
+                break;
+            
+            case 'seo':
+                $executions = $db->table('seo_executions as e')
+                    ->select('e.id', 'e.status', 'e.created_at', 'u.full_name as executor')
+                    ->join('users u', 'u.id', '=', 'e.user_id', 'LEFT')
+                    ->where('e.ad_id', '=', $adId)
+                    ->orderBy('e.created_at', 'DESC')
+                    ->limit(50)
+                    ->get();
+                break;
+
+            case 'custom_task':
+                $executions = $db->table('custom_task_submissions as e')
+                    ->select('e.id', 'e.status', 'e.created_at', 'u.full_name as executor')
+                    ->join('users u', 'u.id', '=', 'e.user_id', 'LEFT')
+                    ->where('e.task_id', '=', $adId)
+                    ->orderBy('e.created_at', 'DESC')
+                    ->limit(50)
+                    ->get();
+                break;
+        }
+        
+        return $executions ?? [];
+    }
+
+    /**
+     * تغییر وضعیت فعال/غیرفعال آگهی
+     */
+    public function toggleAdStatus(int $adId, int $userId): array
+    {
+        $adModel = new \App\Models\Ads();
+        $ad = $adModel->find($adId);
+        
+        if (!$ad || (int)$ad->user_id !== $userId) {
+            return ['success' => false, 'message' => 'آگهی متعلق به شما یافت نشد.'];
+        }
+
+        $newActive = (int)$ad->is_active === 1 ? 0 : 1;
+        $adModel->update($adId, ['is_active' => $newActive]);
+
+        $msg = $newActive ? 'آگهی مجدداً فعال شد.' : 'آگهی به صورت موقت متوقف شد.';
+        return ['success' => true, 'message' => $msg, 'is_active' => $newActive];
+    }
 }

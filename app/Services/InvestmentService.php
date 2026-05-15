@@ -102,14 +102,31 @@ EOT;
         if ($amount > $maxAmount) {
             return ['success' => false, 'message' => "حداکثر مبلغ سرمایه‌گذاری " . $this->currencyService->formatAmount($maxAmount, 'usdt') . " است."];
         }
-
-        $balance = $this->walletService->getBalance($userId, 'usdt');
-        if ($balance < $amount) {
-            return ['success' => false, 'message' => 'موجودی تتری کیف پول شما کافی نیست'];
+        
+        // Pre-validation (non-locking)
+        if ($amount <= 0) {
+            return ['success' => false, 'message' => 'مبلغ سرمایه‌گذاری نامعتبر است'];
         }
 
+        $this->db->beginTransaction();
+
         try {
-            $this->db->beginTransaction();
+            // H-I2 & H-I3 Fix: Move critical checks INSIDE transaction with lock
+            $wallet = $this->walletService->getOrCreateWallet($userId);
+            // Re-fetch with FOR UPDATE
+            $walletRecord = $this->db->selectOne("SELECT usdt_balance FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
+            
+            if (!$walletRecord || (float)$walletRecord->usdt_balance < $amount) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'موجودی تتری کافی نیست'];
+            }
+
+            // H-I3: Check active investment with lock
+            $activeCount = $this->db->query("SELECT COUNT(*) FROM investments WHERE user_id = ? AND status = 'active' FOR UPDATE", [$userId])->fetchColumn();
+            if ($activeCount > 0) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'شما یک سرمایه‌گذاری فعال دارید'];
+            }
 
             $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('investment_creation', [
                 'user_id' => $userId,
@@ -295,39 +312,41 @@ EOT;
      * اعمال سود/ضرر بر روی یک بچ خاص از سرمایه‌گذاری‌ها (اجرا توسط Queue)
      * ✅ OPTIMIZATION: Use bulkFetch() instead of loop with individual find() calls
      */
-    public function applyProfitLossToBatch(array $investmentIds, int $tradingRecordId, float $profitLossPercent, string $period, int $adminId): void
+    public function applyProfitLossToBatch(array $investmentIds, int $tradingRecordId, float $percent, string $period, int $adminId): array
     {
-        if (empty($investmentIds)) {
-            return;
-        }
-
-        // ✅ OPTIMIZATION: Fetch all investments in ONE query instead of N queries in loop
-        $investments = $this->performance->bulkFetch('investments', 'id', $investmentIds);
-        if (empty($investments)) {
-            return;
-        }
-
-        // Index investments by ID for fast lookup
-        $investmentMap = [];
-        foreach ($investments as $inv) {
-            $investmentMap[$inv->id] = $inv;
-        }
-
-        $siteFeePercent = (float)$this->settingService->get('investment_site_fee_percent', 10);
-        $taxPercent     = (float)$this->settingService->get('investment_tax_percent', 9);
-        $count          = 0;
-
-        foreach ($investmentIds as $invId) {
-            // Get from pre-fetched map instead of querying DB
-            $inv = $investmentMap[$invId] ?? null;
-            if (!$inv || $inv->status !== Investment::STATUS_ACTIVE) {
-                continue;
+        $this->db->beginTransaction();
+        try {
+            // H-I4 Fix: Idempotency check - has this record already been processed?
+            $alreadyProcessed = $this->db->query("SELECT 1 FROM investment_profits WHERE trading_record_id = ? LIMIT 1", [$tradingRecordId])->fetch();
+            if ($alreadyProcessed) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'این رکورد سود قبلاً اعمال شده است.'];
             }
 
-            $this->db->beginTransaction();
-            try {
+            $investments = $this->investmentModel->findInIdsForUpdate($investmentIds);
+            if (empty($investments)) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'سرمایه‌گذاری فعالی یافت نشد.'];
+            }
+
+            // Index investments by ID for fast lookup
+            $investmentMap = [];
+            foreach ($investments as $inv) {
+                $investmentMap[$inv->id] = $inv;
+            }
+
+            $siteFeePercent = (float)$this->settingService->get('investment_site_fee_percent', 10);
+            $taxPercent     = (float)$this->settingService->get('investment_tax_percent', 9);
+            $count          = 0;
+
+            foreach ($investmentIds as $invId) {
+                $inv = $investmentMap[$invId] ?? null;
+                if (!$inv || $inv->status !== Investment::STATUS_ACTIVE) {
+                    continue;
+                }
+
                 $investAmount     = (float)$inv->current_balance;
-                $profitLossAmount = round($investAmount * ($profitLossPercent / 100), 2);
+                $profitLossAmount = round($investAmount * ($percent / 100), 2);
                 $isProfit         = $profitLossAmount >= 0;
 
                 $siteFee   = 0;
@@ -348,6 +367,7 @@ EOT;
                     'investment_id'       => $inv->id,
                     'user_id'             => $inv->user_id,
                     'amount'              => $netAmount,
+                    'trading_record_id'   => $tradingRecordId,
                     'currency'            => 'usdt',
                     'profit_type'         => $isProfit ? 'profit' : 'loss',
                     'status'              => 'paid',
@@ -369,10 +389,11 @@ EOT;
                 $this->auditTrail->record('investment.profit.applied', (int)$inv->user_id, [
                     'investment_id'       => $inv->id,
                     'period'              => $period,
-                    'profit_loss_percent' => $profitLossPercent,
+                    'profit_loss_percent' => $percent,
                     'net_amount'          => $netAmount,
                     'balance_before'      => $balanceBefore,
                     'balance_after'       => $balanceAfter,
+                    'trading_record_id'   => $tradingRecordId,
                     'admin_id'            => $adminId,
                 ], $adminId);
 
@@ -383,17 +404,25 @@ EOT;
                     "دوره {$period}: {$typeLabel} {$amountFormatted} | موجودی جدید: " . $this->currencyService->formatAmount($balanceAfter, 'usdt'),
                     'investment_profit'
                 );
-
-                $this->db->commit();
                 $count++;
-
-            } catch (\Throwable $e) {
-                $this->db->rollBack();
-                $this->logger->error('investment_profit_error', ['message' => "Error for investment #{$inv->id}: " . $e->getMessage()]);
             }
-        }
 
-        $this->logger->info('investment_weekly_batch_applied', ['message' => "Admin {$adminId} applied {$profitLossPercent}% for {$period} on batch, affected: {$count}"]);
+            // H-I7: Audit Trail
+            app(\App\Services\AuditTrail::class)->record('investment.profit_batch_applied', $adminId, [
+                'trading_record_id' => $tradingRecordId,
+                'count' => count($investmentIds),
+                'percent' => $percent,
+                'period' => $period
+            ]);
+
+            $this->db->commit();
+            return ['success' => true, 'processed' => count($investments)];
+
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->logger->error('investment_profit_error', ['message' => $e->getMessage()]);
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
     }
 
     /**

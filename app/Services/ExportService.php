@@ -14,9 +14,9 @@ class ExportService extends \App\Services\BaseService
         parent::__construct($logger);
     }
     /**
-     * خروجی CSV
+     * خروجی CSV (Streaming version)
      */
-    public function exportCsv(array $headers, array $rows, string $filename): void
+    public function exportCsvStream(array $headers, \PDOStatement $stmt, string $filename, bool $maskPii = false): void
     {
         $filename = \preg_replace('/[^a-zA-Z0-9_\-]/', '', $filename) . '_' . \date('Y-m-d_His') . '.csv';
 
@@ -34,16 +34,33 @@ class ExportService extends \App\Services\BaseService
         // Header
         \fputcsv($output, $headers);
 
-        // Rows
-        foreach ($rows as $row) {
-            if (\is_object($row)) {
-                $row = (array)$row;
+        // Rows (Streamed)
+        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+            if ($maskPii) {
+                $row = $this->maskSensitiveData($row);
             }
             \fputcsv($output, \array_values($row));
         }
 
         \fclose($output);
         exit;
+    }
+
+    /**
+     * ماسک کردن داده‌های حساس
+     */
+    private function maskSensitiveData(array $row): array
+    {
+        if (isset($row['email'])) {
+            $parts = explode('@', (string)$row['email']);
+            if (count($parts) === 2) {
+                $row['email'] = substr($parts[0], 0, 3) . '***@' . $parts[1];
+            }
+        }
+        if (isset($row['mobile'])) {
+            $row['mobile'] = substr((string)$row['mobile'], 0, 4) . '***' . substr((string)$row['mobile'], -2);
+        }
+        return $row;
     }
 
     /**
@@ -139,11 +156,11 @@ class ExportService extends \App\Services\BaseService
         $kycStatus = $filters['kyc_status'] ?? null;
         $tierLevel = $filters['tier_level'] ?? null;
         
-        $rows = $this->exportData->getUsers($dateFrom, $dateTo, $kycStatus, $tierLevel);
+        $stmt = $this->exportData->getUsersStatement($dateFrom, $dateTo, $kycStatus, $tierLevel);
         
-        $headers = ['#', 'نام', 'ایمیل', 'موبایل', 'KYC', 'سطح', 'کد معرف', 'مسدود', 'تاریخ'];
+        $headers = ['#', 'نام', 'ایمیل', 'موبایل', 'KYC', 'سطح', 'وضعیت', 'تاریخ', 'آخرین ورود'];
         
-        $this->exportCsv($headers, $rows, 'users_export');
+        $this->exportCsvStream($headers, $stmt, 'users_export', true);
     }
 
     /**
@@ -154,14 +171,13 @@ class ExportService extends \App\Services\BaseService
         $dateFrom = $filters['from'] ?? null;
         $dateTo = $filters['to'] ?? null;
         $type = $filters['type'] ?? null;
-        $currency = $filters['currency'] ?? null;
         $status = $filters['status'] ?? null;
         
-        $rows = $this->exportData->getTransactions($dateFrom, $dateTo, $type, $status, $currency);
+        $stmt = $this->exportData->getTransactionsStatement($dateFrom, $dateTo, $type, $status);
         
-        $headers = ['#', 'نام', 'ایمیل', 'نوع', 'مبلغ', 'ارز', 'وضعیت', 'توضیح', 'مرجع', 'تاریخ'];
+        $headers = ['#', 'شماره تراکنش', 'نام کاربر', 'نوع', 'ارز', 'مبلغ', 'قبل', 'بعد', 'وضعیت', 'تاریخ'];
         
-        $this->exportCsv($headers, $rows, 'transactions_export');
+        $this->exportCsvStream($headers, $stmt, 'transactions_export', false);
     }
 
     /**
@@ -174,11 +190,11 @@ class ExportService extends \App\Services\BaseService
         $status = $filters['status'] ?? null;
         $currency = $filters['currency'] ?? null;
         
-        $rows = $this->exportData->getWithdrawals($dateFrom, $dateTo, $status, $currency);
+        $stmt = $this->exportData->getWithdrawalsStatement($dateFrom, $dateTo, $status, $currency);
         
         $headers = ['#', 'کد پیگیری', 'نام', 'ایمیل', 'مبلغ', 'کارمزد', 'مبلغ نهایی', 'ارز', 'وضعیت', 'روش', 'تاریخ'];
         
-        $this->exportCsv($headers, $rows, 'withdrawals_export');
+        $this->exportCsvStream($headers, $stmt, 'withdrawals_export', true);
     }
 
     /**
@@ -191,10 +207,10 @@ class ExportService extends \App\Services\BaseService
         $event = $filters['event'] ?? null;
         $userId = isset($filters['user_id']) ? (int)$filters['user_id'] : null;
         
-        $rows = $this->exportData->getAuditTrail($dateFrom, $dateTo, $event, $userId);
+        $stmt = $this->exportData->getAuditTrailStatement($dateFrom, $dateTo, $event, $userId);
         
         $headers = ['#', 'رویداد', 'کاربر', 'انجام‌دهنده', 'جزئیات', 'IP', 'زمان'];
         
-        $this->exportCsv($headers, $rows, 'audit_trail_export');
+        $this->exportCsvStream($headers, $stmt, 'audit_trail_export', false);
     }
 }

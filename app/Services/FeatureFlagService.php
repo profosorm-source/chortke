@@ -60,8 +60,17 @@ class FeatureFlagService extends \App\Services\BaseService
      */
     public function isEnabled(string $name, ?int $userId = null, ?array $context = null): bool
     {
-        // cache check (MED-10: Include context hash to avoid caching collisions for dynamic targeting)
-        $contextHash = $context ? md5(json_encode($context)) : 'default';
+        // cache check (🚀 BUG FIX [M-03]: Use SHA256 to avoid collisions)
+        $contextHash = 'default';
+        if ($context) {
+            $json = json_encode($context);
+            if ($json === false) {
+                $this->logger->error('feature_flag.json_encode_failed', ['context' => $context]);
+                $json = serialize($context); // fallback
+            }
+            $contextHash = hash('sha256', $json);
+        }
+        
         $userIdStr = $userId !== null ? (string)$userId : 'anon';
         $cacheKey = "ff:enabled:{$name}:{$userIdStr}:{$contextHash}";
         
@@ -374,6 +383,8 @@ class FeatureFlagService extends \App\Services\BaseService
 
     public function toggle(string $name): bool
     {
+        // 🚀 BUG FIX [M-06]: Clear cache to get fresh data for event logging
+        $this->featureModel->clearCache();
         $feature = $this->featureModel->findByName($name);
         if (!$feature) {
             return false;
@@ -399,6 +410,8 @@ class FeatureFlagService extends \App\Services\BaseService
 
     public function update(string $name, array $data): bool
     {
+        // 🚀 BUG FIX [M-06]: Fresh data for audit log
+        $this->featureModel->clearCache();
         $feature = $this->featureModel->findByName($name);
         if (!$feature) {
             throw new \InvalidArgumentException("Feature '{$name}' not found");

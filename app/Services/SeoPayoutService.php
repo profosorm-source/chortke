@@ -100,28 +100,18 @@ class SeoPayoutService extends \App\Services\BaseService
      */
     public function deductFromBudget(int $adId, float $amount): bool
     {
-        $ad = $this->seoAdModel->find($adId);
-        
-        if (!$ad || $ad->remaining_budget < $amount) {
-            return false;
-        }
-
-        // کسر از بودجه
-        $newBudget = max(0, $ad->remaining_budget - $amount);
-        
-        // اگر بودجه تمام شد، وضعیت را exhausted کن
-        $newStatus = $newBudget <= 0 ? 'exhausted' : $ad->status;
-
+        // Atomic deduction directly in SQL to prevent race conditions
         $stmt = $this->seoAdModel->db->prepare(
             "UPDATE ads 
-             SET remaining_budget = ?,
+             SET remaining_budget = remaining_budget - ?,
                  executions_count = executions_count + 1,
-                 status = ?,
+                 status = CASE WHEN (remaining_budget - ?) <= 0 THEN 'exhausted' ELSE status END,
                  updated_at = NOW()
-             WHERE id = ?"
+             WHERE id = ? AND remaining_budget >= ?"
         );
-
-        return $stmt->execute([$newBudget, $newStatus, $adId]);
+        
+        $ok = $stmt->execute([$amount, $amount, $adId, $amount]);
+        return $ok && $stmt->rowCount() > 0;
     }
 
     /**

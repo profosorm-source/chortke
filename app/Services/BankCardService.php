@@ -11,17 +11,20 @@ class BankCardService extends \App\Services\BaseService
     private \App\Models\User $userModel;
     private BankCard $model;
     private \App\Adapters\BankInquiryAdapter $inquiryAdapter;
+    private \Core\Encryption $encryption;
 
     public function __construct(
         \App\Models\BankCard $model,
         \App\Models\User $userModel,
         \App\Adapters\BankInquiryAdapter $inquiryAdapter,
+        \Core\Encryption $encryption,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
         $this->model          = $model;
         $this->userModel      = $userModel;
         $this->inquiryAdapter = $inquiryAdapter;
+        $this->encryption     = $encryption;
     }
 
     public function create(int $userId, array $data): array
@@ -36,7 +39,7 @@ class BankCardService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'شماره کارت وارد شده نامعتبر است'];
         }
 
-        $exists = $this->model->where('card_number', $cardNumber)->where('deleted_at', null)->first();
+        $exists = $this->model->where('card_number', $this->encryption->encrypt($cardNumber))->where('deleted_at', null)->first();
         if ($exists) {
             return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
         }
@@ -64,8 +67,8 @@ class BankCardService extends \App\Services\BaseService
 
         $id = $this->model->create([
             'user_id' => $userId,
-            'card_number' => $cardNumber,
-            'owner_name' => $holder,
+            'card_number' => $this->encryption->encrypt($cardNumber),
+            'owner_name' => $this->encryption->encrypt($holder),
             'bank_name' => $bankName,
             'shaba' => $iban ?: null,
             'status' => 'pending',
@@ -110,7 +113,7 @@ class BankCardService extends \App\Services\BaseService
         }
 
         $ok = $this->model->update($cardId, [
-            'owner_name' => $holder,
+            'owner_name' => \Core\Encryption::encrypt($holder),
             'shaba' => $iban ?: null,
             'status' => 'pending',
             'rejection_reason' => null,
@@ -222,7 +225,12 @@ class BankCardService extends \App\Services\BaseService
 
     public function findById(int $cardId): ?object
     {
-        return $this->model->find($cardId);
+        $card = $this->model->find($cardId);
+        if ($card) {
+            $card->card_number = $this->encryption->decrypt((string)$card->card_number);
+            $card->owner_name = $this->encryption->decrypt((string)$card->owner_name);
+        }
+        return $card;
     }
 
     /**
@@ -230,7 +238,12 @@ class BankCardService extends \App\Services\BaseService
      */
     public function getUserCards(int $userId, ?string $status = null): array
     {
-        return $this->model->getUserCards($userId, $status);
+        $cards = $this->model->getUserCards($userId, $status);
+        foreach ($cards as $card) {
+            $card->card_number = $this->encryption->decrypt((string)$card->card_number);
+            $card->owner_name = $this->encryption->decrypt((string)$card->owner_name);
+        }
+        return $cards;
     }
 
     /**
@@ -238,7 +251,7 @@ class BankCardService extends \App\Services\BaseService
      */
     public function findVerifiedCardForUser(int $userId, int $cardId): ?object
     {
-        $card = $this->model->find($cardId);
+        $card = $this->findById($cardId);
         if ($card && (int)$card->user_id === $userId && $card->status === 'verified') {
             return $card;
         }
@@ -250,7 +263,12 @@ class BankCardService extends \App\Services\BaseService
      */
     public function getPendingCards(int $limit = 50, int $offset = 0): array
     {
-        return $this->model->getPendingCards($limit, $offset);
+        $cards = $this->model->getPendingCards($limit, $offset);
+        foreach ($cards as $card) {
+            $card->card_number = $this->encryption->decrypt((string)$card->card_number);
+            $card->owner_name = $this->encryption->decrypt((string)$card->owner_name);
+        }
+        return $cards;
     }
 }
 

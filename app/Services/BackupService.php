@@ -77,21 +77,31 @@ class BackupService extends \App\Services\BaseService
             $gzFilepath = $filepath . '.gz';
             exec("gzip " . escapeshellarg($filepath), $compressOutput, $compressCode);
 
+            // Integrity Check: Calculate SHA-256 checksum
+            $checksum = hash_file('sha256', $gzFilepath ?? $filepath);
+
             $fileSize = filesize($gzFilepath ?? $filepath);
 
             $this->logger->info('backup.created', [
                 'filename' => $filename,
                 'size' => $fileSize,
+                'checksum' => $checksum,
+                'request_id' => $_SERVER['REQUEST_ID'] ?? null,
                 'description' => $description,
                 'timestamp' => $timestamp
             ]);
 
             // ذخیره اطلاعات پشتیبان
             $this->backupLogModel->logBackup([
-                'filename' => $filename,
-                'size' => $fileSize,
+                'request_id' => $_SERVER['REQUEST_ID'] ?? null,
+                'status' => 'completed',
+                'type' => 'manual',
+                'file_path' => basename($gzFilepath ?? $filepath),
+                'size_bytes' => $fileSize,
+                'checksum' => $checksum,
                 'description' => $description,
                 'created_at' => date('Y-m-d H:i:s'),
+                'completed_at' => date('Y-m-d H:i:s'),
             ]);
 
             return [
@@ -156,13 +166,10 @@ class BackupService extends \App\Services\BaseService
             $deleted = 0;
             foreach ($oldBackups as $backup) {
                 $backup = (array)$backup;
-                $filepath = $this->backupDir . '/' . $backup['filename'];
-                $gzPath = $filepath . '.gz';
+                $filename = $backup['file_path'];
+                $filepath = $this->backupDir . '/' . $filename;
 
-                if (file_exists($gzPath)) {
-                    unlink($gzPath);
-                    $deleted++;
-                } elseif (file_exists($filepath)) {
+                if (file_exists($filepath)) {
                     unlink($filepath);
                     $deleted++;
                 }

@@ -450,6 +450,8 @@ class EmailService extends \App\Services\BaseService
             $mail->Port     = $this->smtpPort;
             $mail->CharSet  = 'UTF-8';
             $mail->SMTPDebug = 0;
+            $mail->Timeout  = 10; // 🚀 BUG-08 Fix: 10 seconds timeout
+            $mail->SMTPKeepAlive = false;
 
             $isProd = (config('app.env', 'production') === 'production');
             if (!empty($this->smtpEncryption)) {

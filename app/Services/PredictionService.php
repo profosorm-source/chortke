@@ -163,20 +163,30 @@ class PredictionService extends \App\Services\BaseService
                 [$result, $adminId, $gameId]
             );
 
-            // محاسبه استخر
+            // محاسبه استخر با BCMath (BUG-P2 Fix)
             $dist = $this->betModel->getDistribution($gameId);
-            $totalPool    = (float)$dist->total_pool;
-            $commission   = (float)($game->commission_percent ?? 5) / 100;
-            $prizePool    = $totalPool * (1 - $commission);
-            $commissionAmt = $totalPool * $commission;
+            $totalPool    = (string)($dist->total_pool ?? '0');
+            $commissionPercent = (string)($game->commission_percent ?? '5');
+            
+            $commissionRatio = bcdiv($commissionPercent, '100', 8);
+            $commissionAmt   = bcmul($totalPool, $commissionRatio, 8);
+            $prizePool       = bcsub($totalPool, $commissionAmt, 8);
 
             // استخر برندگان
             $winnerPool = match ($result) {
-                'home'  => (float)$dist->pool_home,
-                'away'  => (float)$dist->pool_away,
-                'draw'  => (float)$dist->pool_draw,
-                default => 0.0,
+                'home'  => (string)($dist->pool_home ?? '0'),
+                'away'  => (string)($dist->pool_away ?? '0'),
+                'draw'  => (string)($dist->pool_draw ?? '0'),
+                default => '0',
             };
+
+            // H-P5: Audit Trail - log the result before distributing
+            app(\App\Services\AuditTrail::class)->record('prediction.settle_start', $adminId, [
+                'game_id' => $gameId,
+                'result' => $result,
+                'total_pool' => $totalPool,
+                'prize_pool' => $prizePool
+            ]);
 
             $summary = [
                 'game_id'        => $gameId,
@@ -191,7 +201,7 @@ class PredictionService extends \App\Services\BaseService
 
             $winnerBets = $this->betModel->getWinnersByGame($gameId, $result);
 
-            if (empty($winnerBets)) {
+            if (bccomp($winnerPool, '0', 8) <= 0) {
                 // هیچ برنده‌ای نیست — همه شرط‌ها برگشت داده می‌شوند
                 foreach ($this->betModel->getPendingByGame($gameId) as $bet) {
                     $this->_refundBet($bet, $gameId, 'no_winners');
@@ -200,12 +210,19 @@ class PredictionService extends \App\Services\BaseService
                 $summary['no_winners'] = true;
             } else {
                 // پرداخت به برندگان
+                $totalPaidOut = '0';
                 foreach ($winnerBets as $bet) {
-                    $share = $winnerPool > 0
-                        ? ((float)$bet->amount_usdt / $winnerPool) * $prizePool
-                        : 0.0;
-                    $payout = round($share, 6);
-                    $this->_payWinner($bet, $payout, $gameId);
+                    // share = (bet_amount / winner_pool) * prize_pool
+                    $ratio = bcdiv((string)$bet->amount_usdt, $winnerPool, 12);
+                    $payout = bcmul($ratio, $prizePool, 8);
+                    
+                    // BUG-P3 Fix: Ensure we don't overpay due to rounding
+                    $totalPaidOut = bcadd($totalPaidOut, $payout, 8);
+                    if (bccomp($totalPaidOut, $prizePool, 8) > 0) {
+                        $payout = bcsub($payout, bcsub($totalPaidOut, $prizePool, 8), 8);
+                    }
+
+                    $this->_payWinner($bet, (float)$payout, $gameId);
                     $summary['winners_paid']++;
                 }
 
@@ -219,13 +236,21 @@ class PredictionService extends \App\Services\BaseService
                 }
             }
 
-            // علامت پرداخت شده
+            // BUG-P1 Fix: Synchronize winners_paid and status in one update
             $this->db->execute(
-                "UPDATE prediction_games SET winners_paid = 1, paid_at = NOW() WHERE id = ?",
-                [$gameId]
+                "UPDATE prediction_games 
+                 SET winners_paid = 1, paid_at = NOW(), status = 'finished', 
+                     finished_at = NOW(), settled_by = ?, result = ?
+                 WHERE id = ?",
+                [$adminId, $result, $gameId]
             );
 
             $this->db->commit();
+            
+            app(\App\Services\AuditTrail::class)->record('prediction.settle_end', $adminId, [
+                'game_id' => $gameId,
+                'summary' => $summary
+            ]);
 
             return ['success' => true, 'summary' => $summary];
 

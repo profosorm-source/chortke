@@ -865,16 +865,20 @@ class WithdrawalService extends PaymentBaseService
     public function approveWithdrawal(int $withdrawalId, string $paymentReference, int $adminId): array
     {
         try {
-            $withdrawal = $this->findById($withdrawalId);
+            $this->db->beginTransaction();
+
+            // H21 Fix: اضافه کردن قفل بدبینانه روی رکورد برداشت جهت جلوگیری قطعی از Double Deduction در ریکوئست‌های همزمان
+            $withdrawal = $this->db->query("SELECT * FROM withdrawals WHERE id = ? FOR UPDATE", [$withdrawalId])->fetch(\PDO::FETCH_OBJ);
+
             if (!$withdrawal) {
+                $this->db->rollBack();
                 return ['success' => false, 'message' => 'درخواست یافت نشد'];
             }
 
             if ($withdrawal->status !== 'pending') {
-                return ['success' => false, 'message' => 'این درخواست قبلاً پردازش شده است'];
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'این درخواست قبلاً پردازش شده است یا در وضعیت غیرقابل تایید قرار دارد'];
             }
-
-            $this->db->beginTransaction();
 
             // 1. تکمیل برداشت در کیف پول
             $completed = $this->wallet->completeWithdrawal(

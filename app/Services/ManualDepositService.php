@@ -155,7 +155,7 @@ class ManualDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'این درخواست قبلاً بررسی شده است'];
             }
 
-            $ok = $this->wallet->deposit(
+            $ok = $this->wallet->depositInTransaction(
                 (int)$d->user_id,
                 (float)$d->amount,
                 'irt',

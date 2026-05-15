@@ -21,10 +21,13 @@ class RedisEmailQueueService extends \App\Services\BaseService
     private string $processingKey = 'email:processing';
     private string $metaPrefix = 'email:meta:';
 
-    public function __construct(Cache $cache, LoggerInterface $logger)
+    private \Core\Database $db;
+
+    public function __construct(Cache $cache, LoggerInterface $logger, \Core\Database $db)
     {
         parent::__construct($logger);
         $this->cache = $cache;
+        $this->db = $db;
         $this->redis = $this->cache->redis();
         $this->useRedis = $this->cache->driver() === 'redis';
 
@@ -99,21 +102,26 @@ class RedisEmailQueueService extends \App\Services\BaseService
     }
 
     /**
-     * دریافت ایمیل‌های آماده ارسال
+     * دریافت ایمیل‌های آماده ارسال (Atomic Pop using Lua)
      */
     public function pop(int $limit = 10): array
     {
         if ($this->useRedis) {
             try {
                 $now = time();
-                
-                // دریافت ایمیل‌های آماده (با زمان‌بندی تا زمان حال و اولویت‌های ۰ تا ۹)
-                $emailIds = $this->redis->zRangeByScore(
-                    $this->queueKey,
-                    0,
-                    ($now * 10) + 9, // همه اولویت‌ها تا الان
-                    ['limit' => [0, $limit]]
-                );
+                $maxScore = ($now * 10) + 9;
+
+                // 🚀 BUG-02 Fix: Atomic Pop using Lua Script
+                $script = <<<LUA
+                    local items = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, ARGV[2])
+                    for i, id in ipairs(items) do
+                        redis.call('ZREM', KEYS[1], id)
+                        redis.call('SADD', KEYS[2], id)
+                    end
+                    return items
+LUA;
+
+                $emailIds = $this->redis->eval($script, [$this->queueKey, $this->processingKey, $maxScore, $limit], 2);
 
                 if (empty($emailIds)) {
                     return [];
@@ -125,18 +133,16 @@ class RedisEmailQueueService extends \App\Services\BaseService
                     if ($data) {
                         $email = json_decode($data, true);
                         
-                        // بررسی تعداد تلاش
+                        // بررسی تعداد تلاش (اگه از ۳ رد شده باشه نباید تو صف باشه، اما جهت امنیت چک میکنیم)
                         if ($email['attempts'] < 3) {
-                            // انتقال به processing
-                            $this->redis->zRem($this->queueKey, $emailId);
-                            $this->redis->sAdd($this->processingKey, $emailId);
-                            
                             $emails[] = $email;
                         } else {
-                            // حذف از صف (failed)
-                            $this->redis->zRem($this->queueKey, $emailId);
-                            $this->markAsFailed($emailId, 'Max attempts reached');
+                            $this->redis->sRem($this->processingKey, $emailId);
+                            $this->markAsFailed($emailId, 'Max attempts reached during pop');
                         }
+                    } else {
+                        // Metadata گم شده - پاکسازی از processing
+                        $this->redis->sRem($this->processingKey, $emailId);
                     }
                 }
 
@@ -148,6 +154,34 @@ class RedisEmailQueueService extends \App\Services\BaseService
         }
 
         return $this->fallbackGetFromDatabase($limit);
+    }
+
+    /**
+     * تلاش برای "تصاحب" یک ایمیل خاص (Claim)
+     * مخصوص SendEmailJob جهت جلوگیری از تداخل با processQueue
+     * 🚀 BUG-01 Fix
+     */
+    public function claim(string $emailId): bool
+    {
+        if (!$this->useRedis) {
+            // در مد دیتابیس، چون Job و Cron هر دو با DB کار میکنند، تداخل را در سطح DB حل میکنیم
+            return true; 
+        }
+
+        try {
+            // به صورت اتمیک سعی میکنیم از صف حذف و به پردازش اضافه کنیم
+            $script = <<<LUA
+                if redis.call('ZREM', KEYS[1], ARGV[1]) == 1 then
+                    redis.call('SADD', KEYS[2], ARGV[1])
+                    return 1
+                end
+                return 0
+LUA;
+            return (bool) $this->redis->eval($script, [$this->queueKey, $this->processingKey, $emailId], 2);
+        } catch (\Throwable $e) {
+            $this->logger->error('email.redis.claim.failed', ['email_id' => $emailId, 'error' => $e->getMessage()]);
+            return false;
+        }
     }
 
     /**
@@ -196,7 +230,8 @@ return true;
     }
 
     /**
-     * علامت‌گذاری به عنوان ناموفق (با retry)
+     * علامت‌گذاری به عنوان ناموفق (با Exponential Backoff)
+     * 🚀 BUG-05 Fix
      */
     public function markAsFailed(string $emailId, string $error): bool
     {
@@ -212,14 +247,39 @@ return true;
                     $email['error_message'] = $error;
 
                     if ($email['attempts'] >= 3) {
-                        // ناموفق نهایی - آرشیو در DB
+                        // 🚀 BUG-06 Fix: Dead Letter Queue (DLQ)
                         $email['status'] = 'failed';
+                        $email['failed_at'] = time();
+                        
+                        // 1. Archive to main queue table
                         $this->archiveToDatabase($email);
+                        
+                        // 2. Send to dedicated DLQ table for auditing
+                        try {
+                            $this->db->execute(
+                                "INSERT INTO email_dlq (email_id, payload, reason, created_at) VALUES (?, ?, ?, NOW())",
+                                [$emailId, json_encode($email), $error]
+                            );
+                        } catch (\Throwable $dlqError) {
+                            $this->logger->error('email.dlq.db_failed', ['error' => $dlqError->getMessage()]);
+                        }
+
+                        // 3. Push to Redis LIST for fast monitoring
+                        try {
+                            $this->redis->rPush('email:dlq', json_encode($email));
+                            $this->redis->lTrim('email:dlq', -1000, -1); // Keep last 1000
+                        } catch (\Throwable $redisError) {
+                            $this->logger->error('email.dlq.redis_failed', ['error' => $redisError->getMessage()]);
+                        }
+
                         $this->redis->del($this->metaPrefix . $emailId);
                         
-                        $this->logger->warning("Email failed after 3 attempts: {$emailId}", []);
+                        $this->logger->warning("Email moved to DLQ after max attempts: {$emailId}", ['error' => $error]);
                     } else {
-                        // بازگشت به صف برای retry
+                        // 🚀 Exponential Backoff: 1m, 5m, 15m
+                        $backoff = [60, 300, 900];
+                        $delay = $backoff[$email['attempts'] - 1] ?? 900;
+                        
                         $email['status'] = 'pending';
                         $this->redis->setEx(
                             $this->metaPrefix . $emailId,
@@ -228,15 +288,15 @@ return true;
                         );
                         
                         $priority = $this->getPriorityScore($email['priority']);
-                        $nextRun = time() + (300 * $email['attempts']);
-                        $score = ($nextRun * 10) + $priority; // بازگشت به صف با تأخیر و اولویت
+                        $nextRun = time() + $delay;
+                        $score = ($nextRun * 10) + $priority; 
                         $this->redis->zAdd($this->queueKey, $score, $emailId);
                         
                         $this->logger->info('email.redis.retry_scheduled', [
-    'channel' => 'email',
-    'email_id' => $emailId,
-    'attempt' => $email['attempts'] ?? null,
-]);
+                            'email_id' => $emailId,
+                            'attempt' => $email['attempts'],
+                            'delay_seconds' => $delay
+                        ]);
                     }
                 }
 
@@ -271,10 +331,57 @@ return true;
     }
 
     /**
+     * بازگرداندن پیام‌های یتیم (Orphaned) به صف
+     * 🚀 BUG-03 Fix: Visibility Timeout
+     * پیام‌هایی که بیش از 10 دقیقه در processing مانده‌اند بازگردانده می‌شوند.
+     */
+    public function requeueOrphans(): int
+    {
+        if (!$this->useRedis) return 0;
+
+        try {
+            $emailIds = $this->redis->sMembers($this->processingKey) ?? [];
+            $requeued = 0;
+            $now = time();
+
+            foreach ($emailIds as $emailId) {
+                $data = $this->redis->get($this->metaPrefix . $emailId);
+                if ($data) {
+                    $email = json_decode($data, true);
+                    // اگه بیش از 600 ثانیه (10 دقیقه) در حال پردازش بوده
+                    // فرض بر این است که worker کرش کرده
+                    if (isset($email['updated_at']) && ($now - $email['updated_at'] > 600)) {
+                        $this->redis->sRem($this->processingKey, $emailId);
+                        
+                        $priority = $this->getPriorityScore($email['priority'] ?? 'normal');
+                        $score = ($now * 10) + $priority;
+                        $this->redis->zAdd($this->queueKey, $score, $emailId);
+                        $requeued++;
+                    }
+                } else {
+                    // پیام بدون متا - حذف از پردازش
+                    $this->redis->sRem($this->processingKey, $emailId);
+                }
+            }
+
+            if ($requeued > 0) {
+                $this->logger->info('email.redis.orphans_requeued', ['count' => $requeued]);
+            }
+
+            return $requeued;
+        } catch (\Throwable $e) {
+            $this->logger->error('email.redis.requeue_orphans.failed', ['error' => $e->getMessage()]);
+            return 0;
+        }
+    }
+
+    /**
      * پاکسازی ایمیل‌های قدیمی از Redis
      */
     public function cleanup(): int
     {
+        $this->requeueOrphans();
+
         if ($this->useRedis) {
             try {
                 $cleaned = 0;
@@ -345,7 +452,7 @@ return true;
     private function fallbackToDatabase(array $payload): bool|string
     {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
             
             $result = $db->execute(
                 "INSERT INTO email_queue 
@@ -377,7 +484,7 @@ return true;
     private function fallbackGetFromDatabase(int $limit): array
     {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
             $now = date('Y-m-d H:i:s');
 
             return $db->fetchAll(
@@ -405,7 +512,7 @@ return true;
     private function fallbackMarkAsSentInDatabase(string $emailId): bool
     {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
             $id = str_replace('db_', '', $emailId);
             
             return $db->execute(
@@ -421,7 +528,7 @@ return true;
     private function fallbackMarkAsFailedInDatabase(string $emailId, string $error): bool
     {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
             $id = str_replace('db_', '', $emailId);
             
             return $db->execute(
@@ -442,7 +549,7 @@ return true;
     private function fallbackGetStatsFromDatabase(): array
     {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
             $rows = $db->fetchAll("SELECT status, COUNT(*) as cnt FROM email_queue GROUP BY status");
             
             $stats = ['pending' => 0, 'sending' => 0, 'sent' => 0, 'failed' => 0, 'driver' => 'database'];
@@ -460,7 +567,7 @@ return true;
     private function archiveToDatabase(array $email): void
     {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
             
             $db->execute(
                 "INSERT INTO email_queue 
@@ -507,7 +614,7 @@ return true;
         ?string $search = null
     ): array {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
             $offset = ($page - 1) * $perPage;
 
             // ساخت WHERE clause
@@ -595,7 +702,7 @@ return true;
     public function retryAllFailed(): int
     {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
 
             // بروزرسانی ایمیل‌های ناموفق به pending
             $result = $db->execute(
@@ -633,7 +740,7 @@ return true;
     public function retryEmail(int $id): bool
     {
         try {
-            $db = \Core\Database::getInstance();
+            $db = $this->db;
 
             // بروزرسانی ایمیل واحد
             $result = $db->execute(

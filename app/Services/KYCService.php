@@ -21,6 +21,7 @@ class KYCService extends \App\Services\BaseService
     private AuditTrail       $auditTrail;
     private NotificationService $notificationService;
     private \App\Adapters\KycFaceVerificationAdapter $aiAdapter;
+    private \Core\Encryption $encryption;
 
     public function __construct(
         KYCVerification      $kycModel,
@@ -30,6 +31,7 @@ class KYCService extends \App\Services\BaseService
         AuditTrail           $auditTrail,
         \App\Adapters\KycFaceVerificationAdapter $aiAdapter,
         LoggerInterface      $logger,
+        \Core\Encryption     $encryption,
         ?NotificationService $notificationService = null
     ) {
         parent::__construct($logger);
@@ -39,6 +41,7 @@ class KYCService extends \App\Services\BaseService
         $this->uploadService       = $uploadService;
         $this->auditTrail          = $auditTrail;
         $this->aiAdapter           = $aiAdapter;
+        $this->encryption          = $encryption;
         $this->notificationService = $notificationService;
     }
 
@@ -156,8 +159,8 @@ class KYCService extends \App\Services\BaseService
         $kycId = $this->kycModel->create([
             'user_id'            => $userId,
             'verification_image' => $filename,
-            'national_code'      => $nationalCode !== '' ? $nationalCode : null,
-            'birth_date'         => $data['birth_date'] ?? null,
+            'national_code'      => $nationalCode !== '' ? $this->encryption->encrypt($nationalCode) : null,
+            'birth_date'         => !empty($data['birth_date']) ? $this->encryption->encrypt((string)$data['birth_date']) : null,
             'status'             => !empty($photoshopCheck['suspicious']) ? 'under_review' : 'pending',
             'ip_address'         => get_client_ip(),
             'user_agent'         => get_user_agent(),
@@ -230,7 +233,7 @@ class KYCService extends \App\Services\BaseService
     try {
         $this->db->beginTransaction();
 
-        $kyc = $this->kycModel->find($kycId);
+        $kyc = $this->kycModel->findForUpdate($kycId);
         if (!$kyc) {
             $this->db->rollBack();
             return ['success' => false, 'message' => 'درخواست KYC یافت نشد'];
@@ -312,7 +315,7 @@ class KYCService extends \App\Services\BaseService
 
         $this->db->beginTransaction();
 
-        $kyc = $this->kycModel->find($kycId);
+        $kyc = $this->kycModel->findForUpdate($kycId);
         if (!$kyc) {
             $this->db->rollBack();
             return ['success' => false, 'message' => 'درخواست KYC یافت نشد'];
@@ -389,7 +392,16 @@ class KYCService extends \App\Services\BaseService
      */
     public function getAll(array $filters = [], int $limit = 50, int $offset = 0): array
     {
-        return $this->kycModel->getAll($filters, $limit, $offset);
+        $results = $this->kycModel->getAll($filters, $limit, $offset);
+        foreach ($results as $kyc) {
+            if (!empty($kyc->national_code)) {
+                $kyc->national_code = $this->encryption->decrypt((string)$kyc->national_code);
+            }
+            if (!empty($kyc->birth_date)) {
+                $kyc->birth_date = $this->encryption->decrypt((string)$kyc->birth_date);
+            }
+        }
+        return $results;
     }
 
     /**
@@ -405,7 +417,14 @@ class KYCService extends \App\Services\BaseService
      */
     public function find(int $id): ?object
     {
-        return $this->kycModel->find($id);
+        $kyc = $this->kycModel->find($id);
+        if ($kyc && !empty($kyc->national_code)) {
+            $kyc->national_code = $this->encryption->decrypt((string)$kyc->national_code);
+        }
+        if ($kyc && !empty($kyc->birth_date)) {
+            $kyc->birth_date = $this->encryption->decrypt((string)$kyc->birth_date);
+        }
+        return $kyc;
     }
 
     /**

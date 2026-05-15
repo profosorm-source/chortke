@@ -52,6 +52,25 @@ class XPEngine extends BaseService
             return false;
         }
 
+        // ۱.۵. Idempotency Check - جلوگیری از پاداش مضاعف در یک ساعت برای یک فعالیت خاص
+        $idempotencyKey = hash('sha256', "{$userId}:{$module}:{$activityType}:" . date('Y-m-d-H'));
+        $existing = $this->db->prepare("
+            SELECT id FROM score_events 
+            WHERE entity_id = ? AND domain = ? AND source = ? 
+            AND meta_json LIKE ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) 
+            LIMIT 1
+        ");
+        $existing->execute([$userId, 'xp_' . $module, $activityType, "%{$idempotencyKey}%"]);
+        
+        if ($existing->fetch()) {
+            $this->logger->warning('xp_engine.award_xp.duplicate_ignored', [
+                'user_id' => $userId,
+                'module' => $module,
+                'activity' => $activityType
+            ]);
+            return false;
+        }
+
         // ۲. ثبت امتیاز در تخصص ماژولار (لایه اول - دامنه‌های مستقل)
         $this->scoreModel->addEvent([
             'entity_type' => 'user',
@@ -61,7 +80,8 @@ class XPEngine extends BaseService
             'source' => $activityType,
             'meta' => [
                 'base_xp' => $baseXp,
-                'module' => $module
+                'module' => $module,
+                'idempotency_key' => $idempotencyKey
             ]
         ]);
 

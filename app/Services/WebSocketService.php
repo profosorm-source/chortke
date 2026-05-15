@@ -63,12 +63,17 @@ extends \App\Services\BaseService
     {
         try {
             $key = self::ROOM_PREFIX . $room . ':members';
+            $userRoomsKey = "user:{$userId}:rooms"; // 🚀 BUG-07 Fix: Reverse Index
             
-            // ✅ Add user to room
+            // ✅ Add user to room members
             $this->redis->sAdd($key, (string)$userId);
+            
+            // ✅ Add room to user's subscribed rooms (Reverse Index)
+            $this->redis->sAdd($userRoomsKey, $room);
             
             // ✅ Set room expiration to 24 hours
             $this->redis->expire($key, 86400);
+            $this->redis->expire($userRoomsKey, 86400);
             
             $this->logger->debug('websocket.join_room', ['user' => $userId, 'room' => $room]);
             
@@ -86,7 +91,10 @@ extends \App\Services\BaseService
     {
         try {
             $key = self::ROOM_PREFIX . $room . ':members';
+            $userRoomsKey = "user:{$userId}:rooms";
+            
             $this->redis->sRem($key, (string)$userId);
+            $this->redis->sRem($userRoomsKey, $room);
             
             $this->logger->debug('websocket.leave_room', ['user' => $userId, 'room' => $room]);
             
@@ -112,25 +120,9 @@ extends \App\Services\BaseService
      */
     public function getUserRooms(int $userId): array
     {
-        $pattern = self::ROOM_PREFIX . '*:members';
-        $keys = [];
-        $cursor = '0';
-        do {
-            $result = $this->redis->scan($cursor, 'MATCH', $pattern, 'COUNT', 100);
-            $cursor = $result[0];
-            $keys = array_merge($keys, $result[1]);
-        } while ($cursor !== '0');
-
-        $rooms = [];
-
-        foreach ($keys as $key) {
-            if ($this->redis->sIsMember($key, (string)$userId)) {
-                $room = str_replace([self::ROOM_PREFIX, ':members'], '', $key);
-                $rooms[] = $room;
-            }
-        }
-
-        return $rooms;
+        // 🚀 BUG-07 Fix: Use Reverse Index instead of SCAN (O(1) vs O(N))
+        $userRoomsKey = "user:{$userId}:rooms";
+        return $this->redis->sMembers($userRoomsKey) ?? [];
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -145,7 +137,7 @@ extends \App\Services\BaseService
         try {
             // ✅ Add message metadata
             $msg = array_merge($message, [
-                'id' => uniqid('msg_'),
+                'id' => 'msg_' . bin2hex(random_bytes(16)), // 🚀 BUG-12 Fix: Guaranteed unique ID
                 'room' => $room,
                 'sender' => $sender,
                 'timestamp' => date('Y-m-d H:i:s'),
