@@ -21,7 +21,7 @@ class DashboardQueryService extends \App\Services\BaseService
         Cache $cache,
         LoggerInterface $logger,
         PerformanceOptimizationService $performance,
-        \App\Services\DistributedLockService $lockService = null
+        ?\App\Services\DistributedLockService $lockService = null
     ) {
         parent::__construct($logger);
         $this->db = $db;

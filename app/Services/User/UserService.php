@@ -7,6 +7,7 @@ namespace App\Services\User;
 use App\Models\User;
 use App\Contracts\LoggerInterface;
 use App\Services\AntiFraud\GeoIPService;
+use Core\Database;
 
 /**
  * UserService
@@ -17,6 +18,7 @@ class UserService extends \App\Services\BaseService
 {
     public function __construct(
         private User $model,
+        private Database $db,
         protected LoggerInterface $logger,
         private ?GeoIPService $geoService = null
     ) {
@@ -178,38 +180,50 @@ class UserService extends \App\Services\BaseService
 
     public function updateUser(int $id, array $data): array
     {
-        if (isset($data['email'])) {
-            $existing = $this->findByEmail($data['email']);
-            if ($existing && (int)$existing->id !== $id) {
-                return [
-                    'success' => false, 
-                    'errors' => ['email' => ['این ایمیل قبلاً توسط کاربر دیگری ثبت شده است']]
-                ];
+        $this->db->beginTransaction();
+        try {
+            if (isset($data['email'])) {
+                $existing = $this->findByEmail($data['email']);
+                if ($existing && (int)$existing->id !== $id) {
+                    $this->db->rollBack();
+                    return [
+                        'success' => false, 
+                        'errors' => ['email' => ['این ایمیل قبلاً توسط کاربر دیگری ثبت شده است']]
+                    ];
+                }
             }
-        }
 
-        $updateData = [];
-        $updatableFields = ['full_name', 'email', 'role', 'status'];
-        
-        foreach ($updatableFields as $field) {
-            if (isset($data[$field])) {
-                $updateData[$field] = $data[$field];
+            $updateData = [];
+            $updatableFields = ['full_name', 'email', 'role', 'status'];
+            
+            foreach ($updatableFields as $field) {
+                if (isset($data[$field])) {
+                    $updateData[$field] = $data[$field];
+                }
             }
+
+            if (!empty($data['password'])) {
+                $updateData['password'] = hash_password((string)$data['password']);
+            }
+
+            $updateData['updated_at'] = date('Y-m-d H:i:s');
+
+            $ok = $this->model->update($id, $updateData);
+            
+            if ($ok) {
+                $this->db->commit();
+                return ['success' => true, 'message' => 'کاربر با موفقیت بروزرسانی شد'];
+            }
+
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'خطا در ذخیره مشخصات کاربر'];
+        } catch (\Exception $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            $this->logger->error('user.update_failed', ['user_id' => $id, 'error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'بروز خطا در عملیات بروزرسانی کاربر'];
         }
-
-        if (!empty($data['password'])) {
-            $updateData['password'] = hash_password((string)$data['password']);
-        }
-
-        $updateData['updated_at'] = date('Y-m-d H:i:s');
-
-        $ok = $this->model->update($id, $updateData);
-        
-        if ($ok) {
-            return ['success' => true, 'message' => 'کاربر با موفقیت بروزرسانی شد'];
-        }
-
-        return ['success' => false, 'message' => 'خطا در ذخیره مشخصات کاربر'];
     }
 
     public function quickSearch(string $term, int $limit = 5): array

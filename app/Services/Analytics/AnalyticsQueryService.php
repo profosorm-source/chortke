@@ -81,7 +81,7 @@ class AnalyticsQueryService extends \App\Services\BaseService
     public function getFinancialStats(?string $currency = null): array
     {
         $curr = strtolower($currency ?: 'irt');
-        return $this->transactionModel->getFinancialStats($curr);
+        return $this->cache->remember("financial_stats_{$curr}", self::CACHE_TTL_HOT, fn() => $this->transactionModel->getFinancialStats($curr));
     }
 
     // ==========================================
@@ -299,6 +299,8 @@ class AnalyticsQueryService extends \App\Services\BaseService
 
             case 'financial':
                 // اگر متد getFinancialStats کش شود اینجا باید خالی شود.
+                $this->cache->delete('financial_stats_irt');
+                $this->cache->delete('financial_stats_usdt');
                 $this->cache->delete('investment_stats');
                 $this->cache->delete('referral_stats');
                 // پاک کردن کش نمودارهای درآمد روزانه

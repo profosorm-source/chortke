@@ -24,7 +24,7 @@ class DisputeService extends \App\Services\BaseService
     ];
 
     public function __construct(
-        Database $db,
+        private Database $db,
         protected LoggerInterface $logger,
         private NotificationService $notificationService,
         private Dispute $disputeModel,
@@ -32,7 +32,6 @@ class DisputeService extends \App\Services\BaseService
         private ReconciliationService $reconciliationService,
         private \App\Models\Transaction $transactionModel
     ) {
-        $this->db = $db;
         parent::__construct($logger);
     }
 
@@ -411,5 +410,28 @@ class DisputeService extends \App\Services\BaseService
     private function sendNotifications($case): void
     {
         // ارسال نوتیف به ادمین یا طرف مقابل
+    }
+
+    /**
+     * Wrap closures within atomic database transactions.
+     */
+    private function transaction(callable $callback): mixed
+    {
+        $started = !$this->db->inTransaction();
+        if ($started) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $result = $callback();
+            if ($started) {
+                $this->db->commit();
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            if ($started && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 }

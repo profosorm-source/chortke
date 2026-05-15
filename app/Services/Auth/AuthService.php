@@ -82,8 +82,8 @@ class AuthService extends \App\Services\BaseService
         }
 
         if (empty($user->email_verified_at)) {
-            // L-SRV-05 Fix: حذف صریح ایمیل کاربر از بدنه خروجی جهت خنثی‌سازی قطعی ریسک فاش شدن اطلاعات (User Enumeration)
-            return ['success' => false, 'message' => 'ایمیل شما هنوز تأیید نشده است.', 'email_unverified' => true];
+            // L-SRV-05 Fix: ادغام با پیام خطای عمومی جهت ممانعت قطعی از نشت وضعیت حساب (User Enumeration)
+            return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
         }
 
         $this->rateLimiter->clearLoginAttempts($identifier);

@@ -61,12 +61,14 @@ class TwoFactorService extends \App\Services\BaseService
 
     public function getQRCodeUrl(string $username, string $secret): string
     {
+        $secret = $this->decryptSecret($secret);
         $appName = config('app.name', 'Chortke');
         return "otpauth://totp/" . rawurlencode($appName) . ":" . rawurlencode($username) . "?secret=" . rawurlencode($secret) . "&issuer=" . rawurlencode($appName);
     }
 
     public function verifyCode(string $secret, string $code, ?int $userId = null): bool
     {
+        $secret = $this->decryptSecret($secret);
         $timeSlice = (int)floor(time() / 30);
         
         // بازیابی آخرین تایم اسلایس استفاده شده جهت جلوگیری از Replay Attack
@@ -161,19 +163,31 @@ class TwoFactorService extends \App\Services\BaseService
         $this->securityModel->deleteTwoFactorCodes($userId);
         $expiresAt = date('Y-m-d H:i:s', strtotime('+1 year'));
         foreach ($codes as $code) {
-            $this->securityModel->insertTwoFactorCode($userId, hash('sha256', strtoupper((string)$code)), $expiresAt);
+            // Upgraded to Bcrypt hash for high resistance against pre-computed rainbow attacks
+            $bcryptHash = password_hash(strtoupper((string)$code), PASSWORD_BCRYPT);
+            $this->securityModel->insertTwoFactorCode($userId, $bcryptHash, $expiresAt);
         }
     }
 
     private function verifyRecoveryCode(int $userId, string $code): bool
     {
-        $hashedCode = hash('sha256', strtoupper($code));
-        $record = $this->securityModel->findValidTwoFactorCode($userId, $hashedCode);
+        $code = strtoupper(trim($code));
+        $records = $this->securityModel->getValidRecoveryCodes($userId);
 
-        if ($record) {
-            $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
-            $this->logger->info('2FA recovery code used', ['user_id' => $userId, 'code_id' => $record->id]);
-            return true;
+        foreach ($records as $record) {
+            // 1. Attempt industry-standard Bcrypt verification
+            if (password_verify($code, $record->code)) {
+                $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
+                $this->logger->info('2FA recovery code used (bcrypt)', ['user_id' => $userId, 'code_id' => $record->id]);
+                return true;
+            }
+
+            // 2. Graceful migration fallback for older SHA256-hashed codes
+            if (hash('sha256', $code) === $record->code) {
+                $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
+                $this->logger->info('2FA recovery code used (legacy sha256)', ['user_id' => $userId, 'code_id' => $record->id]);
+                return true;
+            }
         }
         return false;
     }
@@ -232,6 +246,40 @@ class TwoFactorService extends \App\Services\BaseService
     private function timingSafeEquals(string $safe, string $user): bool
     {
         return hash_equals($safe, $user);
+    }
+
+    /**
+     * Encrypts 2FA secret using AES-256-CBC with application key.
+     */
+    public function encryptSecret(string $secret): string
+    {
+        $key = (string)config('app.key');
+        $iv = substr($key, 0, 16);
+        $encrypted = openssl_encrypt($secret, 'aes-256-cbc', $key, 0, $iv);
+        if ($encrypted === false) {
+            throw new \RuntimeException('Failed to encrypt 2FA secret.');
+        }
+        return $encrypted;
+    }
+
+    /**
+     * Decrypts 2FA secret, falling back gracefully to raw format if legacy.
+     */
+    public function decryptSecret(string $encryptedSecret): string
+    {
+        // If length is 32 and base32 compliant, it might be legacy unencrypted
+        if (strlen($encryptedSecret) == 32 && preg_match('/^[A-Z2-7]+$/', $encryptedSecret)) {
+            return $encryptedSecret;
+        }
+
+        $key = (string)config('app.key');
+        $iv = substr($key, 0, 16);
+        $decrypted = openssl_decrypt($encryptedSecret, 'aes-256-cbc', $key, 0, $iv);
+        
+        if ($decrypted === false || $decrypted === '') {
+            return $encryptedSecret; // Fallback for extreme safety
+        }
+        return $decrypted;
     }
 }
 

@@ -8,6 +8,7 @@ use App\Models\SecurityModel;
 use App\Services\AntiFraud\RiskPolicyService;
 use App\Services\DistributedLockService;
 use App\Contracts\LoggerInterface;
+use Core\Database;
 /**
  * SessionService
  *
@@ -25,6 +26,7 @@ class SessionService extends \App\Services\BaseService
         private SecurityModel $model,
         private RiskPolicyService $policy,
         private DistributedLockService $lockService,
+        private Database $db,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -96,10 +98,10 @@ class SessionService extends \App\Services\BaseService
             $fingerprint = $this->generateFingerprint($userAgent, $acceptLanguage, $acceptEncoding);
 
             // 🔒 PESSIMISTIC LOCKING: Prevent race condition in session creation
-            $this->model->getDb()->beginTransaction();
+            $this->db->beginTransaction();
 
             // Safe Port: Moved RAW serialized lock to native atomic QueryBuilder execution.
-            $existing = $this->model->getDb()->table('user_sessions')
+            $existing = $this->db->table('user_sessions')
                 ->where('session_id', '=', $sessionId)
                 ->lockForUpdate()
                 ->select('id')
@@ -108,7 +110,7 @@ class SessionService extends \App\Services\BaseService
             if ($existing) {
                 // Session exists, just update activity timestamp
                 $result = $this->model->updateSessionActivity($sessionId);
-                $this->model->getDb()->commit();
+                $this->db->commit();
                 return $result;
             }
 
@@ -126,13 +128,13 @@ class SessionService extends \App\Services\BaseService
                 'fingerprint' => $fingerprint
             ]);
 
-            $this->model->getDb()->commit();
+            $this->db->commit();
             return $result;
 
         } catch (\Exception $e) {
             // 🛡️ H02 Fix: Safe rollback — check if transaction is active before rolling back
-            if ($this->model->getDb()->inTransaction()) {
-                $this->model->getDb()->rollBack();
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
             }
             $this->logger->error('session.record_session.failed', [
                 'user_id' => $userId,

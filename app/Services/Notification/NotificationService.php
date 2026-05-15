@@ -155,17 +155,33 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         }
 
         try {
-            $this->dispatcher->dispatch(
-                'fcm',
-                $userId,
-                $title,
-                $message,
-                array_merge($data ?? [], ['type' => $type, 'notif_id' => (string)($notifId ?? '')]),
-                $imageUrl,
-                $actionUrl
-            );
+            // 🚀 UPG: استفاده از صف سیستم جهت پردازش کاملاً ناهمگام و جلوگیری از مسدودسازی پاسخ HTTP
+            $this->queue->push(\App\Jobs\SendBulkNotificationJob::class, [
+                'channel' => 'fcm',
+                'user_ids' => [$userId],
+                'title' => $title,
+                'message' => $message,
+                'data' => array_merge($data ?? [], ['type' => $type, 'notif_id' => (string)($notifId ?? '')]),
+                'image_url' => $imageUrl,
+                'action_url' => $actionUrl,
+            ]);
         } catch (\Throwable $e) {
-            $this->logger->warning('notif.push_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            $this->logger->warning('notif.push_queue_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            
+            // Fallback to sync dispatch in case queue manager crashes to ensure delivery resilience
+            try {
+                $this->dispatcher->dispatch(
+                    'fcm',
+                    $userId,
+                    $title,
+                    $message,
+                    array_merge($data ?? [], ['type' => $type, 'notif_id' => (string)($notifId ?? '')]),
+                    $imageUrl,
+                    $actionUrl
+                );
+            } catch (\Throwable $syncError) {
+                $this->logger->error('notif.push_fallback_sync_failed', ['user_id' => $userId, 'error' => $syncError->getMessage()]);
+            }
         }
     }
 

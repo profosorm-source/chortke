@@ -394,5 +394,230 @@ class OAuthService extends \App\Services\BaseService
         
         return $username;
     }
+
+    /**
+     * هدایت کاربر به درگاه ورود امن فیس‌بوک
+     */
+    public function getFacebookAuthUrl(): string
+    {
+        $redirectUri = "{$this->appUrl}/auth/callback/facebook";
+        $state = bin2hex(random_bytes(16));
+        
+        $this->session->set('oauth_facebook_state', [
+            'token' => $state,
+            'created_at' => time()
+        ]);
+
+        return "https://www.facebook.com/v18.0/dialog/oauth?" . http_build_query([
+            'client_id' => $this->facebookAppId,
+            'redirect_uri' => $redirectUri,
+            'state' => $state,
+            'scope' => 'email,public_profile',
+            'response_type' => 'code'
+        ]);
+    }
+
+    /**
+     * پردازش درخواست بازگشت فیس‌بوک و احراز اصالت کاربر
+     */
+    public function handleFacebookCallback(string $code, string $state): array
+    {
+        if (!$this->session->has('oauth_facebook_state')) {
+            return ['success' => false, 'message' => 'Invalid request: session state missing.'];
+        }
+
+        $stored = $this->session->get('oauth_facebook_state');
+        $this->session->remove('oauth_facebook_state');
+
+        if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
+            return ['success' => false, 'message' => 'Invalid state structure.'];
+        }
+
+        if ($stored['token'] !== $state) {
+            return ['success' => false, 'message' => 'Invalid state token match failed.'];
+        }
+
+        if ((time() - (int)$stored['created_at']) > 300) {
+            return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
+        }
+
+        try {
+            $tokenResp = $this->getFacebookToken($code);
+            if (!$tokenResp['success']) return $tokenResp;
+            
+            $accessToken = $tokenResp['access_token'];
+
+            // 🛡️ CRITICAL SECURITY UPGRADE: اعتبارسنجی عمیق با debug_token جهت پیشگیری کامل از نشت احراز هویت و Confused Deputy Attack
+            $debugResp = $this->verifyFacebookAccessToken($accessToken);
+            if (!$debugResp['success']) return $debugResp;
+
+            $userInfo = $this->getFacebookUserInfo($accessToken);
+            if (!$userInfo['success']) return $userInfo;
+
+            return $this->linkOrCreateUser('facebook', $userInfo['data']);
+        } catch (\Exception $e) {
+            $this->logger->error('oauth.facebook.callback_failed', ['error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'خطا در ورود با فیس‌بوک'];
+        }
+    }
+
+    private function getFacebookToken(string $code): array
+    {
+        $ch = curl_init('https://graph.facebook.com/v18.0/oauth/access_token');
+        if ($ch === false) {
+            return ['success' => false, 'message' => 'Failed to initialize curl'];
+        }
+
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
+            'client_id' => $this->facebookAppId,
+            'client_secret' => $this->facebookAppSecret,
+            'redirect_uri' => "{$this->appUrl}/auth/callback/facebook",
+            'code' => $code,
+        ]));
+
+        $rawResponse = curl_exec($ch);
+        if ($rawResponse === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            $this->logger->error('oauth.facebook.token_curl_error', ['error' => $error]);
+            return ['success' => false, 'message' => 'خطا در ارتباط با سرور فیس‌بوک'];
+        }
+
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $response = json_decode((string)$rawResponse, true);
+        if ($httpCode !== 200 || !isset($response['access_token'])) {
+            $this->logger->error('oauth.facebook.token_invalid_response', [
+                'http_code' => $httpCode,
+                'response'  => $response
+            ]);
+            return ['success' => false, 'message' => 'خطا در دریافت توکن فیس‌بوک'];
+        }
+
+        return [
+            'success'      => true, 
+            'access_token' => $response['access_token']
+        ];
+    }
+
+    /**
+     * 🛡️ گیت حیاتی امنیتی فیس‌بوک: تصدیق تعلق مستقیم توکن به شناسه اختصاصی اپلیکیشن جاری
+     */
+    private function verifyFacebookAccessToken(string $inputToken): array
+    {
+        $appAccessToken = "{$this->facebookAppId}|{$this->facebookAppSecret}";
+        $url = 'https://graph.facebook.com/debug_token?' . http_build_query([
+            'input_token' => $inputToken,
+            'access_token' => $appAccessToken
+        ]);
+
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return ['success' => false, 'message' => 'Failed to initialize curl'];
+        }
+
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+        $rawResponse = curl_exec($ch);
+        if ($rawResponse === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            $this->logger->error('oauth.facebook.debug_token_curl_error', ['error' => $error]);
+            return ['success' => false, 'message' => 'خطا در راستی‌آزمایی توکن فیس‌بوک'];
+        }
+
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $response = json_decode((string)$rawResponse, true);
+        if ($httpCode !== 200 || !isset($response['data']['app_id']) || !isset($response['data']['is_valid']) || !$response['data']['is_valid']) {
+            $this->logger->error('oauth.facebook.token_invalid', ['response' => $response]);
+            return ['success' => false, 'message' => 'توکن فیس‌بوک نامعتبر یا منقضی شده است'];
+        }
+
+        // 🛡️ Critical Cryptographic Binding: گارد امنیتی حیاتی جهت ممانعت از تزریق توکن‌های صادر شده برای اپلیکیشن‌های متفرقه (Auth Bypass)
+        if ($response['data']['app_id'] !== $this->facebookAppId) {
+            $this->logger->critical('oauth.facebook.app_id_mismatch_detected', [
+                'expected' => $this->facebookAppId,
+                'received' => $response['data']['app_id']
+            ]);
+            return ['success' => false, 'message' => 'نقص امنیتی شناسایی شد: اپلیکیشن آیدی نامعتبر'];
+        }
+
+        return ['success' => true];
+    }
+
+    private function getFacebookUserInfo(string $accessToken): array
+    {
+        $ch = curl_init('https://graph.facebook.com/v18.0/me?' . http_build_query([
+            'fields' => 'id,name,email,picture.type(large)',
+            'access_token' => $accessToken
+        ]));
+        if ($ch === false) {
+            return ['success' => false, 'message' => 'Failed to initialize curl'];
+        }
+
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+        $rawResponse = curl_exec($ch);
+        if ($rawResponse === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            $this->logger->error('oauth.facebook.userinfo_curl_error', ['error' => $error]);
+            return ['success' => false, 'message' => 'خطا در ارتباط با فیس‌بوک'];
+        }
+
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $response = json_decode((string)$rawResponse, true);
+        if ($httpCode !== 200 || !isset($response['id'])) {
+            $this->logger->error('oauth.facebook.userinfo_invalid_response', [
+                'http_code' => $httpCode,
+                'response'  => $response
+            ]);
+            return ['success' => false, 'message' => 'خطا در دریافت اطلاعات کاربری فیس‌بوک'];
+        }
+
+        return [
+            'success' => true, 
+            'data' => [
+                'id'      => $response['id'],
+                'email'   => $response['email'] ?? null,
+                'name'    => $response['name'] ?? '',
+                'picture' => $response['picture']['data']['url'] ?? null
+            ]
+        ];
+    }
+
+    public function getLinkedAccounts(int $userId): array
+    {
+        return $this->db->table('social_accounts')->where('user_id', '=', $userId)->get() ?? [];
+    }
+
+    public function linkSocialAccount(int $userId, string $provider, array $userData): array
+    {
+        return ['success' => false, 'message' => 'در حال حاضر پشتیبانی نمی‌شود.'];
+    }
+
+    public function unlinkSocialAccount(int $userId, string $provider): array
+    {
+        $ok = $this->db->table('social_accounts')
+            ->where('user_id', '=', $userId)
+            ->where('provider', '=', $provider)
+            ->delete();
+        return ['success' => $ok, 'message' => $ok ? 'اتصال حساب با موفقیت جدا شد.' : 'خطا در جدا کردن اتصال حساب.'];
+    }
 }
 

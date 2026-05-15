@@ -28,12 +28,11 @@ class TrustScoreService extends \App\Services\BaseService
         private Score $scoreModel,
         private SocialTaskAnalyticsModel $socialTaskModel,
         private ScoreEventService $scoreEventService,
-        \Core\Database $db,
+        private \Core\Database $db,
         private \App\Models\User $userModel,
         private \App\Services\SettingService $settingService,
         protected LoggerInterface $logger
     ) {
-        $this->db = $db;
         parent::__construct($logger);
     }
 
@@ -203,5 +202,28 @@ class TrustScoreService extends \App\Services\BaseService
     private function clampTrustScore(float $val): float
     {
         return max(self::TRUST_MIN, min(self::TRUST_MAX, $val));
+    }
+
+    /**
+     * Wrap closures within atomic database transactions.
+     */
+    private function transaction(callable $callback): mixed
+    {
+        $started = !$this->db->inTransaction();
+        if ($started) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $result = $callback();
+            if ($started) {
+                $this->db->commit();
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            if ($started && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 }

@@ -19,10 +19,9 @@ class CouponService extends \App\Services\BaseService
     public function __construct(
         private Coupon $couponModel,
         private CouponRedemption $redemptionModel,
-        Database $db,
+        private Database $db,
         LoggerInterface $logger
     ) {
-        $this->db = $db;
         parent::__construct($logger);
     }
 
@@ -355,6 +354,29 @@ class CouponService extends \App\Services\BaseService
             'per_page' => $perPage,
             'total_pages' => ceil($total / $perPage),
         ];
+    }
+
+    /**
+     * Wrap closures within atomic database transactions.
+     */
+    private function transaction(callable $callback): mixed
+    {
+        $started = !$this->db->inTransaction();
+        if ($started) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $result = $callback();
+            if ($started) {
+                $this->db->commit();
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            if ($started && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 }
 

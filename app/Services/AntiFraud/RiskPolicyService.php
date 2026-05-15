@@ -10,7 +10,7 @@ class RiskPolicyService extends \App\Services\BaseService
     private Database $db;
 
     /** @var array<string, mixed> */
-    private static array $cache = [];
+    private array $cache = [];
 
     public function __construct(Database $db, LoggerInterface $logger)
     {
@@ -30,8 +30,8 @@ class RiskPolicyService extends \App\Services\BaseService
     {
         $cacheKey = $this->cacheKey($domain, $key);
 
-        if (array_key_exists($cacheKey, self::$cache)) {
-            return self::$cache[$cacheKey];
+        if (array_key_exists($cacheKey, $this->cache)) {
+            return $this->cache[$cacheKey];
         }
 
         $stmt = $this->db->prepare("
@@ -44,12 +44,12 @@ class RiskPolicyService extends \App\Services\BaseService
         $row = $stmt->fetch(\PDO::FETCH_ASSOC);
 
         if (!$row) {
-            self::$cache[$cacheKey] = $default;
+            $this->cache[$cacheKey] = $default;
             return $default;
         }
 
         $value = $this->castValue($row['value'], $row['value_type'] ?? 'string');
-        self::$cache[$cacheKey] = $value;
+        $this->cache[$cacheKey] = $value;
 
         return $value;
     }
@@ -110,7 +110,7 @@ class RiskPolicyService extends \App\Services\BaseService
             $adminId,
         ]);
 
-        unset(self::$cache[$this->cacheKey($domain, $key)]);
+        unset($this->cache[$this->cacheKey($domain, $key)]);
 
         return $ok;
     }
@@ -160,7 +160,7 @@ class RiskPolicyService extends \App\Services\BaseService
 
     public function clearCache(): void
     {
-        self::$cache = [];
+        $this->cache = [];
     }
 
     private function castValue($value, string $type)

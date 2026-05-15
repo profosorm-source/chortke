@@ -140,11 +140,11 @@ class FraudDetectionService extends \App\Services\BaseService
         $finalScore = (int) min(100, max(0, round($score)));
 
         try {
-            // 🚀 UPG-05: بجای ثبت مستقیم و همگام، شلیک رویداد جهت پردازش ناهمگام و کاهش سربار ریکوئست
-            $this->eventDispatcher->dispatch('fraud.score_updated', new FraudScoreUpdatedEvent($userId, $finalScore));
-
-            // لاگ کردن محاسبه
+            // ۱. ابتدا لاگ کردن محاسبه در پایگاه داده جهت تضمین Persistence و پیشگیری از ناهماهنگی با پردازنده‌های ثانویه
             $this->logFraudCalculation($userId, $factors, $finalScore);
+
+            // ۲. سپس شلیک رویداد جهت فرآیندهای ثانویه و ناهمگام
+            $this->eventDispatcher->dispatch('fraud.score_updated', new FraudScoreUpdatedEvent($userId, $finalScore));
         } catch (\Throwable $e) {
             // M33 Fix: جلوگیری از کرش کل فرآیند در صورت بروز خطا در نوشتن سوابق آماری و لاگ‌های غیرضروری
             $this->logger->error('fraud.score_persistence.failed', [
