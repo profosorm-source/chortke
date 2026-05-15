@@ -8,11 +8,6 @@
 define('BASE_PATH', dirname(__DIR__));
 define('VIEW_PATH', BASE_PATH . '/views');
 
-// ── Hardened Security Defaults ──────────────────────────────────
-error_reporting(0);
-ini_set('display_errors', '0');
-ini_set('log_errors', '1');
-
 ob_start();
 ob_implicit_flush(false);
 
@@ -31,8 +26,12 @@ $app = \Core\Application::getInstance();
 require_once BASE_PATH . '/routes/routes.php';
 
 // ── ۵. اجرای نهایی و ارسال به کاربر ─────────────────────────────
-// تمامی میدل‌ویرهای سراسری در متد dispatch به طور خودکار اعمال می‌شوند.
-$app->run();
+try {
+    $app->run();
+} finally {
+    // ── ۶. اتمام بافر ──────────────────────────────────────────────
+    if (ob_get_level() > 0) {
+        ob_end_flush();
+    }
+}
 
-// ── ۶. اتمام بافر ──────────────────────────────────────────────
-ob_end_flush();
