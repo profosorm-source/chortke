@@ -100,7 +100,8 @@ class TrustScoreService extends \App\Services\BaseService
         // Batched memory-safe retrieval to prevent server timeouts and memory exhaustion
         do {
             $users = $this->db->table('social_task_executions')
-                ->select('DISTINCT executor_id AS user_id')
+                ->distinct()
+                ->select('executor_id AS user_id')
                 ->where('created_at', '>=', date('Y-m-d H:i:s', strtotime('-7 days')))
                 ->limit($chunkSize)
                 ->offset($offset)

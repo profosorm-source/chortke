@@ -143,8 +143,8 @@ class FraudDetectionService extends \App\Services\BaseService
             // ۱. ابتدا لاگ کردن محاسبه در پایگاه داده جهت تضمین Persistence و پیشگیری از ناهماهنگی با پردازنده‌های ثانویه
             $this->logFraudCalculation($userId, $factors, $finalScore);
 
-            // ۲. سپس شلیک رویداد جهت فرآیندهای ثانویه و ناهمگام
-            $this->eventDispatcher->dispatch('fraud.score_updated', new FraudScoreUpdatedEvent($userId, $finalScore));
+            // ۲. سپس شلیک رویداد جهت فرآیندهای ثانویه به صورت کاملاً ناهمگام و پس‌زمینه (🚀 UPG-06)
+            $this->eventDispatcher->dispatchAsync('fraud.score_updated', new FraudScoreUpdatedEvent($userId, $finalScore));
         } catch (\Throwable $e) {
             // M33 Fix: جلوگیری از کرش کل فرآیند در صورت بروز خطا در نوشتن سوابق آماری و لاگ‌های غیرضروری
             $this->logger->error('fraud.score_persistence.failed', [

@@ -27,6 +27,7 @@ final class FraudGuardService extends BaseService
         private VideoFingerprintService $videoFingerprint,
         private BehaviorAnalysisService $behaviorAnalysis,
         private SeoFraudDetector $seoDetector,
+        private \App\Services\FeatureFlagService $featureFlag,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -186,21 +187,26 @@ final class FraudGuardService extends BaseService
         // B. IP Quality Verification
         $results['ip_quality'] = $this->ipQuality->check($ip);
 
-        // C. Device Emulation/Environment Intelligence
-        if (!empty($context['device_info'])) {
-            $results['device'] = $this->deviceIntel->comprehensiveAnalysis($context['device_info']);
-        }
+        // Bypassing heavy external/internal profiling under high-load Feature Flag to prevent latency spikes
+        if (!$this->skipHeavyChecks($userId)) {
+            // C. Device Emulation/Environment Intelligence
+            if (!empty($context['device_info'])) {
+                $results['device'] = $this->deviceIntel->comprehensiveAnalysis($context['device_info']);
+            }
 
-        // D. Email/Phone intelligence verification
-        if (!empty($context['email'])) {
-            $results['email'] = $this->emailPhoneIntel->analyzeEmail($context['email']);
-        }
-        if (!empty($context['phone'])) {
-            $results['phone'] = $this->emailPhoneIntel->analyzePhone($context['phone']);
-        }
+            // D. Email/Phone intelligence verification
+            if (!empty($context['email'])) {
+                $results['email'] = $this->emailPhoneIntel->analyzeEmail($context['email']);
+            }
+            if (!empty($context['phone'])) {
+                $results['phone'] = $this->emailPhoneIntel->analyzePhone($context['phone']);
+            }
 
-        // E. Geolocation & Velocity Anomaly Checks
-        $results['geolocation'] = $this->geoIntel->analyze($userId, $ip, $context);
+            // E. Geolocation & Velocity Anomaly Checks
+            $results['geolocation'] = $this->geoIntel->analyze($userId, $ip, $context);
+        } else {
+            $this->logWarning("anti_fraud.heavy_checks.bypassed", ['user_id' => $userId, 'action' => 'runAuthChecks']);
+        }
 
         return $results;
     }
@@ -264,8 +270,10 @@ final class FraudGuardService extends BaseService
 
         $results['velocity'] = $this->velocity->check($userId, 'deposit', $context);
 
-        if (!empty($context['device_info'])) {
-            $results['device'] = $this->deviceIntel->comprehensiveAnalysis($context['device_info']);
+        if (!$this->skipHeavyChecks($userId)) {
+            if (!empty($context['device_info'])) {
+                $results['device'] = $this->deviceIntel->comprehensiveAnalysis($context['device_info']);
+            }
         }
 
         return $results;
@@ -291,9 +299,11 @@ final class FraudGuardService extends BaseService
         // C. Velocity Check
         $results['velocity'] = $this->velocity->check($userId, 'task_execution', $context);
 
-        // D. Behavioral Biometrics analysis
-        if (!empty($context['biometric_data'])) {
-            $results['biometrics'] = $this->biometrics->analyzePatterns($userId, $context['biometric_data']);
+        // D. Behavioral Biometrics analysis (Heavy JS parse bypassed on high load)
+        if (!$this->skipHeavyChecks($userId)) {
+            if (!empty($context['biometric_data'])) {
+                $results['biometrics'] = $this->biometrics->analyzePatterns($userId, $context['biometric_data']);
+            }
         }
 
         return $results;
@@ -309,9 +319,11 @@ final class FraudGuardService extends BaseService
         // A. Automated Social Tasks anti-fraud
         $results['silent_fraud'] = $this->silentAntiFraud->evaluateExecution($userId, $context['task_id'] ?? 0, $context);
 
-        // B. Video Fingerprint / Duplicate detection
-        if (!empty($context['video_hash'])) {
-            $results['video'] = $this->videoFingerprint->checkDuplicate($userId, $context['video_hash']);
+        // B. Video Fingerprint / Duplicate detection (Skipped if global circuit breaker is ON)
+        if (!$this->skipHeavyChecks($userId)) {
+            if (!empty($context['video_hash'])) {
+                $results['video'] = $this->videoFingerprint->checkDuplicate($userId, $context['video_hash']);
+            }
         }
 
         // C. Social interaction behavior analysis
@@ -337,5 +349,19 @@ final class FraudGuardService extends BaseService
         }
 
         return $results;
+    }
+
+    /**
+     * Centralized circuit breaker strategy evaluating Feature Flags to bypass CPU/I/O heavy calculations.
+     */
+    private function skipHeavyChecks(?int $userId): bool
+    {
+        try {
+            // Checks database/cache configuration dynamically via active feature flag
+            return (bool) $this->featureFlag->isEnabled('anti_fraud.heavy_checks_disabled', $userId);
+        } catch (\Throwable $e) {
+            $this->logError("anti_fraud.ff_circuit_breaker.failed", ['error' => $e->getMessage()]);
+            return false; // Fallback: perform checks if feature flags fail
+        }
     }
 }

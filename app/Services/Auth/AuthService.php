@@ -13,6 +13,9 @@ use App\Services\AuditTrail;
 use Core\Logger;
 use Core\Session;
 use Core\RateLimiter;
+use Core\EventDispatcher;
+use App\Events\UserLoggedInEvent;
+use App\Events\UserRegisteredEvent;
 
 /**
  * AuthService
@@ -32,6 +35,7 @@ class AuthService extends \App\Services\BaseService
         private AuditTrail $auditTrail,
         private TwoFactorService $twoFactorService,
         private \App\Services\SettingService $settingService,
+        private EventDispatcher $eventDispatcher,
         private ?EmailService $emailService = null
     ) {
         parent::__construct($logger);
@@ -96,8 +100,11 @@ class AuthService extends \App\Services\BaseService
             $this->createPending2FASession($user);
         }
 
-        $this->logger->activity('auth.login', 'ورود موفق کاربر', (int)$user->id);
-        $this->auditTrail->record('auth.login', (int)$user->id, ['ip' => $this->clientIp()]);
+        // 🚀 UPG-05: پردازش آسنکرون رویداد ورود با الگوی رویدادگرا (Async Event-Driven)
+        $this->eventDispatcher->dispatchAsync(
+            'auth.login', 
+            new UserLoggedInEvent((int)$user->id, $this->clientIp(), get_user_agent())
+        );
         
         return [
             'success'      => true,
@@ -129,8 +136,11 @@ class AuthService extends \App\Services\BaseService
             $this->createPending2FASession($user);
         }
 
-        $this->logger->activity('auth.direct_login', 'ورود مستقیم کاربر (OAuth)', (int)$user->id);
-        $this->auditTrail->record('auth.direct_login', (int)$user->id, ['ip' => $this->clientIp()]);
+        // 🚀 UPG-05: پردازش آسنکرون رویداد ورود مستقیم (Async Event-Driven)
+        $this->eventDispatcher->dispatchAsync(
+            'auth.login', 
+            new UserLoggedInEvent((int)$user->id, $this->clientIp(), get_user_agent())
+        );
 
         return [
             'success'      => true,
@@ -229,8 +239,11 @@ class AuthService extends \App\Services\BaseService
         $this->session->remove('pending_2fa_user_id');
         $this->createSession($user, false); // remember = false چون قبلاً چک شده
 
-        $this->logger->activity('auth.2fa_success', '2FA موفق', (int)$user->id);
-        $this->auditTrail->record('auth.2fa_verify', (int)$user->id, ['ip' => $this->clientIp()]);
+        // 🚀 UPG-05: پردازش آسنکرون رویداد پس از تایید موفق دو عاملی
+        $this->eventDispatcher->dispatchAsync(
+            'auth.login', 
+            new UserLoggedInEvent((int)$user->id, $this->clientIp(), get_user_agent())
+        );
 
         return [
             'success' => true,
@@ -277,12 +290,12 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'ثبت‌نام با شکست مواجه شد.'];
         }
 
-        $user = $this->userService->find($userId);
-        if ($this->emailService && $user && isset($user->email_verification_token)) {
-            $this->emailService->sendVerificationEmail($userId, $user->email_verification_token);
-        }
+        // 🚀 UPG-05: پردازش آسنکرون ثبت‌نام (ارسال ایمیل و لاگینگ به صورت پس‌زمینه)
+        $this->eventDispatcher->dispatchAsync(
+            'auth.register', 
+            new UserRegisteredEvent($userId, $data['email'] ?? '', $this->clientIp())
+        );
         
-        $this->logger->activity('auth.register', 'ثبت‌نام کاربر', $userId);
         return ['success' => true, 'message' => 'ثبت‌نام با موفقیت انجام شد.'];
     }
 

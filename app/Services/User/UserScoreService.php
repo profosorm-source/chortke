@@ -82,7 +82,7 @@ class UserScoreService extends \App\Services\BaseService
                 'domain' => $domain,
                 'error' => $e->getMessage()
             ]);
-            return false;
+            throw $e; // Propagate up to let Queue handle retries with DLQ safety
         }
     }
 
