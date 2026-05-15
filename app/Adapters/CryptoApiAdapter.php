@@ -89,15 +89,26 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                 return ['status' => 'error', 'reason' => 'پاسخ نامعتبر از API'];
             }
 
+            // Issue 1: Check status and confirmations
+            if (!isset($data['confirmed']) || $data['confirmed'] !== true || !isset($data['contractRet']) || $data['contractRet'] !== 'SUCCESS') {
+                return ['status' => 'pending', 'reason' => 'تراکنش هنوز تایید نهایی نشده است'];
+            }
+
+            // Issue 2: Poisoning check (Fake Token Transfer)
+            // USDT (TRC20) Contract: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+            if (!isset($data['contractData']['contract_address']) || strtolower($data['contractData']['contract_address']) !== 'tr7nhqjeqxgwgcuilmt11mxpcwjrqcqq8d') {
+                return ['status' => 'mismatch', 'reason' => 'توکن ارسالی USDT نیست'];
+            }
+
             // Check if transaction is to our wallet
             $to = $data['contractData']['to_address'] ?? '';
             if (strtolower($to) !== strtolower($toWallet)) {
                 return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده مطابقت ندارد'];
             }
 
-            // Check amount (convert from SUN to TRX)
+            // Check amount (convert from 10^6 for USDT)
             $amount = isset($data['contractData']['amount']) ? $data['contractData']['amount'] / 1000000 : 0;
-            if (abs($amount - $expectedAmount) > 0.000001) {
+            if (abs($amount - $expectedAmount) > 0.01) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
@@ -118,7 +129,9 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function verifyBscTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
         try {
-            $url = "https://api.bscscan.com/api?module=proxy&action=eth_getTransactionByHash&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($this->settingService->get('bscscan_api_key', '') ?: 'YourApiKeyToken');
+            $apiKey = $this->settingService->get('bscscan_api_key', '') ?: 'YourApiKeyToken';
+            $url = "https://api.bscscan.com/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey);
+            
             $ch = \curl_init($url);
             \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             \curl_setopt($ch, CURLOPT_TIMEOUT, 10);
@@ -133,19 +146,39 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             }
 
             $data = json_decode($response, true);
-            if (!$data || !isset($data['result']) || !$data['result']) {
-                return ['status' => 'error', 'reason' => 'تراکنش یافت نشد'];
+            $tx = null;
+            if (isset($data['result']) && is_array($data['result']) && count($data['result']) > 0) {
+                $tx = $data['result'][0];
             }
 
-            $tx = $data['result'];
+            if (!$tx) {
+                return ['status' => 'error', 'reason' => 'تراکنش یافت نشد یا توکن منتقل نشده است'];
+            }
+
+            // Issue 1: Confirmation check
+            if (!isset($tx['blockNumber']) || empty($tx['blockNumber'])) {
+                return ['status' => 'pending', 'reason' => 'تراکنش هنوز در بلاک قرار نگرفته است'];
+            }
+
+            // Issue 2: Poisoning check (USDT BEP20)
+            if (strtolower($tx['contractAddress'] ?? '') !== '0x55d398326f99059ff775485246999027b3197955') {
+                return ['status' => 'mismatch', 'reason' => 'توکن ارسالی USDT (BEP20) نیست'];
+            }
+
+            // Check receiver
+            if (strtolower($tx['to'] ?? '') !== strtolower($toWallet)) {
+                return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده مطابقت ندارد'];
+            }
+
+            // Check amount
+            $decimals = (int)($tx['tokenDecimal'] ?? 18);
+            $amount = $tx['value'] / pow(10, $decimals);
             
-            if (isset($tx['to']) && strtolower($tx['to']) !== strtolower($toWallet)) {
-                // If it's a native BNB transfer, 'to' would match. For BEP20, 'to' is the contract.
-                // We return manual to ensure admin checks BEP20 transfers securely instead of fake success.
-                return ['status' => 'manual', 'reason' => 'نیاز به بررسی دستی توکن/آدرس'];
+            if (abs($amount - $expectedAmount) > 0.01) {
+                return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
-            return ['status' => 'manual', 'reason' => 'بررسی مبلغ توکن BSC نیاز به بررسی دستی دارد'];
+            return ['status' => 'verified', 'details' => $tx];
 
         } catch (\Exception $e) {
             $this->logger->error('crypto.verify.bsc.failed', [
