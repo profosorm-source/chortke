@@ -28,6 +28,15 @@ class AuthMiddleware extends BaseMiddleware
 
     public function handle(Request $request, Closure $next): Response
     {
+        // CORE-037: Enforce separate API authentication (Cookie auth not permitted on /api/*)
+        if (str_starts_with($request->uri(), '/api/')) {
+            $response = new Response();
+            return $response->json([
+                'success' => false, 
+                'message' => 'احراز هویت مبتنی بر سشن روی وب‌سرویس‌ها مجاز نیست.'
+            ], 401);
+        }
+
         $session = $this->session;
         $now = time();
         $timeout = (int)$this->settingService->get('session_idle_timeout_seconds', 900);

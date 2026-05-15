@@ -50,9 +50,31 @@ class RateLimitMiddleware
         $calledNext = false;
         try {
             [$maxAttempts, $decayMinutes] = $this->resolveLimit($request);
+            
+            // CORE-042: Use high-precision token_bucket for sensitive critical operations
+            $isCriticalPath = false;
+            $requestUri = $request->uri();
+            foreach (array_keys(self::ROUTE_LIMITS) as $pattern) {
+                if (str_contains($requestUri, $pattern)) {
+                    $isCriticalPath = true;
+                    break;
+                }
+            }
+
+            $originalStrategy = $this->rateLimiter->getStrategy();
+            if ($isCriticalPath) {
+                $this->rateLimiter->setStrategy('token_bucket');
+            }
+
             $key = $this->resolveRequestSignature($request);
 
-            if (!$this->rateLimiter->attempt($key, $maxAttempts, $decayMinutes)) {
+            try {
+                $allowed = $this->rateLimiter->attempt($key, $maxAttempts, $decayMinutes);
+            } finally {
+                $this->rateLimiter->setStrategy($originalStrategy);
+            }
+
+            if (!$allowed) {
                 $retryAfter = $this->rateLimiter->availableIn($key);
 
                 $this->logger->warning('Rate limit exceeded', [
@@ -123,15 +145,20 @@ class RateLimitMiddleware
 
     private function resolveRequestSignature(Request $request): string
     {
-        // Fix M3: استفاده از strtok برای حذف Query String از کلید محدودسازی
-        // این جلوگیری می‌کند از دور زدن فیلتر توسط تغییر پارامترهای URL
         $uri = $request->uri() ?? '';
         $cleanUri = strtok($uri, '?') ?: $uri; // فقط path، بدون query parameters
+        
+        // CORE-043: Normalize components (trim, lowercase) to ensure hash uniqueness
+        $cleanUri = strtolower(trim($cleanUri));
         
         $userId = $this->session->get('user_id');
         if ($userId) {
             return 'rl_user_' . $userId . '_' . md5($cleanUri);
         }
-        return 'rl_ip_' . md5($_SERVER['REMOTE_ADDR'] ?? 'unknown') . '_' . md5($cleanUri);
+        
+        $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $ip = trim($ip);
+        
+        return 'rl_ip_' . md5($ip) . '_' . md5($cleanUri);
     }
 }
