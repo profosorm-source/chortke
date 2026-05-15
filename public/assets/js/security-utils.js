@@ -143,12 +143,6 @@
                 timestampInput.value = getTimestamp();
             }
         });
-
-        console.log('🔐 Security fields initialized:', {
-            form: formId,
-            idempotency_key: idempotencyInput?.value,
-            device_fingerprint: deviceInput?.value
-        });
     }
 
     /**
