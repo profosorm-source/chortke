@@ -81,7 +81,8 @@ class Application
                     new \App\Models\ActivityLog($db),
                     new \App\Models\SystemLog($db),
                     new \App\Models\SecurityLog($db),
-                    new \App\Models\PerformanceLog($db)
+                    new \App\Models\PerformanceLog($db),
+                    $this->session
                 )
             );
         });

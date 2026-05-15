@@ -462,11 +462,12 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
         $isJson = (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') || (isset($_SERVER['HTTP_ACCEPT']) && $_SERVER['HTTP_ACCEPT'] === 'application/json');
 
         if ($debug) {
+            $sanitizedError = self::sanitizeErrorData($error);
             if ($isJson) {
-                echo json_encode($error, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+                echo json_encode($sanitizedError, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
             } else {
                 echo '<pre>' . e(
-                    print_r($error, true),
+                    print_r($sanitizedError, true),
                     ENT_QUOTES,
                     'UTF-8'
                 ) . '</pre>';
@@ -558,20 +559,37 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
     /**
      * نمایش صفحه خطا در Debug Mode
      */
-   private static function renderDebugPage(Throwable $exception): void
+    private static function renderDebugPage(Throwable $exception): void
 {
     http_response_code(500);
 
     $isDebug = (bool) config('app.debug', false);
 
-    // محدودسازی trace برای جلوگیری از مصرف زیاد حافظه/HTML حجیم
-    $trace = $isDebug ? mb_substr($exception->getTraceAsString(), 0, 12000) : '';
+    // [MED-01] Fix: Sanitize exception data to prevent info leakage
+    $message = $exception->getMessage();
+    $file = $exception->getFile();
+    $trace = $exception->getTraceAsString();
+
+    if (!$isDebug) {
+        // Fallback safety if someone calls this directly
+        self::renderProductionPage($exception);
+        return;
+    }
+
+    // Mask absolute paths for security
+    $baseDir = realpath(__DIR__ . '/../');
+    $maskPath = function($path) use ($baseDir) {
+        return str_replace($baseDir, '{ROOT}', $path);
+    };
+
+    $displayFile = $maskPath($file);
+    $displayTrace = $maskPath(mb_substr($trace, 0, 12000));
     ?>
     <!DOCTYPE html>
     <html lang="fa" dir="rtl">
     <head>
         <meta charset="UTF-8">
-        <title>خطای سیستم</title>
+        <title>خطای سیستم (Debug Mode)</title>
         <style>
             body { font-family: Tahoma; background: #f5f5f5; padding: 20px; }
             .error-box { background: #fff; border: 3px solid #f44336; border-radius: 8px; padding: 20px; max-width: 900px; margin: 0 auto; }
@@ -587,8 +605,7 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
             <div class="message">
                 <strong><?= e(get_class($exception)) ?>:</strong><br>
                 <?php
-                    // M26 Fix: تبدیل کاملاً امن تمام لینک‌های متنی موجود در متن خطا به لینک‌های فعال و قابل کلیک در صفحه دیباگ
-                    $escapedMsg = e($exception->getMessage());
+                    $escapedMsg = e($message);
                     echo preg_replace(
                         '/https?:\/\/[^\s<"\']+/', 
                         '<a href="$0" target="_blank" style="color:#e53935; font-weight:bold; text-decoration:underline;">$0</a>', 
@@ -597,19 +614,47 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 ?>
             </div>
             <div class="meta">
-                <strong>فایل:</strong> <?= e($exception->getFile()) ?><br>
+                <strong>فایل:</strong> <?= e($displayFile) ?><br>
                 <strong>خط:</strong> <?= e((int) $exception->getLine()) ?>
             </div>
 
-            <?php if ($isDebug): ?>
-                <h3>Stack Trace:</h3>
-                <div class="trace"><?= e($trace) ?></div>
-            <?php endif; ?>
+            <h3>Stack Trace:</h3>
+            <div class="trace"><?= e($displayTrace) ?></div>
         </div>
     </body>
     </html>
     <?php
 }
+
+    /**
+     * [MED-01] پاکسازی داده‌های حساس از خروجی خطا
+     */
+    private static function sanitizeErrorData(array $error): array
+    {
+        $sensitiveKeys = [
+            'DB_PASS', 'DB_PASSWORD', 'APP_KEY', 'MAIL_PASSWORD', 
+            'REDIS_PASSWORD', 'PASSWORD', 'SECRET'
+        ];
+
+        $baseDir = realpath(__DIR__ . '/../');
+
+        $walk = function (&$item, $key) use ($sensitiveKeys, $baseDir) {
+            // Mask paths
+            if (is_string($item) && str_contains($item, $baseDir)) {
+                $item = str_replace($baseDir, '{ROOT}', $item);
+            }
+
+            // Mask sensitive values
+            foreach ($sensitiveKeys as $sKey) {
+                if (is_string($key) && str_contains(strtoupper($key), $sKey)) {
+                    $item = '********';
+                }
+            }
+        };
+
+        array_walk_recursive($error, $walk);
+        return $error;
+    }
     
     /**
      * نمایش صفحه خطا در Production

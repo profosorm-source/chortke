@@ -84,5 +84,5 @@ return [
     ],
 
     // کلید امنیتی دسترسی به API سوئیچ‌ها
-    'api_key' => env('FEATURE_FLAG_API_KEY', ''),
+    'api_key' => env('FEATURE_FLAG_API_KEY', 'FF_SECURE_KEY_REQUIRED_MIN_32_CHARS'),
 ];

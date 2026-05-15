@@ -108,6 +108,7 @@ private function buildSqlErrorContext(string $sql, array $params, \Throwable $e)
 
     return [
         'error' => $e->getMessage(),
+        'error_type' => get_class($e),
         'sql' => mb_substr($sql, 0, 1500),
         'params_count' => count($params),
         'file' => $originFile,

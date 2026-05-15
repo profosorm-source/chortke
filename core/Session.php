@@ -41,37 +41,61 @@ class Session
         $this->isStarting = true;
         try {
             $config = config('session');
+            $headersSent = headers_sent();
+
+            if ($headersSent && !in_array(PHP_SAPI, ['cli', 'phpdbg'], true)) {
+                throw new \RuntimeException('Session cannot be started after headers have already been sent.');
+            }
 
             // CORE-033: Enforce strict mode and safe cookie settings
-            ini_set('session.use_strict_mode', '1');
-            ini_set('session.use_only_cookies', '1');
-            ini_set('session.cookie_httponly', '1');
+            if (!$headersSent) {
+                ini_set('session.use_strict_mode', '1');
+                ini_set('session.use_only_cookies', '1');
+                ini_set('session.cookie_httponly', '1');
+            }
 
-            // Set Redis session handler
+            // Set Redis session handler if headers are still writable.
             $handler = new \Core\RedisSessionHandler();
-            session_set_save_handler($handler, true);
+            if (!$headersSent) {
+                session_set_save_handler($handler, true);
+                session_name($config['name']);
 
-            session_name($config['name']);
+                // H12 Fix: جلوگیری از ست شدن نامعتبر دامین در localhost و محافظت در برابر پارس نادرست
+                $host = parse_url(config('app.url', ''), PHP_URL_HOST);
+                $cookieDomain = $host && $host !== 'localhost' ? $host : '';
 
-        // H12 Fix: جلوگیری از ست شدن نامعتبر دامین در localhost و محافظت در برابر پارس نادرست
-        $host = parse_url(config('app.url', ''), PHP_URL_HOST);
-        $cookieDomain = $host && $host !== 'localhost' ? $host : '';
+                session_set_cookie_params([
+                    'lifetime' => $config['lifetime'],
+                    'path'     => '/',
+                    'domain'   => $cookieDomain,
+                    'secure'   => $config['secure'],
+                    'httponly' => $config['httponly'],
+                    'samesite' => $config['samesite'],
+                ]);
+            }
 
-        session_set_cookie_params([
-            'lifetime' => $config['lifetime'],
-            'path'     => '/',
-            'domain'   => $cookieDomain,
-            'secure'   => $config['secure'],
-            'httponly' => $config['httponly'],
-            'samesite' => $config['samesite'],
-        ]);
+            if ($headersSent) {
+                if (!isset($_SESSION)) {
+                    $_SESSION = [];
+                }
+                if (!isset($_SESSION['_initiated'])) {
+                    $_SESSION['_initiated'] = true;
+                }
+                if (!isset($_SESSION['_session_id'])) {
+                    $_SESSION['_session_id'] = bin2hex(random_bytes(16));
+                }
 
-        session_start();
-        $this->started = true;
+                $this->started = true;
+                $this->validateFingerprint();
+                return;
+            }
 
-        if (!isset($_SESSION['_initiated'])) {
-            $_SESSION['_initiated'] = true;
-        }
+            session_start();
+            $this->started = true;
+
+            if (!isset($_SESSION['_initiated'])) {
+                $_SESSION['_initiated'] = true;
+            }
 
         $this->validateFingerprint();
         } finally {
@@ -275,7 +299,11 @@ private function invalidateSession(): void
     {
         // M15 Fix: تضمین فعالیت سشن و بازنویسی اثرانگشت امنیتی به صورت همزمان با تغییر شناسه کاربری
         $this->ensureStarted();
-        session_regenerate_id(true);
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_regenerate_id(true);
+        } else {
+            $_SESSION['_session_id'] = bin2hex(random_bytes(16));
+        }
         $_SESSION['_fingerprint'] = $this->generateFingerprint();
     }
 
@@ -303,7 +331,11 @@ private function invalidateSession(): void
 
     public function getId(): string
     {
-        return session_id();
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            return session_id();
+        }
+
+        return $_SESSION['_session_id'] ?? '';
     }
 
     private function __clone() {}

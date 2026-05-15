@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # 🌐 Web Server (Nginx)
+  web:
+    image: nginx:alpine
+    container_name: chortke_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - .:/var/www/html
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    networks:
+      - chortke_network
+
+  # 🐘 PHP Application (FPM)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chortke_app
+    restart: unless-stopped
+    volumes:
+      - .:/var/www/html
+    environment:
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME:-chortk}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASS=${DB_PASS:-secret}
+      - REDIS_HOST=redis
+    depends_on:
+      - db
+      - redis
+    networks:
+      - chortke_network
+
+  # 📅 Background Worker & Task Scheduler (Cron)
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chortke_scheduler
+    restart: unless-stopped
+    volumes:
+      - .:/var/www/html
+    command: /bin/sh -c "while true; do php /var/www/html/cron.php; sleep 60; done"
+    environment:
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME:-chortk}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASS=${DB_PASS:-secret}
+      - REDIS_HOST=redis
+    depends_on:
+      - app
+    networks:
+      - chortke_network
+
+  # 🗄️ Relational Database (MariaDB 10.4)
+  db:
+    image: mariadb:10.4
+    container_name: chortke_db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-chortk}
+      MYSQL_ROOT_PASSWORD: ${DB_PASS:-secret}
+      MYSQL_USER: ${DB_USER:-root}
+      MYSQL_PASSWORD: ${DB_PASS:-secret}
+    ports:
+      - "3306:3306"
+    volumes:
+      - chortke_db_data:/var/lib/mysql
+    networks:
+      - chortke_network
+
+  # 🚀 Cache & Session Store (Redis)
+  redis:
+    image: redis:7-alpine
+    container_name: chortke_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - chortke_redis_data:/data
+    networks:
+      - chortke_network
+
+networks:
+  chortke_network:
+    driver: bridge
+
+volumes:
+  chortke_db_data:
+    driver: local
+  chortke_redis_data:
+    driver: local

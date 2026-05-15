@@ -61,6 +61,11 @@ class Cache
         return static::$instance;
     }
 
+    public static function reset(): void
+    {
+        static::$instance = null;
+    }
+
     /** نوع درایور فعال: 'redis' یا 'file' */
     public function driver(): string
     {
@@ -600,12 +605,6 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
         fclose($fh);
         unset($this->fileLocks[$lockKey]);
 
-        // Clean up lock file
-        $lockFile = $this->cacheDir . 'locks/' . md5($lockKey) . '.lock';
-        if (file_exists($lockFile)) {
-            @unlink($lockFile);
-        }
-
         return true;
     }
 
@@ -642,7 +641,14 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
 
     public function cleanup(): int
     {
-        $logger = function_exists('logger') ? logger() : null;
+        $logger = null;
+        if (function_exists('logger')) {
+            try {
+                $logger = logger();
+            } catch (\Throwable) {
+                $logger = null;
+            }
+        }
 
         if ($this->driver === 'redis') {
             if ($logger) {

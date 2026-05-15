@@ -276,6 +276,13 @@ $scheduler->everyMinute(function () {
     return ['pending_checked' => count($pending), 'verified' => $verified];
 }, 'crypto_verify');
 
+// پردازش خودکار قوانین هشدار (Alert Engine)
+$scheduler->everyMinute(function () {
+    $dispatcher = \Core\Container::getInstance()->make(\App\Services\Sentry\Alerting\AlertDispatcher::class);
+    $triggered = $dispatcher->processRules();
+    return ['triggered_rules' => $triggered];
+}, 'alert_rule_engine');
+
 
 // پاک‌سازی کش منقضی‌شده
 $scheduler->everyMinutes(feature_config('cron_scheduler_interval', 'rollout_percentage', 5), function () {
@@ -293,6 +300,13 @@ $scheduler->everyMinutes(feature_config('cron_ad_push_interval', 'rollout_percen
     }
     return $result;
 }, 'ad_notification_push');
+
+// H-06 Fix: تخلیه بافر بازدید بنرها از Redis به دیتابیس هر ۵ دقیقه
+$scheduler->everyMinutes(5, function () {
+    $service = \Core\Container::getInstance()->make(\App\Services\BannerService::class);
+    $count   = $service->flushImpressionsBuffer();
+    return ['flushed_banners' => $count];
+}, 'flush_banner_impressions');
 
 /**
  * ─────────────────────────────────────────
@@ -380,6 +394,13 @@ $scheduler->hourly(function () {
     );
     return ['deleted_sessions' => $affected];
 }, 'cleanup_sessions');
+
+// MED-04 Fix: پاک‌سازی توکن‌های بازیابی رمز عبور منقضی شده (بیش از یک ساعت)
+$scheduler->hourly(function () {
+    $model = \Core\Container::getInstance()->make(\App\Models\SecurityModel::class);
+    $count = $model->deleteExpiredPasswordResets(3600);
+    return ['deleted_tokens' => $count];
+}, 'cleanup_password_resets');
 
 // پاک‌سازی پیام‌های realtime منقضی‌شده
 $scheduler->hourly(function () {

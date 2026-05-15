@@ -50,6 +50,12 @@ if (!defined('BASE_PATH')) {
     define('BASE_PATH', dirname(__DIR__));
 }
 
+// ── Tracing Context (Correlation ID) ──────────────────────────
+if (!isset($_SERVER['REQUEST_ID'])) {
+    $_SERVER['REQUEST_ID'] = $_SERVER['HTTP_X_REQUEST_ID'] 
+        ?? bin2hex(random_bytes(16));
+}
+
 // Load critical non-PSR4 compliant constants from legacy ecosystem
 require_once BASE_PATH . '/app/Constants/MagicNumbers.php';
 
@@ -141,7 +147,8 @@ $container->singleton(\App\Services\LogService::class, function($c) {
         $c->make(\App\Models\ActivityLog::class),
         $c->make(\App\Models\SystemLog::class),
         $c->make(\App\Models\SecurityLog::class),
-        $c->make(\App\Models\PerformanceLog::class)
+        $c->make(\App\Models\PerformanceLog::class),
+        $c->make(\Core\Session::class)
     );
 });
 
@@ -2057,6 +2064,7 @@ $container->singleton(\App\Services\AdminDashboard\SystemMonitoringService::clas
 
 $container->singleton(\App\Services\Analytics\AnalyticsQueryService::class, function($c) {
     return new \App\Services\Analytics\AnalyticsQueryService(
+        $c->make(\Core\Database::class),
         $c->make(\App\Models\KpiStatistics::class),
         $c->make(\Core\Cache::class),
         $c->make(\App\Models\CustomTaskAnalyticsModel::class),

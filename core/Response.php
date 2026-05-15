@@ -311,6 +311,22 @@ class Response
             return;
         }
 
+        // [MED-03] Security Headers: Enforcing best-practice security policies
+        header('X-Frame-Options: SAMEORIGIN');
+        header('X-Content-Type-Options: nosniff');
+        header('X-XSS-Protection: 1; mode=block');
+        header('Referrer-Policy: strict-origin-when-cross-origin');
+        header('X-Permitted-Cross-Domain-Policies: none');
+        header('Expect-CT: max-age=86400, enforce');
+        
+        // HSTS (Strict-Transport-Security) only over HTTPS
+        $isSecure = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') 
+                    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+        
+        if ($isSecure) {
+            header('Strict-Transport-Security: max-age=31536000; includeSubDomains; preload');
+        }
+
         // اعمال نهایی وضعیت HTTP
         http_response_code($this->statusCode);
         

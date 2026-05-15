@@ -82,7 +82,19 @@ class RateLimiter
         $maxAttempts = $maxAttempts ?? (int) config('rate_limits.default.max_attempts', 60);
         $decayMinutes = $decayMinutes ?? (int) config('rate_limits.default.decay_minutes', 1);
 
-        $allowed = $this->strategy->attempt($key, $maxAttempts, $decayMinutes);
+        try {
+            // 🚀 BUG-13 Fix: Graceful degradation if Cache/Redis is down
+            $allowed = $this->strategy->attempt($key, $maxAttempts, $decayMinutes);
+        } catch (\Throwable $e) {
+            // If cache/redis is unavailable, fail open (allow the request) to prevent denial of service
+            if (function_exists('logger')) {
+                logger()->error('rate_limiter.cache_failed', [
+                    'key' => $key,
+                    'error' => $e->getMessage()
+                ]);
+            }
+            return true;
+        }
 
         if (!$allowed) {
             // Dispatch Event without interfering with primary app flow
