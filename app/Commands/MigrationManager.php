@@ -51,17 +51,27 @@ class MigrationManager
 
         foreach ($pending as $file) {
             $filename = basename($file);
-            $sql = file_get_contents($file);
+
+            // HIGH-03 Fix: Validate realpath to prevent Path Traversal attacks
+            $realPath = realpath($file);
+            if (!$realPath || strpos($realPath, realpath($this->migrationsDir)) !== 0) {
+                throw new \RuntimeException("Invalid migration file path: $file");
+            }
+            $sql = file_get_contents($realPath);
             
             try {
+                // HIGH-04 Fix: Use Database Transaction wrapper for data consistency
+                $this->db->beginTransaction();
                 // Split multi-queries if needed, though simple exec() handles multiple statements usually
                 // We'll perform robust execution.
-                $this->db->exec($sql);
+                $this->db->getPdo()->exec($sql);
                 
                 // Record success
                 $this->record($filename, $batch);
+                $this->db->commit();
                 $executedCount++;
             } catch (\Exception $e) {
+                $this->db->rollBack();
                 $errors[] = "Failed executing {$filename}: " . $e->getMessage();
                 // Halt migration chain upon error to prevent corrupt/partial state
                 break; 

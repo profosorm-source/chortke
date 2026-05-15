@@ -79,7 +79,7 @@ class LogFeatureFlagChange
                     json_encode($change['old']),
                     json_encode($change['new']),
                     $event->changedBy,
-                    $event->changedAt->format('Y-m-d H:i:s'),
+                    ($event->changedAt ?? new \DateTime())->format('Y-m-d H:i:s'),
                     $event->action
                 );
             }
