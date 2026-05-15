@@ -55,10 +55,17 @@ class OAuthController extends BaseController
         $result = $this->oauthService->handleGoogleCallback($code, $state);
 
         if ($result['success']) {
-            // ورود کاربر به سیستم
-            $this->session->set('user_id', $result['user_id']);
-            $this->session->set('user_role', $result['role'] ?? 'user');
-            
+            // 🛡️ Security Hardening: Handling 2FA checkpoints for social logins
+            if (!empty($result['requires_2fa'])) {
+                $this->session->set('pending_2fa_user', (int)$result['user_id']);
+                if ($this->request->isAjax()) {
+                    $this->jsonSuccess('', ['redirect' => url('verify-2fa')]);
+                    return;
+                }
+                $this->response->redirect(url('verify-2fa'));
+                return;
+            }
+
             $message = ($result['is_new'] ?? false) 
                 ? 'خوش آمدید! حساب کاربری جدید شما ساخته شد.'
                 : 'خوش آمدید!';
@@ -97,9 +104,17 @@ class OAuthController extends BaseController
         $result = $this->oauthService->handleFacebookCallback($code, $state);
 
         if ($result['success']) {
-            $this->session->set('user_id', $result['user_id']);
-            $this->session->set('user_role', $result['role'] ?? 'user');
-            
+            // 🛡️ Security Hardening: Handling 2FA checkpoints for social logins
+            if (!empty($result['requires_2fa'])) {
+                $this->session->set('pending_2fa_user', (int)$result['user_id']);
+                if ($this->request->isAjax()) {
+                    $this->jsonSuccess('', ['redirect' => url('verify-2fa')]);
+                    return;
+                }
+                $this->response->redirect(url('verify-2fa'));
+                return;
+            }
+
             $message = ($result['is_new'] ?? false) 
                 ? 'خوش آمدید! حساب کاربری جدید شما ساخته شد.'
                 : 'خوش آمدید!';

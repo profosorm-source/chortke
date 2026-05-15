@@ -46,11 +46,12 @@ class TwoFactorController extends BaseUserController
         if (!$data['is_enabled']) {
             if (empty($user->two_factor_secret)) {
                 $secret = $this->twoFactorService->generateSecret();
-                $this->userService->update($user->id, ['two_factor_secret' => $secret]);
-                $user->two_factor_secret = $secret;
+                $encryptedSecret = $this->twoFactorService->encryptSecret($secret);
+                $this->userService->update($user->id, ['two_factor_secret' => $encryptedSecret]);
+                $user->two_factor_secret = $encryptedSecret;
             }
 
-            $data['secret']       = $user->two_factor_secret;
+            $data['secret']       = $this->twoFactorService->decryptSecret($user->two_factor_secret);
             $data['qr_code_url']  = $this->twoFactorService->getQRCodeUrl(
                 $user->username ?? $user->email,
                 $user->two_factor_secret

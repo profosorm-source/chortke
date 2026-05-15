@@ -45,6 +45,7 @@ class PaymentController extends BaseController
         $data = [
             'gateway' => $this->request->input('gateway'),
             'amount' => $this->request->input('amount'),
+            'idempotency_key' => $this->request->input('idempotency_key'),
         ];
 
         // اعتبارسنجی با FormRequest
@@ -60,12 +61,14 @@ class PaymentController extends BaseController
         try {
             $amount = (float)$validated['amount'];
             $bankCardId = (int)($this->request->input('bank_card_id') ?? 0);
+            $idempotencyKey = (string)$validated['idempotency_key'];
 
     $result = $this->paymentService->create(
         $userId,
         (string)$data['gateway'],
         $amount,
-        $bankCardId
+        $bankCardId,
+        $idempotencyKey
     );
 
     $this->response->redirect($result['payment_url']);
