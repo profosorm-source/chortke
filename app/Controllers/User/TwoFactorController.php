@@ -14,14 +14,17 @@ class TwoFactorController extends BaseUserController
 {
     private TwoFactorService $twoFactorService;
     private ActivityLog $activityLog;
+    private \Core\RateLimiter $rateLimiter;
 
     public function __construct(
         ActivityLog $activityLog,
-        TwoFactorService $twoFactorService
+        TwoFactorService $twoFactorService,
+        \Core\RateLimiter $rateLimiter
     ) {
         parent::__construct();
         $this->activityLog      = $activityLog;
         $this->twoFactorService = $twoFactorService;
+        $this->rateLimiter      = $rateLimiter;
     }
 
     public function index(): void
@@ -86,6 +89,16 @@ class TwoFactorController extends BaseUserController
             return;
         }
 
+        // H21 Fix: محافظت ضد Brute-Force برای کدهای 2FA
+        $throttleKey = '2fa_verify:' . $userId . ':' . $this->request->ip();
+        if (!$this->rateLimiter->attempt($throttleKey, 5, 1)) { // حداکثر 5 تلاش در دقیقه
+            $this->response->json([
+                'success' => false, 
+                'message' => 'تعداد تلاش‌های شما بیش از حد مجاز است. لطفاً یک دقیقه صبر کنید.'
+            ]);
+            return;
+        }
+
         $code = trim((string)($this->request->input('code') ?? ''));
         if ($code === '') {
             $this->response->json(['success' => false, 'message' => 'لطفاً کد را وارد کنید.']);
@@ -99,6 +112,9 @@ class TwoFactorController extends BaseUserController
         }
 
         if ($this->twoFactorService->verifyCode($user->two_factor_secret, $code, (int)$userId)) {
+            // ورود موفق -> پاک کردن محدودیت
+            $this->rateLimiter->clear($throttleKey);
+
             $this->session->remove('pending_2fa_user');
             
             // اصلاح لاجیک سشن برای مدیریت دسترسی و جلوگیری از خطای میدلویر
