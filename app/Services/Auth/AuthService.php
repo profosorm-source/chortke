@@ -16,6 +16,7 @@ use Core\RateLimiter;
 use Core\EventDispatcher;
 use App\Events\UserLoggedInEvent;
 use App\Events\UserRegisteredEvent;
+use App\Constants\SessionKeys;
 
 /**
  * AuthService
@@ -163,23 +164,24 @@ class AuthService extends \App\Services\BaseService
     {
         // CRIT-03 Fix: regenerate(true) to delete old session
         $this->session->regenerate(true);
-        $this->session->set('pending_2fa_user_id', (int)$user->id);
+        $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
     }
 
     private function createSession(object $user, bool $remember = false): void
     {
         // CRIT-03 Fix: regenerate(true) BEFORE setting data
         $this->session->regenerate(true);
-        $this->session->set('user_id',  (int)$user->id);
-        $this->session->set('username', $user->username ?? '');
-        $this->session->set('role',     $user->role);
-        $this->session->set('user_role', $user->role); // MED-03 Fix: Consistency with AdminMiddleware
-        $this->session->set('is_admin', in_array($user->role, ['admin', 'super_admin'], true));
-        $this->session->set('logged_in', true);
+        $this->session->set(SessionKeys::USER_ID,  (int)$user->id);
+        $this->session->set(SessionKeys::USERNAME, $user->username ?? '');
+        $this->session->set(SessionKeys::USER_ROLE, $user->role);
+        $this->session->set(SessionKeys::IS_ADMIN, in_array($user->role, ['admin', 'super_admin'], true));
+        $this->session->set(SessionKeys::LOGGED_IN, true);
 
         if ($remember) {
             $token = bin2hex(random_bytes(32));
-            $this->userModel->update((int)$user->id, ['remember_token' => hash('sha256', $token)]);
+            // MED-07 Fix: Using hash_hmac for remember_token to protect against rainbow tables
+            $hashedToken = hash_hmac('sha256', $token, config('app.key'));
+            $this->userModel->update((int)$user->id, ['remember_token' => $hashedToken]);
             
             $rememberDays = (int)$this->settingService->get('auth_remember_days', 30);
             // 🛡️ Modernized Security Attributes: Strictly enforcing HttpOnly, Secure and Lax SameSite policies
@@ -205,9 +207,15 @@ class AuthService extends \App\Services\BaseService
 
     public function logout(): void
     {
-        $userId = $this->session->get('user_id');
+        $userId = $this->session->get(SessionKeys::USER_ID);
         if ($userId) {
             $this->logger->activity('auth.logout', 'خروج کاربر', (int)$userId);
+            
+            // HIGH-06 Fix: Invalidate remember_token in DB
+            $this->userModel->update((int)$userId, ['remember_token' => null]);
+            
+            // HIGH-06 Fix: Deactivate all user sessions in DB
+            $this->sessionService->invalidateAllUserSessions((int)$userId);
         }
 
         if (isset($_COOKIE['remember_token'])) {
@@ -226,7 +234,7 @@ class AuthService extends \App\Services\BaseService
 
     public function verify2FA(string $code): array
     {
-        $pendingUserId = $this->session->get('pending_2fa_user_id');
+        $pendingUserId = $this->session->get(SessionKeys::PENDING_2FA_USER_ID);
         if (!$pendingUserId) {
             return ['success' => false, 'message' => 'هیچ درخواست 2FA pending وجود ندارد.'];
         }
@@ -243,7 +251,7 @@ class AuthService extends \App\Services\BaseService
         }
 
         // پاک کردن pending session و ساخت session اصلی
-        $this->session->remove('pending_2fa_user_id');
+        $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
         $this->createSession($user, false); // remember = false چون قبلاً چک شده
 
         // 🚀 UPG-05: پردازش آسنکرون رویداد پس از تایید موفق دو عاملی
@@ -371,12 +379,12 @@ class AuthService extends \App\Services\BaseService
 
     public function check(): bool
     {
-        return $this->session->get('logged_in') === true;
+        return $this->session->get(SessionKeys::LOGGED_IN) === true;
     }
 
     public function user(): ?object
     {
         if (!$this->check()) return null;
-        return $this->userModel->find((int)$this->session->get('user_id'));
+        return $this->userModel->find((int)$this->session->get(SessionKeys::USER_ID));
     }
 }

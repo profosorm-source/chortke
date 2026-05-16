@@ -108,7 +108,8 @@ class TwoFactorService extends \App\Services\BaseService
     {
         $codes = [];
         for ($i = 0; $i < $count; $i++) {
-            $codes[] = strtoupper(bin2hex(random_bytes(4)));
+            // HIGH-02 Fix: Increasing entropy from 32-bit (4 bytes) to 80-bit (10 bytes) for recovery codes.
+            $codes[] = strtoupper(bin2hex(random_bytes(10)));
         }
         return $codes;
     }
