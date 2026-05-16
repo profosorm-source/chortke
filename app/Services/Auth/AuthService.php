@@ -51,6 +51,9 @@ class AuthService extends \App\Services\BaseService
         $rateLimitKey = "{$action}:{$key}:{$ip}";
         $rateLimitCheck = $this->rateLimiter->checkLoginAttempt($rateLimitKey);
         
+        // HIGH-H-18 Fix: Adding random jitter to neutralize timing analysis on rate-limited paths
+        usleep(random_int(50, 150) * 1000);
+
         // H16 Fix: الگوی امن Fail-Closed؛ اگر خروجی به صراحت TRUE نباشد، درخواست بلاک می‌شود.
         if (!is_array($rateLimitCheck) || !isset($rateLimitCheck['allowed']) || $rateLimitCheck['allowed'] !== true) {
             throw new \Exception($rateLimitCheck['message'] ?? 'تعداد درخواست بیش از حد مجاز است. لطفاً بعداً تلاش کنید.', 429);
@@ -68,23 +71,42 @@ class AuthService extends \App\Services\BaseService
 
         $user = $this->userModel->findByCredentials($identifier);
         
-        // HIGH-01 Fix: Timing-based User Enumeration mitigation
+        // HIGH-H-03 Fix: Constant-Time Failure Responses
         // Use a dummy hash if user not found to ensure constant-time comparison
-        $dummyHash = '$2y$10$abcdefghijklmnopqrstuv'; // Fixed dummy hash
+        $dummyHash = '$2y$10$abcdefghijklmnopqrstuv'; 
         $passwordToVerify = $user ? $user->password : $dummyHash;
-        
+
+        $delay = random_int(100000, 300000);
+        usleep($delay);
+
         if (!$user || !password_verify($password, $passwordToVerify)) {
             $this->logger->warning('auth.login.failed', ['identifier' => $identifier]);
             
-            if ($user && $this->rateLimiter->getAttempts('login:' . $identifier) <= 5) {
-                try {
-                    $this->userModel->incrementFraudScore((int)$user->id, 5);
-                } catch (\Throwable $e) {
-                    $this->logError('auth.fraud_score_increment_failed', $e->getMessage());
+            if ($user) {
+                $attempts = $this->rateLimiter->getAttempts('login:' . $identifier);
+                
+                if ($attempts >= 10 && $user->status !== 'locked') {
+                    $this->userModel->update((int)$user->id, ['status' => 'locked']);
+                    $this->logger->critical('auth.account_locked', ['user_id' => $user->id, 'identifier' => $identifier]);
+                    if ($this->emailService) {
+                        $this->emailService->sendAccountLockedAlert((int)$user->id, $this->clientIp());
+                    }
+                }
+
+                if ($attempts <= 5) {
+                    try {
+                        $this->userModel->incrementFraudScore((int)$user->id, 5);
+                    } catch (\Throwable $e) {
+                        $this->logError('auth.fraud_score_increment_failed', $e->getMessage());
+                    }
                 }
             }
             
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
+        }
+
+        if ($user->status === 'locked') {
+            return ['success' => false, 'message' => 'حساب کاربری شما به دلیل تلاش‌های ناموفق متعدد مسدود شده است. لطفاً با پشتیبانی تماس بگیرید.'];
         }
 
         if ($user->status === 'banned' || $user->status === 'suspended') {
@@ -92,8 +114,6 @@ class AuthService extends \App\Services\BaseService
         }
 
         if (empty($user->email_verified_at)) {
-            // MEDIUM-04 Fix: Prevent timing-based user enumeration by applying a random delay
-            usleep(random_int(100000, 300000)); // 100-300ms random delay
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
         }
 
@@ -132,8 +152,13 @@ class AuthService extends \App\Services\BaseService
      */
     public function loginDirectly(object $user): array
     {
-        if ($user->status === 'banned' || $user->status === 'suspended') {
+        if ($user->status === 'banned' || $user->status === 'suspended' || $user->status === 'locked') {
             return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.'];
+        }
+
+        // HIGH-H-14 Fix: Enforce email verification check for direct/OAuth logins
+        if (empty($user->email_verified_at)) {
+            return ['success' => false, 'message' => 'ایمیل کاربر تأیید نشده است.'];
         }
 
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
@@ -163,6 +188,9 @@ class AuthService extends \App\Services\BaseService
 
     private function createPending2FASession(object $user): void
     {
+        // MEDIUM-M-02 Fix: Clear login failures after successful password verification but before 2FA
+        $this->rateLimiter->clearLoginAttempts($user->email ?? $user->username);
+        
         // CRIT-03 Fix: regenerate(true) to delete old session
         $this->session->regenerate(true);
         $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
@@ -349,10 +377,16 @@ class AuthService extends \App\Services\BaseService
         $user = $this->userModel->findByEmail($email);
         $genericMsg = 'اگر این ایمیل در سیستم ثبت شده باشد، لینک بازیابی برای شما ارسال می‌شود.';
 
-        if (!$user) return ['success' => true, 'message' => $genericMsg];
-
+        // HIGH-H-10 Fix: Prevent Timing-based User Enumeration in Password Reset
+        // Always generate a token and record it even if user doesn't exist.
+        // If user doesn't exist, we still apply a small delay to simulate processing.
         $token = bin2hex(random_bytes(32));
         $this->securityModel->createPasswordResetToken($email, $token);
+
+        if (!$user) {
+            usleep(random_int(50000, 150000));
+            return ['success' => true, 'message' => $genericMsg];
+        }
         
         if ($this->emailService) {
             $this->emailService->sendPasswordResetEmail((int)$user->id, $token);
@@ -364,10 +398,11 @@ class AuthService extends \App\Services\BaseService
 
     public function resetPassword(string $token, string $newPassword): array
     {
-        $record = $this->securityModel->findPasswordResetByToken($token);
+        // HIGH-H-11 Fix: The TTL check is now enforced inside findPasswordResetByToken (DB-level)
         $timeout = (int)config('auth.password_reset_ttl', 3600);
+        $record = $this->securityModel->findPasswordResetByToken($token, $timeout);
         
-        if (!$record || (time() - strtotime((string)$record->created_at)) > $timeout) {
+        if (!$record) {
             return ['success' => false, 'message' => 'لینک بازیابی نامعتبر یا منقضی شده است.'];
         }
 

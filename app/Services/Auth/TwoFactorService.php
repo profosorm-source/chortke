@@ -116,8 +116,8 @@ class TwoFactorService extends \App\Services\BaseService
     {
         $codes = [];
         for ($i = 0; $i < $count; $i++) {
-            // HIGH-02 Fix: Increasing entropy from 32-bit (4 bytes) to 80-bit (10 bytes) for recovery codes.
-            $codes[] = strtoupper(bin2hex(random_bytes(10)));
+            // CRITICAL-C-04 Fix: Increasing entropy to 96-bit (12 bytes) for high resistance against offline attacks
+            $codes[] = strtoupper(bin2hex(random_bytes(12))); // 24 hex chars
         }
         return $codes;
     }
@@ -171,9 +171,12 @@ class TwoFactorService extends \App\Services\BaseService
     {
         $this->securityModel->deleteTwoFactorCodes($userId);
         $expiresAt = date('Y-m-d H:i:s', strtotime('+1 year'));
+        $key = (string)config('app.key');
         foreach ($codes as $code) {
-            // Upgraded to Bcrypt hash for high resistance against pre-computed rainbow attacks
-            $bcryptHash = password_hash(strtoupper((string)$code), PASSWORD_BCRYPT);
+            // CRITICAL-C-04 Fix: Double-layer protection — HMAC-SHA256 of the code then Bcrypt hash.
+            // This prevents cracking even if the salt/hashes are leaked, as the attacker needs the app key.
+            $hashedCode = hash_hmac('sha256', strtoupper((string)$code), $key);
+            $bcryptHash = password_hash($hashedCode, PASSWORD_BCRYPT);
             $this->securityModel->insertTwoFactorCode($userId, $bcryptHash, $expiresAt);
         }
     }
@@ -182,17 +185,29 @@ class TwoFactorService extends \App\Services\BaseService
     {
         $code = strtoupper(trim($code));
         $records = $this->securityModel->getValidRecoveryCodes($userId);
+        $key = (string)config('app.key');
 
         foreach ($records as $record) {
-            // 1. Attempt industry-standard Bcrypt verification
-            if (password_verify($code, $record->code)) {
+            // 1. Attempt CRITICAL-C-04 Fix: HMAC + Bcrypt verification (New format)
+            $hmacCode = hash_hmac('sha256', $code, $key);
+            if (password_verify($hmacCode, $record->code)) {
                 $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
-                $this->logger->info('2FA recovery code used (bcrypt)', ['user_id' => $userId, 'code_id' => $record->id]);
+                $this->logger->info('2FA recovery code used (hmac+bcrypt)', ['user_id' => $userId, 'code_id' => $record->id]);
                 return true;
             }
 
-            // 2. MED-01 Fix: Graceful migration fallback for older SHA256-hashed codes
-            // MEDIUM-M4 Fix: Force migration to bcrypt by requiring regeneration after use
+            // 2. Attempt legacy Bcrypt verification (Old format)
+            if (password_verify($code, $record->code)) {
+                $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
+                $this->logger->warning('2FA recovery code used (LEGACY BCRYPT - MIGRATION TRIGGERED)', ['user_id' => $userId]);
+                
+                // Force migration to new secure format
+                $this->userModel->update($userId, ['force_2fa_regen' => 1]);
+                $this->session->setFlash('warning', 'شما از یک کد بازیابی با فرمت قدیمی استفاده کردید. برای امنیت بیشتر، لطفاً کدهای جدید دریافت کنید.');
+                return true;
+            }
+
+            // 3. MED-01 Fix: Graceful migration fallback for even older SHA256-hashed codes
             if (hash_equals(hash('sha256', $code), $record->code)) {
                 $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
                 $this->logger->warning('2FA recovery code used (LEGACY SHA256 - MIGRATION TRIGGERED)', [

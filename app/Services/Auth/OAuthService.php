@@ -46,10 +46,16 @@ class OAuthService extends \App\Services\BaseService
     {
         $redirectUri = "{$this->appUrl}/auth/callback/google";
         $state = bin2hex(random_bytes(16));
+        $nonce = bin2hex(random_bytes(16));
         
+        // HIGH-H-15 Fix: State signing with application key to prevent state tampering/forgery
+        $signature = hash_hmac('sha256', $state, (string)config('app.key'));
+
         // 🛡️ Security Improvement: Storing cryptographic state with creation timestamp for TTL enforcement.
         $this->session->set(SessionKeys::OAUTH_STATE, [
             'token'      => $state,
+            'signature'  => $signature,
+            'nonce'      => $nonce,
             'created_at' => time(),
             'session_id' => $this->session->getId(),
             'ip'         => $this->clientIp()
@@ -61,6 +67,7 @@ class OAuthService extends \App\Services\BaseService
             'response_type' => 'code',
             'scope' => 'openid email profile',
             'state' => $state,
+            'nonce' => $nonce,
         ]);
     }
 
@@ -83,19 +90,24 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Invalid state token match failed.'];
         }
 
+        // HIGH-H-15 Fix: Verify state signature
+        $expectedSignature = hash_hmac('sha256', $state, (string)config('app.key'));
+        if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
+            return ['success' => false, 'message' => 'State signature verification failed.'];
+        }
+
         // HIGH-06 Fix: Verify session binding
         if (($stored['session_id'] ?? '') !== $this->session->getId()) {
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // MED-02 Fix: IP address mismatch during OAuth flow.
-        // Relaxing to a warning + log instead of blocking for better UX on mobile/proxies.
+        // HIGH-H-01 Fix: Strictly blocking IP mismatch during OAuth flow to prevent session theft/injection.
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
-            $this->logger->warning('oauth.google.ip_mismatch', [
+            $this->logger->critical('oauth.google.ip_mismatch_detected', [
                 'expected' => $stored['ip'],
-                'received' => $this->clientIp(),
-                'session_id' => $this->session->getId()
+                'received' => $this->clientIp()
             ]);
+            return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
         }
 
 
@@ -117,6 +129,15 @@ class OAuthService extends \App\Services\BaseService
             // این کار جلوی هرگونه جعل هویت و جعل دسترسی (Authentication Bypass) را می‌گیرد
             $userInfo = $this->verifyGoogleIdToken($token['id_token']);
             if (!$userInfo['success']) return $userInfo;
+
+            // MED-M-04 Fix: Validate nonce in ID Token to prevent replay attacks
+            if (empty($userInfo['data']['nonce']) || !hash_equals((string)$stored['nonce'], (string)$userInfo['data']['nonce'])) {
+                $this->logger->critical('oauth.google.nonce_mismatch', [
+                    'expected' => $stored['nonce'] ?? 'none',
+                    'received' => $userInfo['data']['nonce'] ?? 'none'
+                ]);
+                return ['success' => false, 'message' => 'Nonce validation failed.'];
+            }
 
             return $this->linkOrCreateUser('google', $userInfo['data']);
         } catch (\Exception $e) {
@@ -225,7 +246,7 @@ class OAuthService extends \App\Services\BaseService
                 'username' => $username,
                 'full_name' => $userData['name'] ?? '',
                 'password' => hash_password(bin2hex(random_bytes(16))),
-                'email_verified_at' => date('Y-m-d H:i:s'),
+                'email_verified_at' => ($userData['email_verified'] ?? true) ? date('Y-m-d H:i:s') : null,
                 'status' => 'active',
                 'role' => 'user'
             ]);
@@ -383,6 +404,24 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'امضای توکن هویتی گوگل نامعتبر است'];
         }
 
+        // CRITICAL-C-02 Fix: Validating Issuer (iss), Expiration (exp), and Issued-At (iat) claims
+        $validIssuers = ['accounts.google.com', 'https://accounts.google.com'];
+        if (!in_array($response['iss'] ?? '', $validIssuers, true)) {
+            $this->logger->critical('oauth.google.iss_mismatch', ['received' => $response['iss'] ?? '']);
+            return ['success' => false, 'message' => 'Issuer mismatch in ID Token'];
+        }
+
+        if (isset($response['exp']) && (int)$response['exp'] < time()) {
+            return ['success' => false, 'message' => 'ID Token has expired'];
+        }
+
+        if (isset($response['iat'])) {
+            $iat = (int)$response['iat'];
+            if ($iat > time() + 60 || $iat < time() - 86400) {
+                return ['success' => false, 'message' => 'ID Token issued at invalid time'];
+            }
+        }
+        
         // 🛡️ گارد حیاتی رمزنگاری: بررسی مطابقت کامل با کلاینت آیدی خود برنامه جهت جلوگیری از حملات Confused Deputy
         if ($response['aud'] !== $this->googleClientId) {
             $this->logger->critical('oauth.google.aud_mismatch_detected', [
@@ -397,8 +436,10 @@ class OAuthService extends \App\Services\BaseService
             'data' => [
                 'id'      => $response['sub'],
                 'email'   => $response['email'] ?? null,
+                'email_verified' => ($response['email_verified'] ?? false) === true,
                 'name'    => $response['name'] ?? '',
-                'picture' => $response['picture'] ?? null
+                'picture' => $response['picture'] ?? null,
+                'nonce'   => $response['nonce'] ?? null
             ]
         ];
     }
@@ -409,13 +450,13 @@ class OAuthService extends \App\Services\BaseService
         $base = strtolower(preg_replace('/[^a-z0-9]/i', '', $parts[0]));
         
         if (strlen($base) < 4) {
-            $base .= 'u' . rand(100, 999);
+            $base .= 'u' . random_int(100, 999);
         }
         
         $username = $base;
         $counter = 1;
         
-        while ($this->userModel->where('username', '=', $username)->first()) {
+        while ($this->db->table('users')->where('username', '=', $username)->lockForUpdate()->first()) {
             $username = $base . $counter;
             $counter++;
             
@@ -436,8 +477,12 @@ class OAuthService extends \App\Services\BaseService
         $redirectUri = "{$this->appUrl}/auth/callback/facebook";
         $state = bin2hex(random_bytes(16));
         
+        // HIGH-H-15 Fix: State signing for Facebook
+        $signature = hash_hmac('sha256', $state, (string)config('app.key'));
+
         $this->session->set(SessionKeys::OAUTH_STATE . '_facebook', [
             'token'      => $state,
+            'signature'  => $signature,
             'created_at' => time(),
             'session_id' => $this->session->getId(),
             'ip'         => $this->clientIp()
@@ -473,19 +518,24 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Invalid state token match failed.'];
         }
 
+        // HIGH-H-15 Fix: Verify state signature for Facebook
+        $expectedSignature = hash_hmac('sha256', $state, (string)config('app.key'));
+        if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
+            return ['success' => false, 'message' => 'State signature verification failed.'];
+        }
+
         // HIGH-06 Fix: Verify session binding
         if (($stored['session_id'] ?? '') !== $this->session->getId()) {
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // MED-02 Fix: IP address mismatch during OAuth flow.
-        // Relaxing to a warning + log instead of blocking for better UX on mobile/proxies.
+        // HIGH-H-01 Fix: Strictly blocking IP mismatch during OAuth flow to prevent session theft/injection.
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
-            $this->logger->warning('oauth.facebook.ip_mismatch', [
+            $this->logger->critical('oauth.facebook.ip_mismatch_detected', [
                 'expected' => $stored['ip'],
-                'received' => $this->clientIp(),
-                'session_id' => $this->session->getId()
+                'received' => $this->clientIp()
             ]);
+            return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
         }
 
         if ((time() - (int)$stored['created_at']) > 300) {
@@ -646,6 +696,7 @@ class OAuthService extends \App\Services\BaseService
             'data' => [
                 'id'      => $response['id'],
                 'email'   => $response['email'] ?? null,
+                'email_verified' => isset($response['email']), // HIGH-H-12: Facebook doesn't always guarantee verified emails
                 'name'    => $response['name'] ?? '',
                 'picture' => $response['picture']['data']['url'] ?? null
             ]
