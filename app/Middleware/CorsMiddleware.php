@@ -38,9 +38,7 @@ class CorsMiddleware
 
         // MEDIUM-M-02 Fix: Explicit check for wildcard origins to prevent fail-open security configurations
         if (in_array('*', $allowedOrigins, true)) {
-            if (config('app.env') === 'production') {
-                throw new \RuntimeException('Wildcard CORS origin is NOT allowed in production environment.');
-            }
+            throw new \RuntimeException('Wildcard CORS origin is not allowed in CORS configuration.');
         }
 
         // ۲. اضافه کردن دامنه اصلی سایت (Canonical URL)

@@ -32,6 +32,7 @@ class RateLimitMiddleware
         '/reset-password'   => [3,  60],
         '/payment'          => [10,  1],
         '/withdrawal'       => [5,  60],
+        '/security/csp-report' => [5, 1],
     ];
 
     public function __construct(RateLimiter $rateLimiter, LoggerInterface $logger, Session $session, int $maxAttempts = 60, int $decayMinutes = 1)
