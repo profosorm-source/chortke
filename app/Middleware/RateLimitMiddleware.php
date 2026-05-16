@@ -67,7 +67,9 @@ class RateLimitMiddleware
             $key = $this->resolveRequestSignature($request);
 
             try {
-                $allowed = $this->rateLimiter->attempt($key, $maxAttempts, $decayMinutes);
+                // CORE-044: Enforce fail-closed for critical paths to maintain security posture when Redis is down
+                $failClosed = $isCriticalPath;
+                $allowed = $this->rateLimiter->attempt($key, $maxAttempts, $decayMinutes, $failClosed);
             } finally {
                 $this->rateLimiter->setStrategy($originalStrategy);
             }
