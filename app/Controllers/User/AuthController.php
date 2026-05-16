@@ -49,15 +49,8 @@ class AuthController extends BaseController
      */
     public function login(): void
     {
-        try {
-            $this->authService->checkRateLimit('auth', 'login');
-        } catch (\Exception $e) {
-            if ($e->getCode() === 429) {
-                $this->session->setFlash('error', $e->getMessage());
-                $this->response->redirect(url('login'));
-                return;
-            }
-        }
+        // CRITICAL-01 Fix: Redundant checkRateLimit removed. AuthService::login now handles 
+        // consolidated IP + Identifier rate limiting.
 
         $email = (string)$this->request->input('email', '');
         $captchaType = $this->loginRiskService->getCaptchaType('login', null, $email);
@@ -167,15 +160,7 @@ class AuthController extends BaseController
      */
     public function register(): void
     {
-        try {
-            $this->authService->checkRateLimit('auth', 'register');
-        } catch (\Exception $e) {
-            if ($e->getCode() === 429) {
-                $this->session->setFlash('error', $e->getMessage());
-                $this->response->redirect(url('register'));
-                return;
-            }
-        }
+        // CRITICAL-01 Fix: Redundant checkRateLimit removed.
 
         $captchaType = $this->loginRiskService->getCaptchaType('register');
         if ($captchaType !== null) {
@@ -299,16 +284,26 @@ class AuthController extends BaseController
 
         $user = $this->userService->findByEmail($email);
         if (!$user || empty($user->email_verification_token)) {
-            $this->response->redirect(url('login'));
+            // HIGH-05 Fix: Standardize response to prevent enumeration
+            $this->session->setFlash('error', 'کد نامعتبر است یا منقضی شده.');
+            $this->response->redirect(url('email/verify-code'));
             return;
         }
 
-        // کد ۶ رقمی مطابق منطق EmailService (substr(token, 0, 6))
-        $expectedCode = strtoupper(substr((string)$user->email_verification_token, 0, 6));
+        $inputCode = strtoupper($code);
+        $hashedInput = hash_hmac('sha256', $inputCode, (string)config('app.key'));
+        
+        $isValid = hash_equals((string)$user->email_verification_token, $hashedInput);
+        
+        // Fallback for legacy plaintext tokens
+        if (!$isValid && strlen((string)$user->email_verification_token) > 6) {
+            $legacyCode = strtoupper(substr((string)$user->email_verification_token, 0, 6));
+            $isValid = hash_equals($legacyCode, $inputCode);
+        }
 
-        if (!hash_equals($expectedCode, strtoupper($code))) {
+        if (!$isValid) {
             $this->logger->warning('auth.email_verification.failed', ['email' => $email, 'ip' => $ip]);
-            $this->session->setFlash('error', 'کد تأیید اشتباه است.');
+            $this->session->setFlash('error', 'کد نامعتبر است یا منقضی شده.');
             $this->response->redirect(url('email/verify-code'));
             return;
         }
@@ -396,6 +391,10 @@ class AuthController extends BaseController
             $this->response->redirect(url('login'));
             return;
         }
+
+        // HIGH-06 Fix: Prevent password reset token leakage in Referer header
+        $this->response->setHeader('Referrer-Policy', 'no-referrer');
+        
         $this->view('auth/reset-password', ['token' => $token]);
     }
 

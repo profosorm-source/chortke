@@ -96,7 +96,7 @@ class TwoFactorController extends BaseUserController
         }
 
         $user = $this->userService->find($userId);
-        if ($user && password_verify($password, $user->password)) {
+        if ($user && verify_user_password($password, $user->password, (int)$user->id)) {
             // CRITICAL-C-01 Fix: Store timestamp instead of boolean for expiration check
             $this->session->set(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED, time());
             
@@ -161,9 +161,7 @@ class TwoFactorController extends BaseUserController
         if ($this->twoFactorService->verifyCode($user->two_factor_secret, $code, (int)$userId)) {
             $this->rateLimiter->clear($throttleKey);
 
-            $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
-            
-            // CRIT-03 Fix: regenerate(true) BEFORE setting sensitive session data
+            // HIGH-01 Fix: regenerate(true) handles clearing the PENDING_2FA_USER_ID automatically
             $this->session->regenerate(true); 
 
             $this->session->set(SessionKeys::USER_ID,   $user->id);
