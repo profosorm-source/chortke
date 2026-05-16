@@ -36,6 +36,13 @@ class CorsMiddleware
         $allowedOriginsRaw = (string)config('cors.allowed_origins', '');
         $allowedOrigins = array_filter(array_map('trim', explode(',', $allowedOriginsRaw)));
 
+        // MEDIUM-M-02 Fix: Explicit check for wildcard origins to prevent fail-open security configurations
+        if (in_array('*', $allowedOrigins, true)) {
+            if (config('app.env') === 'production') {
+                throw new \RuntimeException('Wildcard CORS origin is NOT allowed in production environment.');
+            }
+        }
+
         // ۲. اضافه کردن دامنه اصلی سایت (Canonical URL)
         $appUrl = trim((string)config('app.url', ''));
         if ($appUrl !== '') {
@@ -55,7 +62,13 @@ class CorsMiddleware
 
         if ($isAllowedOrigin) {
             $response->header('Access-Control-Allow-Origin', $requestOrigin);
-            $response->header('Access-Control-Allow-Credentials', 'true');
+            
+            // MEDIUM-M5 Fix: Only allow credentials for trusted origins to prevent leak in case of compromised subdomains
+            $credentialOrigins = array_filter(array_map('trim', explode(',', (string)config('cors.credential_origins', ''))));
+            if (in_array($requestOrigin, $credentialOrigins, true)) {
+                $response->header('Access-Control-Allow-Credentials', 'true');
+            }
+            
             $response->header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
             $response->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-CSRF-TOKEN, Accept, Origin');
             $response->header('Access-Control-Max-Age', '600');

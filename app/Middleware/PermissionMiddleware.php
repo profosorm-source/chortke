@@ -150,13 +150,16 @@ class PermissionMiddleware extends BaseMiddleware
     }
 
     /**
-     * پاک‌سازی کش سطوح دسترسی کاربر در سشن (مثلا هنگام تغییر دسترسی‌ها توسط ادمین)
-     * حل خطای Call to undefined method PermissionMiddleware::clearCache در RoleController
+     * MEDIUM-M1 Fix: Use Redis for cache invalidation to match hasPermission logic
      */
-    public static function clearCache(): void
+    public static function clearCache(int $userId): void
     {
-        $session = Session::getInstance();
-        $session->remove('user_permissions');
-        $session->remove('permissions_cache_time');
+        $redis = app(Redis::class);
+        if ($redis->isAvailable()) {
+            try {
+                // MEDIUM-M-09 Fix: Consistent key usage for cache invalidation
+                $redis->delete("user_permissions:{$userId}");
+            } catch (\Throwable) {}
+        }
     }
 }

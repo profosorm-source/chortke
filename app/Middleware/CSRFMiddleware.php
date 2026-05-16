@@ -28,18 +28,24 @@ class CSRFMiddleware
     {
         // فقط برای متدهای تغییر دهنده وضعیت
         if (in_array($request->method(), ['POST', 'PUT', 'PATCH', 'DELETE'])) {
-            if (!$this->csrf->check()) {
-                $this->logger->warning('security.csrf_failed', [
-                    'ip' => get_client_ip(),
-                    'uri' => $request->uri()
-                ]);
+            try {
+                if (!$this->csrf->check()) {
+                    $this->logger->warning('security.csrf_failed', [
+                        'ip' => get_client_ip(),
+                        'uri' => $request->uri()
+                    ]);
 
-                $response = new Response();
-                if ($request->isAjax()) {
-                    return $response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر است.'], 419);
+                    $response = new Response();
+                    if ($request->isAjax()) {
+                        return $response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر است.'], 419);
+                    }
+
+                    return $response->setStatusCode(419)->setContent('419 Page Expired - CSRF Token mismatch');
                 }
-
-                return $response->setStatusCode(419)->setContent('419 Page Expired - CSRF Token mismatch');
+            } catch (\Throwable $e) {
+                $this->logger->error('csrf.check.exception', ['error' => $e->getMessage()]);
+                $response = new Response();
+                return $response->setStatusCode(419)->setContent('Session Expired');
             }
         }
 

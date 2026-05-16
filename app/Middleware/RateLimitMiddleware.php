@@ -125,11 +125,10 @@ class RateLimitMiddleware
             
             // Fail-Closed: در صورت بروز هرگونه خطای داخلی در سیستم محدودسازی نرخ، درخواست را به طور ایمن رد می‌کنیم
             $response = new Response();
-            $response->json([
+            return $response->json([
                 'success' => false,
-                'message' => 'خطای امنیتی سیستمی در اعتبارسنجی درخواست.'
-            ], 500);
-            return $response;
+                'message' => 'سرویس موقتاً در دسترس نیست. لطفا دقایقی دیگر تلاش کنید.'
+            ], 503);
         }
     }
 
@@ -152,7 +151,7 @@ class RateLimitMiddleware
         // CORE-043: Normalize components (trim, lowercase) to ensure hash uniqueness
         $cleanUri = strtolower(trim($cleanUri));
         
-        $userId = $this->session->get(SessionKeys::USER_ID);
+        $userId = (PHP_SESSION_ACTIVE === session_status()) ? $this->session->get(SessionKeys::USER_ID) : null;
         $ip = function_exists('get_client_ip') ? get_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
 
         if ($userId) {

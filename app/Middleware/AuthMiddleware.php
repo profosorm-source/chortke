@@ -19,12 +19,18 @@ class AuthMiddleware extends BaseMiddleware
     private Session $session;
     private Redis $redis;
     private \App\Services\SettingService $settingService;
+    private \App\Models\User $userModel;
 
-    public function __construct(Session $session, Redis $redis, \App\Services\SettingService $settingService)
-    {
+    public function __construct(
+        Session $session, 
+        Redis $redis, 
+        \App\Services\SettingService $settingService,
+        \App\Models\User $userModel
+    ) {
         $this->session = $session;
         $this->redis = $redis;
         $this->settingService = $settingService;
+        $this->userModel = $userModel;
     }
 
     public function handle(Request $request, Closure $next): Response
@@ -114,6 +120,25 @@ class AuthMiddleware extends BaseMiddleware
             }
             $response->redirect(url('login'));
             return $response;
+        }
+
+        // HIGH-H-06 Fix: Periodic DB validation (Every 5 minutes)
+        // Ensure user is still active/not banned without hitting DB on every request
+        $lastVerify = (int)$session->get('user_verify_time', 0);
+        if (time() - $lastVerify > 300) {
+            $user = $this->userModel->find($userId);
+            if (!$user || (string)$user->status !== 'active') {
+                $session->destroy();
+                if ($redisAvailable) {
+                    try { $this->redis->delete($redisKey); } catch (\Throwable) {}
+                }
+                $response = new Response();
+                if ($request->isAjax()) {
+                    return $response->json(['success' => false, 'message' => 'حساب شما غیرفعال شده است.'], 403);
+                }
+                return $response->redirect(url('login'));
+            }
+            $session->set('user_verify_time', time());
         }
 
         return $this->toResponse($next($request));

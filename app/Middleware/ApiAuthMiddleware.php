@@ -124,11 +124,9 @@ class ApiAuthMiddleware
 
     private function extractToken(Request $request): ?string
     {
-        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-        if (empty($authHeader) && function_exists('getallheaders')) {
-            $headers = getallheaders();
-            $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? '';
-        }
+        $authHeader = $request->header('Authorization') 
+            ?? $request->header('authorization') 
+            ?? ($_SERVER['HTTP_AUTHORIZATION'] ?? '');
 
         if (!preg_match('/Bearer\s+(.+)/i', (string)$authHeader, $m)) {
             return null;
@@ -174,17 +172,21 @@ class ApiAuthMiddleware
      */
     private function isSensitivePath(string $uri): bool
     {
-        $sensitivePaths = [
+        // HIGH-H4 Fix: Expanded and configurable list of sensitive paths requiring strict ownership
+        $sensitivePaths = config('security.api.sensitive_paths', [
             '/api/payment',
             '/api/withdrawal',
             '/api/wallet',
-            '/api/account/settings',
-            '/api/account/password',
+            '/api/account',
             '/api/profile/update',
-        ];
+            '/api/admin',
+            '/api/security',
+            '/api/2fa',
+            '/api/token',
+        ]);
 
         foreach ($sensitivePaths as $path) {
-            if (str_starts_with($uri, $path)) {
+            if (str_starts_with($uri, (string)$path)) {
                 return true;
             }
         }

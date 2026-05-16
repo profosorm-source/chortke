@@ -28,8 +28,11 @@ class HttpsMiddleware
             }
 
             $uri = $request->uri();
-            // Ensure safe and valid fully qualified URL construction
-            $redirectUrl = $appUrl . '/' . ltrim($uri, '/');
+            // MEDIUM-M-10 Fix: Robust URI sanitization using parse_url to prevent header injection or redirection bypasses
+            $cleanPath = parse_url($uri, PHP_URL_PATH) ?: '/';
+            $query = parse_url($uri, PHP_URL_QUERY);
+            
+            $redirectUrl = $appUrl . '/' . ltrim($cleanPath, '/') . ($query ? '?' . $query : '');
 
             $response = new Response();
             return $response->redirect($redirectUrl, 301);

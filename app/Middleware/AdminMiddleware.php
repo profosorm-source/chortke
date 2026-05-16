@@ -9,6 +9,7 @@ use Core\Response;
 use Core\Session;
 use App\Policies\RolePolicy;
 use Closure;
+use App\Constants\SessionKeys;
 
 /**
  * AdminMiddleware — محدودسازی دسترسی به مدیران سیستم
@@ -28,7 +29,7 @@ class AdminMiddleware extends BaseMiddleware
     {
         $session = $this->session;
 
-        if (!$session->has('user_id')) {
+        if (!$session->has(SessionKeys::USER_ID) || !$session->get(SessionKeys::LOGGED_IN)) {
             $response = new Response();
             if ($request->isAjax()) {
                 return $response->json(['success' => false, 'message' => 'لطفاً ابتدا وارد شوید.'], 401);
@@ -37,15 +38,15 @@ class AdminMiddleware extends BaseMiddleware
             return $response->redirect(url('login'));
         }
 
-        $userId = (int)$session->get('user_id');
-        $role = (string)($session->get('user_role') ?? '');
+        $userId = (int)$session->get(SessionKeys::USER_ID);
+        $role = (string)($session->get(SessionKeys::USER_ROLE) ?? '');
         $lastVerify = (int)$session->get('admin_verify_time');
 
         // 🚀 BUG FIX [H-01]: Periodic DB re-validation (Every 5 minutes)
         // جلوگیری از دسترسی ادمین‌های اخراج شده یا تغییر نقش یافته
         if (time() - $lastVerify > 300) {
             $user = $this->userModel->find($userId);
-            if (!$user || !RolePolicy::isAdmin($user->role_slug ?? '')) {
+            if (!$user || !RolePolicy::isAdmin($user->role ?? '')) {
                 $session->destroy();
                 $response = new Response();
                 if ($request->isAjax()) {
@@ -55,9 +56,9 @@ class AdminMiddleware extends BaseMiddleware
             }
             
             // Sync session with DB
-            $session->set('user_role', $user->role_slug);
+            $session->set(SessionKeys::USER_ROLE, $user->role);
             $session->set('admin_verify_time', time());
-            $role = $user->role_slug;
+            $role = $user->role;
         }
 
         if (!RolePolicy::isAdmin($role)) {

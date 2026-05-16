@@ -60,10 +60,21 @@ class SecurityHeadersMiddleware
         // Cross-Origin Policies (اصلاح شده برای جلوگیری از شکستن CDNها)
         // require-corp فقط اگر واقعاً نیاز به ایزوله‌سازی پردازش باشد اعمال شود
         $response->header('Cross-Origin-Opener-Policy', 'same-origin');
-        $response->header('Cross-Origin-Resource-Policy', 'same-site'); 
+        $response->header('Cross-Origin-Resource-Policy', 'same-site');
+        // LOW-L2 Fix: Add COEP for Spectre mitigation
+        $response->header('Cross-Origin-Embedder-Policy', 'require-corp');
 
         // LOW-02 Fix: Remove framework identification for security through obscurity
         $response->header('Server', '');
+        
+        // LOW-L-02 Fix: Modern CSP reporting
+        $reportUrl = (string)config('app.url', '') . '/api/security/csp-report';
+        $response->header('Reporting-Endpoints', 'csp-endpoint="' . $reportUrl . '"');
+        $response->header('Report-To', json_encode([
+            'group' => 'csp-group',
+            'max_age' => 10886400,
+            'endpoints' => [['url' => $reportUrl]]
+        ]));
         
         return $response;
     }
@@ -85,7 +96,9 @@ class SecurityHeadersMiddleware
             "frame-ancestors 'self'",
             "base-uri 'self'",
             "form-action 'self'",
-            "upgrade-insecure-requests"
+            "upgrade-insecure-requests",
+            "report-uri /api/security/csp-report",
+            "report-to csp-group"
         ]);
     }
     
