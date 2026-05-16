@@ -6,6 +6,7 @@ use App\Services\Auth\TwoFactorService;
 use App\Services\User\UserService;
 use App\Models\ActivityLog;
 use App\Controllers\User\BaseUserController;
+use App\Constants\SessionKeys;
 
 /**
  * Two Factor Authentication Controller
@@ -47,6 +48,15 @@ class TwoFactorController extends BaseUserController
         ];
 
         if (!$data['is_enabled']) {
+            // HIGH-01 Fix: Require password re-verification before showing 2FA secret
+            if (!$this->session->get(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED)) {
+                $this->view('user/security/confirm-password', [
+                    'title' => 'تأیید رمز عبور',
+                    'redirect_to' => url('security/two-factor')
+                ]);
+                return;
+            }
+
             if (empty($user->two_factor_secret)) {
                 $secret = $this->twoFactorService->generateSecret();
                 $encryptedSecret = $this->twoFactorService->encryptSecret($secret);
@@ -64,9 +74,40 @@ class TwoFactorController extends BaseUserController
         $this->view('user/security/two-factor', $data);
     }
 
+    /**
+     * تأیید رمز عبور برای دسترسی به تنظیمات حساس 2FA
+     */
+    public function authorizeSetup(): void
+    {
+        $password = (string)$this->request->post('password');
+        $userId = $this->userId();
+        
+        if (!$userId) {
+            $this->jsonError('لطفاً وارد شوید.', [], 401);
+            return;
+        }
+
+        // Rate limit password attempts
+        $throttleKey = 'pw_confirm:' . $userId . ':' . $this->request->ip();
+        if (!$this->rateLimiter->attempt($throttleKey, 5, 1)) {
+            $this->jsonError('تعداد تلاش‌های شما بیش از حد مجاز است.', [], 429);
+            return;
+        }
+
+        $user = $this->userService->find($userId);
+        if ($user && password_verify($password, $user->password)) {
+            $this->session->set(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED, true);
+            $this->rateLimiter->clear($throttleKey);
+            $this->jsonSuccess('تأیید شد', ['redirect' => url('security/two-factor')]);
+            return;
+        }
+
+        $this->jsonError('رمز عبور اشتباه است.');
+    }
+
     public function showVerify(): void
     {
-        $userId = $this->session->get('pending_2fa_user_id');
+        $userId = $this->session->get(SessionKeys::PENDING_2FA_USER_ID);
         if (!$userId) {
             $this->response->redirect(url('login'));
             return;
@@ -79,7 +120,7 @@ class TwoFactorController extends BaseUserController
 
     public function verify(): void
     {
-        $userId = $this->session->get('pending_2fa_user_id');
+        $userId = $this->session->get(SessionKeys::PENDING_2FA_USER_ID);
         if (!$userId) {
             if ($this->request->isAjax()) {
                 $this->jsonError('نشست نامعتبر است.', [], 401);
@@ -114,18 +155,17 @@ class TwoFactorController extends BaseUserController
         if ($this->twoFactorService->verifyCode($user->two_factor_secret, $code, (int)$userId)) {
             $this->rateLimiter->clear($throttleKey);
 
-            $this->session->remove('pending_2fa_user_id');
+            $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
             
             // CRIT-03 Fix: regenerate(true) BEFORE setting sensitive session data
             $this->session->regenerate(true); 
 
-            $this->session->set('user_id',   $user->id);
-            $this->session->set('username',  $user->username  ?? '');
+            $this->session->set(SessionKeys::USER_ID,   $user->id);
+            $this->session->set(SessionKeys::USERNAME,  $user->username  ?? '');
             $this->session->set('email',     $user->email);
-            $this->session->set('role',      $user->role);
-            $this->session->set('user_role', $user->role); 
-            $this->session->set('is_admin',  in_array($user->role, ['admin', 'super_admin'], true));
-            $this->session->set('logged_in', true);
+            $this->session->set(SessionKeys::USER_ROLE, $user->role); 
+            $this->session->set(SessionKeys::IS_ADMIN,  in_array($user->role, ['admin', 'super_admin'], true));
+            $this->session->set(SessionKeys::LOGGED_IN, true);
 
             $this->logger->activity('2fa.verified', 'تأیید موفق احراز هویت دو مرحله‌ای', $user->id, [
                 'channel' => 'auth',
@@ -170,6 +210,7 @@ class TwoFactorController extends BaseUserController
         $result = $this->twoFactorService->enable($userId, $code);
 
         if ($result['success']) {
+            $this->session->remove(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED);
             $this->logger->activity('2fa.enabled', 'فعال‌سازی احراز هویت دو مرحله‌ای', $userId, [
                 'channel' => 'auth',
             ]);
