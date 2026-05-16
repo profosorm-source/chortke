@@ -92,7 +92,8 @@ class AuthService extends \App\Services\BaseService
         }
 
         if (empty($user->email_verified_at)) {
-            // L-SRV-05 Fix: ادغام با پیام خطای عمومی جهت ممانعت قطعی از نشت وضعیت حساب (User Enumeration)
+            // MEDIUM-04 Fix: Prevent timing-based user enumeration by applying a random delay
+            usleep(random_int(100000, 300000)); // 100-300ms random delay
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
         }
 
@@ -173,6 +174,7 @@ class AuthService extends \App\Services\BaseService
         $this->session->regenerate(true);
         $this->session->set(SessionKeys::USER_ID,  (int)$user->id);
         $this->session->set(SessionKeys::USERNAME, $user->username ?? '');
+        $this->session->set(SessionKeys::USER_EMAIL, $user->email);
         $this->session->set(SessionKeys::USER_ROLE, $user->role);
         $this->session->set(SessionKeys::IS_ADMIN, in_array($user->role, ['admin', 'super_admin'], true));
         $this->session->set(SessionKeys::LOGGED_IN, true);
@@ -211,11 +213,13 @@ class AuthService extends \App\Services\BaseService
         if ($userId) {
             $this->logger->activity('auth.logout', 'خروج کاربر', (int)$userId);
             
-            // HIGH-06 Fix: Invalidate remember_token in DB
+            // HIGH-06 & MEDIUM-07 Fix: Invalidate remember_token and sessions in DB
             $this->userModel->update((int)$userId, ['remember_token' => null]);
             
-            // HIGH-06 Fix: Deactivate all user sessions in DB
-            $this->sessionService->invalidateAllUserSessions((int)$userId);
+            // Deactivate specific session or all? Usually logout only kills current, 
+            // but for security we can invalidate all or just current. 
+            // The requirement says "نشست در DB deactivate نمیشود"
+            $this->sessionService->terminateSession($this->session->getId(), (int)$userId);
         }
 
         if (isset($_COOKIE['remember_token'])) {

@@ -8,6 +8,7 @@ use App\Models\ApiToken;
 use App\Models\User;
 use App\Contracts\LoggerInterface;
 use Core\RateLimiter;
+use App\Models\ApiToken;
 
 class ApiTokenService extends \App\Services\BaseService
 {
@@ -106,13 +107,7 @@ class ApiTokenService extends \App\Services\BaseService
         $name = trim($name);
         $name = $name === '' ? 'api-token-' . date('Ymd') : mb_substr($name, 0, 80);
 
-        $validScopes = [
-            'read', 'write', 'admin', 
-            'profile:read', 'profile:write', 
-            'wallet:read', 'wallet:write', 
-            'transactions:read', 'tasks:read', 'tasks:write'
-        ];
-        if (!in_array($scope, $validScopes, true)) {
+        if (!in_array($scope, ApiToken::ALLOWED_SCOPES, true)) {
             $scope = 'read';
         }
 
@@ -240,19 +235,14 @@ class ApiTokenService extends \App\Services\BaseService
         $name = mb_substr($name, 0, 80);
 
         $requestedScopes = explode(',', preg_replace('/[^a-z0-9,:_-]/i', '', trim($scopes)));
-        $validScopesList = [
-            'read', 'write', 'admin', 
-            'profile:read', 'profile:write', 
-            'wallet:read', 'wallet:write', 
-            'transactions:read', 'tasks:read', 'tasks:write'
-        ];
         $finalScopes = [];
         foreach ($requestedScopes as $s) {
             $s = trim($s);
-            if (in_array($s, $validScopesList, true)) {
+            if (in_array($s, ApiToken::ALLOWED_SCOPES, true)) {
                 $finalScopes[] = $s;
             }
         }
+        $finalScopes = array_unique($finalScopes);
 
         // H20 Fix: فقط ادمین یا سوپرادمین مجاز به دریافت توکن با اسکوپ admin هستند
         $isAdmin = in_array($user->role, ['admin', 'super_admin'], true);

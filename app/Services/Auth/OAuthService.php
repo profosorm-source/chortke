@@ -10,6 +10,7 @@ use App\Services\Notification\NotificationService;
 use App\Services\AuditTrail;
 use App\Services\DistributedLockService;
 use App\Contracts\LoggerInterface;
+use App\Constants\SessionKeys;
 /**
  * OAuthService — Social Login سہولت (Google, Facebook)
  */
@@ -47,7 +48,7 @@ class OAuthService extends \App\Services\BaseService
         $state = bin2hex(random_bytes(16));
         
         // 🛡️ Security Improvement: Storing cryptographic state with creation timestamp for TTL enforcement.
-        $this->session->set('oauth_state', [
+        $this->session->set(SessionKeys::OAUTH_STATE, [
             'token'      => $state,
             'created_at' => time(),
             'session_id' => $this->session->getId(),
@@ -65,14 +66,14 @@ class OAuthService extends \App\Services\BaseService
 
     public function handleGoogleCallback(string $code, string $state): array
     {
-        if (!$this->session->has('oauth_state')) {
+        if (!$this->session->has(SessionKeys::OAUTH_STATE)) {
             return ['success' => false, 'message' => 'Invalid request: session state missing.'];
         }
 
-        $stored = $this->session->get('oauth_state');
+        $stored = $this->session->get(SessionKeys::OAUTH_STATE);
         
         // Atomic Cleanup: Clear state instantly to block replay attacks
-        $this->session->remove('oauth_state');
+        $this->session->remove(SessionKeys::OAUTH_STATE);
 
         if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
             return ['success' => false, 'message' => 'Invalid state structure.'];
@@ -87,10 +88,16 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-06 Fix: Verify IP binding
+        // MED-02 Fix: IP address mismatch during OAuth flow.
+        // Relaxing to a warning + log instead of blocking for better UX on mobile/proxies.
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
-            return ['success' => false, 'message' => 'IP address mismatch during OAuth flow.'];
+            $this->logger->warning('oauth.google.ip_mismatch', [
+                'expected' => $stored['ip'],
+                'received' => $this->clientIp(),
+                'session_id' => $this->session->getId()
+            ]);
         }
+
 
         // 🛡️ Hardened Expiration: Bound security state validity to maximum 5 minutes
         if ((time() - (int)$stored['created_at']) > 300) {
@@ -153,8 +160,8 @@ class OAuthService extends \App\Services\BaseService
             $this->db->beginTransaction();
 
             // CRIT-05: Check if we are in a linking flow (user already logged in)
-            $linkingUserId = $this->session->get('oauth_linking_user_id');
-            $this->session->remove('oauth_linking_user_id');
+            $linkingUserId = $this->session->get(SessionKeys::OAUTH_LINKING_USER_ID);
+            $this->session->remove(SessionKeys::OAUTH_LINKING_USER_ID);
 
             if ($linkingUserId) {
                 $result = $this->linkSocialAccount((int)$linkingUserId, $provider, $userData);
@@ -429,7 +436,7 @@ class OAuthService extends \App\Services\BaseService
         $redirectUri = "{$this->appUrl}/auth/callback/facebook";
         $state = bin2hex(random_bytes(16));
         
-        $this->session->set('oauth_facebook_state', [
+        $this->session->set(SessionKeys::OAUTH_STATE . '_facebook', [
             'token'      => $state,
             'created_at' => time(),
             'session_id' => $this->session->getId(),
@@ -450,12 +457,13 @@ class OAuthService extends \App\Services\BaseService
      */
     public function handleFacebookCallback(string $code, string $state): array
     {
-        if (!$this->session->has('oauth_facebook_state')) {
+        $stateKey = SessionKeys::OAUTH_STATE . '_facebook';
+        if (!$this->session->has($stateKey)) {
             return ['success' => false, 'message' => 'Invalid request: session state missing.'];
         }
 
-        $stored = $this->session->get('oauth_facebook_state');
-        $this->session->remove('oauth_facebook_state');
+        $stored = $this->session->get($stateKey);
+        $this->session->remove($stateKey);
 
         if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
             return ['success' => false, 'message' => 'Invalid state structure.'];
@@ -470,9 +478,14 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-06 Fix: Verify IP binding
+        // MED-02 Fix: IP address mismatch during OAuth flow.
+        // Relaxing to a warning + log instead of blocking for better UX on mobile/proxies.
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
-            return ['success' => false, 'message' => 'IP address mismatch during OAuth flow.'];
+            $this->logger->warning('oauth.facebook.ip_mismatch', [
+                'expected' => $stored['ip'],
+                'received' => $this->clientIp(),
+                'session_id' => $this->session->getId()
+            ]);
         }
 
         if ((time() - (int)$stored['created_at']) > 300) {
@@ -647,7 +660,7 @@ class OAuthService extends \App\Services\BaseService
     public function getAuthUrlForLinking(string $provider, int $userId): string
     {
         // Store the fact that we are linking to an existing account
-        $this->session->set('oauth_linking_user_id', $userId);
+        $this->session->set(SessionKeys::OAUTH_LINKING_USER_ID, $userId);
         
         if ($provider === 'google') {
             return $this->getGoogleAuthUrl();

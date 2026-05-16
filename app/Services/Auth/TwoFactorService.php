@@ -61,9 +61,17 @@ class TwoFactorService extends \App\Services\BaseService
 
     public function getQRCodeUrl(string $username, string $secret): string
     {
-        $secret = $this->decryptSecret($secret);
+        // MEDIUM-02 Fix: Robust decryption and error handling to prevent plaintext leakage
+        try {
+            $plainSecret = $this->decryptSecret($secret);
+        } catch (\Throwable $e) {
+            $this->logger->error('2fa.qr_url.decrypt_failed', ['error' => $e->getMessage()]);
+            throw new \RuntimeException('امکان تولید QR Code وجود ندارد');
+        }
+
         $appName = config('app.name', 'Chortke');
-        return "otpauth://totp/" . rawurlencode($appName) . ":" . rawurlencode($username) . "?secret=" . rawurlencode($secret) . "&issuer=" . rawurlencode($appName);
+        return "otpauth://totp/" . rawurlencode($appName) . ":" . rawurlencode($username) 
+             . "?secret=" . rawurlencode($plainSecret) . "&issuer=" . rawurlencode($appName);
     }
 
     public function verifyCode(string $secret, string $code, ?int $userId = null): bool

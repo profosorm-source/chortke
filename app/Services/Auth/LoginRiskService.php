@@ -223,7 +223,9 @@ class LoginRiskService extends \App\Services\BaseService
 
     private function buildKey(string $context, string $ip): string
     {
-        return "login_risk_{$context}_" . md5($ip);
+        // HIGH-06 Fix: Use HMAC-SHA256 with app key to prevent precomputation and cache poisoning
+        $salt = (string)config('app.key');
+        return "login_risk_{$context}_" . hash_hmac('sha256', $ip, $salt);
     }
 
     /**
