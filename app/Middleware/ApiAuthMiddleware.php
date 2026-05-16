@@ -71,10 +71,21 @@ class ApiAuthMiddleware
         $request->setUser($user);
 
         // بروزرسانی آمار استفاده از توکن
-        $this->db->query(
-            "UPDATE api_tokens SET last_used_at = NOW(), use_count = use_count + 1 WHERE id = ?",
-            [(int)$user->token_id]
-        );
+        // MEDIUM-01 Fix: Add error handling for stats update
+        try {
+            $this->db->query(
+                "UPDATE api_tokens SET last_used_at = NOW(), use_count = use_count + 1 WHERE id = ?",
+                [(int)$user->token_id]
+            );
+        } catch (\Throwable $e) {
+            // Ignore non-critical error but log it
+            if (function_exists('logger')) {
+                logger()->warning('api_auth.stats_update_failed', [
+                    'token_id' => $user->token_id,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
 
         return $this->toResponse($next($request));
     }

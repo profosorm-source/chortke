@@ -24,13 +24,20 @@ class PasswordPolicy
         $requireSpecialChars = (bool)config('auth.password.require_special_chars', true); // HIGH-09: Default to true
         $preventCommonPasswords = (bool)config('auth.password.prevent_common', true);
 
-        // طول
-        if (strlen($password) < $minLength) {
+        // HIGH-05 Fix: Use mb_strlen for characters and check byte length for bcrypt
+        $charCount = mb_strlen($password, 'UTF-8');
+        $byteCount = strlen($password);
+
+        if ($charCount < $minLength) {
             $errors[] = "رمز عبور باید حداقل " . $minLength . " کاراکتر باشد.";
         }
 
-        if (strlen($password) > $maxLength) {
+        if ($charCount > $maxLength) {
             $errors[] = "رمز عبور نباید بیشتر از " . $maxLength . " کاراکتر باشد.";
+        }
+        
+        if ($byteCount > 72) {
+            $errors[] = "طول رمز عبور به دلیل محدودیت‌های امنیتی نباید از ۷۲ بایت تجاوز کند.";
         }
 
         // حروف بزرگ
@@ -81,7 +88,8 @@ class PasswordPolicy
             'football', 'iloveyou', 'sunshine', 'princess', 'charlie'
         ];
 
-        return in_array(strtolower($password), array_map('strtolower', $commonPasswords));
+        // LOW-03 Fix: Use mb_strtolower for Unicode support
+        return in_array(mb_strtolower($password, 'UTF-8'), array_map(fn($p) => mb_strtolower($p, 'UTF-8'), $commonPasswords));
     }
 
     /**

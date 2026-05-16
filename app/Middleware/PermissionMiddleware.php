@@ -9,6 +9,8 @@ use Core\Session;
 use Core\Response;
 use Core\Request;
 use Closure;
+use Core\Redis;
+use App\Constants\SessionKeys;
 
 /**
  * PermissionMiddleware — مدیریت سطوح دسترسی کاربران بر اساس Dependency Injection
@@ -17,14 +19,16 @@ class PermissionMiddleware extends BaseMiddleware
 {
     private Session $session;
     private Permission $permissionModel;
+    private Redis $redis;
 
     /**
      * متد سازنده جهت تزریق خودکار وابستگی‌ها (DI Auto-wiring)
      */
-    public function __construct(Session $session, Permission $permissionModel)
+    public function __construct(Session $session, Permission $permissionModel, Redis $redis)
     {
         $this->session = $session;
         $this->permissionModel = $permissionModel;
+        $this->redis = $redis;
     }
 
     /**
@@ -72,18 +76,29 @@ class PermissionMiddleware extends BaseMiddleware
             return true;
         }
         
-        $cachedPermissions = $this->session->get('user_permissions');
-        $cacheTime = $this->session->get('permissions_cache_time');
+        // MEDIUM-09 Fix: Use Redis for permission caching instead of session for better security and reactivity
+        $cacheKey = "user_permissions:{$userId}";
+        $cachedPermissions = null;
+        
+        if ($this->redis->isAvailable()) {
+            try {
+                $cached = $this->redis->get($cacheKey);
+                if ($cached) {
+                    $cachedPermissions = json_decode($cached, true);
+                }
+            } catch (\Throwable) {}
+        }
         
         // HIGH-05 Fix: Force DB check for critical permissions to ensure immediate revocation
         $isCritical = $this->isCriticalPermission($permission);
         
-        if ($isCritical || $cachedPermissions === null || $cacheTime === null || (time() - (int)$cacheTime) > 60) {
+        if ($isCritical || $cachedPermissions === null) {
             $cachedPermissions = $this->permissionModel->getUserPermissions($userId);
             
-            if (!$isCritical) {
-                $this->session->set('user_permissions', $cachedPermissions);
-                $this->session->set('permissions_cache_time', time());
+            if (!$isCritical && $this->redis->isAvailable()) {
+                try {
+                    $this->redis->set($cacheKey, json_encode($cachedPermissions), 30); // 30 seconds TTL
+                } catch (\Throwable) {}
             }
         }
         

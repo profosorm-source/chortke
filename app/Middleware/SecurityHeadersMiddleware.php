@@ -82,6 +82,9 @@ class SecurityHeadersMiddleware
             "img-src 'self' data: https:",
             "frame-src https://www.google.com",
             "connect-src 'self' https://www.google.com",
+            "frame-ancestors 'self'",
+            "base-uri 'self'",
+            "form-action 'self'",
             "upgrade-insecure-requests"
         ]);
     }

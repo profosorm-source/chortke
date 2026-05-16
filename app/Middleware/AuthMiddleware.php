@@ -83,20 +83,15 @@ class AuthMiddleware extends BaseMiddleware
             }
         }
         
-        // تمدید فعالیت
-        $activityUpdated = false;
+        // تمدید فعالیت در Redis (در صورت در دسترس بودن)
         if ($redisAvailable) {
             try {
                 $this->redis->set($redisKey, (string)$now, $timeout + 60);
-                $activityUpdated = true;
-            } catch (\Throwable) {
-                $redisAvailable = false;
-            }
+            } catch (\Throwable) {}
         }
-        
-        if (!$activityUpdated) {
-            $session->set('last_activity', (string)$now);
-        }
+
+        // HIGH-02 Fix: Always update session as backup to prevent fail-open if Redis goes down
+        $session->set('last_activity', (string)$now);
 
         // بررسی ورود کاربر
         // MED-08 Fix: Unified and robust check for both user_id and logged_in flag

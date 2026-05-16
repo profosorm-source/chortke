@@ -161,7 +161,22 @@ class RateLimitMiddleware
             return 'rl_user_' . $userId . '_' . md5($ip) . '_' . md5($cleanUri);
         }
         
-        // HIGH-07 Fix: Only use IP for anonymous users. User-Agent is too easy to spoof and bypass limits.
-        return 'rl_ip_' . md5($ip) . '_' . md5($cleanUri);
+        // MEDIUM-06 Fix: Normalize IPv6 to /64 prefix to prevent rate limit bypass
+        $normalizedIp = $this->normalizeIp($ip);
+        return 'rl_ip_' . md5($normalizedIp) . '_' . md5($cleanUri);
+    }
+
+    /**
+     * MEDIUM-06 Fix: Normalize IPv6 address to its /64 prefix
+     */
+    private function normalizeIp(string $ip): string 
+    {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $packed = inet_pton($ip);
+            if ($packed === false) return $ip;
+            $packed = substr($packed, 0, 8) . str_repeat("\x00", 8); // /64 mask
+            return inet_ntop($packed);
+        }
+        return $ip;
     }
 }
