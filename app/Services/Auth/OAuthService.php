@@ -248,6 +248,8 @@ class OAuthService extends \App\Services\BaseService
             if ($linkingUserId) {
                 $result = $this->linkSocialAccount((int)$linkingUserId, $provider, $userData);
                 if ($result['success']) {
+                    $this->session->regenerate(true);
+                    $this->logger->activity('oauth.account_linked', 'اتصال حساب اجتماعی (پروفایل)', (int)$linkingUserId);
                     $this->db->commit();
                     return $result;
                 }
@@ -336,6 +338,8 @@ class OAuthService extends \App\Services\BaseService
 
                 $result = $this->linkSocialAccount((int)$existingUser->id, $provider, $userData);
                 if ($result['success']) {
+                    $this->session->regenerate(true);
+                    $this->logger->activity('oauth.account_linked', 'اتصال حساب اجتماعی (لاگین)', (int)$existingUser->id);
                     $this->db->commit();
                     return $result;
                 }
@@ -683,6 +687,11 @@ class OAuthService extends \App\Services\BaseService
 
     public function linkSocialAccount(int $userId, string $provider, array $userData): array
     {
+        $user = $this->userModel->find($userId);
+        if (!$user || in_array($user->status, ['locked', 'banned', 'suspended'], true)) {
+            return ['success' => false, 'message' => 'امکان اتصال حساب برای این کاربر وجود ندارد.'];
+        }
+
         // Check if this social account is already linked to ANOTHER user
         $existing = $this->db->table('social_accounts')
             ->where('provider', '=', $provider)

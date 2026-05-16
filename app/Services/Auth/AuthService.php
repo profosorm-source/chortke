@@ -250,6 +250,13 @@ class AuthService extends \App\Services\BaseService
      */
     public function loginDirectly(object $user): array
     {
+        // 🛡️ Rate Limiting: Prevent abuse of direct/OAuth login flows
+        $ip = $this->clientIp();
+        if (!$this->rateLimiter->attempt('login_direct:' . hash('sha256', $ip), 20, 1, true)) {
+            $this->logger->warning('auth.login_directly.throttled', ['user_id' => $user->id, 'ip' => $ip]);
+            return ['success' => false, 'message' => 'تعداد تلاش‌های شما بیش از حد مجاز است.'];
+        }
+
         if ($user->status === 'locked') {
             return ['success' => false, 'message' => 'حساب کاربری شما قفل شده است.', 'code' => 'ACCOUNT_LOCKED'];
         }
@@ -275,13 +282,6 @@ class AuthService extends \App\Services\BaseService
             'auth.login', 
             new UserLoggedInEvent((int)$user->id, $this->clientIp(), get_user_agent())
         );
-
-        // 🛡️ Rate Limiting: Prevent abuse of direct/OAuth login flows
-        $ip = $this->clientIp();
-        if (!$this->rateLimiter->attempt('login_direct:' . hash('sha256', $ip), 20, 1, true)) {
-            $this->logger->warning('auth.login_directly.throttled', ['user_id' => $user->id, 'ip' => $ip]);
-            return ['success' => false, 'message' => 'تعداد تلاش‌های شما بیش از حد مجاز است.'];
-        }
 
         return [
             'success'      => true,
@@ -470,7 +470,7 @@ class AuthService extends \App\Services\BaseService
                 'domain' => '',
                 'secure' => true,
                 'httponly' => true,
-                'samesite' => 'Lax'
+                'samesite' => 'Strict'
             ]);
         }
     }
@@ -495,8 +495,18 @@ class AuthService extends \App\Services\BaseService
         $pendingIp = $this->session->get('pending_2fa_ip');
         $currentIp = $this->clientIp();
         // Normalize IPs to /24 subnet for comparison
-        $pendingSubnet = substr($pendingIp ?? '', 0, strrpos($pendingIp ?? '', '.'));
-        $currentSubnet = substr($currentIp, 0, strrpos($currentIp, '.'));
+        // Normalize IPs to /24 subnet (IPv4) or /64 (IPv6) for comparison
+        $normalize = function(string $ip): string {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+                $packed = inet_pton($ip);
+                if ($packed === false) return $ip;
+                return inet_ntop(substr($packed, 0, 8) . str_repeat("\x00", 8));
+            }
+            return substr($ip, 0, strrpos($ip, '.') ?: 0);
+        };
+
+        $pendingSubnet = $normalize($pendingIp ?? '');
+        $currentSubnet = $normalize($currentIp);
         if ($pendingSubnet !== $currentSubnet) {
             $this->logger->warning('auth.2fa.ip_mismatch', [
                 'pending_ip' => $pendingIp,
@@ -534,10 +544,11 @@ class AuthService extends \App\Services\BaseService
 
     public function validateRegister(array $data): array
     {
+        $minLength = (int)config('auth.password.min_length', 12);
         $validator = new \Core\Validator($data, [
             'full_name' => 'required|min:3',
             'email' => 'required|email',
-            'password' => 'required|min:6',
+            'password' => "required|min:{$minLength}",
         ]);
 
         $errors = [];
@@ -652,7 +663,10 @@ class AuthService extends \App\Services\BaseService
         }
 
         $user = $this->userModel->findByEmail($record->email);
-        if (!$user) return ['success' => false, 'message' => 'کاربر یافت نشد.'];
+        if (!$user) {
+            $this->securityModel->deletePasswordResetByEmail($record->email);
+            return ['success' => false, 'message' => 'لینک بازیابی نامعتبر یا منقضی شده است.'];
+        }
 
         // MEDIUM-05 Fix: Pre-hash password before bcrypt to handle 72-byte truncation
         $passwordToHash = base64_encode(hash('sha384', $newPassword, true));

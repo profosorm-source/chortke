@@ -409,11 +409,12 @@ class TwoFactorService extends \App\Services\BaseService
      */
     public function encryptSecret(string $secret): string
     {
-        $key = (string)config('app.key');
-        if (strlen($key) < 32) {
+        $rawKey = (string)config('app.key');
+        if (strlen($rawKey) < 32) {
             throw new \RuntimeException('Application key is too short for AES-256 encryption.');
         }
 
+        $key = hash('sha256', $rawKey, true);
         $iv = random_bytes(16);
         $encrypted = openssl_encrypt($secret, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
         
@@ -434,7 +435,8 @@ class TwoFactorService extends \App\Services\BaseService
             return $encryptedSecret;
         }
 
-        $key = (string)config('app.key');
+        $rawKey = (string)config('app.key');
+        $key = hash('sha256', $rawKey, true);
         $decoded = base64_decode($encryptedSecret, true);
 
         // Check if it's the new format (IV + Ciphertext)
@@ -443,6 +445,12 @@ class TwoFactorService extends \App\Services\BaseService
             $ciphertext = substr($decoded, 16);
             $decrypted = openssl_decrypt($ciphertext, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
             
+            if ($decrypted !== false && $decrypted !== '') {
+                return $decrypted;
+            }
+
+            // Fallback: try with non-hashed key for backwards compatibility
+            $decrypted = openssl_decrypt($ciphertext, 'aes-256-cbc', $rawKey, OPENSSL_RAW_DATA, $iv);
             if ($decrypted !== false && $decrypted !== '') {
                 return $decrypted;
             }

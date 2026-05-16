@@ -81,13 +81,13 @@ class ApiTokenService extends \App\Services\BaseService
         return $this->apiTokenModel->revokeById($tokenId);
     }
 
-    public function revokeTokenByHash(string $token): array
+    public function revokeTokenByHashForUser(string $token, int $userId): array
     {
         // CRIT-01 Fix: Pass plain token to the model which handles HMAC-SHA256
         // The model will hash the token before looking it up
         $record = $this->apiTokenModel->findByHash($token);
 
-        if (!$record || (int)$record['revoked'] === 1) {
+        if (!$record || (int)$record['user_id'] !== $userId || (int)$record['revoked'] === 1) {
             return ['success' => false, 'message' => 'توکن یافت نشد یا قبلاً باطل شده', 'status' => 404, 'code' => 'TOKEN_NOT_FOUND'];
         }
 
