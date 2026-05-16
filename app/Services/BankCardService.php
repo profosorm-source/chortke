@@ -12,12 +12,14 @@ class BankCardService extends \App\Services\BaseService
     private BankCard $model;
     private \App\Adapters\BankInquiryAdapter $inquiryAdapter;
     private \Core\Encryption $encryption;
+    private \Core\Database $db;
 
     public function __construct(
         \App\Models\BankCard $model,
         \App\Models\User $userModel,
         \App\Adapters\BankInquiryAdapter $inquiryAdapter,
         \Core\Encryption $encryption,
+        \Core\Database $db,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -25,23 +27,14 @@ class BankCardService extends \App\Services\BaseService
         $this->userModel      = $userModel;
         $this->inquiryAdapter = $inquiryAdapter;
         $this->encryption     = $encryption;
+        $this->db             = $db;
     }
 
     public function create(int $userId, array $data): array
     {
-        $count = (int)$this->model->countUserCards($userId);
-        if ($count >= 4) {
-            return ['success' => false, 'message' => 'حداکثر ۴ کارت بانکی مجاز است'];
-        }
-
         $cardNumber = preg_replace('/\D/', '', (string)($data['card_number'] ?? ''));
         if (!$this->validateLuhn($cardNumber)) {
             return ['success' => false, 'message' => 'شماره کارت وارد شده نامعتبر است'];
-        }
-
-        $exists = $this->model->where('card_number', $this->encryption->encrypt($cardNumber))->where('deleted_at', null)->first();
-        if ($exists) {
-            return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
         }
 
         $holder = trim((string)($data['card_holder'] ?? ''));
@@ -63,26 +56,61 @@ class BankCardService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'نام دارنده کارت با نام کاربری شما مطابقت ندارد'];
         }
 
-        $bankName = $this->detectBankName($cardNumber);
+        $this->db->beginTransaction();
+        try {
+            $count = (int)$this->model->countUserCards($userId);
+            if ($count >= 4) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'حداکثر ۴ کارت بانکی مجاز است'];
+            }
 
-        $id = $this->model->create([
-            'user_id' => $userId,
-            'card_number' => $this->encryption->encrypt($cardNumber),
-            'owner_name' => $this->encryption->encrypt($holder),
-            'bank_name' => $bankName,
-            'shaba' => $iban ?: null,
-            'status' => 'pending',
-            'is_default' => $count === 0,
-        ]);
+            // H14 Fix (BUG-13): بررسی با قفل ردیفی بدبینانه جهت ممانعت از ثبت همزمان کارت
+            $encryptedCardNumber = $this->encryption->encrypt($cardNumber);
+            $stmt = $this->db->prepare("SELECT id FROM bank_cards WHERE card_number = ? AND deleted_at IS NULL FOR UPDATE");
+            $stmt->execute([$encryptedCardNumber]);
+            if ($stmt->fetch()) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
+            }
 
-        if (!$id) {
-             return ['success' => false, 'message' => 'خطا در ایجاد کارت'];
+            $bankName = $this->detectBankName($cardNumber);
+
+            $id = $this->model->create([
+                'user_id' => $userId,
+                'card_number' => $encryptedCardNumber,
+                'owner_name' => $this->encryption->encrypt($holder),
+                'bank_name' => $bankName,
+                'shaba' => $iban ?: null,
+                'status' => 'pending',
+                'is_default' => $count === 0,
+            ]);
+
+            if (!$id) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در ایجاد کارت'];
+            }
+
+            $this->db->commit();
+            $this->logger->info('bankcard.created', ['user_id' => $userId, 'card_id' => $id->id ?? 0]);
+
+            $message = 'کارت ثبت شد و در انتظار تأیید است';
+            return ['success' => true, 'message' => $message, 'card_id' => (int)($id->id ?? 0)];
+
+        } catch (\PDOException $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            // خطای کلید یکتا (کارت تکراری)
+            if ((string)$e->getCode() === '23000' || $e->errorInfo[1] === 1062) {
+                return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
+            }
+            throw $e;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
         }
-
-        $this->logger->info('bankcard.created', ['user_id' => $userId, 'card_id' => $id->id ?? 0]);
-
-        $message = 'کارت ثبت شد و در انتظار تأیید است';
-        return ['success' => true, 'message' => $message, 'card_id' => (int)($id->id ?? 0)];
     }
 
     public function updateByUser(int $userId, int $cardId, array $data): array

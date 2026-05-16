@@ -54,13 +54,47 @@ class ManualDepositService extends \App\Services\BaseService
 
     public function create(int $userId, array $data, ?string $receiptPath): array
     {
+        // H14 Fix (BUG-04): تعریف و استخراج کامل متغیرهای ورودی پیش از شروع تراکنش
+        $amount = (float)($data['amount'] ?? 0);
+        if ($amount <= 0) {
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
+            return ['success' => false, 'message' => 'مبلغ واریز دستی باید بزرگتر از صفر باشد'];
+        }
+
+        $tracking = trim((string)($data['tracking_code'] ?? ''));
+        if (empty($tracking)) {
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
+            return ['success' => false, 'message' => 'شماره پیگیری پرداخت الزامی است'];
+        }
+
+        $receiptHash = null;
+        if (!empty($receiptPath) && \file_exists($receiptPath)) {
+            $receiptHash = \md5_file($receiptPath);
+        }
+
+        $cardId = (int)($data['card_id'] ?? $data['bank_card_id'] ?? 0);
+        $card = null;
+        if ($cardId > 0) {
+            $card = $this->bankCardModel->find($cardId);
+        }
+
         // ممانعت از ثبت واریز ریالی در صورت فعال بودن حالت تتر-تنها
         if (!$this->currencyService->isIRT()) {
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
             return ['success' => false, 'message' => 'واریز دستی ریالی در وضعیت فعلی ارز مسدود است'];
         }
 
         $user = $this->userModel->find($userId);
         if (!$user || $user->kyc_status !== 'verified') {
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
             return ['success' => false, 'message' => 'برای واریز دستی باید احراز هویت شما تأیید شده باشد'];
         }
 
@@ -112,6 +146,7 @@ class ManualDepositService extends \App\Services\BaseService
 
             $id = $this->model->create([
                 'user_id'       => $userId,
+                'card_id'       => $card ? $card->id : null,
                 'amount'        => $amount,
                 'currency'      => 'irt',
                 'receipt_image' => $receiptPath,

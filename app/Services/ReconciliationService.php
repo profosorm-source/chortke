@@ -55,13 +55,13 @@ class ReconciliationService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // ۱. یافتن تراکنش متناظر (بر اساس external_id یا native uuid)
-            $transaction = $this->transactionModel->findByExternalId((string)$externalId);
-            if (!$transaction) {
-                $transaction = $this->transactionModel->findByTransactionId((string)$externalId);
-            }
+            // ۱. یافتن تراکنش متناظر با قفل بدبینانه ردیفی جهت ممانعت از رفتارهای وب‌هوکی موازی (BUG-02)
+            $transaction = $this->db->query(
+                "SELECT * FROM transactions WHERE external_id = :ext_id OR gateway_transaction_id = :ext_id OR transaction_id = :ext_id LIMIT 1 FOR UPDATE",
+                ['ext_id' => (string)$externalId]
+            )->fetch(\PDO::FETCH_OBJ);
 
-            // ۲. اگر تراکنش وجود نداشت، یک تراکنش یتیم/ناشناخته ثبت کن تا از هدررفت داده جلوگیری شود
+            // ۲. اگر تراکنش وجود نداشت، یک تراکنش یتیم/ناشناخته ثبت کن تا از هدررفت داده جلوگیری شود (BUG-14)
             if (!$transaction) {
                 $transaction = $this->createOrphanTransaction($webhookData);
             }
@@ -97,6 +97,9 @@ class ReconciliationService extends \App\Services\BaseService
                         'error' => $consistency['message'],
                         'transaction_id' => $transaction->id
                     ]);
+
+                    // H14 Fix (BUG-06): ابطال فوری و رول‌بک تراکنش در صورت کشف ناهمخوانی بالانس و دفتر کل جهت ممانعت از اختلال مالی
+                    throw new \RuntimeException("Reconciliation aborted: Financial consistency drift detected: " . $consistency['message']);
                 }
             }
 
@@ -235,6 +238,16 @@ class ReconciliationService extends \App\Services\BaseService
     {
         $externalId = (string)($webhookData['transaction_id'] ?? $webhookData['reference_id'] ?? 'orphan_' . time());
         
+        // H14 Fix (BUG-14): بررسی مجدد و با قفل بدبینانه قبل از ساخت تراکنش ناشناس جهت ممانعت از درج موازی ردیف‌های یتیم تکراری
+        $existing = $this->db->query(
+            "SELECT * FROM transactions WHERE external_id = ? LIMIT 1 FOR UPDATE",
+            [$externalId]
+        )->fetch(\PDO::FETCH_OBJ);
+
+        if ($existing) {
+            return $existing;
+        }
+
         $id = $this->transactionModel->create([
             'user_id' => $webhookData['user_id'] ?? null,
             'type' => 'orphan_payment',
@@ -248,7 +261,7 @@ class ReconciliationService extends \App\Services\BaseService
         ]);
 
         // دریافت مدل ثبت شده جدید
-        return $this->transactionModel->findByExternalId($externalId) 
+        return $this->db->query("SELECT * FROM transactions WHERE id = ?", [$id])->fetch(\PDO::FETCH_OBJ)
                ?? $this->transactionModel->find((int)$id);
     }
 

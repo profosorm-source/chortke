@@ -69,7 +69,7 @@ class LedgerService extends \App\Services\BaseService
             }
             return true;
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
+            if ($startedTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
             $this->logError('ledger.record_double_entry.failed', [
