@@ -58,7 +58,40 @@ class CSRF
     {
         $sessionToken = $this->getToken();
         if (!$sessionToken || !$token) return false;
+        
+        // MED-04 Fix: Check Origin/Referer for sensitive requests
+        if (!$this->validateOrigin()) {
+            return false;
+        }
+
         return hash_equals($sessionToken, $token);
+    }
+
+    /**
+     * MED-04 Fix: Validate Origin or Referer against application URL
+     */
+    private function validateOrigin(): bool
+    {
+        $appUrl = config('app.url');
+        if (!$appUrl) return true; // Fallback if not configured
+
+        $origin = $this->request->header('Origin');
+        $referer = $this->request->header('Referer');
+        
+        // Parse host from app.url
+        $appHost = parse_url($appUrl, PHP_URL_HOST);
+
+        if ($origin) {
+            $originHost = parse_url($origin, PHP_URL_HOST);
+            if ($originHost !== $appHost) return false;
+        }
+
+        if ($referer) {
+            $refererHost = parse_url($referer, PHP_URL_HOST);
+            if ($refererHost !== $appHost) return false;
+        }
+        
+        return true;
     }
 
     public function check(): bool

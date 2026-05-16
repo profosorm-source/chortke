@@ -22,6 +22,7 @@ class Request
     private string $rawInput = '';
     private ?array $parsedBody = null;
     private ?object $user = null;
+    private array $attributes = [];
 
     public function setUser(object $user): void
     {
@@ -31,6 +32,16 @@ class Request
     public function user(): ?object
     {
         return $this->user;
+    }
+
+    public function setAttribute(string $key, $value): void
+    {
+        $this->attributes[$key] = $value;
+    }
+
+    public function getAttribute(string $key, $default = null)
+    {
+        return $this->attributes[$key] ?? $default;
     }
 
     public function getUser(): ?object
