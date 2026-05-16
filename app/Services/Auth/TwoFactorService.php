@@ -77,7 +77,8 @@ class TwoFactorService extends \App\Services\BaseService
 
     public function verifyTOTPCode(string $secret, string $code, ?int $userId = null): bool
     {
-        $secret = $this->decryptSecret($secret);
+        $isLegacy = false;
+        $plainSecret = $this->decryptSecret($secret, $isLegacy);
         $timeSlice = (int)floor(time() / 30);
         
         // بازیابی آخرین تایم اسلایس استفاده شده جهت جلوگیری از Replay Attack
@@ -98,7 +99,19 @@ class TwoFactorService extends \App\Services\BaseService
                 continue;
             }
 
-            if ($this->timingSafeEquals($this->generateTOTP($secret, $sliceToCheck), $code)) {
+            if ($this->timingSafeEquals($this->generateTOTP($plainSecret, $sliceToCheck), $code)) {
+                // 🛡️ MIGRATION-01: On-the-fly migration for legacy secrets using derived IV
+                if ($userId && $isLegacy) {
+                    try {
+                        $newEncryptedSecret = $this->encryptSecret($plainSecret);
+                        $this->userModel->update($userId, ['two_factor_secret' => $newEncryptedSecret]);
+                        $this->logger->info('2fa.secret_migrated', ['user_id' => $userId]);
+                    } catch (\Throwable $e) {
+                        // Log but don't fail the login if migration fails (already verified)
+                        $this->logger->error('2fa.migration_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+                    }
+                }
+
                 // ذخیره تایم اسلایس موفق جهت فریز کردن آن
                 if ($userId) {
                     $this->userModel->update($userId, ['last_2fa_timeslice' => $sliceToCheck]);
@@ -315,10 +328,12 @@ class TwoFactorService extends \App\Services\BaseService
         return base64_encode($iv . $encrypted);
     }
 
-    public function decryptSecret(string $encryptedSecret): string
+    public function decryptSecret(string $encryptedSecret, bool &$isLegacy = false): string
     {
-        // If length is 32 and base32 compliant, it is legacy unencrypted
-        if (strlen($encryptedSecret) == 32 && preg_match('/^[A-Z2-7]+$/', $encryptedSecret)) {
+        $isLegacy = false;
+        // If length is 32 and base32 compliant, it's a legacy plaintext 2FA secret.
+        if (strlen($encryptedSecret) === 32 && preg_match('/^[A-Z2-7]+$/', $encryptedSecret)) {
+            $isLegacy = true;
             return $encryptedSecret;
         }
 
@@ -341,6 +356,7 @@ class TwoFactorService extends \App\Services\BaseService
         $decryptedLegacy = openssl_decrypt($encryptedSecret, 'aes-256-cbc', $key, 0, $ivLegacy);
         
         if ($decryptedLegacy !== false && $decryptedLegacy !== '') {
+            $isLegacy = true;
             return $decryptedLegacy;
         }
 

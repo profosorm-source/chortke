@@ -84,13 +84,12 @@ class SessionService extends \App\Services\BaseService
         $lock = $this->lockService->acquire($lockResource, ttl: 30, waitTimeout: 5);
 
         if (!$lock['acquired']) {
-            // MED-07 Fix: با توجه به اینکه در ادامه از تراکنش و lockForUpdate روی session_id استفاده می‌شود،
-            // شکست قفل توزیع شده نباید کل لاگین کاربر را متوقف کند (بهره‌مندی از الگو Graceful Degradation).
-            $this->logger->warning('session.record_session.lock_failed_ignored', [
+            // MEDIUM-M-14 Fix: Abort on distributed lock failure to prevent race conditions.
+            $this->logger->warning('session.record_session.lock_failed', [
                 'user_id' => $userId,
                 'session_id' => $sessionId
             ]);
-            // به جای پرتاب استثنا و دان کردن سیستم، لاگ ثبت و اجرا ادامه می‌یابد
+            throw new \RuntimeException('Session creation temporarily unavailable due to lock contention.');
         }
 
         try {

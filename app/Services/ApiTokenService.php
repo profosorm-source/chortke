@@ -8,7 +8,6 @@ use App\Models\ApiToken;
 use App\Models\User;
 use App\Contracts\LoggerInterface;
 use Core\RateLimiter;
-use App\Models\ApiToken;
 
 class ApiTokenService extends \App\Services\BaseService
 {
@@ -16,7 +15,7 @@ class ApiTokenService extends \App\Services\BaseService
     private User $userModel;
     private RateLimiter $rateLimiter;
     private \App\Services\Auth\TwoFactorService $twoFactorService;
-    private static string $dummyHash = '';
+    private readonly string $dummyHash;
 
     public function __construct(
         LoggerInterface $logger, 
@@ -30,6 +29,7 @@ class ApiTokenService extends \App\Services\BaseService
         $this->userModel = $userModel;
         $this->rateLimiter = $rateLimiter;
         $this->twoFactorService = $twoFactorService;
+        $this->dummyHash = password_hash(bin2hex(random_bytes(16)), PASSWORD_BCRYPT);
     }
 
     public function getTokensForAdmin(
@@ -139,6 +139,15 @@ class ApiTokenService extends \App\Services\BaseService
             }
         }
 
+        if (in_array('*', $finalScopes, true) && !$isAdmin) {
+            return [
+                'success' => false,
+                'message' => 'تنها ادمین می‌تواند توکن با دسترسی کامل بسازد',
+                'status' => 403,
+                'code' => 'FORBIDDEN_SCOPE'
+            ];
+        }
+
         $scope = implode(',', $finalScopes);
 
         $this->apiTokenModel->createToken($userId, $token, $name, $scope, $expiresAt);
@@ -180,10 +189,7 @@ class ApiTokenService extends \App\Services\BaseService
 
     private function getDummyHash(): string
     {
-        if (empty(self::$dummyHash)) {
-            self::$dummyHash = password_hash('dummy_password_not_used', PASSWORD_BCRYPT);
-        }
-        return self::$dummyHash;
+        return $this->dummyHash;
     }
 
     public function issueToken(string $email, string $password, string $name, string $scopes, string $otp = ''): array

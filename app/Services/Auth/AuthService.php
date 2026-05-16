@@ -25,6 +25,8 @@ use App\Constants\SessionKeys;
  */
 class AuthService extends \App\Services\BaseService
 {
+    private readonly string $dummyHash;
+
     public function __construct(
         Logger $logger,
         private UserService $userService,
@@ -40,6 +42,7 @@ class AuthService extends \App\Services\BaseService
         private ?EmailService $emailService = null
     ) {
         parent::__construct($logger);
+        $this->dummyHash = password_hash(bin2hex(random_bytes(16)), PASSWORD_BCRYPT);
     }
 
     /**
@@ -88,6 +91,10 @@ class AuthService extends \App\Services\BaseService
     public function login(string $identifier, string $password, bool $remember = false): array
     {
         $ip = $this->clientIp();
+        $identifier = trim($identifier);
+        if (filter_var($identifier, FILTER_VALIDATE_EMAIL)) {
+            $identifier = mb_strtolower($identifier, 'UTF-8');
+        }
         
         // CRITICAL-01 Fix: Consolidated Rate Limiting (IP + Identifier)
         // CRIT-07 Fix: failClosed = true for security-sensitive routes
@@ -139,12 +146,11 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.', 'email_unverified' => true, 'email' => $user->email];
         }
 
-        $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $identifier));
-        $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $ip));
-        
-        // اگر 2FA فعال باشد، session کامل نسازیم
+        // اگر 2FA فعال باشد، session کامل نسازیم و در صورت تکمیل 2FA، تلاش‌ها را پاک می‌کنیم.
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
         if (!$requires2FA) {
+            $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $identifier));
+            $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $ip));
             $this->createSession($user, $remember);
         } else {
             $this->createPending2FASession($user);
@@ -201,10 +207,6 @@ class AuthService extends \App\Services\BaseService
 
     private function createPending2FASession(object $user): void
     {
-        // MEDIUM-M-02 Fix: Clear login failures after successful password verification but before 2FA
-        $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $user->email ?? $user->username));
-        $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $this->clientIp()));
-        
         // CRIT-03 Fix: regenerate(true) to delete old session
         $this->session->regenerate(true);
         $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
@@ -255,6 +257,14 @@ class AuthService extends \App\Services\BaseService
         );
     }
 
+    public function finalizeSessionAfter2FA(object $user): void
+    {
+        $this->createSession($user, false);
+        $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
+        $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $user->email ?? $user->username));
+        $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $this->clientIp()));
+    }
+
     public function logout(): void
     {
         $userId = $this->session->get(SessionKeys::USER_ID);
@@ -303,9 +313,7 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'کد 2FA نامعتبر است.'];
         }
 
-        // پاک کردن pending session و ساخت session اصلی
-        $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
-        $this->createSession($user, false); // remember = false چون قبلاً چک شده
+        $this->finalizeSessionAfter2FA($user);
 
         // 🚀 UPG-05: پردازش آسنکرون رویداد پس از تایید موفق دو عاملی
         $this->eventDispatcher->dispatchAsync(
@@ -440,6 +448,11 @@ class AuthService extends \App\Services\BaseService
 
         $this->logger->activity('auth.password_reset.completed', 'بازیابی رمز عبور انجام شد', (int)$user->id);
         return ['success' => true, 'message' => 'رمز عبور با موفقیت تغییر کرد.'];
+    }
+
+    private function getDummyHash(): string
+    {
+        return $this->dummyHash;
     }
 
     public function check(): bool

@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\Notification\NotificationService;
 use App\Services\AuditTrail;
 use App\Services\DistributedLockService;
+use App\Services\Auth\GoogleJwtVerifier;
 use App\Contracts\LoggerInterface;
 use App\Constants\SessionKeys;
 /**
@@ -32,6 +33,7 @@ class OAuthService extends \App\Services\BaseService
         private \Core\Session $session,
         private \Core\Database $db,
         private DistributedLockService $lockService,
+        private GoogleJwtVerifier $jwtVerifier,
         private array $oAuthConfig = []
     ) {
         parent::__construct($logger);
@@ -44,7 +46,7 @@ class OAuthService extends \App\Services\BaseService
 
     public function getGoogleAuthUrl(): string
     {
-        $redirectUri = "{$this->appUrl}/auth/callback/google";
+        $redirectUri = $this->buildRedirectUri('/auth/callback/google');
         $state = bin2hex(random_bytes(16));
         $nonce = bin2hex(random_bytes(16));
         
@@ -69,6 +71,22 @@ class OAuthService extends \App\Services\BaseService
             'state' => $state,
             'nonce' => $nonce,
         ]);
+    }
+
+    private function buildRedirectUri(string $path): string
+    {
+        $baseUrl = rtrim($this->appUrl, '/');
+        $parsed = parse_url($baseUrl);
+        if (!$parsed || !isset($parsed['scheme'], $parsed['host'])) {
+            throw new \RuntimeException('APP_URL is invalid when building OAuth redirect URIs.');
+        }
+
+        $uri = $baseUrl . '/' . ltrim($path, '/');
+        if (strpos($uri, $baseUrl) !== 0) {
+            throw new \RuntimeException('Unsafe OAuth redirect URI construction detected.');
+        }
+
+        return $uri;
     }
 
     public function handleGoogleCallback(string $code, string $state): array
@@ -297,6 +315,7 @@ class OAuthService extends \App\Services\BaseService
 
     private function getGoogleToken(string $code): array
     {
+        $redirectUri = $this->buildRedirectUri('/auth/callback/google');
         $ch = curl_init('https://oauth2.googleapis.com/token');
         if ($ch === false) {
             return ['success' => false, 'message' => 'Failed to initialize curl'];
@@ -310,7 +329,7 @@ class OAuthService extends \App\Services\BaseService
             'code' => $code,
             'client_id' => $this->googleClientId,
             'client_secret' => $this->googleClientSecret,
-            'redirect_uri' => "{$this->appUrl}/auth/callback/google",
+            'redirect_uri' => $redirectUri,
             'grant_type' => 'authorization_code',
         ]));
 
@@ -382,70 +401,27 @@ class OAuthService extends \App\Services\BaseService
      */
     private function verifyGoogleIdToken(string $idToken): array
     {
-        $ch = curl_init('https://oauth2.googleapis.com/tokeninfo?' . http_build_query(['id_token' => $idToken]));
-        if ($ch === false) {
-            return ['success' => false, 'message' => 'Failed to initialize curl'];
+        $verification = $this->jwtVerifier->verifyIdToken(
+            $idToken,
+            $this->googleClientId,
+            ['accounts.google.com', 'https://accounts.google.com']
+        );
+
+        if (!$verification['success']) {
+            $this->logger->critical('oauth.google.id_token_invalid', ['error' => $verification['message']]);
+            return ['success' => false, 'message' => $verification['message']];
         }
 
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-
-        $rawResponse = curl_exec($ch);
-        if ($rawResponse === false) {
-            $error = curl_error($ch);
-            curl_close($ch);
-            $this->logger->error('oauth.google.id_token_curl_error', ['error' => $error]);
-            return ['success' => false, 'message' => 'خطا در راستی‌آزمایی توکن گوگل'];
-        }
-
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        $response = json_decode((string)$rawResponse, true);
-        
-        if ($httpCode !== 200 || !isset($response['aud']) || !isset($response['sub'])) {
-            $this->logger->error('oauth.google.id_token_invalid', ['response' => $response]);
-            return ['success' => false, 'message' => 'امضای توکن هویتی گوگل نامعتبر است'];
-        }
-
-        // CRITICAL-C-02 Fix: Validating Issuer (iss), Expiration (exp), and Issued-At (iat) claims
-        $validIssuers = ['accounts.google.com', 'https://accounts.google.com'];
-        if (!in_array($response['iss'] ?? '', $validIssuers, true)) {
-            $this->logger->critical('oauth.google.iss_mismatch', ['received' => $response['iss'] ?? '']);
-            return ['success' => false, 'message' => 'Issuer mismatch in ID Token'];
-        }
-
-        if (isset($response['exp']) && (int)$response['exp'] < time()) {
-            return ['success' => false, 'message' => 'ID Token has expired'];
-        }
-
-        if (isset($response['iat'])) {
-            $iat = (int)$response['iat'];
-            if ($iat > time() + 60 || $iat < time() - 86400) {
-                return ['success' => false, 'message' => 'ID Token issued at invalid time'];
-            }
-        }
-        
-        // 🛡️ گارد حیاتی رمزنگاری: بررسی مطابقت کامل با کلاینت آیدی خود برنامه جهت جلوگیری از حملات Confused Deputy
-        if ($response['aud'] !== $this->googleClientId) {
-            $this->logger->critical('oauth.google.aud_mismatch_detected', [
-                'expected' => $this->googleClientId,
-                'received' => $response['aud']
-            ]);
-            return ['success' => false, 'message' => 'نقص امنیتی شناسایی شد: کلاینت آیدی نامعتبر'];
-        }
-
+        $payload = $verification['payload'];
         return [
             'success' => true,
             'data' => [
-                'id'      => $response['sub'],
-                'email'   => $response['email'] ?? null,
-                'email_verified' => ($response['email_verified'] ?? false) === true,
-                'name'    => $response['name'] ?? '',
-                'picture' => $response['picture'] ?? null,
-                'nonce'   => $response['nonce'] ?? null
+                'id'      => (string)($payload['sub'] ?? ''),
+                'email'   => $payload['email'] ?? null,
+                'email_verified' => ($payload['email_verified'] ?? false) === true,
+                'name'    => $payload['name'] ?? '',
+                'picture' => $payload['picture'] ?? null,
+                'nonce'   => $payload['nonce'] ?? null
             ]
         ];
     }
@@ -480,7 +456,7 @@ class OAuthService extends \App\Services\BaseService
      */
     public function getFacebookAuthUrl(): string
     {
-        $redirectUri = "{$this->appUrl}/auth/callback/facebook";
+        $redirectUri = $this->buildRedirectUri('/auth/callback/facebook');
         $state = bin2hex(random_bytes(16));
         
         // HIGH-H-15 Fix: State signing for Facebook

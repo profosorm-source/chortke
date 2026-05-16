@@ -212,7 +212,7 @@ class LoginRiskService extends \App\Services\BaseService
             $idCount = $this->extractValidCount($idData, $windowSeconds);
         }
 
-        return max($ipCount, $idCount);
+        return $ipCount + $idCount;
     }
 
     private function extractValidCount($data, int $windowSeconds): int
