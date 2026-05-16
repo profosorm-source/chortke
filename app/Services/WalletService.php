@@ -16,10 +16,9 @@ use App\Contracts\WalletServiceInterface;
 class WalletService extends \App\Services\BaseService implements WalletServiceInterface
 {
     private \Core\IdempotencyKey $idempotencyKey;
-    // 🛡️ H14 Fix: Load supported currencies from config instead of hardcoding
     private array $supportedCurrencies = ['irt', 'usdt'];
     private const SUPPORTED_NETWORKS   = ['TRC20', 'BNB20', 'ERC20', 'TON', 'SOL'];
-    private const MIN_AMOUNT           = 0.01;
+    private const MIN_AMOUNT           = '0.01';
 
     private Wallet      $walletModel;
     private Transaction $transactionModel;
@@ -53,7 +52,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $this->settingService = $settingService;
         $this->fraudGuard = $fraudGuard;
 
-        // 🛡️ H14 Fix: Load supported currencies from config
+        // Load supported currencies from config
         $configuredCurrencies = $settingService->get('wallet_supported_currencies');
         if (is_array($configuredCurrencies) && !empty($configuredCurrencies)) {
             $this->supportedCurrencies = array_map('strtolower', $configuredCurrencies);
@@ -71,11 +70,11 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
     public function getOrCreateWallet(int $userId): ?object
     {
-        $wallet = $this->walletModel->findByUserId($userId);
-        if (!$wallet) {
-            $wallet = $this->walletModel->createForUser($userId);
-        }
-        return $wallet;
+        $sql = "INSERT IGNORE INTO wallets (user_id, created_at, updated_at) 
+                VALUES (:user_id, NOW(), NOW())";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['user_id' => $userId]);
+        return $this->walletModel->findByUserId($userId);
     }
 
     public function getWalletBalances(int $userId): array
@@ -100,12 +99,12 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }
 
         return [
-            'irt_balance'        => (float)$irtBalance,
-            'irt_locked'         => (float)$irtLocked,
-            'irt_available'      => (float)$irtAvailable,
-            'usdt_balance'       => (float)$usdtBalance,
-            'usdt_locked'        => (float)$usdtLocked,
-            'usdt_available'     => (float)$usdtAvailable,
+            'irt_balance'        => $irtBalance,
+            'irt_locked'         => $irtLocked,
+            'irt_available'      => $irtAvailable,
+            'usdt_balance'       => $usdtBalance,
+            'usdt_locked'        => $usdtLocked,
+            'usdt_available'     => $usdtAvailable,
             'last_withdrawal_at' => $wallet->last_withdrawal_at ?? null,
         ];
     }
@@ -125,7 +124,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     /**
      * افزایش موجودی (واریز) — با Idempotency Protection
      */
-    public function deposit(int $userId, float $amount, string $currency = 'irt', array $metadata = []): array
+    public function deposit(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array
     {
         $currency = strtolower($currency);
         $this->validateDepositInput($userId, $amount, $currency, $metadata);
@@ -155,7 +154,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     /**
      * افزایش موجودی درون یک تراکنش فعال — بدون قفل توزیع‌شده
      */
-    public function depositInTransaction(int $userId, float $amount, string $currency = 'irt', array $metadata = []): array
+    public function depositInTransaction(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array
     {
         $currency = strtolower($currency);
         $this->validateDepositInput($userId, $amount, $currency, $metadata);
@@ -187,7 +186,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     /**
      * اعتبارسنجی ورودی‌های متد واریز
      */
-    private function validateDepositInput(int $userId, float $amount, string $currency, array $metadata): void
+    private function validateDepositInput(int $userId, string $amount, string $currency, array $metadata): void
     {
         $this->validateCurrency($currency);
 
@@ -196,14 +195,14 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             $this->assertWalletActive($userId);
         }
 
-        if ($amount <= 0) {
+        if (!is_numeric($amount) || bccomp($amount, '0', 8) <= 0) {
             throw new \InvalidArgumentException('مبلغ باید بیشتر از صفر باشد');
         }
 
         $minAmount = ($currency === 'usdt') 
-            ? (float)$this->settingService->get('min_deposit_usdt', 1.0) 
-            : (float)$this->settingService->get('min_deposit_irt', 1000.0);
-        if ($amount < $minAmount) {
+            ? (string)$this->settingService->get('min_deposit_usdt', '1.0') 
+            : (string)$this->settingService->get('min_deposit_irt', '1000.0');
+        if (bccomp($amount, $minAmount, $this->getScale($currency)) < 0) {
             throw new \InvalidArgumentException("حداقل مبلغ واریز {$minAmount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " است");
         }
     }
@@ -212,7 +211,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
      * پردازش تراکنش واریز در پایگاه داده
      */
     private function processDepositTransaction(
-        int $userId, float $amount, string $currency, array $metadata, string $idempotencyKey,
+        int $userId, string $amount, string $currency, array $metadata, string $idempotencyKey,
         string $requestId, string $ipAddress, string $deviceFingerprint, string $logId
     ): array {
         $idempotencyService = $this->idempotencyKey;
@@ -246,9 +245,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             }
 
             $balanceField  = $this->balanceField($currency);
-            $balanceBefore = (float)$wallet->$balanceField;
+            $balanceBefore = (string)($wallet->$balanceField ?? '0');
             $scale         = $this->getScale($currency);
-            $balanceAfter  = (float)bcadd((string)$balanceBefore, (string)$amount, $scale);
+            $balanceAfter  = bcadd($balanceBefore, $amount, $scale);
 
             if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
                 throw new \RuntimeException('خطا در بروزرسانی موجودی');
@@ -340,8 +339,6 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'currency' => $currency,
             ]);
             
-            // Auto-tagging removed, system natively relies on metadata->type and transaction.type
-
             return $result;
 
         } catch (\InvalidArgumentException $e) {
@@ -394,7 +391,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     /**
      * برداشت وجه — با قفل موجودی و Idempotency
      */
-    public function withdraw(int $userId, float $amount, string $currency = 'irt', array $metadata = []): array
+    public function withdraw(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array
     {
         $currency = strtolower($currency);
         $this->validateWithdrawInput($userId, $amount, $currency, $metadata);
@@ -435,20 +432,14 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
     /**
      * 🛡️ برداشت درون یک تراکنش فعال — بدون قفل توزیع‌شده
-     * برای استفاده داخلی توسط سرویس‌های دیگر که قبلاً transaction شروع کرده‌اند
-     * 
-     * CRITICAL: این متد صرفاً برای internal use است. مطمئن شوید که:
-     * - Transaction قبلاً شروع شده است
-     * - Wallet با FOR UPDATE قفل شده است
-     * - تمام عملیات در یک transaction اتمیک انجام می‌شود
      */
-    public function withdrawInTransaction(int $userId, float $amount, string $currency = 'irt', array $metadata = []): array
+    public function withdrawInTransaction(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array
     {
         $currency = strtolower($currency);
         $this->validateCurrency($currency);
         $this->assertWalletActive($userId);
 
-        if ($amount <= 0) {
+        if (!is_numeric($amount) || bccomp($amount, '0', 8) <= 0) {
             throw new \InvalidArgumentException('مبلغ باید بیشتر از صفر باشد');
         }
 
@@ -465,16 +456,16 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             }
 
             $balanceField = $this->balanceField($currency);
-            $currentBalance = (float)$wallet->$balanceField;
+            $currentBalance = (string)($wallet->$balanceField ?? '0');
             $scale = $this->getScale($currency);
 
             // ✅ Balance check with BCMath for precision
-            if (bccomp((string)$currentBalance, (string)$amount, $scale) < 0) {
+            if (bccomp($currentBalance, $amount, $scale) < 0) {
                 throw new \RuntimeException("موجودی کافی نیست (موجودی فعلی: {$currentBalance})");
             }
 
             $balanceBefore = $currentBalance;
-            $balanceAfter = (float)bcsub((string)$balanceBefore, (string)$amount, $scale);
+            $balanceAfter = bcsub($balanceBefore, $amount, $scale);
 
             // Update balance directly (no separate lock needed due to FOR UPDATE)
             if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
@@ -552,19 +543,19 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     /**
      * اعتبارسنجی ورودی‌های متد برداشت
      */
-    private function validateWithdrawInput(int $userId, float $amount, string $currency, array $metadata): void
+    private function validateWithdrawInput(int $userId, string $amount, string $currency, array $metadata): void
     {
         $this->validateCurrency($currency);
         $this->assertWalletActive($userId);
 
-        if ($amount <= 0) {
+        if (!is_numeric($amount) || bccomp($amount, '0', 8) <= 0) {
             throw new \InvalidArgumentException('مبلغ باید بیشتر از صفر باشد');
         }
 
         $minAmount = ($currency === 'usdt') 
-            ? (float)$this->settingService->get('min_withdraw_usdt', 5.0) 
-            : (float)$this->settingService->get('min_withdraw_irt', 10000.0);
-        if ($amount < $minAmount) {
+            ? (string)$this->settingService->get('min_withdraw_usdt', '5.0') 
+            : (string)$this->settingService->get('min_withdraw_irt', '10000.0');
+        if (bccomp($amount, $minAmount, $this->getScale($currency)) < 0) {
             throw new \InvalidArgumentException("حداقل مبلغ برداشت {$minAmount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " است");
         }
     }
@@ -573,7 +564,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
      * پردازش تراکنش برداشت در پایگاه داده
      */
     private function processWithdrawTransaction(
-        int $userId, float $amount, string $currency, array $metadata, string $idempotencyKey,
+        int $userId, string $amount, string $currency, array $metadata, string $idempotencyKey,
         string $requestId, string $ipAddress, string $deviceFingerprint, string $logId
     ): array {
         $idempotencyService = $this->idempotencyKey;
@@ -590,15 +581,15 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             }
 
             $balanceField   = $this->balanceField($currency);
-            $currentBalance = (float)$wallet->$balanceField;
+            $currentBalance = (string)($wallet->$balanceField ?? '0');
             $scale          = $this->getScale($currency);
 
-            if (bccomp((string)$currentBalance, (string)$amount, $scale) < 0) {
-                throw new \RuntimeException("موجوزی کافی نیست (موجودی فعلی: {$currentBalance})");
+            if (bccomp($currentBalance, $amount, $scale) < 0) {
+                throw new \RuntimeException("موجودی کافی نیست (موجودی فعلی: {$currentBalance})");
             }
 
             $balanceBefore = $currentBalance;
-            $balanceAfter  = (float)bcsub((string)$balanceBefore, (string)$amount, $scale);
+            $balanceAfter  = bcsub($balanceBefore, $amount, $scale);
 
             if (!$this->walletModel->lockBalance($userId, $amount, $currency)) {
                 throw new \RuntimeException('خطا در قفل کردن موجودی');
@@ -674,8 +665,6 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'currency' => $currency,
             ]);
             
-            // Auto-tagging removed, system natively relies on transaction.type
-
             return $result;
 
         } catch (\InvalidArgumentException $e) {
@@ -716,16 +705,16 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     }
 
     /**
-     * پرداخت داخلی فوری — کسر از موجودی بدون قفل کردن (خرید سرویس، سرمایه‌گذاری و غیره)
+     * پرداخت داخلی فوری — کسر از موجودی بدون قفل کردن
      */
-    public function pay(int $userId, float $amount, string $currency = 'irt', array $metadata = []): array
+    public function pay(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array
     {
         $currency = strtolower($currency);
         $this->validateCurrency($currency);
         
         $this->assertWalletActive($userId);
 
-        if ($amount <= 0) {
+        if (!is_numeric($amount) || bccomp($amount, '0', 8) <= 0) {
             throw new \InvalidArgumentException('مبلغ پرداخت باید بیشتر از صفر باشد');
         }
 
@@ -767,25 +756,26 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 }
 
                 $balanceField   = $this->balanceField($currency);
-                $currentBalance = (float)$wallet->$balanceField;
+                $currentBalance = (string)($wallet->$balanceField ?? '0');
                 $scale          = $this->getScale($currency);
 
-                if (bccomp((string)$currentBalance, (string)$amount, $scale) < 0) {
+                if (bccomp($currentBalance, $amount, $scale) < 0) {
                     throw new \RuntimeException("موجودی کافی نیست (موجودی فعلی: {$currentBalance})");
                 }
 
                 $balanceBefore = $currentBalance;
-                $balanceAfter  = (float)bcsub((string)$balanceBefore, (string)$amount, $scale);
+                $balanceAfter  = bcsub($balanceBefore, $amount, $scale);
 
                 if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
                     throw new \RuntimeException('خطا در کسر موجودی');
                 }
 
+                $negativeAmount = bcmul($amount, '-1', $scale);
                 $transaction = $this->transactionModel->create([
                     'user_id'            => $userId,
                     'type'               => $metadata['type'] ?? 'payment',
                     'currency'           => $currency,
-                    'amount'             => -$amount, // Negative for payment
+                    'amount'             => $negativeAmount, // Negative for payment
                     'balance_before'     => $balanceBefore,
                     'balance_after'      => $balanceAfter,
                     'status'             => 'completed',
@@ -867,17 +857,17 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }, 15, 10); // TTL 15s, Wait up to 10s
     }
 
-    public function hasBalance(int $userId, float $amount, string $currency = 'irt'): bool
+    public function hasBalance(int $userId, string $amount, string $currency = 'irt'): bool
     {
         $currency = strtolower($currency);
         if (!in_array($currency, $this->supportedCurrencies, true)) {
             return false;
         }
         $balance = $this->walletModel->getBalance($userId, $currency);
-        return bccomp((string)$balance, (string)$amount, $this->getScale($currency)) >= 0;
+        return bccomp($balance, $amount, $this->getScale($currency)) >= 0;
     }
 
-    public function completeWithdrawal(int $userId, float $amount, string $currency, ?string $transactionId): bool
+    public function completeWithdrawal(int $userId, string $amount, string $currency, ?string $transactionId): bool
     {
         return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $transactionId) {
             $this->assertWalletActive($userId);
@@ -946,7 +936,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }, 15, 10);
     }
 
-    public function cancelWithdrawal(int $userId, float $amount, string $currency, ?string $transactionId): bool
+    public function cancelWithdrawal(int $userId, string $amount, string $currency, ?string $transactionId): bool
     {
         $currency = strtolower($currency);
         return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $transactionId) {
@@ -975,12 +965,12 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
                 if ($transaction && $transaction->type === 'withdraw') {
                     $balanceField  = $this->balanceField($currency);
-                    $balanceBefore = (float)$wallet->$balanceField;
+                    $balanceBefore = (string)($wallet->$balanceField ?? '0');
                     
                     // آنلاک اتمیک روی دیتابیس (ردیف قفل شده است)
                     $unlockResult  = $this->walletModel->unlockBalance($userId, $amount, $currency);
                     if ($unlockResult) {
-                        $balanceAfter = (float)bcadd((string)$balanceBefore, (string)$amount, $this->getScale($currency));
+                        $balanceAfter = bcadd($balanceBefore, $amount, $this->getScale($currency));
 
                         $refundTx = $this->transactionModel->create([
                             'user_id' => $userId,
@@ -1061,7 +1051,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }, 15, 10);
     }
 
-    public function canWithdraw(int $userId, float $amount, string $currency = 'irt'): array
+    public function canWithdraw(int $userId, string $amount, string $currency = 'irt'): array
     {
         $result = ['can_withdraw' => false, 'message' => ''];
         $scale  = $this->getScale($currency);
@@ -1069,7 +1059,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $balance = $this->db->inTransaction()
             ? $this->walletModel->getBalanceForUpdate($userId, $currency)
             : $this->walletModel->getBalance($userId, $currency);
-        if (bccomp((string)$balance, (string)$amount, $scale) < 0) {
+        if (bccomp($balance, $amount, $scale) < 0) {
             $result['message'] = 'موجودی کافی نیست';
             return $result;
         }
@@ -1080,10 +1070,10 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }
 
         $minWithdrawal = ($currency === 'usdt') 
-            ? (float)$this->settingService->get('min_withdraw_usdt', 5.0) 
-            : (float)$this->settingService->get('min_withdraw_irt', 10000.0);
-        if (bccomp((string)$amount, (string)$minWithdrawal, $scale) < 0) {
-            $result['message'] = 'حداقل مبلغ برداشت ' . number_format($minWithdrawal) . ' ' . ($currency === 'usdt' ? 'USDT' : 'تومان') . ' است';
+            ? (string)$this->settingService->get('min_withdraw_usdt', '5.0') 
+            : (string)$this->settingService->get('min_withdraw_irt', '10000.0');
+        if (bccomp($amount, $minWithdrawal, $scale) < 0) {
+            $result['message'] = 'حداقل مبلغ برداشت ' . number_format((float)$minWithdrawal) . ' ' . ($currency === 'usdt' ? 'USDT' : 'تومان') . ' است';
             return $result;
         }
 
@@ -1096,13 +1086,16 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $wallet = $this->getOrCreateWallet($userId);
         $stats  = $this->transactionModel->getUserStats($userId);
 
+        $totalIrt = bcadd((string)($wallet->balance_irt ?? '0'), (string)($wallet->locked_irt ?? '0'), 4);
+        $totalUsdt = bcadd((string)($wallet->balance_usdt ?? '0'), (string)($wallet->locked_usdt ?? '0'), 8);
+
         return (object)[
-            'balance_irt'        => (float)$wallet->balance_irt,
-            'balance_usdt'       => (float)$wallet->balance_usdt,
-            'locked_irt'         => (float)$wallet->locked_irt,
-            'locked_usdt'        => (float)$wallet->locked_usdt,
-            'total_irt'          => (float)$wallet->balance_irt  + (float)$wallet->locked_irt,
-            'total_usdt'         => (float)$wallet->balance_usdt + (float)$wallet->locked_usdt,
+            'balance_irt'        => (string)($wallet->balance_irt ?? '0'),
+            'balance_usdt'       => (string)($wallet->balance_usdt ?? '0'),
+            'locked_irt'         => (string)($wallet->locked_irt ?? '0'),
+            'locked_usdt'        => (string)($wallet->locked_usdt ?? '0'),
+            'total_irt'          => $totalIrt,
+            'total_usdt'         => $totalUsdt,
             'is_frozen'          => (bool)($wallet->is_frozen ?? 0),
             'last_withdrawal_at' => $wallet->last_withdrawal_at,
             'can_withdraw_today' => $this->walletModel->canWithdrawToday($userId),
@@ -1110,7 +1103,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         ];
     }
 
-    public function transfer(int $fromUserId, int $toUserId, float $amount, string $currency = 'irt', string $description = ''): ?object
+    public function transfer(int $fromUserId, int $toUserId, string $amount, string $currency = 'irt', string $description = ''): ?object
     {
         // 🛡️ گیت ضدتقلب انتقال وجه (Velocity check & Global limits)
         $risk = $this->fraudGuard->checkAction($fromUserId, 'wallet.transfer', [
@@ -1132,7 +1125,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $this->assertWalletActive($fromUserId);
         $this->assertWalletActive($toUserId);
 
-        if ($amount <= 0) {
+        if (!is_numeric($amount) || bccomp($amount, '0', 8) <= 0) {
             throw new \InvalidArgumentException('مبلغ باید بیشتر از صفر باشد');
         }
 
@@ -1160,24 +1153,25 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             $toWallet   = ($firstId === $toUserId)   ? $firstWallet : $secondWallet;
 
             $balanceField    = $this->balanceField($currency);
-            $fromBalance     = (float)$fromWallet->$balanceField;
-            $toBalanceBefore = (float)$toWallet->$balanceField;
+            $fromBalance     = (string)($fromWallet->$balanceField ?? '0');
+            $toBalanceBefore = (string)($toWallet->$balanceField ?? '0');
             $scale           = $this->getScale($currency);
 
-            if (bccomp((string)$fromBalance, (string)$amount, $scale) < 0) {
+            if (bccomp($fromBalance, $amount, $scale) < 0) {
                 throw new \RuntimeException('موجودی کافی نیست');
             }
 
-            $this->walletModel->updateBalance($fromUserId, -$amount, $currency);
+            $negativeAmount = bcmul($amount, '-1', $scale);
+            $this->walletModel->updateBalance($fromUserId, $negativeAmount, $currency);
             $this->walletModel->updateBalance($toUserId, $amount, $currency);
 
             $fromTransaction = $this->transactionModel->create([
                 'user_id'        => $fromUserId,
                 'type'           => 'transfer',
                 'currency'       => $currency,
-                'amount'         => -$amount,
+                'amount'         => $negativeAmount,
                 'balance_before' => $fromBalance,
-                'balance_after'  => (float)bcsub((string)$fromBalance, (string)$amount, $scale),
+                'balance_after'  => bcsub($fromBalance, $amount, $scale),
                 'status'         => 'completed',
                 'description'    => $description ?: "انتقال به کاربر {$toUserId}",
                 'metadata'       => json_encode(['to_user_id' => $toUserId]),
@@ -1189,7 +1183,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'currency'       => $currency,
                 'amount'         => $amount,
                 'balance_before' => $toBalanceBefore,
-                'balance_after'  => (float)bcadd((string)$toBalanceBefore, (string)$amount, $scale),
+                'balance_after'  => bcadd($toBalanceBefore, $amount, $scale),
                 'status'         => 'completed',
                 'description'    => $description ?: "دریافت از کاربر {$fromUserId}",
                 'metadata'       => json_encode(['from_user_id' => $fromUserId]),
@@ -1206,7 +1200,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     [
                         'counterparty' => $toUserId,
                         'balance_before' => $fromBalance,
-                        'balance_after' => (float)bcsub((string)$fromBalance, (string)$amount, $scale),
+                        'balance_after' => bcsub($fromBalance, $amount, $scale),
                     ]
                 );
             }
@@ -1222,7 +1216,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     [
                         'counterparty' => $fromUserId,
                         'balance_before' => $toBalanceBefore,
-                        'balance_after' => (float)bcadd((string)$toBalanceBefore, (string)$amount, $scale),
+                        'balance_after' => bcadd($toBalanceBefore, $amount, $scale),
                     ]
                 );
             }
@@ -1260,11 +1254,11 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }
     }
 
-    public function getBalance(int $userId, string $currency = 'irt'): float
+    public function getBalance(int $userId, string $currency = 'irt'): string
     {
         $currency = strtolower($currency);
-        if (!in_array($currency, self::SUPPORTED_CURRENCIES, true)) {
-            return 0.0;
+        if (!in_array($currency, $this->supportedCurrencies, true)) {
+            return '0';
         }
         return $this->walletModel->getBalance($userId, $currency);
     }
@@ -1294,7 +1288,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $userId = (int)$transaction->user_id;
 
         return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($transaction, $transactionId, $performedBy, $reason, $userId) {
-            $amount = (float)$transaction->amount;
+            $amount = (string)$transaction->amount;
             $currency = strtolower($transaction->currency ?? 'irt');
             $reversalType = 'transaction_reversal';
             $description = $reason ?? 'Reversal of transaction ' . $transactionId;
@@ -1319,25 +1313,26 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 }
 
                 $balanceField = $this->balanceField($currency);
-                $balanceBefore = (float)$wallet->$balanceField;
+                $balanceBefore = (string)($wallet->$balanceField ?? '0');
                 $scale = $this->getScale($currency);
 
                 $transactionDelta = bcsub((string)$transaction->balance_after, (string)$transaction->balance_before, $scale);
-                $reversalAmount = abs($amount);
+                $reversalAmount = bccomp($amount, '0', $scale) < 0 ? bcmul($amount, '-1', $scale) : $amount;
 
                 if (bccomp($transactionDelta, '0', $scale) < 0) {
                     // Original transaction reduced wallet balance, reversal should credit user wallet.
-                    $balanceAfter = (float)bcadd((string)$balanceBefore, (string)$reversalAmount, $scale);
+                    $balanceAfter = bcadd($balanceBefore, $reversalAmount, $scale);
                     $this->walletModel->updateBalance($userId, $reversalAmount, $currency);
                     $debitAccount = 'transaction_reversal';
                     $creditAccount = "wallet:{$userId}";
                 } else {
                     // Original transaction increased wallet balance, reversal should debit user wallet.
-                    if (bccomp((string)$balanceBefore, (string)$reversalAmount, $scale) < 0) {
+                    if (bccomp($balanceBefore, $reversalAmount, $scale) < 0) {
                         throw new \RuntimeException("موجودی کافی برای معکوس کردن تراکنش وجود ندارد.");
                     }
-                    $balanceAfter = (float)bcsub((string)$balanceBefore, (string)$reversalAmount, $scale);
-                    $this->walletModel->updateBalance($userId, -$reversalAmount, $currency);
+                    $balanceAfter = bcsub($balanceBefore, $reversalAmount, $scale);
+                    $negativeReversal = bcmul($reversalAmount, '-1', $scale);
+                    $this->walletModel->updateBalance($userId, $negativeReversal, $currency);
                     $debitAccount = "wallet:{$userId}";
                     $creditAccount = 'transaction_reversal';
                 }
@@ -1346,7 +1341,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     'user_id' => $userId,
                     'type' => $reversalType,
                     'currency' => $currency,
-                    'amount' => ($transactionDelta < 0 ? $reversalAmount : -$reversalAmount),
+                    'amount' => (bccomp($transactionDelta, '0', $scale) < 0 ? $reversalAmount : bcmul($reversalAmount, '-1', $scale)),
                     'balance_before' => $balanceBefore,
                     'balance_after' => $balanceAfter,
                     'status' => 'completed',
@@ -1477,7 +1472,6 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
     private function validateCurrency(string $currency): void
     {
-        // 🛡️ H14 Fix: Use configured currencies instead of hardcoded constant
         if (!in_array($currency, $this->supportedCurrencies, true)) {
             $supportedList = implode("'، '", $this->supportedCurrencies);
             throw new \InvalidArgumentException("ارز '{$currency}' پشتیبانی نمی‌شود. فقط '{$supportedList}' معتبر است.");
@@ -1498,8 +1492,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             'success'        => (bool)($response['success'] ?? false),
             'transaction_id' => $response['transaction_id'] ?? null,
             'message'        => $response['message'] ?? '',
-            'new_balance'    => isset($response['new_balance']) ? (float)$response['new_balance'] : null,
-            'amount'         => isset($response['amount']) ? (float)$response['amount'] : null,
+            'new_balance'    => isset($response['new_balance']) ? (string)$response['new_balance'] : null,
+            'amount'         => isset($response['amount']) ? (string)$response['amount'] : null,
             'currency'       => $response['currency'] ?? null,
             'status'         => $response['status'] ?? null,
             'error'          => $response['error'] ?? null,
@@ -1507,4 +1501,3 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     }
 
 }
-

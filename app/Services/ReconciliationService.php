@@ -12,14 +12,11 @@ use App\Contracts\LoggerInterface;
 use App\Services\AuditTrail;
 
 /**
- * ReconciliationService — خودکار Payment Reconciliation (معماری متمرکز بر تراکنش)
- * 
- * این سرویس تراکنش‌های خارجی (Webhooks) را با کیف پول و لجر داخلی هماهنگ می‌کند.
- * فاقد وابستگی به مدل‌های فرعی نظیر Order.
+ * ReconciliationService — dynamic payment reconciliation with hardened security (HMAC & Ledger precision)
  */
 class ReconciliationService extends \App\Services\BaseService
 {
-    private const RECONCILIATION_TIMEOUT = 3600; // 1 ساعت
+    private const RECONCILIATION_TIMEOUT = 3600; // 1 Hour
 
     public function __construct(
         private Transaction $transactionModel,
@@ -35,15 +32,12 @@ class ReconciliationService extends \App\Services\BaseService
     }
 
     /**
-     * تطبیق اطلاعات یک تراکنش خارجی با دیتابیس
-     * 
-     * @param array $webhookData داده‌های دریافتی از گیت‌وی یا سرویس بیرونی
-     * @return array
+     * Reconcile external transaction webhook data with local ledger and wallet
      */
     public function reconcilePayment(array $webhookData): array
     {
         $externalId = $webhookData['transaction_id'] ?? $webhookData['reference_id'] ?? null;
-        $amount = (float) ($webhookData['amount'] ?? 0);
+        $amount = (string)($webhookData['amount'] ?? '0');
         $currency = strtolower((string)($webhookData['currency'] ?? 'irt'));
         $status = $webhookData['status'] ?? null; // 'success', 'failed', 'pending'
 
@@ -52,13 +46,33 @@ class ReconciliationService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'کد پیگیری معتبر نیست'];
         }
 
-        // ۱. یافتن تراکنش متناظر بدون قفل ردیفی در ابتدا جهت ایجاد ایمن رکوردهای یتیم خارج از تراکنش اصلی
+        // 🛡️ HIGH-03: Enforce Webhook signature validation (HMAC) prior to reconciling
+        $secret = $this->db->fetchColumn("SELECT value FROM settings WHERE key_name = 'webhook_secret' LIMIT 1");
+        if ($secret) {
+            $signature = $webhookData['signature'] ?? $_SERVER['HTTP_X_SIGNATURE'] ?? null;
+            if (!$signature) {
+                return ['success' => false, 'message' => 'امضای امنیتی وب‌هوک یافت نشد'];
+            }
+            $payloadData = $webhookData;
+            unset($payloadData['signature']);
+            ksort($payloadData);
+            $computed = hash_hmac('sha256', json_encode($payloadData, JSON_UNESCAPED_SLASHES), (string)$secret);
+            if (!hash_equals((string)$signature, $computed)) {
+                $this->logger->error('reconciliation.invalid_signature', [
+                    'received' => $signature,
+                    'computed' => $computed,
+                ]);
+                return ['success' => false, 'message' => 'امضای وب‌هوک معتبر نیست'];
+            }
+        }
+
+        // 1. Find matching transaction
         $transaction = $this->db->query(
             "SELECT * FROM transactions WHERE external_id = :ext_id OR gateway_transaction_id = :ext_id OR transaction_id = :ext_id LIMIT 1",
             ['ext_id' => (string)$externalId]
         )->fetch(\PDO::FETCH_OBJ);
 
-        // ۲. اگر تراکنش وجود نداشت، یک تراکنش یتیم/ناشناخته خارج از تراکنش اصلی ثبت کن تا از هدررفت داده جلوگیری شود (BUG-17)
+        // 2. Register orphan transaction if missing
         if (!$transaction) {
             $transaction = $this->createOrphanTransaction($webhookData);
         }
@@ -66,26 +80,23 @@ class ReconciliationService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // ۳. قفل بدبینانه ردیفی روی تراکنش جهت ممانعت از رفتارهای وب‌هوکی موازی
+            // 3. Lock transaction row FOR UPDATE
             $transaction = $this->db->query(
                 "SELECT * FROM transactions WHERE id = :id FOR UPDATE",
                 ['id' => $transaction->id]
             )->fetch(\PDO::FETCH_OBJ);
 
-            // H14 Fix (BUG-08): جلوگیری از ثبت موفقیت‌آمیز تراکنش‌های یتیم بدون کاربر مشخص
             if (empty($transaction->user_id)) {
                 $this->db->rollBack();
                 $this->logger->error('reconciliation.orphan_no_user', ['external_id' => $externalId]);
                 return ['success' => false, 'message' => 'تراکنش ناشناخته بدون کاربر مشخص مجاز نیست'];
             }
 
-            // ۳. اگر تراکنش قبلاً نهایی شده، نادیده بگیر (Idempotency)
-            if (in_array($transaction->status, ['completed', 'failed', 'cancelled'])) {
+            if (in_array($transaction->status, ['completed', 'failed', 'cancelled'], true)) {
                 $this->db->rollBack();
                 return ['success' => true, 'message' => 'این تراکنش قبلاً پردازش و نهایی شده بود'];
             }
 
-            // ۴. پردازش بر اساس وضعیت دریافت شده
             $result = match ($status) {
                 'success' => $this->processSuccessfulPayment($transaction, $webhookData),
                 'failed'  => $this->processFailedPayment($transaction, $webhookData),
@@ -97,7 +108,7 @@ class ReconciliationService extends \App\Services\BaseService
                 return $result;
             }
 
-            // ۵. بررسی یکپارچگی دیتا پس از عملیات (Consistency Check) - Non-blocking Audit
+            // 5. Verification check
             if ($transaction->user_id) {
                 $consistency = $this->verifyConsistency((int)$transaction->user_id, $currency);
                 if (!$consistency['valid']) {
@@ -111,12 +122,10 @@ class ReconciliationService extends \App\Services\BaseService
                         'transaction_id' => $transaction->id
                     ]);
 
-                    // H14 Fix (BUG-06): ابطال فوری و رول‌بک تراکنش در صورت کشف ناهمخوانی بالانس و دفتر کل جهت ممانعت از اختلال مالی
                     throw new \RuntimeException("Reconciliation aborted: Financial consistency drift detected: " . $consistency['message']);
                 }
             }
 
-            // ۶. ثبت در AuditTrail
             $this->auditTrail->record('payment_reconciled', $transaction->user_id ? (int)$transaction->user_id : null, [
                 'message' => "Payment $externalId reconciled dynamically.",
                 'transaction_id' => $transaction->id,
@@ -146,20 +155,15 @@ class ReconciliationService extends \App\Services\BaseService
     }
 
     /**
-     * پردازش موفقیت‌آمیز پرداخت
+     * Process successful payment securely
      */
     private function processSuccessfulPayment(object $transaction, array $webhookData): array
     {
-        // جلوگیری از Double-Entry: بررسی بر اساس فیلد تراکنش و بررسی شناسه تراکنش در دفتر کل (Ledger-based Idempotency)
+        // 🛡️ CRIT-04: Strict Ledger-based Idempotency Check only. Float balance comparisons are deleted.
         $txId = (string)($transaction->transaction_id ?? $transaction->id);
         $existingLedger = $this->ledgerModel->getByTransactionId($txId);
         if (!empty($existingLedger)) {
             return ['success' => true, 'message' => 'این تراکنش قبلاً در دفتر کل ثبت شده است و پردازش مجدد نادیده گرفته شد'];
-        }
-
-        if (isset($transaction->balance_after) && isset($transaction->balance_before) && 
-            (float)$transaction->balance_after > (float)$transaction->balance_before) {
-            return ['success' => true, 'message' => 'Already processed'];
         }
 
         $webhookAmount = $webhookData['amount'] ?? null;
@@ -184,9 +188,9 @@ class ReconciliationService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'ارز تراکنش با ارز پرداخت شده مطابقت ندارد'];
         }
 
-        $amount = (float)$transaction->amount;
+        $amount = (string)$transaction->amount;
 
-        // ۱. آپدیت وضعیت تراکنش به کامل‌شده به صورت کاملاً اتمیک (BUG-04)
+        // 1. Update status atomicaly
         $affected = $this->db->execute(
             "UPDATE transactions 
              SET status = 'completed', 
@@ -206,12 +210,11 @@ class ReconciliationService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'تراکنش قبلاً پردازش شده یا در وضعیت معلق نیست'];
         }
 
-        // ۲. اجرای منطق حسابداری بر اساس نوع تراکنش (Business Logic)
+        // 2. Perform financial operations in the current transaction
         switch ($transaction->type) {
             case 'deposit':
             case 'crypto_deposit':
             case 'payment':
-                // شارژ کیف پول درون تراکنش موجود
                 if ($transaction->user_id) {
                     $this->walletService->depositInTransaction(
                         (int)$transaction->user_id,
@@ -227,8 +230,6 @@ class ReconciliationService extends \App\Services\BaseService
                 break;
 
             case 'withdrawal':
-                // نهایی کردن برداشت (عموماً قبلا مبلغ قفل شده بود)
-                // ثبت دوطرفه در لجر به عنوان خرج کامل شده
                 if ($transaction->user_id) {
                     $this->walletService->completeWithdrawal(
                         (int)$transaction->user_id,
@@ -240,7 +241,6 @@ class ReconciliationService extends \App\Services\BaseService
                 break;
             
             default:
-                // سایر موارد فقط وضعیت تراکنش آپدیت شد و لاگ می‌شود
                 $this->logger->info('reconciliation.type_handled_default', ['type' => $transaction->type, 'tx' => $transaction->id]);
                 break;
         }
@@ -249,11 +249,10 @@ class ReconciliationService extends \App\Services\BaseService
     }
 
     /**
-     * پردازش شکست پرداخت
+     * Process failed payment securely
      */
     private function processFailedPayment(object $transaction, array $webhookData): array
     {
-        // ۱. آپدیت وضعیت تراکنش به شکست‌خورده به صورت کاملاً اتمیک (BUG-04)
         $affected = $this->db->execute(
             "UPDATE transactions 
              SET status = 'failed', 
@@ -274,12 +273,10 @@ class ReconciliationService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'تراکنش قبلاً پردازش شده یا در وضعیت معلق نیست'];
         }
 
-        // ۲. اگر منطق خاصی برای بازگشت پول یا آنلاک کردن وجه نیاز است:
         if ($transaction->type === 'withdrawal' && $transaction->user_id) {
-            // آزادسازی وجهی که برای برداشت قفل شده بود به کیف پول کاربر
             $this->walletService->cancelWithdrawal(
                 (int)$transaction->user_id,
-                (float)$transaction->amount,
+                (string)$transaction->amount,
                 (string)$transaction->currency,
                 (string)($transaction->transaction_id ?? null)
             );
@@ -289,7 +286,7 @@ class ReconciliationService extends \App\Services\BaseService
     }
 
     /**
-     * ثبت یک تراکنش ناشناخته (برای مواردی که درگاه پرداختی فرستاده که در دیتابیس نبود)
+     * Create orphan transaction record safely
      */
     private function createOrphanTransaction(array $webhookData): object
     {
@@ -301,7 +298,6 @@ class ReconciliationService extends \App\Services\BaseService
                 $this->db->beginTransaction();
             }
 
-            // H14 Fix (BUG-14): بررسی مجدد و با قفل بدبینانه قبل از ساخت تراکنش ناشناس جهت ممانعت از درج موازی ردیف‌های یتیم تکراری
             $existing = $this->db->query(
                 "SELECT * FROM transactions WHERE external_id = ? LIMIT 1 FOR UPDATE",
                 [$externalId]
@@ -317,7 +313,7 @@ class ReconciliationService extends \App\Services\BaseService
             $id = $this->transactionModel->create([
                 'user_id' => $webhookData['user_id'] ?? null,
                 'type' => 'orphan_payment',
-                'amount' => (float)($webhookData['amount'] ?? 0),
+                'amount' => (string)($webhookData['amount'] ?? '0'),
                 'currency' => strtolower((string)($webhookData['currency'] ?? 'irt')),
                 'status' => 'pending',
                 'external_id' => $externalId,
@@ -330,7 +326,6 @@ class ReconciliationService extends \App\Services\BaseService
                 $this->db->commit();
             }
 
-            // دریافت مدل ثبت شده جدید
             return $this->db->query("SELECT * FROM transactions WHERE id = ?", [$id])->fetch(\PDO::FETCH_OBJ)
                    ?? $this->transactionModel->find((int)$id);
         } catch (\Throwable $e) {
@@ -342,7 +337,7 @@ class ReconciliationService extends \App\Services\BaseService
     }
 
     /**
-     * بررسی یکپارچگی مالی کاربر (برابری بالانس کیف پول با جمع لجرها)
+     * Verification check for accounting consistency (Wallet balance vs Ledger history)
      */
     public function verifyConsistency(int $userId, string $currency = 'irt'): array
     {
@@ -350,12 +345,10 @@ class ReconciliationService extends \App\Services\BaseService
             $currency = strtolower($currency);
             $scale = $currency === 'usdt' ? 8 : 4;
 
-            // ۱. دریافت موجودی فعلی از کیف پول
             $wallet = $this->walletModel->findByUserId($userId);
             $balanceField = $currency === 'usdt' ? 'balance_usdt' : 'balance_irt';
             $walletBalance = $wallet ? (string)($wallet->$balanceField ?? '0') : '0';
 
-            // ۲. دریافت جمع ریاضی تراکنش‌ها از دفتر کل (Ledger)
             $account = "wallet:{$userId}";
             $ledgerResult = $this->db->query(
                 "SELECT SUM(debit) as total_debit, SUM(credit) as total_credit
@@ -368,11 +361,9 @@ class ReconciliationService extends \App\Services\BaseService
             $creditSum = $ledgerResult ? (string)($ledgerResult->total_credit ?? '0') : '0';
             $ledgerBalance = bcsub($debitSum, $creditSum, $scale);
 
-            // ۳. محاسبه تفاضل با BCMath
             $diff = bcsub($walletBalance, $ledgerBalance, $scale);
             $absDiff = (bccomp($diff, '0', $scale) < 0) ? bcmul($diff, '-1', $scale) : $diff;
 
-            // تلورانس مجاز بر اساس ارز
             $tolerance = $currency === 'usdt' ? '0.0001' : '1.0000';
 
             if (bccomp($absDiff, $tolerance, $scale) > 0) {
@@ -394,13 +385,12 @@ class ReconciliationService extends \App\Services\BaseService
     }
 
     /**
-     * سیستم ممیزی ساعتی: پیدا کردن تراکنش‌های یتیم یا رها شده و تلاش برای حل وضعیت آن‌ها
+     * Hourly audit for pending orphan/abandoned transactions
      */
     public function autoReconcilePendingTransactions(int $limit = 50): array
     {
         $results = ['total' => 0, 'reconciled' => 0, 'failed' => 0];
 
-        // دریافت تراکنش‌های در انتظار قدیمی‌تر از یک ساعت
         $pendingTxns = $this->db->query(
             "SELECT * FROM transactions 
              WHERE status = 'pending' 
@@ -412,9 +402,7 @@ class ReconciliationService extends \App\Services\BaseService
         foreach ($pendingTxns as $txn) {
             $results['total']++;
             try {
-                // اینجا در سیستم واقعی می‌توان یک ریکوئست Verify به گیت‌وی مربوطه زد
-                // در این مرحله ما صرفا ساختار آماده کرده‌ایم.
-                // به صورت فرضی اینجا فرض می‌کنیم وریفای باید هندل شود.
+                // Future Verify Endpoint integration
             } catch (\Throwable $e) {
                 $results['failed']++;
             }

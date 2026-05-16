@@ -93,7 +93,7 @@ class WithdrawalService extends PaymentBaseService
 
     public function requestFromUser(int $userId, array $payload): array
     {
-        $amount = (float)($payload['amount'] ?? 0);
+        $amount = (string)($payload['amount'] ?? '0');
         $currency = (string)($payload['currency'] ?? 'irt');
         $bankCardId = (int)($payload['bank_card_id'] ?? 0);
         $requestId = (string)($payload['request_id'] ?? bin2hex(random_bytes(8)));
@@ -101,23 +101,23 @@ class WithdrawalService extends PaymentBaseService
         $fingerprint = (string)($payload['fingerprint'] ?? '');
 
         try {
-            if ($amount <= 0) {
+            if (bccomp($amount, '0', 8) <= 0) {
                 return ['success' => false, 'message' => 'مبلغ نامعتبر است'];
             }
 
             $scale = strtolower($currency) === 'usdt' ? 8 : 4;
-            $minAmount = (float)($this->settings->get('withdrawal_min_amount', 10000));
-            if (bccomp((string)$amount, (string)$minAmount, $scale) < 0) {
-                return ['success' => false, 'message' => "حداقل مبلغ برداشت " . $this->currencyService->formatAmount($minAmount, $currency) . " است"];
+            $minAmount = (string)($this->settings->get('withdrawal_min_amount', '10000'));
+            if (bccomp($amount, $minAmount, $scale) < 0) {
+                return ['success' => false, 'message' => "حداقل مبلغ برداشت " . $this->currencyService->formatAmount((float)$minAmount, $currency) . " است"];
             }
 
             if (!$this->kycService->isApproved($userId)) {
                 return ['success' => false, 'message' => 'احراز هویت شما کامل نیست'];
             }
 
-            // 🛡️ گیت ضدتقلب متمرکز برداشت (Velocity, ATO, Geolocation)
+            // 🛡️ Risk Check
             $risk = $this->fraudGuard->checkAction($userId, 'withdrawal.create', [
-                'amount'      => $amount,
+                'amount'      => (float)$amount,
                 'currency'    => $currency,
                 'ip'          => $ip,
                 'fingerprint' => $fingerprint,
@@ -133,9 +133,15 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'درخواست برداشت به دلایل امنیتی مسدود شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از محدودیت تعداد تراکنش' : $risk['reason'])];
             }
 
+            // Lock Wallet first, then check pending status to avoid deadlocks
             $this->db->beginTransaction();
 
-            // ۱. بررسی اتمیک تکراری بودن درخواست (Idempotency)
+            $walletLock = $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [$userId])->fetch();
+            if (!$walletLock) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'کیف پول یافت نشد'];
+            }
+
             $idempotencyKey = $payload['idempotency_key'] ?? $payload['request_id'] ?? hash('sha256', implode('|', [
                 $userId,
                 'withdrawal_user_request',
@@ -150,14 +156,7 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => true, 'message' => 'درخواست برداشت با موفقیت ثبت شد'];
             }
 
-            // ۲. اعمال قفل بدبینانه روی سطر کیف پول جهت سریالیزه کردن درخواست‌های مالی موازی
-            $walletLock = $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [$userId])->fetch();
-            if (!$walletLock) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'کیف پول یافت نشد'];
-            }
-
-            // ۳. کارت بانکی اجباری برای IRT
+            // Bank Card validation for IRT
             if (strtolower($currency) === 'irt') {
                 if ($bankCardId <= 0) {
                     $this->db->rollBack();
@@ -170,20 +169,17 @@ class WithdrawalService extends PaymentBaseService
                 }
             }
 
-            // ۴. بررسی عدم وجود درخواست معلق فعلی با قفل تراکنشی
             if ($this->model->hasPendingWithdrawal($userId, true)) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
             }
 
-            // ۵. بررسی موجودی با قفل تراکنشی
             $can = $this->wallet->canWithdraw($userId, $amount, $currency);
             if (empty($can['can_withdraw'])) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => $can['message'] ?? 'موجودی کافی نیست'];
             }
 
-            // قفل پول و جلوگیری از Race condition
             $debit = $this->wallet->withdraw($userId, $amount, $currency, [
                 'type' => 'withdrawal_request',
                 'request_id' => $requestId,
@@ -230,9 +226,6 @@ class WithdrawalService extends PaymentBaseService
         }
     }
 
-    /**
-     * تولید شناسه یکتا برای جلوگیری از اجرای دوبار تراکنش (Idempotency)
-     */
     private function uuid(): string
     {
         return sprintf(
@@ -245,9 +238,6 @@ class WithdrawalService extends PaymentBaseService
         );
     }
 
-    /**
-     * ثبت درخواست برداشت
-     */
     public function create(int $userId, array $data): array
     {
         $user = $this->userModel->find($userId);
@@ -260,21 +250,17 @@ class WithdrawalService extends PaymentBaseService
             return ['success' => false, 'message' => 'ارز نامعتبر'];
         }
 
-        // ممانعت از برداشت ریالی در صورت فعال بودن حالت تتر-تنها
         if (strtoupper($currency) === 'IRT' && !$this->currencyService->isIRT()) {
             return ['success' => false, 'message' => 'برداشت ریالی در وضعیت فعلی سیستم مسدود است. لطفاً از برداشت تتر استفاده کنید'];
         }
 
-        $amount = (float)($data['amount'] ?? 0);
-        if ($amount <= 0) {
+        $amount = (string)($data['amount'] ?? '0');
+        if (bccomp($amount, '0', 8) <= 0) {
             return ['success' => false, 'message' => 'مبلغ نامعتبر'];
         }
 
-        // H10: اعتبارسنجی سقف‌های برداشت به داخل بلاک قفل تراکنشی منتقل شد.
-
-        // 🛡️ گیت ضدتقلب متمرکز برداشت (Velocity, ATO, Geolocation)
         $risk = $this->fraudGuard->checkAction($userId, 'withdrawal.create', [
-            'amount'      => $amount,
+            'amount'      => (float)$amount,
             'currency'    => $currency,
             'ip'          => get_client_ip(),
             'user_agent'  => get_user_agent()
@@ -289,25 +275,28 @@ class WithdrawalService extends PaymentBaseService
             return ['success' => false, 'message' => 'برداشت وجه به دلایل امنیتی متوقف شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از سقف برداشت امن' : $risk['reason'])];
         }
 
-        // 🔒 شروع بلاک تراکنش سراسری جهت اعمال قفل انحصاری و ممانعت از رفتارهای مخرب موازی (Race Condition)
+        // Lock Wallet first, then lock Withdrawal to enforce strict lock order (Wallet -> Withdrawal)
         $this->db->beginTransaction();
 
         try {
-            // اعمال قفل بدبینانه روی سطر کاربر جهت سریالیزه کردن درخواست‌های مالی موازی
+            $walletLock = $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [$userId])->fetch();
+            if (!$walletLock) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'کیف پول یافت نشد'];
+            }
+
             $userLock = $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$userId])->fetch();
             if (!$userLock) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'کاربر یافت نشد'];
             }
 
-            // ۱. بررسی محدودیت‌های برداشت (انتقال به درون قفل تراکنشی)
             $limitCheck = $this->check($userId, $amount, $currency);
             if (!$limitCheck['allowed']) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => $limitCheck['reason']];
             }
 
-            // ۲. بررسی عدم وجود درخواست معلق فعلی با قفل تراکنشی جهت ممانعت قطعی از ثبت همزمان
             $pending = $this->db->query(
                 "SELECT id FROM withdrawals WHERE user_id = ? AND status IN ('pending', 'processing') LIMIT 1 FOR UPDATE",
                 [$userId]
@@ -328,11 +317,11 @@ class WithdrawalService extends PaymentBaseService
                 $currency === 'IRT' ? '50000000' : '100000'
             );
 
-            if (bccomp((string)$amount, (string)$min, $scale) < 0) {
+            if (bccomp($amount, (string)$min, $scale) < 0) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'کمتر از حداقل برداشت (' . $this->currencyService->formatAmount((float)$min, $currency) . ') است'];
             }
-            if (bccomp((string)$amount, (string)$max, $scale) > 0) {
+            if (bccomp($amount, (string)$max, $scale) > 0) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'بیشتر از حداکثر برداشت (' . $this->currencyService->formatAmount((float)$max, $currency) . ') است'];
             }
@@ -341,11 +330,11 @@ class WithdrawalService extends PaymentBaseService
                 $currency === 'IRT' ? 'withdrawal_fee_irt' : 'withdrawal_fee_usdt',
                 '0'
             );
-            $fee   = bcdiv(bcmul((string)$amount, (string)$feePercent, $scale), '100', $scale);
-            $final = bcsub((string)$amount, (string)$fee, $scale);
+            $fee   = bcdiv(bcmul($amount, (string)$feePercent, $scale), '100', $scale);
+            $final = bcsub($amount, $fee, $scale);
 
             $availableApprox = $this->wallet->getBalance($userId, strtolower($currency));
-            if (bccomp((string)$availableApprox, (string)$amount, $scale) < 0) {
+            if (bccomp($availableApprox, $amount, $scale) < 0) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'موجودی کافی نیست'];
             }
@@ -397,7 +386,6 @@ class WithdrawalService extends PaymentBaseService
                 $data['crypto_network'] ?? '',
             ]));
 
-            // بررسی idempotency تحت تراکنش
             $existing = $this->model->where('idempotency_key', $idempotencyKey)->first();
             if ($existing) {
                 $this->db->rollBack();
@@ -407,6 +395,7 @@ class WithdrawalService extends PaymentBaseService
                     'message' => 'درخواست برداشت قبلاً ثبت شده است'
                 ];
             }
+
             $w = $this->wallet->withdraw(
                 $userId,
                 $amount,
@@ -440,14 +429,12 @@ class WithdrawalService extends PaymentBaseService
             ], $withdrawalData));
 
             if (!$idObj) {
-                // اگر ایجاد رکورد withdrawal شکست خورد، عملیات والت را برگردانیم
                 $this->wallet->cancelWithdrawal($userId, $amount, strtolower($currency), $w['transaction_id'] ?? null);
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'خطا در ثبت درخواست برداشت'];
             }
 
             $id = (int)$idObj->id;
-
             $this->increaseDailyLimit($userId);
 
             $this->auditTrail->record('withdrawal.requested', $userId, [
@@ -468,7 +455,6 @@ class WithdrawalService extends PaymentBaseService
             ];
 
         } catch (\Throwable $e) {
-            // در صورت خطا، تراکنش را rollback کنیم
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
@@ -485,13 +471,31 @@ class WithdrawalService extends PaymentBaseService
     }
 
     /**
-     * تأیید برداشت توسط ادمین
+     * تأیید برداشت توسط ادمین - Hardened Lock Order (Wallet -> Withdrawal)
      */
     public function adminApprove(int $adminId, int $withdrawalId, array $paymentData): array
     {
         try {
             $this->db->beginTransaction();
 
+            // 1. Fetch user_id without locking first
+            $temp = $this->db->query(
+                "SELECT user_id FROM withdrawals WHERE id = :id",
+                ['id' => $withdrawalId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            if (!$temp) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'برداشت یافت نشد'];
+            }
+
+            // 2. Lock user's wallet row FOR UPDATE
+            $this->db->query(
+                "SELECT id FROM wallets WHERE user_id = :user_id FOR UPDATE",
+                ['user_id' => $temp->user_id]
+            )->fetch();
+
+            // 3. Lock withdrawal row FOR UPDATE
             $w = $this->db->query(
                 "SELECT * FROM withdrawals WHERE id = :id FOR UPDATE",
                 ['id' => $withdrawalId]
@@ -522,7 +526,7 @@ class WithdrawalService extends PaymentBaseService
 
             if (!$this->wallet->completeWithdrawal(
                 (int)$w->user_id,
-                (float)$w->amount,
+                (string)$w->amount,
                 strtolower((string)$w->currency),
                 $w->transaction_id
             )) {
@@ -530,13 +534,12 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'خطا در تکمیل برداشت'];
             }
 
-
             $this->model->update($withdrawalId, $update);
             $this->db->commit();
 
             $this->auditTrail->record('withdrawal.approved', (int)$w->user_id, [
                 'withdrawal_id' => (int)$withdrawalId,
-                'amount'        => (float)$w->amount,
+                'amount'        => (string)$w->amount,
                 'currency'      => $w->currency,
                 'admin_id'      => $adminId,
             ], $adminId);
@@ -546,20 +549,40 @@ class WithdrawalService extends PaymentBaseService
             return ['success' => true, 'message' => 'برداشت تکمیل شد'];
 
         } catch (\Throwable $e) {
-            $this->db->rollBack();
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             $this->logger->error('withdrawal.approve.failed', ['id' => $withdrawalId, 'err' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در تکمیل برداشت'];
         }
     }
 
     /**
-     * رد درخواست برداشت و بازگشت وجه
+     * رد درخواست برداشت و بازگشت وجه - Hardened Lock Order (Wallet -> Withdrawal)
      */
     public function adminReject(int $adminId, int $withdrawalId, string $reason): array
     {
         try {
             $this->db->beginTransaction();
 
+            // 1. Fetch user_id without locking first
+            $temp = $this->db->query(
+                "SELECT user_id FROM withdrawals WHERE id = :id",
+                ['id' => $withdrawalId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            if (!$temp) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'برداشت یافت نشد'];
+            }
+
+            // 2. Lock user's wallet row FOR UPDATE
+            $this->db->query(
+                "SELECT id FROM wallets WHERE user_id = :user_id FOR UPDATE",
+                ['user_id' => $temp->user_id]
+            )->fetch();
+
+            // 3. Lock withdrawal row FOR UPDATE
             $w = $this->db->query(
                 "SELECT * FROM withdrawals WHERE id = :id FOR UPDATE",
                 ['id' => $withdrawalId]
@@ -576,18 +599,8 @@ class WithdrawalService extends PaymentBaseService
             }
 
             $userId   = (int)$w->user_id;
-            $amount   = (float)$w->amount;
+            $amount   = (string)$w->amount;
             $currency = strtolower((string)$w->currency);
-
-            $wallet = $this->db->query(
-                "SELECT * FROM wallets WHERE user_id = :user_id FOR UPDATE",
-                ['user_id' => $userId]
-            )->fetch(\PDO::FETCH_OBJ);
-
-            if (!$wallet) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'کیف پول کاربر یافت نشد'];
-            }
 
             if (!$this->wallet->cancelWithdrawal($userId, $amount, $currency, $w->transaction_id)) {
                 $this->db->rollBack();
@@ -611,12 +624,14 @@ class WithdrawalService extends PaymentBaseService
                 'admin_id'      => $adminId,
             ], $adminId);
 
-            $this->notifier->withdrawalRejected($userId, $amount, $reason);
+            $this->notifier->withdrawalRejected($userId, (float)$amount, $reason);
 
             return ['success' => true, 'message' => 'برداشت رد شد و وجه برگشت داده شد'];
 
         } catch (\Throwable $e) {
-            $this->db->rollBack();
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             $this->logger->error('withdrawal.reject.failed', [
                 'id'  => $withdrawalId,
                 'err' => $e->getMessage(),
@@ -625,7 +640,7 @@ class WithdrawalService extends PaymentBaseService
         }
     }
 
-    public function check(int $userId, float $amount, string $currency): array
+    public function check(int $userId, string $amount, string $currency): array
     {
         $this->logger->info('withdrawal.limit.check.started', [
             'user_id' => $userId,
@@ -677,18 +692,19 @@ class WithdrawalService extends PaymentBaseService
             ];
         }
 
-        if ($amount > $limits['max_amount']) {
+        $scale = strtolower($currency) === 'usdt' ? 8 : 4;
+        if (bccomp($amount, $limits['max_amount'], $scale) > 0) {
             return [
                 'allowed' => false,
-                'reason'  => 'مبلغ بیشتر از سقف مجاز (' . $this->currencyService->formatAmount($limits['max_amount'], $currency) . ') است',
+                'reason'  => 'مبلغ بیشتر از سقف مجاز (' . $this->currencyService->formatAmount((float)$limits['max_amount'], $currency) . ') است',
                 'limits'  => $limits,
             ];
         }
 
-        if ($amount < $limits['min_amount']) {
+        if (bccomp($amount, $limits['min_amount'], $scale) < 0) {
             return [
                 'allowed' => false,
-                'reason'  => 'مبلغ کمتر از حداقل برداشت (' . $this->currencyService->formatAmount($limits['min_amount'], $currency) . ') است',
+                'reason'  => 'مبلغ کمتر از حداقل برداشت (' . $this->currencyService->formatAmount((float)$limits['min_amount'], $currency) . ') است',
                 'limits'  => $limits,
             ];
         }
@@ -713,8 +729,6 @@ class WithdrawalService extends PaymentBaseService
         $profile = $this->resolveProfile($user);
         $limits  = $this->getLimits($currency, $profile);
 
-        // ✅ OPTIMIZATION: Consolidated all 3 withdrawal counts into single query using CASE statements
-        // Instead of 3 separate queries for day/week/month, use single CASE-based query
         $sql = "
             SELECT 
                 SUM(CASE WHEN DATE(created_at) = CURDATE() THEN 1 ELSE 0 END) as count_day,
@@ -726,7 +740,6 @@ class WithdrawalService extends PaymentBaseService
         
         $counts = $this->db->fetch($sql, [$userId]);
         
-        // Track query performance
         $executionTime = microtime(true) - $startTime;
         $this->performance->trackQueryTime('getLimitsForUser (consolidated)', $executionTime);
         
@@ -760,15 +773,15 @@ class WithdrawalService extends PaymentBaseService
         $p = $profiles[$profile] ?? $profiles['no_kyc'] ?? self::PROFILES_DEFAULT['no_kyc'];
         $cur = strtolower($currency);
 
-        $baseMin = (float)$this->settings->get("min_withdrawal_{$cur}", $cur === 'irt' ? 50000 : 10);
-        $baseMax = (float)$this->settings->get("max_withdrawal_{$cur}", $cur === 'irt' ? 10000000 : 1000);
+        $baseMin = (string)$this->settings->get("min_withdrawal_{$cur}", $cur === 'irt' ? '50000' : '10');
+        $baseMax = (string)$this->settings->get("max_withdrawal_{$cur}", $cur === 'irt' ? '10000000' : '1000');
 
         return [
             'daily_count'   => $p['daily'],
             'weekly_count'  => $p['weekly'],
             'monthly_count' => $p['monthly'],
             'min_amount'    => $baseMin,
-            'max_amount'    => $p['multiplier'] > 0 ? ($baseMax * $p['multiplier']) : 0,
+            'max_amount'    => $p['multiplier'] > 0 ? bcmul($baseMax, (string)$p['multiplier'], $cur === 'usdt' ? 8 : 4) : '0',
             'currency'      => strtoupper($currency),
             'profile_label' => $this->profileLabel($profile),
         ];
@@ -801,8 +814,6 @@ class WithdrawalService extends PaymentBaseService
             default      => $profile,
         };
     }
-
-    // ─── private helpers ──────────────────────────────────────────
 
     private function checkDailyLimit(int $userId, int $limit): bool
     {
@@ -867,17 +878,11 @@ class WithdrawalService extends PaymentBaseService
         return $this->model->updateStatus($id, $status, $reason, $adminId, $transactionId);
     }
 
-    /**
-     * بررسی وجود درخواست برداشت در انتظار برای کاربر
-     */
     public function hasPendingWithdrawal(int $userId): bool
     {
         return $this->model->hasPendingWithdrawal($userId);
     }
 
-    /**
-     * دریافت تمام درخواست‌های برداشت مربوط به یک کاربر
-     */
     public function getUserWithdrawals(
         int $userId,
         ?string $status = null,
@@ -889,15 +894,35 @@ class WithdrawalService extends PaymentBaseService
     }
 
     /**
-     * تأیید و پرداخت نهایی درخواست برداشت توسط مدیر
+     * تأیید و پرداخت نهایی درخواست برداشت توسط مدیر - Hardened Lock Order (Wallet -> Withdrawal)
      */
     public function approveWithdrawal(int $withdrawalId, string $paymentReference, int $adminId): array
     {
         try {
             $this->db->beginTransaction();
 
-            // H21 Fix: اضافه کردن قفل بدبینانه روی رکورد برداشت جهت جلوگیری قطعی از Double Deduction در ریکوئست‌های همزمان
-            $withdrawal = $this->db->query("SELECT * FROM withdrawals WHERE id = ? FOR UPDATE", [$withdrawalId])->fetch(\PDO::FETCH_OBJ);
+            // 1. Fetch user_id without locking first
+            $temp = $this->db->query(
+                "SELECT user_id FROM withdrawals WHERE id = ?",
+                [$withdrawalId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            if (!$temp) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'درخواست یافت نشد'];
+            }
+
+            // 2. Lock user's wallet row FOR UPDATE
+            $this->db->query(
+                "SELECT id FROM wallets WHERE user_id = ? FOR UPDATE",
+                [$temp->user_id]
+            )->fetch();
+
+            // 3. Lock withdrawal row FOR UPDATE
+            $withdrawal = $this->db->query(
+                "SELECT * FROM withdrawals WHERE id = ? FOR UPDATE",
+                [$withdrawalId]
+            )->fetch(\PDO::FETCH_OBJ);
 
             if (!$withdrawal) {
                 $this->db->rollBack();
@@ -912,7 +937,7 @@ class WithdrawalService extends PaymentBaseService
             // 1. تکمیل برداشت در کیف پول
             $completed = $this->wallet->completeWithdrawal(
                 (int)$withdrawal->user_id,
-                (float)$withdrawal->amount,
+                (string)$withdrawal->amount,
                 (string)$withdrawal->currency,
                 (string)$withdrawal->transaction_id
             );
@@ -922,14 +947,12 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'خطا در نهایی‌سازی تراکنش در کیف پول'];
             }
 
-            // 2. تغییر وضعیت به completed
             $updated = $this->model->updateStatus($withdrawalId, 'completed', $paymentReference, $adminId);
             if (!$updated) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'خطا در به‌روزرسانی وضعیت درخواست'];
             }
 
-            // 3. ثبت ایونت تراکنش
             if (method_exists($this, 'recordTransactionStatusChange')) {
                 $this->recordTransactionStatusChange(
                     (string)$withdrawal->transaction_id,
@@ -951,7 +974,7 @@ class WithdrawalService extends PaymentBaseService
                     'transaction_id' => (string)$withdrawal->transaction_id,
                     'reference_id' => 'withdrawal_settlement_' . $withdrawalId,
                     'user_id' => (int)$withdrawal->user_id,
-                    'amount' => (float)$withdrawal->amount,
+                    'amount' => (string)$withdrawal->amount,
                     'currency' => $withdrawal->currency,
                     'status' => 'success',
                     'gateway' => 'withdrawal_bank',
@@ -995,19 +1018,14 @@ class WithdrawalService extends PaymentBaseService
         }
     }
 
-    /**
-     * جستجوی سریع درخواست‌های برداشت برای سیستم سرچ مرکزی
-     */
     public function quickSearchWithdrawals(string $term, int $limit = 5): array
     {
         $query = $this->model->query()
             ->select('withdrawals.id', 'withdrawals.amount', 'withdrawals.currency', 'withdrawals.status', 'withdrawals.created_at', 'u.full_name', 'u.email')
             ->leftJoin('users as u', 'u.id', '=', 'withdrawals.user_id');
 
-        // ۱. جستجو روی فیلدهای خود برداشت
         $this->model->applySearch($query, $term);
 
-        // ۲. فیلترهای الحاقی برای ایمیل و آیدی دقیق
         if (!empty($term)) {
             $term = trim($term);
             $escaped = addcslashes($term, '%_');
