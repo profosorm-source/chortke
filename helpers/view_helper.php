@@ -19,6 +19,14 @@ if (!function_exists('view')) {
         $globals['showResendVerification'] = $session->getFlash('show_resend_verification') ?? false;
         $globals['resendEmail']            = $session->getFlash('resend_email') ?? '';
 
+        // HIGH-11 Fix: Inject CSP Nonce from the current request into all views
+        try {
+            $request = \Core\Container::getInstance()->make(\Core\Request::class);
+            $globals['cspNonce'] = $request->nonce();
+        } catch (\Throwable $e) {
+            $globals['cspNonce'] = '';
+        }
+
         $data = array_merge($globals, (array)$data);
 
         extract($data, EXTR_SKIP);
