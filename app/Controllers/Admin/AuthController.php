@@ -122,6 +122,20 @@ class AuthController extends BaseController
                 return redirect('/admin/login');
             }
 
+            if (!empty($result['requires_2fa'])) {
+                // H22 Fix: مدیریت صحیح لاگین ادمین با احراز هویت دو مرحله ای
+                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
+                // CRITICAL-02 Fix: Log pending 2FA state
+                $this->logger->info('admin.login.pending_2fa', [
+                    'channel' => 'admin_auth',
+                    'user_id' => $user->id,
+                    'email' => $email,
+                    'ip' => get_client_ip()
+                ]);
+                return redirect('/admin/verify-2fa');
+            }
+
+            // CRITICAL-02 Fix: Only log success and record audit trail if 2FA is NOT required
             $this->logger->activity(
                 'admin.login',
                 'ورود موفق به پنل مدیریت',
@@ -133,12 +147,6 @@ class AuthController extends BaseController
                     'remember' => $remember,
                 ]
             );
-
-            if (!empty($result['requires_2fa'])) {
-                // H22 Fix: مدیریت صحیح لاگین ادمین با احراز هویت دو مرحله ای
-                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
-                return redirect('/admin/verify-2fa');
-            }
 
             // MEDIUM-M-08 Fix: Record audit trail ONLY after full authentication (2FA not required here)
             $this->auditTrail->record(
