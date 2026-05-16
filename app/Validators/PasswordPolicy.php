@@ -16,7 +16,7 @@ class PasswordPolicy
         $errors = [];
         
         // MED-09 Fix: Use config() instead of mutable static properties for shared-state environments
-        $minLength = (int)config('auth.password.min_length', 8);
+        $minLength = (int)config('auth.password.min_length', 12);
         $maxLength = (int)config('auth.password.max_length', 128);
         $requireUppercase = (bool)config('auth.password.require_uppercase', true);
         $requireLowercase = (bool)config('auth.password.require_lowercase', true);
@@ -104,7 +104,7 @@ class PasswordPolicy
         $score = 0;
 
         // طول
-        $length = strlen($password);
+        $length = mb_strlen($password, 'UTF-8');
         if ($length >= 8) $score += 20;
         if ($length >= 12) $score += 10;
         if ($length >= 16) $score += 10;
