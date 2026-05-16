@@ -13,6 +13,8 @@
     
     <!-- CSRF Token -->
     <meta name="csrf-token" content="<?= csrf_token() ?>">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://ajax.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';">
     
     <!-- Favicon (از تنظیمات سیستم) -->
     <?= render_site_favicons() ?>
@@ -73,29 +75,6 @@
                 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
             }
         });
-        
-        // Toast Notification
-        function showToast(message, type = 'success') {
-            const toast = `
-                <div class="toast align-items-center text-white bg-${type} border-0" role="alert" style="position: fixed; top: 20px; left: 20px; z-index: 9999;">
-                    <div class="d-flex">
-                        <div class="toast-body">
-                            ${message}
-                        </div>
-                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-                    </div>
-                </div>
-            `;
-            
-            $('body').append(toast);
-            const toastEl = $('.toast').last();
-            const bsToast = new bootstrap.Toast(toastEl[0]);
-            bsToast.show();
-            
-            setTimeout(() => {
-                toastEl.remove();
-            }, 5000);
-        }
     </script>
     
     <?php if (isset($scripts)): ?>

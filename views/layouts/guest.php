@@ -15,6 +15,8 @@ $siteLogo = site_logo('main') ?? '';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="<?= e($siteDesc) ?>">
     <meta name="csrf-token" content="<?= csrf_token() ?>">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://ajax.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';">
     <meta name="theme-color" content="#1565c0">
     <title><?= e($title ?? $siteName) ?></title>
 
