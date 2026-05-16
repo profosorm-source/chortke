@@ -132,7 +132,7 @@ class ApiToken extends Model
         string $plainToken, 
         string $name, 
         string $scopes, 
-        string $expiresAt
+        ?string $expiresAt
     ): int {
         $this->validateId($userId, 'user_id');
 

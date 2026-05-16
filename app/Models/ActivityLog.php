@@ -17,7 +17,7 @@ class ActivityLog extends Model
      * دریافت لاگ‌های اخیر
      * L-01: Removed cache() from Model - Caching must be in Service layer
      */
-    public function getRecent(int $limit = 50, ?int $userId = null, ?string $action = null): array
+    public function getRecent(int $limit = 50, ?int $userId = null, ?string $action = null, ?string $channel = null): array
     {
         $limit = max(1, min(500, $limit));
         
@@ -31,6 +31,9 @@ class ActivityLog extends Model
         }
         if ($action !== null) {
             $query->where('al.action', '=', $action);
+        }
+        if ($channel !== null) {
+            $query->where('al.channel', '=', $channel);
         }
 
         return $query->orderBy('al.created_at', 'DESC')->limit($limit)->get();
@@ -46,7 +49,8 @@ class ActivityLog extends Model
         ?string $action = null,
         ?string $search = null,
         ?string $dateFrom = null,
-        ?string $dateTo = null
+        ?string $dateTo = null,
+        ?string $channel = null
     ): array {
         $page = max(1, $page);
         $perPage = max(1, min(100, $perPage));
@@ -61,6 +65,9 @@ class ActivityLog extends Model
         }
         if ($action !== null) {
             $query->where('al.action', '=', $action);
+        }
+        if ($channel !== null) {
+            $query->where('al.channel', '=', $channel);
         }
         if ($search !== null) {
             $searchClean = addcslashes($search, '%_');
