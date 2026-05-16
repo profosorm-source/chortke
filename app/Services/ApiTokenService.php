@@ -56,14 +56,14 @@ class ApiTokenService extends \App\Services\BaseService
 
     public function revokeTokenByHash(string $token): array
     {
-        $hashedToken = hash('sha256', $token);
-        $record = $this->apiTokenModel->findByHash($hashedToken);
+        // CRIT-01 Fix: Pass plain token to the model which handles HMAC-SHA256
+        $record = $this->apiTokenModel->findByHash($token);
 
         if (!$record || (int)$record['revoked'] === 1) {
             return ['success' => false, 'message' => 'توکن یافت نشد یا قبلاً باطل شده', 'status' => 404, 'code' => 'TOKEN_NOT_FOUND'];
         }
 
-        $this->apiTokenModel->revokeByHash($hashedToken);
+        $this->apiTokenModel->revokeByHash($token);
 
         $this->logger->info('api_token.revoked_by_hash', [
             'token_id' => $record['id'] ?? null,
@@ -99,7 +99,6 @@ class ApiTokenService extends \App\Services\BaseService
         }
 
         $token = bin2hex(random_bytes(32));
-        $hashedToken = hash('sha256', $token);
         $expiresAt = $expiresIn > 0
             ? date('Y-m-d H:i:s', strtotime("+{$expiresIn} days"))
             : null;
@@ -118,7 +117,7 @@ class ApiTokenService extends \App\Services\BaseService
             $scope = 'read';
         }
 
-        $this->apiTokenModel->createToken($userId, $hashedToken, $name, $scope, $expiresAt);
+        $this->apiTokenModel->createToken($userId, $token, $name, $scope, $expiresAt);
 
         $this->logger->info('api_token.created_for_user', [
             'user_id' => $userId,
@@ -216,8 +215,17 @@ class ApiTokenService extends \App\Services\BaseService
             ];
         }
 
+        // MED-07 Fix: Ensure email is verified before issuing tokens
+        if (empty($user->email_verified_at)) {
+            return [
+                'success' => false,
+                'message' => 'ایمیل شما تایید نشده است. لطفاً ابتدا ایمیل خود را تایید کنید.',
+                'status' => 403,
+                'code' => 'EMAIL_UNVERIFIED',
+            ];
+        }
+
         $token = bin2hex(random_bytes(32));
-        $hashedToken = hash('sha256', $token);
         $expiresAt = date('Y-m-d H:i:s', strtotime('+30 days'));
 
         $name = trim($name);
@@ -244,7 +252,7 @@ class ApiTokenService extends \App\Services\BaseService
 
         $scopes = !empty($finalScopes) ? implode(',', array_unique($finalScopes)) : 'read';
 
-        $this->apiTokenModel->createToken($user->id, $hashedToken, $name, $scopes, $expiresAt);
+        $this->apiTokenModel->createToken($user->id, $token, $name, $scopes, $expiresAt);
 
         return [
             'success' => true,
