@@ -90,10 +90,10 @@ class RateLimitPolicy
             }
         }
         
-        // Safe defaults if flag not found or model not available
+        // Fail-closed / highly restrictive defaults if flag not found or model not available
         return [
-            'max_attempts' => 5,
-            'decay_minutes' => 60
+            'max_attempts' => 3,
+            'decay_minutes' => 1440 // 24 hours lockout
         ];
     }
     
