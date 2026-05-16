@@ -76,7 +76,9 @@ class PasswordPolicy
             '12345678', 'password', '123456789', '12345', '1234567',
             'password123', 'qwerty', 'abc123', '111111', '123123',
             'admin', 'letmein', 'welcome', 'monkey', '1234567890',
-            'Password1', 'password1', '123qwe', 'qwerty123'
+            'Password1', 'password123!', '123qwe', 'qwerty123',
+            'chortke', '1234567890', '!@#$%^&*', 'asdfghjkl',
+            'football', 'iloveyou', 'sunshine', 'princess', 'charlie'
         ];
 
         return in_array(strtolower($password), array_map('strtolower', $commonPasswords));
