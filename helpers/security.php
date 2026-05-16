@@ -249,3 +249,18 @@ if (!function_exists('is_mobile')) {
         return (bool) preg_match('/(android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini)/i', $userAgent);
     }
 }
+if (!function_exists('csp_nonce')) {
+    /**
+     * MEDIUM-03 Fix: Helper to retrieve the CSP nonce for the current request
+     */
+    function csp_nonce(): string
+    {
+        try {
+            $app = \Core\Application::getInstance();
+            if (isset($app->request)) {
+                return (string)$app->request->getAttribute(\App\Constants\SessionKeys::CSP_NONCE, '');
+            }
+        } catch (\Throwable $e) {}
+        return '';
+    }
+}
