@@ -315,17 +315,16 @@ class AuthController extends BaseController
         // This prevents timing-based user enumeration
         $user = $this->userService->findByEmail($email);
         
-        // HIGH-H-08 Fix: Constant-time response regardless of user existence
-        // All paths lead to same error message and similar timing
-        $storedToken = $user ? $user->email_verification_token : null;
+        // HIGH-02 Fix: Timing Leak in verification path for invalid/non-existing users
+        // Use a dummy hash comparison when $user or token is null to guarantee constant time hash_equals execution
+        $dummyHash = hash_hmac('sha256', 'DUMMY_CODE', (string)config('app.key'));
+        $storedToken = $user && !empty($user->email_verification_token) ? (string)$user->email_verification_token : $dummyHash;
         
-        // Perform hash comparison regardless of whether user/token exists
-        // This ensures consistent timing for both existing and non-existing users
         $inputCode = strtoupper($code);
         $hashedInput = hash_hmac('sha256', $inputCode, (string)config('app.key'));
         
-        // Always perform the comparison (constant time)
-        $isValid = $storedToken !== null && hash_equals((string)$storedToken, $hashedInput);
+        // Always execute hash_equals for constant time execution
+        $isValid = hash_equals($storedToken, $hashedInput) && $user !== null && !empty($user->email_verification_token);
 
         if (!$isValid) {
             $this->logger->warning('auth.email_verification.failed', [
@@ -456,9 +455,17 @@ class AuthController extends BaseController
         // HIGH-02 Fix: Validate token existence and expiry before showing the form
         if (!$this->authService->validatePasswordResetToken((string)$token)) {
             $this->session->remove('pw_reset_token');
+            $this->session->remove('pw_reset_email');
             $this->session->setFlash('error', 'لینک بازیابی نامعتبر یا منقضی شده است.');
             $this->response->redirect(url('forgot-password'));
             return;
+        }
+
+        // CRITICAL-01 Fix: Save lookup email in session to bind user identity with pw_reset_token
+        $timeout = (int)config('auth.password_reset_ttl', 3600);
+        $record = app(\App\Models\SecurityModel::class)->findPasswordResetByToken((string)$token, $timeout);
+        if ($record) {
+            $this->session->set('pw_reset_email', $record->email);
         }
 
         // HIGH-06 Fix: Prevent password reset token leakage in Referer header
@@ -491,12 +498,19 @@ class AuthController extends BaseController
             return;
         }
 
-        $result = $this->authService->resetPassword((string)$data['token'], (string)$data['password']);
+        // CRITICAL-01 Fix: Retrieve bound email from session and pass to resetPassword service
+        $sessionEmail = $this->session->get('pw_reset_email');
+
+        $result = $this->authService->resetPassword((string)$data['token'], (string)$data['password'], $sessionEmail);
         if (!$result['success']) {
             $this->session->setFlash('error', $result['message']);
             $this->response->redirect(url('forgot-password'));
             return;
         }
+
+        // Cleanup password reset session keys
+        $this->session->remove('pw_reset_token');
+        $this->session->remove('pw_reset_email');
 
         $this->session->remove('pw_reset_token');
         $this->session->setFlash('success', 'رمز عبور با موفقیت تغییر یافت.');
