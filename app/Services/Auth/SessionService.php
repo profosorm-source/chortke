@@ -187,7 +187,7 @@ class SessionService extends \App\Services\BaseService
 
         // LOW-06 Fix: Clear Redis activity key
         if ($this->redis->isAvailable()) {
-            try { $this->redis->delete("session:activity:" . $sessionId); } catch (\Throwable) {}
+            try { $this->redis->delete("session:activity:" . $session->session_id); } catch (\Throwable) {}
         }
 
         return ['success' => true, 'message' => 'نشست با موفقیت حذف شد'];

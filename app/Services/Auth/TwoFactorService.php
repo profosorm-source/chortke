@@ -165,8 +165,8 @@ class TwoFactorService extends \App\Services\BaseService
     {
         $user = $this->userModel->find($userId);
         
-        // 🔐 Critical Security Fix: Explicitly migrated custom validation to native password_verify()
-        if (!$user || !password_verify($password, $user->password)) {
+        // 🔐 Critical Security Fix: Explicitly migrated custom validation to centralized verify_user_password()
+        if (!$user || !verify_user_password($password, $user->password, (int)$userId)) {
             return ['success' => false, 'message' => 'رمز عبور اشتباه است.'];
         }
 

@@ -80,11 +80,12 @@ class LogService extends BaseService
         register_shutdown_function([$this, 'flush']);
     }
 
-    public function logActivity(string $action, string $description, ?int $userId = null, array $context = []): void
+    public function logActivity(string $action, string $description, ?int $userId = null, array $context = [], string $channel = 'default'): void
     {
         $data = [
             'request_id' => $this->requestId,
             'user_id' => $userId ?? $this->session->get('user_id'),
+            'channel' => $channel,
             'action' => $action,
             'description' => $description,
             'context' => !empty($context) ? json_encode($context, JSON_UNESCAPED_UNICODE) : null,

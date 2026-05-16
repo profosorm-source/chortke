@@ -285,7 +285,7 @@ class UserSettingsService extends \App\Services\BaseService
     {
         try {
             $user = $this->userModel->find($userId);
-            if (!$user || !password_verify($password, $user['password'] ?? '')) {
+            if (!$user || !verify_user_password($password, $user['password'] ?? '', (int)($user['id'] ?? 0))) {
                 return ['ok' => false, 'message' => 'رمزعبور نادرست'];
             }
 

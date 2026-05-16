@@ -101,11 +101,18 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-H-01 Fix: Relaxed IP binding - Log as warning but don't block (UX for mobile/proxy users)
+        // HIGH-H-01 Fix: Relaxed IP binding - Log as warning but don't block
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
             $this->logger->warning('oauth.google.ip_changed_during_flow', [
                 'expected' => $stored['ip'],
                 'received' => $this->clientIp()
+            ]);
+            
+            // HIGH-03 Fix: Audit suspicious IP change during OAuth flow
+            $this->auditTrail->record('oauth.google.suspicious_ip_change', 0, [
+                'expected' => $stored['ip'],
+                'received' => $this->clientIp(),
+                'state'    => $state
             ]);
         }
 
@@ -533,6 +540,13 @@ class OAuthService extends \App\Services\BaseService
             $this->logger->warning('oauth.facebook.ip_changed_during_flow', [
                 'expected' => $stored['ip'],
                 'received' => $this->clientIp()
+            ]);
+            
+            // HIGH-03 Fix: Audit suspicious IP change during OAuth flow
+            $this->auditTrail->record('oauth.facebook.suspicious_ip_change', 0, [
+                'expected' => $stored['ip'],
+                'received' => $this->clientIp(),
+                'state'    => $state
             ]);
         }
 

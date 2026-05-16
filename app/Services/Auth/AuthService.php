@@ -60,44 +60,68 @@ class AuthService extends \App\Services\BaseService
         }
     }
 
+    /**
+     * MEDIUM-05 Fix: Centralized password verification with SHA-384 pre-hash and legacy fallback
+     */
+    public function verifyPassword(string $password, string $hash, ?int $userId = null): bool
+    {
+        if ($password === '') return false;
+
+        $inputPassword = base64_encode(hash('sha384', $password, true));
+        
+        if (password_verify($inputPassword, $hash)) {
+            return true;
+        }
+
+        // Fallback for legacy passwords (without sha384 pre-hash)
+        if (password_verify($password, $hash)) {
+            if ($userId) {
+                // Auto-rehash legacy password
+                $this->userService->changePassword($userId, $password);
+            }
+            return true;
+        }
+
+        return false;
+    }
+
     public function login(string $identifier, string $password, bool $remember = false): array
     {
-        $rateLimitCheck = $this->rateLimiter->checkLoginAttempt('login:' . $identifier);
+        $ip = $this->clientIp();
         
-        // H16 Fix: الگوی امن Fail-Closed؛ ممانعت از دور زدن نرخ درخواست در لاگین
-        if (!is_array($rateLimitCheck) || !isset($rateLimitCheck['allowed']) || $rateLimitCheck['allowed'] !== true) {
-            return ['success' => false, 'message' => $rateLimitCheck['message'] ?? 'تعداد تلاش‌های ورود بیش از حد مجاز است.'];
+        // CRITICAL-01 Fix: Consolidated Rate Limiting - Checking both IP and Identifier
+        $ipRateLimit = $this->rateLimiter->checkLoginAttempt('login_ip:' . hash('sha256', $ip));
+        $idRateLimit = $this->rateLimiter->checkLoginAttempt('login_id:' . hash('sha256', $identifier));
+
+        if (!$ipRateLimit['allowed'] || !$idRateLimit['allowed']) {
+            $message = !$idRateLimit['allowed'] ? ($idRateLimit['message'] ?? '') : ($ipRateLimit['message'] ?? '');
+            return [
+                'success' => false, 
+                'message' => $message ?: 'تعداد تلاش‌های ورود بیش از حد مجاز است. لطفاً بعداً تلاش کنید.'
+            ];
         }
 
         $user = $this->userModel->findByCredentials($identifier);
         
-        // HIGH-H-03 Fix: Constant-Time Failure Responses
-        // Use a dummy hash if user not found to ensure constant-time comparison
-        $dummyHash = '$2y$10$abcdefghijklmnopqrstuv'; 
-        $passwordToVerify = $user ? $user->password : $dummyHash;
+        // CRITICAL-03 Fix: Use a valid pre-computed bcrypt hash to prevent timing side-channel
+        $passwordToVerify = $user ? $user->password : $this->getDummyHash();
 
         $delay = random_int(100000, 300000);
         usleep($delay);
 
-        if (!$user || !password_verify($password, $passwordToVerify)) {
-            $this->logger->warning('auth.login.failed', ['identifier' => $identifier]);
-            
-            if ($user) {
-                $attempts = $this->rateLimiter->getAttempts('login:' . $identifier);
+        if (!$this->verifyPassword($password, $passwordToVerify, $user ? (int)$user->id : null)) {
+            if (!$user) {
+                $this->logger->warning('auth.login.failed', ['identifier' => $identifier]);
+            } else {
+                $this->logger->warning('auth.login.failed', ['user_id' => $user->id]);
+                
+                $attempts = $this->rateLimiter->getAttempts('login_id:' . hash('sha256', $identifier));
                 
                 if ($attempts >= 10 && $user->status !== 'locked') {
                     $this->userModel->update((int)$user->id, ['status' => 'locked']);
                     $this->logger->critical('auth.account_locked', ['user_id' => $user->id, 'identifier' => $identifier]);
                     if ($this->emailService) {
-                        $this->emailService->sendAccountLockedAlert((int)$user->id, $this->clientIp());
-                    }
-                }
-
-                if ($attempts <= 5) {
-                    try {
-                        $this->userModel->incrementFraudScore((int)$user->id, 5);
-                    } catch (\Throwable $e) {
-                        $this->logError('auth.fraud_score_increment_failed', $e->getMessage());
+                        $this->emailService->sendAccountLockedAlert((int)$user->id, $ip);
                     }
                 }
             }
@@ -105,8 +129,9 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
         }
 
+        // MEDIUM-03 Fix: Standardize status messages to prevent enumeration
         if ($user->status === 'locked') {
-            return ['success' => false, 'message' => 'حساب کاربری شما به دلیل تلاش‌های ناموفق متعدد مسدود شده است. لطفاً با پشتیبانی تماس بگیرید.'];
+            return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
         }
 
         if ($user->status === 'banned' || $user->status === 'suspended') {
@@ -114,10 +139,11 @@ class AuthService extends \App\Services\BaseService
         }
 
         if (empty($user->email_verified_at)) {
-            return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
+            return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.', 'email_unverified' => true, 'email' => $user->email];
         }
 
-        $this->rateLimiter->clearLoginAttempts($identifier);
+        $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $identifier));
+        $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $ip));
         
         // اگر 2FA فعال باشد، session کامل نسازیم
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
@@ -179,7 +205,8 @@ class AuthService extends \App\Services\BaseService
     private function createPending2FASession(object $user): void
     {
         // MEDIUM-M-02 Fix: Clear login failures after successful password verification but before 2FA
-        $this->rateLimiter->clearLoginAttempts($user->email ?? $user->username);
+        $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $user->email ?? $user->username));
+        $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $this->clientIp()));
         
         // CRIT-03 Fix: regenerate(true) to delete old session
         $this->session->regenerate(true);
@@ -200,7 +227,9 @@ class AuthService extends \App\Services\BaseService
         if ($remember) {
             $token = bin2hex(random_bytes(32));
             // MED-07 Fix: Using hash_hmac for remember_token to protect against rainbow tables
-            $hashedToken = hash_hmac('sha256', $token, config('app.key'));
+            $hashedToken = hash_hmac('sha256', $token, (string)config('app.key'));
+            
+            // HIGH-02 Fix: Store hashed token and rotate on use
             $this->userModel->update((int)$user->id, ['remember_token' => $hashedToken]);
             
             $rememberDays = (int)$this->settingService->get('auth_remember_days', 30);
@@ -328,15 +357,18 @@ class AuthService extends \App\Services\BaseService
 
     public function register(array $data): array
     {
-        $userId = $this->userService->register($data);
-        if (!$userId) {
+        $result = $this->userService->register($data);
+        if (!$result) {
             return ['success' => false, 'message' => 'ثبت‌نام با شکست مواجه شد.'];
         }
+
+        $userId = $result['id'];
+        $plainToken = $result['plain_token'];
 
         // 🚀 UPG-05: پردازش آسنکرون ثبت‌نام (ارسال ایمیل و لاگینگ به صورت پس‌زمینه)
         $this->eventDispatcher->dispatchAsync(
             'auth.register', 
-            new UserRegisteredEvent($userId, $data['email'] ?? '', $this->clientIp())
+            new UserRegisteredEvent($userId, $data['email'] ?? '', $this->clientIp(), $plainToken)
         );
         
         return ['success' => true, 'message' => 'ثبت‌نام با موفقیت انجام شد.'];
@@ -399,7 +431,9 @@ class AuthService extends \App\Services\BaseService
         $user = $this->userModel->findByEmail($record->email);
         if (!$user) return ['success' => false, 'message' => 'کاربر یافت نشد.'];
 
-        $this->userService->changePassword((int)$user->id, $newPassword);
+        // MEDIUM-05 Fix: Pre-hash password before bcrypt to handle 72-byte truncation
+        $passwordToHash = base64_encode(hash('sha384', $newPassword, true));
+        $this->userService->changePassword((int)$user->id, $passwordToHash);
         $this->securityModel->deletePasswordResetByEmail($record->email);
 
         $this->logger->activity('auth.password_reset.completed', 'بازیابی رمز عبور انجام شد', (int)$user->id);

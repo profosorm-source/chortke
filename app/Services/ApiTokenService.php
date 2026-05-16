@@ -210,7 +210,7 @@ class ApiTokenService extends \App\Services\BaseService
         }
 
         $user = $this->userModel->findByEmail($email);
-        $passwordValid = password_verify($password, $user ? $user->password : $this->getDummyHash());
+        $passwordValid = verify_user_password($password, $user ? $user->password : $this->getDummyHash(), $user ? (int)$user->id : null);
 
         if (!$user || !$passwordValid) {
             return [

@@ -25,7 +25,7 @@ class UserService extends \App\Services\BaseService
         parent::__construct($logger);
     }
 
-    public function register(array $data): int|false
+    public function register(array $data): array|false
     {
         $this->logger->info('user.registration.attempt', ['email' => $data['email'] ?? 'unknown']);
 
@@ -34,7 +34,11 @@ class UserService extends \App\Services\BaseService
         $data['password'] = hash_password($data['password'] ?? bin2hex(random_bytes(8)));
         
         $data['referral_code'] = $this->generateUniqueReferralCode();
-        $data['email_verification_token'] = bin2hex(random_bytes(32));
+        
+        // CRITICAL-02 Fix: Store hashed token in DB
+        $plainToken = bin2hex(random_bytes(32));
+        $data['email_verification_token'] = hash_hmac('sha256', $plainToken, (string)config('app.key'));
+        
         $data['status'] = $data['status'] ?? 'active';
         $data['role'] = $data['role'] ?? 'user';
         $data['created_at'] = date('Y-m-d H:i:s');
@@ -68,9 +72,10 @@ class UserService extends \App\Services\BaseService
 
         if ($userId) {
             $this->logger->info('user.registration.success', ['user_id' => $userId]);
+            return ['id' => (int)$userId, 'plain_token' => $plainToken];
         }
 
-        return $userId;
+        return false;
     }
 
     public function generateUniqueReferralCode(int $maxAttempts = 10): string
