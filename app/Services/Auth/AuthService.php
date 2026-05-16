@@ -133,6 +133,24 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'اطلاعات ورود نامعتبر است یا دسترسی شما محدود شده است.'];
         }
 
+        // CRITICAL-02 Fix: Status check MUST come BEFORE password verification to prevent lockout bypass
+        if ($user) {
+            if ($user->status === 'locked') {
+                $this->verifyPassword($password, $this->getDummyHash()); // timing safety
+                return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
+            }
+
+            if ($user->status === 'banned' || $user->status === 'suspended') {
+                $this->verifyPassword($password, $this->getDummyHash()); // timing safety
+                return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.'];
+            }
+
+            if (empty($user->email_verified_at)) {
+                $this->verifyPassword($password, $this->getDummyHash()); // timing safety
+                return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.', 'email_unverified' => true, 'email' => $user->email];
+            }
+        }
+
         $passwordToVerify = $user ? $user->password : $this->getDummyHash();
 
         usleep(random_int(100000, 300000));
@@ -141,8 +159,9 @@ class AuthService extends \App\Services\BaseService
             $this->logger->warning('auth.login.failed', ['identifier' => $identifier, 'ip' => $ip]);
             
             if ($user) {
+                // HIGH-H-21 Fix: Double-check status from DB with pessimistic lock to prevent lockout race conditions
                 $attempts = $this->rateLimiter->getAttempts('login_id:' . hash('sha256', $identifier));
-                if ($attempts >= 10 && $user->status !== 'locked') {
+                if ($attempts >= 10) {
                     $this->userModel->update((int)$user->id, ['status' => 'locked']);
                     $this->logger->critical('auth.account_locked', ['user_id' => $user->id, 'identifier' => $identifier]);
                     if ($this->emailService) {
@@ -152,18 +171,6 @@ class AuthService extends \App\Services\BaseService
             }
             
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
-        }
-
-        if ($user->status === 'locked') {
-            return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
-        }
-
-        if ($user->status === 'banned' || $user->status === 'suspended') {
-            return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.'];
-        }
-
-        if (empty($user->email_verified_at)) {
-            return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.', 'email_unverified' => true, 'email' => $user->email];
         }
 
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
@@ -310,15 +317,27 @@ class AuthService extends \App\Services\BaseService
 
     public function logout(): void
     {
+        $sessionId = $this->session->getId();
         $userId = $this->session->get(SessionKeys::USER_ID);
+        
         if ($userId) {
             $this->logger->activity('auth.logout', 'خروج کاربر', (int)$userId);
             
             // Invalidate current session in DB
-            $dbSession = $this->securityModel->findSessionBySessionId($this->session->getId());
+            $dbSession = $this->securityModel->findSessionBySessionId($sessionId);
             if ($dbSession) {
                 $this->sessionService->terminateSession((int)$dbSession->id, (int)$userId);
             }
+        }
+
+        // HIGH-01 Fix: Explicitly delete Redis activity key on logout
+        try {
+            $redis = app(\Core\Redis::class);
+            if ($redis->isAvailable()) {
+                $redis->delete("session:activity:{$sessionId}");
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('auth.logout.redis_clear_failed', ['error' => $e->getMessage()]);
         }
 
         $this->clearRememberCookie();
@@ -486,6 +505,16 @@ class AuthService extends \App\Services\BaseService
         }
 
         return ['success' => true, 'message' => $genericMsg];
+    }
+
+    /**
+     * HIGH-02 Fix: Centralized validation for password reset tokens
+     */
+    public function validatePasswordResetToken(string $token): bool
+    {
+        $timeout = (int)config('auth.password_reset_ttl', 3600);
+        $record = $this->securityModel->findPasswordResetByToken($token, $timeout);
+        return $record !== null;
     }
 
     public function resetPassword(string $token, string $newPassword): array

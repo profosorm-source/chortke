@@ -78,6 +78,26 @@ class CacheAdminService extends \App\Services\BaseService
     }
 
     /**
+     * ریست کردن Circuit Breaker
+     */
+    public function resetCircuitBreaker(string $name): bool
+    {
+        try {
+            $key = "circuit_breaker:{$name}";
+            $this->cache->delete($key);
+            
+            // همچنین حذف هرگونه قفل احتمالی باقیمانده
+            $this->cache->delete("cb_state_{$name}");
+            
+            $this->logger->info('cache.circuit_breaker.reset', ['name' => $name]);
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger->error('cache.circuit_breaker.reset_failed', ['name' => $name, 'error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /**
      * آمار cache
      */
     public function getStats(): array
