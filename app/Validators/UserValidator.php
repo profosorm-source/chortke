@@ -72,8 +72,8 @@ class UserValidator
     {
         $errors = [];
         
-        if (empty($data['identifier'])) {
-            $errors['identifier'][] = 'نام کاربری یا ایمیل الزامی است.';
+        if (empty($data['email']) && empty($data['identifier'])) {
+            $errors['login'][] = 'نام کاربری یا ایمیل الزامی است.';
         }
         
         if (empty($data['password'])) {
