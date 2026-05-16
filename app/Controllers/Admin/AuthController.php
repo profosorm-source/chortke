@@ -62,8 +62,10 @@ class AuthController extends BaseController
                 return view('admin/login');
             }
 
-            // MED-01 & LOW-06 Fix: Use injected RateLimiter and include IP in key
-            $throttleKey = 'admin:' . md5(get_client_ip()) . ':' . md5($email);
+            // HIGH-09 Fix: Normalize IP (IPv6 /64) and use SHA-256 for rate limit keys
+            $normalizedIp = $this->normalizeIp(get_client_ip());
+            $throttleKey = 'admin:' . hash('sha256', $normalizedIp) . ':' . hash('sha256', $email);
+            
             $throttle = $this->rateLimiter->checkLoginAttempt($throttleKey);
             if (!$throttle['allowed']) {
                 $this->session->setFlash('error', $throttle['message']);
@@ -230,9 +232,9 @@ class AuthController extends BaseController
                 ['channel' => 'admin_auth']
             );
 
-            // MEDIUM-M-08 Fix: Record audit trail after successful 2FA completion
+            // CRITICAL-04 Fix: Record specific 'admin.login.2fa_completed' event after 2FA
             $this->auditTrail->record(
-                'admin.login',
+                'admin.login.2fa_completed',
                 (int)$userId,
                 [
                     'channel' => 'admin_auth',
