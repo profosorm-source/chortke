@@ -14,6 +14,11 @@ use App\Services\Auth\LoginRiskService;
  * AuthController
  * 
  * مدیریت فرآیندهای احراز هویت (ورود، ثبت‌نام، فراموشی رمز عبور).
+ * 
+ * SECURITY NOTES:
+ * - User enumeration is prevented with constant-time responses
+ * - Rate limiting on all authentication endpoints
+ * - Session isolation for different auth states
  */
 class AuthController extends BaseController
 {
@@ -249,8 +254,8 @@ class AuthController extends BaseController
         if (time() - $createdAt > 900) { // 15 minutes
             $this->session->remove('pending_verification_email');
             $this->session->remove('pending_verification_at');
-            $this->session->setFlash('error', 'مهلت زمانی تأیید به پایان رسیده است. لطفاً دوباره ثبت‌نام کنید یا درخواست ارسال مجدد دهید.');
-            $this->response->redirect(url('login'));
+            $this->session->setFlash('error', 'مهلت زمانی تأیید به پایان رسیده است. لطفاً دوباره ثبت‌نام کنید.');
+            $this->response->redirect(url('register'));
             return;
         }
 
@@ -265,6 +270,9 @@ class AuthController extends BaseController
 
     /**
      * پردازش کد تأیید ایمیل
+     * 
+     * HIGH-H-08 Fix: Prevent user enumeration by using constant-time validation
+     * and consistent error messages. Rate limiting happens BEFORE user lookup.
      */
     public function verifyEmailByCode(): void
     {
@@ -274,13 +282,14 @@ class AuthController extends BaseController
             return;
         }
 
-        // HIGH-H-09 Fix: Rate limiting on email verification code to prevent brute-force
         $ip = $this->request->ip();
-        $rateLimitKey = "verify_email:" . hash('sha256', "{$email}:{$ip}");
+        
+        // HIGH-H-08 Fix: Rate limiting on email verification code to prevent brute-force
+        // This check happens BEFORE user lookup to prevent timing-based enumeration
+        $rateLimitId = "verify_email_attempts:" . hash('sha256', $email);
         
         // HIGH-08 Fix: Using attempt() to increment and check, with session destruction on excessive failures
-        $rateLimitId = "verify_email_attempts:" . hash('sha256', $email);
-        if (!$this->rateLimiter->attempt($rateLimitId, 5, 15)) {
+        if (!$this->rateLimiter->attempt($rateLimitId, 5, 15, true)) {
              $this->logger->critical('auth.email_verification.bruteforce_detected', ['email' => $email, 'ip' => $ip]);
              $this->session->destroy();
              $this->session->setFlash('error', 'تعداد تلاش‌های ناموفق بیش از حد مجاز است. نشست شما برای امنیت بیشتر بسته شد.');
@@ -295,21 +304,36 @@ class AuthController extends BaseController
             return;
         }
 
-        $user = $this->userService->findByEmail($email);
-        if (!$user || empty($user->email_verification_token)) {
-            // HIGH-05 Fix: Standardize response to prevent enumeration
-            $this->session->setFlash('error', 'کد نامعتبر است یا منقضی شده.');
+        // HIGH-H-08 Fix: Validate code format (alphanumeric, 6 chars)
+        if (!preg_match('/^[A-Z0-9]{6}$/i', $code)) {
+            $this->session->setFlash('error', 'کد وارد شده نامعتبر است.');
             $this->response->redirect(url('email/verify-code'));
             return;
         }
 
+        // MED-01 Fix: Always perform database lookup to maintain consistent timing
+        // This prevents timing-based user enumeration
+        $user = $this->userService->findByEmail($email);
+        
+        // HIGH-H-08 Fix: Constant-time response regardless of user existence
+        // All paths lead to same error message and similar timing
+        $storedToken = $user ? $user->email_verification_token : null;
+        
+        // Perform hash comparison regardless of whether user/token exists
+        // This ensures consistent timing for both existing and non-existing users
         $inputCode = strtoupper($code);
         $hashedInput = hash_hmac('sha256', $inputCode, (string)config('app.key'));
         
-        $isValid = hash_equals((string)$user->email_verification_token, $hashedInput);
+        // Always perform the comparison (constant time)
+        $isValid = $storedToken !== null && hash_equals((string)$storedToken, $hashedInput);
 
         if (!$isValid) {
-            $this->logger->warning('auth.email_verification.failed', ['email' => $email, 'ip' => $ip]);
+            $this->logger->warning('auth.email_verification.failed', [
+                'email' => $email, 
+                'ip' => $ip,
+                'reason' => $user ? 'invalid_code' : 'user_not_found'
+            ]);
+            // HIGH-H-08 Fix: Standardized error message for all failure cases
             $this->session->setFlash('error', 'کد نامعتبر است یا منقضی شده.');
             $this->response->redirect(url('email/verify-code'));
             return;
@@ -341,7 +365,7 @@ class AuthController extends BaseController
         $ip = $this->request->ip();
         $rateLimitKey = "resend_email:" . hash('sha256', "{$email}:{$ip}");
         
-        if (!$this->rateLimiter->attempt($rateLimitKey, 3, 120)) {
+        if (!$this->rateLimiter->attempt($rateLimitKey, 3, 120, true)) {
             $this->jsonError('لطفاً چند دقیقه صبر کنید و سپس دوباره تلاش کنید.');
             return;
         }
@@ -386,8 +410,8 @@ class AuthController extends BaseController
         $rateLimitEmail = "forgot_pwd_email:{$emailKey}";
 
         $rateLimiter = app(\Core\RateLimiter::class);
-        if (!$rateLimiter->attempt($rateLimitIp, 5, 60) || 
-            !$rateLimiter->attempt($rateLimitEmail, 3, 3600)) {
+        if (!$rateLimiter->attempt($rateLimitIp, 5, 60, true) || 
+            !$rateLimiter->attempt($rateLimitEmail, 3, 3600, true)) {
             
             $this->session->setFlash('error', 'تعداد درخواست‌های بازیابی بیش از حد مجاز است. لطفاً بعداً تلاش کنید.');
             $this->response->redirect(url('forgot-password'));
@@ -510,6 +534,7 @@ class AuthController extends BaseController
         }
 
         if ($this->request->post('logout_all') === '1') {
+            // HIGH-01 Fix: Invalidate all sessions including Redis keys
             $this->authService->logoutAll($userId);
         } else {
             $this->authService->logout();

@@ -10,6 +10,12 @@ use App\Constants\SessionKeys;
 
 /**
  * Two Factor Authentication Controller
+ * 
+ * SECURITY NOTES:
+ * - All 2FA operations require valid session with user_id
+ * - pending_2fa_user_id is validated against session's logged-in user
+ * - Rate limiting prevents brute-force attacks on 2FA codes
+ * - IP and session validation prevents session hijacking
  */
 class TwoFactorController extends BaseUserController
 {
@@ -87,9 +93,9 @@ class TwoFactorController extends BaseUserController
             return;
         }
 
-        // Rate limit password attempts
-        $throttleKey = 'pw_confirm:' . $userId . ':' . $this->request->ip();
-        if (!$this->rateLimiter->attempt($throttleKey, 5, 1)) {
+        // CRIT-04 Fix: Rate limit password attempts for 2FA setup authorization
+        $throttleKey = 'pw_confirm_2fa:' . $userId . ':' . $this->request->ip();
+        if (!$this->rateLimiter->attempt($throttleKey, 5, 1, true)) {
             $this->jsonError('تعداد تلاش‌های شما بیش از حد مجاز است.', [], 429);
             return;
         }
@@ -117,6 +123,14 @@ class TwoFactorController extends BaseUserController
             $this->response->redirect(url('login'));
             return;
         }
+        
+        // CRIT-04 Fix: Verify that the pending 2FA session has not expired
+        $createdAt = (int)$this->session->get('pending_2fa_created_at', 0);
+        if (time() - $createdAt > 600) {
+            $this->session->destroy();
+            $this->response->redirect(url('login'));
+            return;
+        }
 
         $this->view('user/security/verify-2fa', [
             'title' => 'تأیید هویت دو مرحله‌ای',
@@ -125,8 +139,25 @@ class TwoFactorController extends BaseUserController
 
     public function verify(): void
     {
-        $userId = $this->session->get(SessionKeys::PENDING_2FA_USER_ID);
-        if (!$userId) {
+        // CRIT-04 Fix: Validate pending_2fa_user_id comes from a valid session
+        // This prevents attackers from manipulating the pending 2FA user ID
+        $sessionUserId = (int)$this->session->get(SessionKeys::USER_ID, 0);
+        $pendingUserId = (int)$this->session->get(SessionKeys::PENDING_2FA_USER_ID, 0);
+        
+        // If there's a logged-in user in the session, ensure pending 2FA matches or is for the same user
+        // This prevents session fixation attacks where attacker tries to use another user's pending 2FA
+        if ($sessionUserId > 0 && $pendingUserId > 0 && $sessionUserId !== $pendingUserId) {
+            $this->logger->warning('2fa.verify.session_mismatch', [
+                'session_user_id' => $sessionUserId,
+                'pending_user_id' => $pendingUserId,
+                'ip' => $this->request->ip()
+            ]);
+            $this->session->destroy();
+            $this->response->json(['success' => false, 'message' => 'نشست نامعتبر است.'], 401);
+            return;
+        }
+        
+        if (!$pendingUserId) {
             if ($this->request->isAjax()) {
                 $this->jsonError('نشست نامعتبر است.', [], 401);
                 return;
@@ -134,14 +165,43 @@ class TwoFactorController extends BaseUserController
             $this->response->redirect(url('login'));
             return;
         }
+        
+        // CRIT-04 Fix: Verify that the pending 2FA session was created recently
+        $createdAt = (int)$this->session->get('pending_2fa_created_at', 0);
+        if (time() - $createdAt > 600) { // 10 minute timeout
+            $this->session->destroy();
+            $this->response->json(['success' => false, 'message' => 'نشست 2FA منقضی شده است. لطفاً دوباره وارد شوید.'], 401);
+            return;
+        }
+        
+        // CRIT-04 Fix: Verify IP consistency for 2FA verification
+        // Only check if we have a stored IP (backwards compatibility)
+        $pendingIp = $this->session->get('pending_2fa_ip');
+        if ($pendingIp) {
+            $currentIp = $this->clientIp();
+            // Normalize IPs to /24 for comparison (allow subnet changes, not complete IP changes)
+            $pendingSubnet = substr($pendingIp, 0, strrpos($pendingIp, '.'));
+            $currentSubnet = substr($currentIp, 0, strrpos($currentIp, '.'));
+            
+            if ($pendingSubnet !== $currentSubnet) {
+                $this->logger->warning('2fa.verify.ip_changed', [
+                    'expected_subnet' => $pendingSubnet,
+                    'current_ip' => $currentIp,
+                    'user_id' => $pendingUserId
+                ]);
+                // Log but don't block - could be legitimate network change
+                // But increase fraud score as it's suspicious
+                $this->userService->incrementFraudScore($pendingUserId, 10);
+            }
+        }
 
         // H21 Fix: محافظت ضد Brute-Force برای کدهای 2FA
-        $throttleKey = '2fa_verify:' . $userId . ':' . $this->request->ip();
-        if (!$this->rateLimiter->attempt($throttleKey, 5, 1)) { // حداکثر 5 تلاش در دقیقه
+        $throttleKey = '2fa_verify:' . $pendingUserId . ':' . $this->request->ip();
+        if (!$this->rateLimiter->attempt($throttleKey, 5, 1, true)) { // حداکثر 5 تلاش در دقیقه
             $this->response->json([
                 'success' => false, 
                 'message' => 'تعداد تلاش‌های شما بیش از حد مجاز است. لطفاً یک دقیقه صبر کنید.'
-            ]);
+            ], 429);
             return;
         }
 
@@ -151,7 +211,13 @@ class TwoFactorController extends BaseUserController
             return;
         }
 
-        $user = $this->userService->find((int)$userId);
+        // Validate code format (6 digits)
+        if (!preg_match('/^[0-9]{6}$/', $code)) {
+            $this->response->json(['success' => false, 'message' => 'لطفاً کد ۶ رقمی معتبر وارد کنید.']);
+            return;
+        }
+
+        $user = $this->userService->find($pendingUserId);
         if (!$user || empty($user->two_factor_secret) || !$user->two_factor_enabled) {
             // CRIT-05 Fix: Ensure 2FA is actually enabled and secret exists. Atomic cleanup on failure.
             $this->session->destroy();
@@ -159,7 +225,7 @@ class TwoFactorController extends BaseUserController
             return;
         }
 
-        if ($this->twoFactorService->verifyCode($user->two_factor_secret, $code, (int)$userId)) {
+        if ($this->twoFactorService->verifyCode($user->two_factor_secret, $code, (int)$pendingUserId)) {
             $this->rateLimiter->clear($throttleKey);
 
             $this->authService->finalizeSessionAfter2FA($user);
@@ -176,7 +242,7 @@ class TwoFactorController extends BaseUserController
             return;
         }
 
-        $this->userService->incrementFraudScore((int)$userId, 5);
+        $this->userService->incrementFraudScore((int)$pendingUserId, 5);
         $this->response->json(['success' => false, 'message' => 'کد وارد شده نامعتبر است.']);
     }
 
@@ -190,11 +256,22 @@ class TwoFactorController extends BaseUserController
 
         // CRIT-04 Fix: Rate limiting on 2FA enablement
         $throttleKey = '2fa_enable:' . $userId . ':' . $this->request->ip();
-        if (!$this->rateLimiter->attempt($throttleKey, 5, 1)) {
+        if (!$this->rateLimiter->attempt($throttleKey, 5, 1, true)) {
             $this->response->json([
                 'success' => false,
                 'message' => 'تعداد تلاش‌های شما برای فعال‌سازی بیش از حد مجاز است. لطفاً یک دقیقه صبر کنید.'
             ], 429);
+            return;
+        }
+
+        // Verify 2FA setup authorization
+        $authTime = (int)$this->session->get(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED, 0);
+        if (time() - $authTime > 600) {
+            $this->session->remove(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED);
+            $this->response->json([
+                'success' => false,
+                'message' => 'مهلت زمانی تأیید رمز عبور به پایان رسیده است. لطفاً دوباره تلاش کنید.'
+            ], 401);
             return;
         }
 
@@ -265,6 +342,16 @@ class TwoFactorController extends BaseUserController
         $userId = $this->userId();
         if (!$userId) {
             $this->jsonError('لطفاً وارد شوید.', [], 401);
+            return;
+        }
+
+        // CRIT-04 Fix: Rate limiting on 2FA disable
+        $throttleKey = '2fa_disable:' . $userId . ':' . $this->request->ip();
+        if (!$this->rateLimiter->attempt($throttleKey, 3, 60, true)) {
+            $this->response->json([
+                'success' => false,
+                'message' => 'تعداد تلاش‌های شما برای غیرفعال‌سازی بیش از حد مجاز است.'
+            ], 429);
             return;
         }
 
