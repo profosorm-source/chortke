@@ -80,9 +80,9 @@
     </div>
 </div>
 
-<script src="<?= asset('assets/vendor/bootstrap/js/bootstrap.bundle.min.js') ?>"></script>
-<script src="<?= asset('assets/vendor/notyf/notyf.min.js') ?>"></script>
-<script>
+<script src="<?= asset('assets/vendor/bootstrap/js/bootstrap.bundle.min.js') ?>" nonce="<?= $cspNonce ?? '' ?>"></script>
+<script src="<?= asset('assets/vendor/notyf/notyf.min.js') ?>" nonce="<?= $cspNonce ?? '' ?>"></script>
+<script nonce="<?= $cspNonce ?? '' ?>">
 // BUG FIX 12: Vanilla JS - بدون jQuery
 const notyf = new Notyf({ duration: 4000, position: { x: 'center', y: 'top' } });
 const csrfToken = document.querySelector('meta[name="csrf-token"]').content;

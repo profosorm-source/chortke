@@ -7,12 +7,20 @@ ob_start();
 ?>
 
 <div class="row mb-4">
-    <div class="col-12">
-        <h4 class="fw-bold">
-            <span class="material-icons align-middle text-primary">security</span>
-            احراز هویت دو مرحله‌ای (2FA)
-        </h4>
-        <p class="text-muted">افزایش امنیت حساب با استفاده از Google Authenticator یا Authy</p>
+    <div class="col-12 d-flex flex-column flex-md-row justify-content-between align-items-start gap-3">
+        <div>
+            <h4 class="fw-bold">
+                <span class="material-icons align-middle text-primary">security</span>
+                احراز هویت دو مرحله‌ای (2FA)
+            </h4>
+            <p class="text-muted">افزایش امنیت حساب با استفاده از Google Authenticator یا Authy</p>
+        </div>
+        <div class="text-md-end">
+            <a href="<?= url('/settings/security') ?>" class="btn btn-outline-secondary btn-sm">
+                <span class="material-icons align-middle">arrow_back</span>
+                بازگشت به تنظیمات امنیتی
+            </a>
+        </div>
     </div>
 </div>
 
@@ -148,7 +156,7 @@ ob_start();
     </div>
 </div>
 
-<script>
+<script nonce="<?= $cspNonce ?? '' ?>">
 // BUG FIX 12: استفاده از Vanilla JS به جای jQuery
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
     || '<?= csrf_token() ?>';
@@ -286,8 +294,8 @@ function confirmSaved() {
 </script>
 
 <!-- QR Code Library & Local Generation (Local Privacy Protection) -->
-<script src="<?= asset('assets/vendor/qrcodejs/qrcode.min.js') ?>"></script>
-<script>
+<script src="<?= asset('assets/vendor/qrcodejs/qrcode.min.js') ?>" nonce="<?= $cspNonce ?? '' ?>"></script>
+<script nonce="<?= $cspNonce ?? '' ?>">
 document.addEventListener('DOMContentLoaded', () => {
     const qrContainer = document.getElementById('qrcode');
     if (qrContainer) {
