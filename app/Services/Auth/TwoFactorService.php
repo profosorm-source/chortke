@@ -182,10 +182,18 @@ class TwoFactorService extends \App\Services\BaseService
                 return true;
             }
 
-            // 2. Graceful migration fallback for older SHA256-hashed codes
-            if (hash('sha256', $code) === $record->code) {
+            // 2. MED-01 Fix: Graceful migration fallback for older SHA256-hashed codes
+            // Use hash_equals for timing-safe comparison
+            if (hash_equals(hash('sha256', $code), $record->code)) {
                 $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
-                $this->logger->info('2FA recovery code used (legacy sha256)', ['user_id' => $userId, 'code_id' => $record->id]);
+                $this->logger->warning('2FA recovery code used (LEGACY SHA256 - UPGRADE REQUIRED)', [
+                    'user_id' => $userId, 
+                    'code_id' => $record->id
+                ]);
+                
+                // Notify user to regenerate codes for better security
+                $this->session->setFlash('warning', 'شما از یک کد بازیابی قدیمی استفاده کردید. لطفاً برای امنیت بیشتر، کدهای بازیابی جدید دریافت کنید.');
+                
                 return true;
             }
         }

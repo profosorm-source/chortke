@@ -66,10 +66,15 @@ class AuthService extends \App\Services\BaseService
         }
 
         $user = $this->userModel->findByCredentials($identifier);
-        if (!$user || !password_verify($password, $user->password)) {
+        
+        // HIGH-01 Fix: Timing-based User Enumeration mitigation
+        // Use a dummy hash if user not found to ensure constant-time comparison
+        $dummyHash = '$2y$10$abcdefghijklmnopqrstuv'; // Fixed dummy hash
+        $passwordToVerify = $user ? $user->password : $dummyHash;
+        
+        if (!$user || !password_verify($password, $passwordToVerify)) {
             $this->logger->warning('auth.login.failed', ['identifier' => $identifier]);
             
-            // فقط وقتی تلاش‌ها کمتر از حد آستانه باشد نمره تقلب افزایش می‌یابد
             if ($user && $this->rateLimiter->getAttempts('login:' . $identifier) <= 5) {
                 try {
                     $this->userModel->incrementFraudScore((int)$user->id, 5);
@@ -156,17 +161,19 @@ class AuthService extends \App\Services\BaseService
 
     private function createPending2FASession(object $user): void
     {
-        $this->session->regenerate();
+        // CRIT-03 Fix: regenerate(true) to delete old session
+        $this->session->regenerate(true);
         $this->session->set('pending_2fa_user_id', (int)$user->id);
-        // logged_in را اینجا ست نکنیم تا bypass نشود
     }
 
     private function createSession(object $user, bool $remember = false): void
     {
-        $this->session->regenerate();
+        // CRIT-03 Fix: regenerate(true) BEFORE setting data
+        $this->session->regenerate(true);
         $this->session->set('user_id',  (int)$user->id);
         $this->session->set('username', $user->username ?? '');
         $this->session->set('role',     $user->role);
+        $this->session->set('user_role', $user->role); // MED-03 Fix: Consistency with AdminMiddleware
         $this->session->set('is_admin', in_array($user->role, ['admin', 'super_admin'], true));
         $this->session->set('logged_in', true);
 

@@ -27,6 +27,7 @@ class SessionService extends \App\Services\BaseService
         private RiskPolicyService $policy,
         private DistributedLockService $lockService,
         private Database $db,
+        private \Core\Redis $redis,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -172,13 +173,32 @@ class SessionService extends \App\Services\BaseService
         }
 
         $this->model->deactivateSession((int)$session->id);
+
+        // LOW-06 Fix: Clear Redis activity key
+        if ($this->redis->isAvailable()) {
+            try { $this->redis->delete("session:activity:" . $sessionId); } catch (\Throwable) {}
+        }
+
         return ['success' => true, 'message' => 'نشست با موفقیت حذف شد'];
     }
 
     public function invalidateAllUserSessions(int $userId, ?string $excludeSessionId = null): bool
     {
         $this->logger->info('session.invalidate_all', ['user_id' => $userId, 'exclude' => $excludeSessionId]);
-        return $this->model->deactivateUserSessions($userId, $excludeSessionId);
+        
+        // LOW-06 Fix: Get all active sessions to clear Redis keys
+        $sessions = $this->model->getActiveSessions($userId);
+        
+        $result = $this->model->deactivateUserSessions($userId, $excludeSessionId);
+        
+        if ($this->redis->isAvailable()) {
+            foreach ($sessions as $s) {
+                if ($excludeSessionId && $s->session_id === $excludeSessionId) continue;
+                try { $this->redis->delete("session:activity:" . $s->session_id); } catch (\Throwable) {}
+            }
+        }
+
+        return $result;
     }
 
     public function cleanupSessions(): void

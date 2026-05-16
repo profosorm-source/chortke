@@ -48,8 +48,10 @@ class OAuthService extends \App\Services\BaseService
         
         // 🛡️ Security Improvement: Storing cryptographic state with creation timestamp for TTL enforcement.
         $this->session->set('oauth_state', [
-            'token' => $state,
-            'created_at' => time()
+            'token'      => $state,
+            'created_at' => time(),
+            'session_id' => $this->session->getId(),
+            'ip'         => $this->clientIp()
         ]);
 
         return "https://accounts.google.com/o/oauth2/v2/auth?" . http_build_query([
@@ -78,6 +80,16 @@ class OAuthService extends \App\Services\BaseService
 
         if ($stored['token'] !== $state) {
             return ['success' => false, 'message' => 'Invalid state token match failed.'];
+        }
+
+        // HIGH-06 Fix: Verify session binding
+        if (($stored['session_id'] ?? '') !== $this->session->getId()) {
+            return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
+        }
+
+        // HIGH-06 Fix: Verify IP binding
+        if (($stored['ip'] ?? '') !== $this->clientIp()) {
+            return ['success' => false, 'message' => 'IP address mismatch during OAuth flow.'];
         }
 
         // 🛡️ Hardened Expiration: Bound security state validity to maximum 5 minutes
@@ -139,6 +151,20 @@ class OAuthService extends \App\Services\BaseService
 
         try {
             $this->db->beginTransaction();
+
+            // CRIT-05: Check if we are in a linking flow (user already logged in)
+            $linkingUserId = $this->session->get('oauth_linking_user_id');
+            $this->session->remove('oauth_linking_user_id');
+
+            if ($linkingUserId) {
+                $result = $this->linkSocialAccount((int)$linkingUserId, $provider, $userData);
+                if ($result['success']) {
+                    $this->db->commit();
+                    return $result;
+                }
+                $this->db->rollBack();
+                return $result;
+            }
 
             // 🔒 Safe Pessimistic Lock: Swapped RAW SQL query for native, database-agnostic lockForUpdate()
             $socialAccount = $this->db->table('social_accounts')
@@ -404,8 +430,10 @@ class OAuthService extends \App\Services\BaseService
         $state = bin2hex(random_bytes(16));
         
         $this->session->set('oauth_facebook_state', [
-            'token' => $state,
-            'created_at' => time()
+            'token'      => $state,
+            'created_at' => time(),
+            'session_id' => $this->session->getId(),
+            'ip'         => $this->clientIp()
         ]);
 
         return "https://www.facebook.com/v18.0/dialog/oauth?" . http_build_query([
@@ -435,6 +463,16 @@ class OAuthService extends \App\Services\BaseService
 
         if ($stored['token'] !== $state) {
             return ['success' => false, 'message' => 'Invalid state token match failed.'];
+        }
+
+        // HIGH-06 Fix: Verify session binding
+        if (($stored['session_id'] ?? '') !== $this->session->getId()) {
+            return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
+        }
+
+        // HIGH-06 Fix: Verify IP binding
+        if (($stored['ip'] ?? '') !== $this->clientIp()) {
+            return ['success' => false, 'message' => 'IP address mismatch during OAuth flow.'];
         }
 
         if ((time() - (int)$stored['created_at']) > 300) {
@@ -606,9 +644,44 @@ class OAuthService extends \App\Services\BaseService
         return $this->db->table('social_accounts')->where('user_id', '=', $userId)->get() ?? [];
     }
 
+    public function getAuthUrlForLinking(string $provider, int $userId): string
+    {
+        // Store the fact that we are linking to an existing account
+        $this->session->set('oauth_linking_user_id', $userId);
+        
+        if ($provider === 'google') {
+            return $this->getGoogleAuthUrl();
+        } elseif ($provider === 'facebook') {
+            return $this->getFacebookAuthUrl();
+        }
+        
+        throw new \InvalidArgumentException("Unsupported provider: {$provider}");
+    }
+
     public function linkSocialAccount(int $userId, string $provider, array $userData): array
     {
-        return ['success' => false, 'message' => 'در حال حاضر پشتیبانی نمی‌شود.'];
+        // Check if this social account is already linked to ANOTHER user
+        $existing = $this->db->table('social_accounts')
+            ->where('provider', '=', $provider)
+            ->where('provider_id', '=', (string)$userData['id'])
+            ->first();
+            
+        if ($existing) {
+            if ((int)$existing->user_id === $userId) {
+                return ['success' => true, 'message' => 'این حساب قبلاً به اکانت شما متصل شده است.'];
+            }
+            return ['success' => false, 'message' => 'این حساب اجتماعی قبلاً به اکانت دیگری متصل شده است.'];
+        }
+
+        $ok = $this->db->table('social_accounts')->insert([
+            'user_id'     => $userId,
+            'provider'    => $provider,
+            'provider_id' => (string)$userData['id'],
+            'avatar'      => $userData['picture'] ?? null,
+            'created_at'  => date('Y-m-d H:i:s')
+        ]);
+
+        return ['success' => $ok, 'message' => $ok ? 'حساب با موفقیت متصل شد.' : 'خطا در اتصال حساب.'];
     }
 
     public function unlinkSocialAccount(int $userId, string $provider): array
