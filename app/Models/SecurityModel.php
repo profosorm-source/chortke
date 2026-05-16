@@ -188,8 +188,7 @@ class SecurityModel extends Model
     {
         $row = $this->db->fetch(
             "SELECT COUNT(*) as count FROM user_sessions 
-             WHERE user_id = ? AND is_active = 1 
-             AND last_activity > DATE_SUB(NOW(), INTERVAL 30 MINUTE)",
+             WHERE user_id = ? AND is_active = 1",
             [$userId]
         );
         return (int)($row->count ?? 0);
