@@ -195,13 +195,26 @@ class ApiTokenService extends \App\Services\BaseService
     public function issueToken(string $email, string $password, string $name, string $scopes, string $otp = ''): array
     {
         // MED-11: Rate limiting check (10 attempts per 60 seconds per IP)
-        $ipKey = 'token_issue:' . ($this->clientIp() ?? 'unknown');
+        $ip = $this->clientIp() ?? 'unknown';
+        $ipKey = 'token_issue:' . $ip;
         if ($this->rateLimiter->tooMany($ipKey, maxAttempts: 10, decaySeconds: 60)) {
             return [
                 'success' => false,
                 'message' => 'تعداد تلاش‌های زیادی برای صدور توکن. لطفاً بعداً تلاش کنید',
                 'status' => 429,
                 'code' => 'RATE_LIMITED',
+            ];
+        }
+
+        // HIGH-05 Fix: Per-identifier rate limiting to prevent password spray
+        $identifierKey = 'token_issue_id:' . hash('sha256', mb_strtolower($email));
+        if ($this->rateLimiter->tooMany($identifierKey, maxAttempts: 5, decaySeconds: 300)) {
+            $this->logger->warning('api_token.issue.throttled_by_id', ['email' => $email, 'ip' => $ip]);
+            return [
+                'success' => false,
+                'message' => 'تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً ۵ دقیقه دیگر تلاش کنید.',
+                'status' => 429,
+                'code' => 'RATE_LIMITED_IDENTIFIER',
             ];
         }
 
@@ -304,6 +317,9 @@ class ApiTokenService extends \App\Services\BaseService
         $scopes = !empty($finalScopes) ? implode(',', array_unique($finalScopes)) : 'read';
 
         $this->apiTokenModel->createToken($user->id, $token, $name, $scopes, $expiresAt);
+
+        // Clear rate limit on success
+        $this->rateLimiter->clear($identifierKey);
 
         return [
             'success' => true,

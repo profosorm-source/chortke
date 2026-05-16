@@ -112,9 +112,11 @@ class TwoFactorService extends \App\Services\BaseService
                     }
                 }
 
-                // ذخیره تایم اسلایس موفق جهت فریز کردن آن
+                // CRIT-06 Fix: استفاده از آپدیت اتمیک برای جلوگیری از Race Condition در مصرف کد
                 if ($userId) {
-                    $this->userModel->update($userId, ['last_2fa_timeslice' => $sliceToCheck]);
+                    if (!$this->userModel->update2FATimeslice($userId, $sliceToCheck)) {
+                        continue;
+                    }
                 }
                 return true;
             }
@@ -163,9 +165,17 @@ class TwoFactorService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'کد وارد شده نامعتبر است.'];
         }
 
-        $recoveryCodes = $this->generateRecoveryCodes();
-        $this->saveRecoveryCodes($userId, $recoveryCodes);
-        $this->userModel->update($userId, ['two_factor_enabled' => 1]);
+        $this->db->beginTransaction();
+        try {
+            $recoveryCodes = $this->generateRecoveryCodes();
+            $this->saveRecoveryCodes($userId, $recoveryCodes);
+            $this->userModel->update($userId, ['two_factor_enabled' => 1]);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            $this->logger->error('2fa.enable.failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'خطا در فعال‌سازی احراز هویت دو مرحله‌ای.'];
+        }
 
         return [
             'success' => true,
@@ -209,46 +219,63 @@ class TwoFactorService extends \App\Services\BaseService
     private function verifyRecoveryCode(int $userId, string $code): bool
     {
         $code = strtoupper(trim($code));
-        $records = $this->securityModel->getValidRecoveryCodes($userId);
-        $key = (string)config('app.key');
+        $db = $this->securityModel->getDb();
+        $db->beginTransaction();
+        
+        try {
+            // HIGH-H-04 Fix: Atomic recovery code invalidation using FOR UPDATE to prevent race conditions
+            $records = $db->fetchAll(
+                "SELECT id, code FROM two_factor_codes WHERE user_id = ? AND used = 0 AND expires_at > NOW() FOR UPDATE",
+                [$userId]
+            ) ?: [];
 
-        foreach ($records as $record) {
-            // 1. Attempt CRITICAL-C-04 Fix: HMAC + Bcrypt verification (New format)
-            $hmacCode = hash_hmac('sha256', $code, $key);
-            if (password_verify($hmacCode, $record->code)) {
-                $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
-                $this->logger->info('2FA recovery code used (hmac+bcrypt)', ['user_id' => $userId, 'code_id' => $record->id]);
+            $key = (string)config('app.key');
+            $found = false;
+            $matchedRecord = null;
+
+            foreach ($records as $record) {
+                $hmacCode = hash_hmac('sha256', $code, $key);
+                
+                $match = false;
+                if (password_verify($hmacCode, $record->code)) {
+                    $match = true;
+                } elseif (password_verify($code, $record->code)) {
+                    $match = true;
+                } elseif (hash_equals(hash('sha256', $code), $record->code)) {
+                    $match = true;
+                }
+
+                if ($match && !$found) {
+                    $found = true;
+                    $matchedRecord = $record;
+                }
+            }
+
+            if ($found && $matchedRecord) {
+                // Delete or mark as used immediately within the locked transaction
+                $this->securityModel->deleteTwoFactorCode((int)$matchedRecord->id);
+                $db->commit();
+                
+                $this->logger->info('2FA recovery code used', ['user_id' => $userId, 'code_id' => $matchedRecord->id]);
+                
+                // Check for legacy formats to trigger migration
+                if (!password_verify(hash_hmac('sha256', $code, $key), $matchedRecord->code)) {
+                    $this->userModel->update($userId, ['force_2fa_regen' => 1]);
+                    $this->session->setFlash('warning', 'شما از یک کد بازیابی قدیمی استفاده کردید. لطفاً کدهای جدید دریافت کنید.');
+                }
+                
                 return true;
             }
 
-            // 2. Attempt legacy Bcrypt verification (Old format)
-            if (password_verify($code, $record->code)) {
-                $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
-                $this->logger->warning('2FA recovery code used (LEGACY BCRYPT - MIGRATION TRIGGERED)', ['user_id' => $userId]);
-                
-                // Force migration to new secure format
-                $this->userModel->update($userId, ['force_2fa_regen' => 1]);
-                $this->session->setFlash('warning', 'شما از یک کد بازیابی با فرمت قدیمی استفاده کردید. برای امنیت بیشتر، لطفاً کدهای جدید دریافت کنید.');
-                return true;
+            $db->rollBack();
+            return false;
+        } catch (\Throwable $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
             }
-
-            // 3. MED-01 Fix: Graceful migration fallback for even older SHA256-hashed codes
-            if (hash_equals(hash('sha256', $code), $record->code)) {
-                $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
-                $this->logger->warning('2FA recovery code used (LEGACY SHA256 - MIGRATION TRIGGERED)', [
-                    'user_id' => $userId, 
-                    'code_id' => $record->id
-                ]);
-                
-                // Set flag to force user to regenerate codes on next dashboard visit
-                $this->userModel->update($userId, ['force_2fa_regen' => 1]);
-                
-                $this->session->setFlash('warning', 'شما از یک کد بازیابی قدیمی استفاده کردید. برای امنیت بیشتر، سیستم شما را ملزم به دریافت کدهای جدید می‌کند.');
-                
-                return true;
-            }
+            $this->logger->error('2fa.recovery_code.verification_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return false;
         }
-        return false;
     }
 
     private function generateTOTP(string $secret, int $timeSlice): string

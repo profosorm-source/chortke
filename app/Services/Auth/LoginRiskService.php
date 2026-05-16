@@ -254,12 +254,21 @@ class LoginRiskService extends \App\Services\BaseService
      */
     private function resolveIp(?string $ip = null): string
     {
-        if ($ip !== null && filter_var($ip, FILTER_VALIDATE_IP)) {
-            return $ip;
-        }
+        $clientIp = ($ip !== null && filter_var($ip, FILTER_VALIDATE_IP)) ? $ip : get_client_ip();
+        $clientIp = filter_var($clientIp, FILTER_VALIDATE_IP) ? $clientIp : '127.0.0.1';
         
-        // MED Fix: استفاده از تابع جهانی، استاندارد و ضدجعل get_client_ip جهت ممانعت قطعی از دور زدن سیستم امنیتی
-        $clientIp = get_client_ip();
-        return filter_var($clientIp, FILTER_VALIDATE_IP) ? $clientIp : '127.0.0.1';
+        // MED-02 Fix: Normalize IP (IPv6 /64) to prevent subnet-based risk bypass
+        return $this->normalizeIp($clientIp);
+    }
+
+    private function normalizeIp(string $ip): string
+    {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $packed = inet_pton($ip);
+            if ($packed === false) return $ip;
+            $packed = substr($packed, 0, 8) . str_repeat("\x00", 8); // /64 mask
+            return inet_ntop($packed);
+        }
+        return $ip;
     }
 }

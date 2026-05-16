@@ -125,7 +125,7 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-H-01 Fix: Relaxed IP binding - Log as warning but don't block
+        // HIGH-H-01 Fix: Relaxed IP binding by default, but block if strict_ip_binding is enabled
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
             $this->logger->warning('oauth.google.ip_changed_during_flow', [
                 'expected' => $stored['ip'],
@@ -138,6 +138,11 @@ class OAuthService extends \App\Services\BaseService
                 'received' => $this->clientIp(),
                 'state'    => $state
             ]);
+
+            if (config('oauth.strict_ip_binding', false)) {
+                $this->logger->error('oauth.google.blocked_due_to_ip_change', ['ip' => $this->clientIp()]);
+                return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
+            }
         }
 
 
@@ -464,15 +469,17 @@ class OAuthService extends \App\Services\BaseService
     {
         $redirectUri = $this->buildRedirectUri('/auth/callback/facebook');
         $state = bin2hex(random_bytes(16));
+        $nonce = bin2hex(random_bytes(16)); // HIGH-03 Fix: Add nonce for Facebook too
         
         // HIGH-H-15 Fix: State signing for Facebook with IP/Session binding
         $ip = $this->clientIp();
         $sessionId = $this->session->getId();
-        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId, (string)config('app.key'));
+        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId . '|' . $nonce, (string)config('app.key'));
 
         $this->session->set(SessionKeys::OAUTH_STATE . '_facebook', [
             'token'      => $state,
             'signature'  => $signature,
+            'nonce'      => $nonce,
             'created_at' => time(),
             'session_id' => $sessionId,
             'ip'         => $ip
@@ -509,7 +516,7 @@ class OAuthService extends \App\Services\BaseService
         }
 
         // HIGH-H-15 Fix: Verify state signature for Facebook
-        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), (string)config('app.key'));
+        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? '') . '|' . ($stored['nonce'] ?? ''), (string)config('app.key'));
         if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
             $this->logger->critical('oauth.facebook.state_signature_mismatch', [
                 'state' => $state,
@@ -523,7 +530,7 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-H-01 Fix: Relaxed IP binding - Log as warning but don't block
+        // HIGH-H-01 Fix: Strict IP binding check for Facebook OAuth
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
             $this->logger->warning('oauth.facebook.ip_changed_during_flow', [
                 'expected' => $stored['ip'],
@@ -536,6 +543,10 @@ class OAuthService extends \App\Services\BaseService
                 'received' => $this->clientIp(),
                 'state'    => $state
             ]);
+
+            if (config('oauth.strict_ip_binding', false)) {
+                return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
+            }
         }
 
         if ((time() - (int)$stored['created_at']) > 300) {

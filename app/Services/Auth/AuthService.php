@@ -25,7 +25,7 @@ use App\Constants\SessionKeys;
  */
 class AuthService extends \App\Services\BaseService
 {
-    private readonly string $dummyHash;
+    private static ?string $cachedDummyHash = null;
 
     public function __construct(
         Logger $logger,
@@ -42,13 +42,15 @@ class AuthService extends \App\Services\BaseService
         private ?EmailService $emailService = null
     ) {
         parent::__construct($logger);
-        $this->dummyHash = password_hash(bin2hex(random_bytes(16)), PASSWORD_BCRYPT);
     }
 
     /**
      * بررسی محدودیت نرخ درخواست برای ورود امن
      */
-    public function checkRateLimit(string $action, string $key): void
+    /**
+     * CRIT-03 Fix: تغییر منطق به بازگشت مقدار Boolean برای سازگاری با کنترلرها
+     */
+    public function checkRateLimit(string $action, string $key): bool
     {
         $ip = $this->clientIp();
         $rateLimitKey = "{$action}:{$key}:{$ip}";
@@ -57,10 +59,9 @@ class AuthService extends \App\Services\BaseService
         // HIGH-H-18 Fix: Adding random jitter to neutralize timing analysis on rate-limited paths
         usleep(random_int(50, 150) * 1000);
 
-        // H16 Fix: الگوی امن Fail-Closed؛ اگر خروجی به صراحت TRUE نباشد، درخواست بلاک می‌شود.
-        if (!is_array($rateLimitCheck) || !isset($rateLimitCheck['allowed']) || $rateLimitCheck['allowed'] !== true) {
-            throw new \Exception($rateLimitCheck['message'] ?? 'تعداد درخواست بیش از حد مجاز است. لطفاً بعداً تلاش کنید.', 429);
-        }
+        return is_array($rateLimitCheck) 
+            && isset($rateLimitCheck['allowed']) 
+            && $rateLimitCheck['allowed'] === true;
     }
 
     /**
@@ -79,8 +80,11 @@ class AuthService extends \App\Services\BaseService
         // Fallback for legacy passwords (without sha384 pre-hash)
         if (password_verify($password, $hash)) {
             if ($userId) {
-                // Auto-rehash legacy password
-                $this->userService->changePassword($userId, $password);
+                // HIGH-10 Fix: Auto-rehash legacy password asynchronously to prevent hot-path blocking
+                $this->eventDispatcher->dispatchAsync(
+                    'auth.rehash_password',
+                    ['user_id' => $userId, 'password' => $password]
+                );
             }
             return true;
         }
@@ -90,6 +94,22 @@ class AuthService extends \App\Services\BaseService
 
     public function login(string $identifier, string $password, bool $remember = false): array
     {
+        return $this->performLogin($identifier, $password, $remember, false);
+    }
+
+    /**
+     * CRIT-02 Fix: متد اختصاصی برای ورود ادمین با چک کردن نقش قبل از ساخت سشن
+     */
+    public function loginAsAdmin(string $email, string $password, bool $remember = false): array
+    {
+        return $this->performLogin($email, $password, $remember, true);
+    }
+
+    /**
+     * منطق مشترک ورود با قابلیت فیلتر بر اساس ادمین بودن
+     */
+    private function performLogin(string $identifier, string $password, bool $remember, bool $requireAdmin): array
+    {
         $ip = $this->clientIp();
         $identifier = trim($identifier);
         if (filter_var($identifier, FILTER_VALIDATE_EMAIL)) {
@@ -97,7 +117,6 @@ class AuthService extends \App\Services\BaseService
         }
         
         // CRITICAL-01 Fix: Consolidated Rate Limiting (IP + Identifier)
-        // CRIT-07 Fix: failClosed = true for security-sensitive routes
         if (!$this->rateLimiter->attempt('login_ip:' . hash('sha256', $ip), 10, 1, true) || 
             !$this->rateLimiter->attempt('login_id:' . hash('sha256', $identifier), 5, 15, true)) {
             
@@ -107,20 +126,22 @@ class AuthService extends \App\Services\BaseService
 
         $user = $this->userModel->findByCredentials($identifier);
         
-        // CRITICAL-03 Fix: Use a valid pre-computed bcrypt hash to prevent timing side-channel
+        // CRIT-02 Fix: Pre-check admin role before verification to ensure session isolation
+        if ($requireAdmin && $user && !in_array($user->role, ['admin', 'super_admin', 'support'], true)) {
+            // Timing safety: Simulate work even if role is invalid
+            $this->verifyPassword($password, $this->getDummyHash());
+            return ['success' => false, 'message' => 'اطلاعات ورود نامعتبر است یا دسترسی شما محدود شده است.'];
+        }
+
         $passwordToVerify = $user ? $user->password : $this->getDummyHash();
 
-        $delay = random_int(100000, 300000);
-        usleep($delay);
+        usleep(random_int(100000, 300000));
 
         if (!$this->verifyPassword($password, $passwordToVerify, $user ? (int)$user->id : null)) {
-            if (!$user) {
-                $this->logger->warning('auth.login.failed', ['identifier' => $identifier]);
-            } else {
-                $this->logger->warning('auth.login.failed', ['user_id' => $user->id]);
-                
+            $this->logger->warning('auth.login.failed', ['identifier' => $identifier, 'ip' => $ip]);
+            
+            if ($user) {
                 $attempts = $this->rateLimiter->getAttempts('login_id:' . hash('sha256', $identifier));
-                
                 if ($attempts >= 10 && $user->status !== 'locked') {
                     $this->userModel->update((int)$user->id, ['status' => 'locked']);
                     $this->logger->critical('auth.account_locked', ['user_id' => $user->id, 'identifier' => $identifier]);
@@ -133,7 +154,6 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
         }
 
-        // MEDIUM-03 Fix: Standardize status messages to prevent enumeration
         if ($user->status === 'locked') {
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
         }
@@ -146,7 +166,6 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.', 'email_unverified' => true, 'email' => $user->email];
         }
 
-        // اگر 2FA فعال باشد، session کامل نسازیم و در صورت تکمیل 2FA، تلاش‌ها را پاک می‌کنیم.
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
         if (!$requires2FA) {
             $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $identifier));
@@ -156,7 +175,6 @@ class AuthService extends \App\Services\BaseService
             $this->createPending2FASession($user);
         }
 
-        // 🚀 UPG-05: پردازش آسنکرون رویداد ورود با الگوی رویدادگرا (Async Event-Driven)
         $this->eventDispatcher->dispatchAsync(
             'auth.login', 
             new UserLoggedInEvent((int)$user->id, $this->clientIp(), get_user_agent())
@@ -276,7 +294,11 @@ class AuthService extends \App\Services\BaseService
         
         $this->createSession($user, false);
         $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
-        $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $user->email ?? $user->username));
+        
+        // CRIT-01 Fix: Ensure consistent identifier normalization for rate-limit clearing
+        $identifier = mb_strtolower($user->email ?? (string)$user->username, 'UTF-8');
+        
+        $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $identifier));
         $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $this->clientIp()));
         
         // Record final login event after 2FA
@@ -292,16 +314,36 @@ class AuthService extends \App\Services\BaseService
         if ($userId) {
             $this->logger->activity('auth.logout', 'خروج کاربر', (int)$userId);
             
-            // HIGH-06 & MEDIUM-07 Fix: Invalidate remember_token and sessions in DB
-            $this->userModel->update((int)$userId, ['remember_token' => null]);
-            
-            // Deactivate current session in DB
+            // Invalidate current session in DB
             $dbSession = $this->securityModel->findSessionBySessionId($this->session->getId());
             if ($dbSession) {
                 $this->sessionService->terminateSession((int)$dbSession->id, (int)$userId);
             }
         }
 
+        $this->clearRememberCookie();
+        $this->session->destroy();
+    }
+
+    /**
+     * HIGH-01 Fix: Invalidate all sessions for a specific user
+     */
+    public function logoutAll(int $userId): void
+    {
+        $this->logger->activity('auth.logout_all', 'خروج از تمامی دستگاه‌ها', $userId);
+        
+        // Invalidate all sessions in DB
+        $this->securityModel->deactivateUserSessions($userId);
+        
+        // Invalidate remember token
+        $this->userModel->update($userId, ['remember_token' => null]);
+        
+        $this->clearRememberCookie();
+        $this->session->destroy();
+    }
+
+    private function clearRememberCookie(): void
+    {
         if (isset($_COOKIE['remember_token'])) {
             setcookie('remember_token', '', [
                 'expires' => time() - 3600,
@@ -312,8 +354,6 @@ class AuthService extends \App\Services\BaseService
                 'samesite' => 'Lax'
             ]);
         }
-
-        $this->session->destroy();
     }
 
     public function verify2FA(string $code): array
@@ -430,22 +470,21 @@ class AuthService extends \App\Services\BaseService
         $user = $this->userModel->findByEmail($email);
         $genericMsg = 'اگر این ایمیل در سیستم ثبت شده باشد، لینک بازیابی برای شما ارسال می‌شود.';
 
-        // HIGH-H-10 Fix: Prevent Timing-based User Enumeration in Password Reset
-        // Always generate a token and record it even if user doesn't exist.
-        // If user doesn't exist, we still apply a small delay to simulate processing.
+        // MED-01 Fix: Using a consistent execution path to prevent timing-based enumeration
+        // Always generate a token to keep DB workload consistent
         $token = bin2hex(random_bytes(32));
         $this->securityModel->createPasswordResetToken($email, $token);
 
-        if (!$user) {
-            usleep(random_int(50000, 150000));
-            return ['success' => true, 'message' => $genericMsg];
-        }
-        
-        if ($this->emailService) {
-            $this->emailService->sendPasswordResetEmail((int)$user->id, $token);
+        if ($user) {
+            if ($this->emailService) {
+                $this->emailService->sendPasswordResetEmail((int)$user->id, $token);
+            }
+            $this->logger->activity('auth.password_reset.requested', 'درخواست بازیابی رمز عبور', (int)$user->id);
+        } else {
+            // MED-01 Fix: Artificial delay for non-existent users to match the "email sending" time
+            usleep(random_int(100000, 300000));
         }
 
-        $this->logger->activity('auth.password_reset.requested', 'درخواست بازیابی رمز عبور', (int)$user->id);
         return ['success' => true, 'message' => $genericMsg];
     }
 
@@ -473,7 +512,10 @@ class AuthService extends \App\Services\BaseService
 
     private function getDummyHash(): string
     {
-        return $this->dummyHash;
+        if (self::$cachedDummyHash === null) {
+            self::$cachedDummyHash = password_hash(bin2hex(random_bytes(16)), PASSWORD_BCRYPT);
+        }
+        return self::$cachedDummyHash;
     }
 
     public function check(): bool
