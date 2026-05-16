@@ -77,10 +77,10 @@ class AuthController extends BaseController
             }
         }
 
-        $data = $this->request->all();
+        $minLength = (int)config('auth.password.min_length', 8);
         $validator = new Validator($data, [
             'email'    => 'required|email',
-            'password' => 'required|min:8',
+            'password' => "required|min:{$minLength}",
         ]);
 
         if ($validator->fails()) {
@@ -425,6 +425,14 @@ class AuthController extends BaseController
         if ($this->request->get('token')) {
             $this->session->set('pw_reset_token', $token);
             $this->response->redirect(url('reset-password'));
+            return;
+        }
+
+        // HIGH-02 Fix: Validate token existence and expiry before showing the form
+        if (!$this->authService->validatePasswordResetToken((string)$token)) {
+            $this->session->remove('pw_reset_token');
+            $this->session->setFlash('error', 'لینک بازیابی نامعتبر یا منقضی شده است.');
+            $this->response->redirect(url('forgot-password'));
             return;
         }
 
