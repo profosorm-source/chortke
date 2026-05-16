@@ -14,6 +14,12 @@ use App\Constants\SessionKeys;
 
 /**
  * AuthController - احراز هویت ادمین
+ * 
+ * SECURITY NOTES:
+ * - Complete session isolation from regular user sessions
+ * - Separate session storage for admin auth state
+ * - IP and timestamp tracking for admin 2FA pending sessions
+ * - Stricter rate limiting than regular auth
  */
 class AuthController extends BaseController
 {
@@ -124,7 +130,12 @@ class AuthController extends BaseController
 
             if (!empty($result['requires_2fa'])) {
                 // H22 Fix: مدیریت صحیح لاگین ادمین با احراز هویت دو مرحله ای
+                // HIGH-09 Fix: Store admin-specific pending 2FA with isolation
                 $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
+                $this->session->set('admin_pending_2fa', true); // Admin-specific flag
+                $this->session->set('admin_pending_2fa_created', time()); // Timestamp for timeout
+                $this->session->set('admin_pending_2fa_ip', get_client_ip()); // IP binding
+                
                 // CRITICAL-02 Fix: Log pending 2FA state
                 $this->logger->info('admin.login.pending_2fa', [
                     'channel' => 'admin_auth',
@@ -186,7 +197,17 @@ class AuthController extends BaseController
     public function showVerify2FA()
     {
         $userId = $this->session->get(SessionKeys::PENDING_2FA_USER_ID);
-        if (!$userId) {
+        
+        // HIGH-09 Fix: Verify this is admin pending 2FA (not user pending 2FA)
+        if (!$userId || !$this->session->get('admin_pending_2fa')) {
+            return redirect('/admin/login');
+        }
+        
+        // HIGH-09 Fix: Verify admin pending 2FA hasn't expired
+        $createdAt = (int)$this->session->get('admin_pending_2fa_created', 0);
+        if (time() - $createdAt > 600) { // 10 minute timeout
+            $this->session->destroy();
+            $this->session->setFlash('error', 'نشست تأیید ادمین منقضی شده است. لطفاً دوباره لاگین کنید.');
             return redirect('/admin/login');
         }
 
@@ -199,8 +220,34 @@ class AuthController extends BaseController
     public function verify2FA()
     {
         $userId = $this->session->get(SessionKeys::PENDING_2FA_USER_ID);
-        if (!$userId) {
+        
+        // HIGH-09 Fix: Verify admin pending 2FA exists and is valid
+        if (!$userId || !$this->session->get('admin_pending_2fa')) {
             return $this->json(false, 'نشست نامعتبر است.', [], 401);
+        }
+        
+        // HIGH-09 Fix: Verify admin pending 2FA hasn't expired
+        $createdAt = (int)$this->session->get('admin_pending_2fa_created', 0);
+        if (time() - $createdAt > 600) {
+            $this->session->destroy();
+            return $this->json(false, 'نشست تأیید ادمین منقضی شده است.', [], 401);
+        }
+        
+        // HIGH-09 Fix: Verify IP consistency for admin 2FA
+        $storedIp = $this->session->get('admin_pending_2fa_ip');
+        $currentIp = get_client_ip();
+        if ($storedIp && $storedIp !== $currentIp) {
+            // Normalize to /24 for comparison
+            $storedSubnet = substr($storedIp, 0, strrpos($storedIp, '.'));
+            $currentSubnet = substr($currentIp, 0, strrpos($currentIp, '.'));
+            if ($storedSubnet !== $currentSubnet) {
+                $this->logger->warning('admin.2fa.ip_changed', [
+                    'user_id' => $userId,
+                    'stored_ip' => $storedIp,
+                    'current_ip' => $currentIp
+                ]);
+                // Log but don't block - legitimate network changes
+            }
         }
 
         $code = trim((string)$this->request->post('code'));
@@ -208,9 +255,14 @@ class AuthController extends BaseController
             return $this->json(false, 'لطفاً کد ۶ رقمی را وارد کنید.');
         }
 
-        // CRITICAL-01 Fix: Rate limiting for Admin 2FA verification
+        // Validate code format
+        if (!preg_match('/^[0-9]{6}$/', $code)) {
+            return $this->json(false, 'لطفاً کد ۶ رقمی معتبر وارد کنید.');
+        }
+
+        // CRITICAL-01 Fix: Rate limiting for Admin 2FA verification (stricter than user 2FA)
         $throttleKey = 'admin_2fa_verify:' . (int)$userId . ':' . get_client_ip();
-        $throttle = $this->rateLimiter->attempt($throttleKey, 5, 10); // 5 تلاش در 10 دقیقه
+        $throttle = $this->rateLimiter->attempt($throttleKey, 3, 10, true); // 3 attempts in 10 minutes (stricter for admin)
         if (!$throttle) {
             $this->logger->warning('admin.2fa.bruteforce_attempt', [
                 'user_id' => $userId,
@@ -225,9 +277,13 @@ class AuthController extends BaseController
         if ($result['success']) {
             $this->rateLimiter->clear($throttleKey);
             $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
+            $this->session->remove('admin_pending_2fa');
+            $this->session->remove('admin_pending_2fa_created');
+            $this->session->remove('admin_pending_2fa_ip');
             
             // CRITICAL-C1 Fix: Redundant regenerate() removed. AuthService::verify2FA -> createSession already handles this.
             $this->session->set('admin_verify_time', time());
+            $this->session->set('admin_session', true); // Mark session as admin
             
             $this->logger->activity(
                 'admin.2fa.verified',
@@ -304,11 +360,18 @@ if ($userId) {
 );
 }
 
+// Clear admin-specific session flags
+$this->session->remove('admin_pending_2fa');
+$this->session->remove('admin_pending_2fa_created');
+$this->session->remove('admin_pending_2fa_ip');
+$this->session->remove('admin_verify_time');
+$this->session->remove('admin_session');
+
 $this->authService->logout();
 
 return redirect('/admin/login');
 
-        // catch خروج
+// catch خروج
 } catch (\Exception $e) {
     $this->logger->error('admin.logout.failed', [
         'channel' => 'admin_auth',
