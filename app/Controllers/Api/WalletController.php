@@ -27,21 +27,13 @@ class WalletController extends BaseApiController
     public function balance(): never
     {
         $userId = $this->userId();
-        $wallet = $this->walletService->getOrCreateWallet($userId);
+        $balances = $this->walletService->getWalletBalances($userId);
 
-        if (!$wallet) {
+        if (empty($balances)) {
             $this->error('کیف‌پول یافت نشد', 404);
         }
 
-        $this->success([
-            'irt_balance'        => (float)($wallet->balance_irt ?? 0),
-            'irt_locked'         => (float)($wallet->locked_irt ?? 0),
-            'irt_available'      => max(0, (float)($wallet->balance_irt ?? 0) - (float)($wallet->locked_irt ?? 0)),
-            'usdt_balance'       => (float)($wallet->balance_usdt ?? 0),
-            'usdt_locked'        => (float)($wallet->locked_usdt ?? 0),
-            'usdt_available'     => max(0, (float)($wallet->balance_usdt ?? 0) - (float)($wallet->locked_usdt ?? 0)),
-            'last_withdrawal_at' => $wallet->last_withdrawal_at ?? null,
-        ]);
+        $this->success($balances);
     }
 
     /** تاریخچه تراکنش‌ها */
