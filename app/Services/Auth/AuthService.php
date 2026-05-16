@@ -89,16 +89,13 @@ class AuthService extends \App\Services\BaseService
     {
         $ip = $this->clientIp();
         
-        // CRITICAL-01 Fix: Consolidated Rate Limiting - Checking both IP and Identifier
-        $ipRateLimit = $this->rateLimiter->checkLoginAttempt('login_ip:' . hash('sha256', $ip));
-        $idRateLimit = $this->rateLimiter->checkLoginAttempt('login_id:' . hash('sha256', $identifier));
-
-        if (!$ipRateLimit['allowed'] || !$idRateLimit['allowed']) {
-            $message = !$idRateLimit['allowed'] ? ($idRateLimit['message'] ?? '') : ($ipRateLimit['message'] ?? '');
-            return [
-                'success' => false, 
-                'message' => $message ?: 'تعداد تلاش‌های ورود بیش از حد مجاز است. لطفاً بعداً تلاش کنید.'
-            ];
+        // CRITICAL-01 Fix: Consolidated Rate Limiting (IP + Identifier)
+        // CRIT-07 Fix: failClosed = true for security-sensitive routes
+        if (!$this->rateLimiter->attempt('login_ip:' . hash('sha256', $ip), 10, 1, true) || 
+            !$this->rateLimiter->attempt('login_id:' . hash('sha256', $identifier), 5, 15, true)) {
+            
+            $this->auditTrail->record('auth.login_throttled', 0, ['identifier' => $identifier, 'ip' => $ip]);
+            return ['success' => false, 'message' => 'تعداد تلاش‌های شما بیش از حد مجاز است. لطفاً بعداً تلاش کنید.'];
         }
 
         $user = $this->userModel->findByCredentials($identifier);
@@ -233,11 +230,15 @@ class AuthService extends \App\Services\BaseService
             $this->userModel->update((int)$user->id, ['remember_token' => $hashedToken]);
             
             $rememberDays = (int)$this->settingService->get('auth_remember_days', 30);
+            // H12 Fix: جلوگیری از ست شدن نامعتبر دامین در localhost و محافظت در برابر پارس نادرست
+            $host = parse_url(config('app.url', ''), PHP_URL_HOST);
+            $cookieDomain = $host && $host !== 'localhost' ? $host : '';
+
             // 🛡️ Modernized Security Attributes: Strictly enforcing HttpOnly, Secure and Lax SameSite policies
             setcookie('remember_token', $token, [
                 'expires' => time() + ($rememberDays * 86400),
                 'path' => '/',
-                'domain' => '',
+                'domain' => $cookieDomain,
                 'secure' => true,
                 'httponly' => true,
                 'samesite' => 'Lax'
@@ -381,7 +382,8 @@ class AuthService extends \App\Services\BaseService
         $rateLimitKey = "pw_reset:" . hash('sha256', "{$email}:{$ip}");
         
         // Threshold limit: 3 recovery attempts per hour
-        if (!$this->rateLimiter->attempt($rateLimitKey, 3, 60)) {
+        // CRIT-07 Fix: failClosed = true for security-sensitive routes
+        if (!$this->rateLimiter->attempt($rateLimitKey, 3, 60, true)) {
             $seconds = $this->rateLimiter->availableIn($rateLimitKey);
             $minutes = (int)ceil($seconds / 60);
             

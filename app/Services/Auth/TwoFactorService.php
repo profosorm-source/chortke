@@ -300,32 +300,57 @@ class TwoFactorService extends \App\Services\BaseService
     public function encryptSecret(string $secret): string
     {
         $key = (string)config('app.key');
-        $iv = substr($key, 0, 16);
-        $encrypted = openssl_encrypt($secret, 'aes-256-cbc', $key, 0, $iv);
+        if (strlen($key) < 32) {
+            throw new \RuntimeException('Application key is too short for AES-256 encryption.');
+        }
+
+        $iv = random_bytes(16);
+        $encrypted = openssl_encrypt($secret, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
+        
         if ($encrypted === false) {
             throw new \RuntimeException('Failed to encrypt 2FA secret.');
         }
-        return $encrypted;
+
+        // Prepend IV to ciphertext and base64 encode
+        return base64_encode($iv . $encrypted);
     }
 
-    /**
-     * Decrypts 2FA secret, falling back gracefully to raw format if legacy.
-     */
     public function decryptSecret(string $encryptedSecret): string
     {
-        // If length is 32 and base32 compliant, it might be legacy unencrypted
+        // If length is 32 and base32 compliant, it is legacy unencrypted
         if (strlen($encryptedSecret) == 32 && preg_match('/^[A-Z2-7]+$/', $encryptedSecret)) {
             return $encryptedSecret;
         }
 
         $key = (string)config('app.key');
-        $iv = substr($key, 0, 16);
-        $decrypted = openssl_decrypt($encryptedSecret, 'aes-256-cbc', $key, 0, $iv);
-        
-        if ($decrypted === false || $decrypted === '') {
-            return $encryptedSecret; // Fallback for extreme safety
+        $decoded = base64_decode($encryptedSecret, true);
+
+        // Check if it's the new format (IV + Ciphertext)
+        if ($decoded !== false && strlen($decoded) > 16) {
+            $iv = substr($decoded, 0, 16);
+            $ciphertext = substr($decoded, 16);
+            $decrypted = openssl_decrypt($ciphertext, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
+            
+            if ($decrypted !== false && $decrypted !== '') {
+                return $decrypted;
+            }
         }
-        return $decrypted;
+
+        // Fallback for old format (Derived IV)
+        $ivLegacy = substr($key, 0, 16);
+        $decryptedLegacy = openssl_decrypt($encryptedSecret, 'aes-256-cbc', $key, 0, $ivLegacy);
+        
+        if ($decryptedLegacy !== false && $decryptedLegacy !== '') {
+            return $decryptedLegacy;
+        }
+
+        // CRITICAL-05 Fix: Do not return raw input on failure. Log and fail.
+        $this->logger->critical('2fa.decrypt_failed', [
+            'payload_length' => strlen($encryptedSecret),
+            'format' => ($decoded !== false) ? 'new' : 'legacy/unknown'
+        ]);
+        
+        throw new \RuntimeException('امکان رمزگشایی کد تایید وجود ندارد. لطفاً با پشتیبانی تماس بگیرید.');
     }
 }
 

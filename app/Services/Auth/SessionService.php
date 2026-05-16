@@ -121,8 +121,8 @@ class SessionService extends \App\Services\BaseService
             $activeSessions = $this->model->countActiveSessions($userId);
             $maxSessions = (int)config('auth.max_concurrent_sessions', 5);
             if ($activeSessions >= $maxSessions) {
-                // Terminate oldest session to make room
-                $this->invalidateAllUserSessions($userId); // Or implement invalidateOldestSession
+                // Terminate oldest session to make room (LOW-L-02 Fix: Selective invalidation instead of mass)
+                $this->model->deactivateOldestSession($userId);
                 $this->logger->info('session.limit_reached.auto_cleanup', ['user_id' => $userId]);
             }
 
