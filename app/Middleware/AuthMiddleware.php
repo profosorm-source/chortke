@@ -37,10 +37,14 @@ class AuthMiddleware extends BaseMiddleware
                 'message' => 'احراز هویت مبتنی بر سشن روی وب‌سرویس‌ها مجاز نیست.'
             ], 401);
         }
-
         $session = $this->session;
         $now = time();
-        $timeout = (int)$this->settingService->get('session_idle_timeout_seconds', 900);
+
+        $redisAvailable = $this->redis && $this->redis->isAvailable();
+        
+        // MEDIUM-M2 Fix: Reduce timeout when Redis is down for conservative security posture
+        $defaultTimeout = $redisAvailable ? 900 : 300; // 15 min vs 5 min
+        $timeout = (int)$this->settingService->get('session_idle_timeout_seconds', $defaultTimeout);
         
         // ✅ امنیت: استفاده از Redis برای ذخیره timeout (نه session-side) با فال‌بک امن سشن در صورت عدم دسترسی به ردیس
         $sessionId = session_id();
@@ -97,6 +101,13 @@ class AuthMiddleware extends BaseMiddleware
         // MED-08 Fix: Unified and robust check for both user_id and logged_in flag
         $userId = (int)$session->get(SessionKeys::USER_ID, 0);
         if ($userId <= 0 || !$session->get(SessionKeys::LOGGED_IN)) {
+            // HIGH-H-13 Fix: Redirect to verification page if an email confirmation is pending
+            if ($session->has('pending_verification_email')) {
+                $response = new Response();
+                $response->redirect(url('email/verify-code'));
+                return $response;
+            }
+
             $response = new Response();
             if ($request->isAjax()) {
                 return $response->json(['success' => false, 'message' => config('messages.auth.unauthorized')], 401);
