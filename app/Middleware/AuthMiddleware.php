@@ -13,6 +13,11 @@ use App\Constants\SessionKeys;
 
 /**
  * AuthMiddleware — مدیریت احراز هویت و انقضای نشست کاربر
+ * 
+ * SECURITY NOTES:
+ * - When Redis is unavailable, timeout is reduced for security
+ * - Session verification includes Redis keys cleanup
+ * - Fail-closed behavior when all storage mechanisms fail
  */
 class AuthMiddleware extends BaseMiddleware
 {
@@ -20,6 +25,10 @@ class AuthMiddleware extends BaseMiddleware
     private Redis $redis;
     private \App\Services\SettingService $settingService;
     private \App\Models\User $userModel;
+
+    // LOW-04 Fix: Reduced fallback timeout from 300 (5 min) to 180 (3 min)
+    // This provides more aggressive security when Redis is unavailable
+    private const FALLBACK_TIMEOUT_WHEN_REDIS_DOWN = 180; // 3 minutes instead of 5
 
     public function __construct(
         Session $session, 
@@ -49,8 +58,21 @@ class AuthMiddleware extends BaseMiddleware
         $redisAvailable = $this->redis && $this->redis->isAvailable();
         
         // MEDIUM-M2 Fix: Reduce timeout when Redis is down for conservative security posture
-        $defaultTimeout = $redisAvailable ? 900 : 300; // 15 min vs 5 min
+        // LOW-04 Fix: Further reduced from 300 (5min) to 180 (3min) when Redis is down
+        $defaultTimeout = $redisAvailable ? 900 : self::FALLBACK_TIMEOUT_WHEN_REDIS_DOWN; // 15 min vs 3 min
         $timeout = (int)$this->settingService->get('session_idle_timeout_seconds', $defaultTimeout);
+        
+        // If Redis was available but then fails during this request, use conservative timeout
+        // This ensures we don't trust stale activity data from Redis
+        if ($redisAvailable) {
+            try {
+                // Verify Redis is still responding (not just that it's "available")
+                $this->redis->ping();
+            } catch (\Throwable $e) {
+                $redisAvailable = false;
+                $timeout = self::FALLBACK_TIMEOUT_WHEN_REDIS_DOWN; // Use conservative timeout
+            }
+        }
         
         // ✅ امنیت: استفاده از Redis برای ذخیره timeout (نه session-side) با فال‌بک امن سشن در صورت عدم دسترسی به ردیس
         $sessionId = session_id();
@@ -74,15 +96,28 @@ class AuthMiddleware extends BaseMiddleware
         if ($lastActivity === null) {
             // NEW-H-03 Fix: Initialize last_activity if missing to prevent timeout bypass
             $session->set('last_activity', (string)$now);
+            // LOW-04 Fix: When initializing, also set Redis key if available
+            if ($redisAvailable) {
+                try { $this->redis->set($redisKey, (string)$now, $timeout + 60); } catch (\Throwable) {}
+            }
         } else {
             $lastActivityTime = (int)$lastActivity;
             
             // بررسی انقضای نشست (Idle Timeout)
             if (($now - $lastActivityTime) > $timeout) {
-                $session->destroy();
+                // LOW-04 Fix: Clean up Redis keys when session expires
                 if ($redisAvailable) {
-                    try { $this->redis->delete($redisKey); } catch (\Throwable) {}
+                    try { 
+                        $this->redis->delete($redisKey); 
+                        // LOW-04 Fix: Also clear verify key
+                        $userId = (int)$session->get(SessionKeys::USER_ID, 0);
+                        if ($userId > 0) {
+                            $this->redis->delete("user_verify:{$userId}");
+                        }
+                    } catch (\Throwable) {}
                 }
+                
+                $session->destroy();
                 
                 $response = new Response();
                 if ($request->isAjax()) {
@@ -99,7 +134,10 @@ class AuthMiddleware extends BaseMiddleware
         if ($redisAvailable) {
             try {
                 $this->redis->set($redisKey, (string)$now, $timeout + 60);
-            } catch (\Throwable) {}
+            } catch (\Throwable) {
+                // If Redis write fails, continue with session-side tracking
+                $redisAvailable = false;
+            }
         }
 
         // HIGH-02 Fix: Always update session as backup to prevent fail-open if Redis goes down
@@ -147,13 +185,14 @@ class AuthMiddleware extends BaseMiddleware
             try {
                 $user = $this->userModel->find($userId);
                 if (!$user || (string)$user->status !== 'active') {
-                    $session->destroy();
+                    // LOW-04 Fix: Clean up all session-related Redis keys on account deactivation
                     if ($redisAvailable) {
                         try { 
                             $this->redis->delete($redisKey); 
                             $this->redis->delete($verifyRedisKey);
                         } catch (\Throwable) {}
                     }
+                    $session->destroy();
                     $response = new Response();
                     if ($request->isAjax()) {
                         return $response->json(['success' => false, 'message' => 'حساب شما غیرفعال شده یا دسترسی با خطا مواجه شد.'], 403);
@@ -168,8 +207,19 @@ class AuthMiddleware extends BaseMiddleware
                 }
             } catch (\Throwable $e) {
                 $this->logger->error('auth.middleware.db_error', ['error' => $e->getMessage()]);
+                // LOW-04 Fix: When DB verification fails, use fail-closed behavior
+                // Don't allow the request to proceed if we can't verify the user is still valid
                 $session->destroy();
+                if ($redisAvailable) {
+                    try { 
+                        $this->redis->delete($redisKey); 
+                        $this->redis->delete($verifyRedisKey);
+                    } catch (\Throwable) {}
+                }
                 $response = new Response();
+                if ($request->isAjax()) {
+                    return $response->json(['success' => false, 'message' => 'خطا در تأیید وضعیت حساب. لطفاً دوباره وارد شوید.'], 401);
+                }
                 return $response->redirect(url('login'));
             }
         }
