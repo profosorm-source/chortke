@@ -59,7 +59,8 @@ class AuthController extends BaseController
             }
         }
 
-        $captchaType = $this->loginRiskService->getCaptchaType('login');
+        $email = (string)$this->request->input('email', '');
+        $captchaType = $this->loginRiskService->getCaptchaType('login', null, $email);
         if ($captchaType !== null) {
             // ✅ استفاده از $this->request->input() به جای $_POST
             $captchaToken = trim((string)$this->request->input('captcha_token', ''));
@@ -68,14 +69,14 @@ class AuthController extends BaseController
 
             if ($captchaType === 'recaptcha_v2') {
                 if ($recaptchaResp === '' || !$this->captchaService->verify('', '', $recaptchaResp)) {
-                    $this->loginRiskService->recordFailure('login');
+                    $this->loginRiskService->recordFailure('login', null, $email);
                     $this->session->setFlash('error', 'کپچا نامعتبر است.');
                     $this->response->redirect(url('login'));
                     return;
                 }
             } else {
                 if ($captchaToken === '' || $captchaResp === '' || !$this->captchaService->verify($captchaToken, $captchaResp)) {
-                    $this->loginRiskService->recordFailure('login');
+                    $this->loginRiskService->recordFailure('login', null, $email);
                     $this->session->setFlash('error', 'کپچا اشتباه است.');
                     $this->response->redirect(url('login'));
                     return;
@@ -119,7 +120,7 @@ class AuthController extends BaseController
         $result = $this->authService->login($data['email'], $data['password'], $remember);
 
         if (!$result['success']) {
-            $this->loginRiskService->recordFailure('login');
+            $this->loginRiskService->recordFailure('login', null, (string)$data['email']);
             if (!empty($result['email_unverified'])) {
                 $this->session->set('pending_verification_email', $result['email']);
                 $this->session->setFlash('success', 'ایمیل تأیید ارسال شد.');
@@ -137,10 +138,10 @@ class AuthController extends BaseController
             return;
         }
 
-        // MED-05 Fix: Regenerate session ID after successful login to prevent fixation
-        $this->session->regenerate();
+        // CRITICAL-C1 Fix: Redundant regenerate() removed. AuthService::login already calls regenerate(true)
+        // to prevent session fixation and ensure 2FA pending state isolation.
         
-        $this->loginRiskService->clearFailures('login');
+        $this->loginRiskService->clearFailures('login', null, (string)$data['email']);
         $this->session->setFlash('success', 'خوش آمدید!');
         $this->response->redirect(url('dashboard'));
     }
@@ -326,7 +327,17 @@ class AuthController extends BaseController
             return;
         }
         
-        app(\Core\CSRF::class)->validate();
+        try {
+            app(\Core\CSRF::class)->validate();
+        } catch (\Throwable $e) {
+            $this->logger->warning('auth.logout.csrf_failed', [
+                'ip' => $this->request->ip(),
+                'error' => $e->getMessage()
+            ]);
+            $this->session->setFlash('error', 'درخواست نامعتبر (CSRF).');
+            $this->response->redirect(url('dashboard'));
+            return;
+        }
 
         $this->authService->logout();
         $this->session->setFlash('success', 'با موفقیت خارج شدید.');

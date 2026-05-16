@@ -65,10 +65,8 @@ class TwoFactorController extends BaseUserController
             }
 
             $data['secret']       = $this->twoFactorService->decryptSecret($user->two_factor_secret);
-            $data['qr_code_url']  = $this->twoFactorService->getQRCodeUrl(
-                $user->username ?? $user->email,
-                $user->two_factor_secret
-            );
+            // HIGH-H2 Fix: Point to server-side QR generator route instead of exposing otpauth URL in view
+            $data['qr_code_url']  = url('two-factor/qr');
         }
 
         $this->view('user/security/two-factor', $data);
@@ -217,6 +215,57 @@ class TwoFactorController extends BaseUserController
         }
 
         $this->response->json($result);
+    }
+
+    /**
+     * HIGH-H2 Fix: Server-side QR Code Generator Proxy
+     * This prevents leaking the TOTP secret via Referrer headers or browser history/logs.
+     */
+    public function qrCode(): void
+    {
+        $userId = $this->userId();
+        if (!$userId) {
+            $this->response->setStatusCode(401);
+            $this->response->setContent('Unauthorized');
+            return;
+        }
+
+        $user = $this->userService->find($userId);
+        if (!$user || empty($user->two_factor_secret) || ($user->two_factor_enabled && !$this->session->get(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED))) {
+            $this->response->setStatusCode(404);
+            $this->response->setContent('Not Found');
+            return;
+        }
+
+        $otpAuthUrl = $this->twoFactorService->getQRCodeUrl(
+            $user->username ?? $user->email,
+            $user->two_factor_secret
+        );
+
+        // Render QR using Google Charts API as a server-side proxy
+        // Since it's done server-to-server, the secret is never exposed to the client's browser/logs.
+        $qrServiceUrl = "https://chart.googleapis.com/chart?chs=200x200&cht=qr&chl=" . urlencode($otpAuthUrl) . "&choe=UTF-8";
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $qrServiceUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        $image = curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($image === false || empty($image)) {
+            $this->logger->error('2fa.qr_proxy.failed', ['error' => $error]);
+            $this->response->setStatusCode(502);
+            $this->response->setContent('Failed to generate QR');
+            return;
+        }
+
+        $this->response->header('Content-Type', 'image/png');
+        $this->response->header('Cache-Control', 'no-store, no-cache, must-revalidate');
+        $this->response->header('Pragma', 'no-cache');
+        $this->response->setContent($image);
     }
 
     public function disable(): void
