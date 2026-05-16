@@ -47,6 +47,14 @@ class SecurityModel extends Model
         return (bool)$this->db->query("UPDATE two_factor_codes SET used = 1 WHERE id = ?", [$id]);
     }
 
+    /**
+     * CRIT-04 Fix: حذف فیزیکی کد بازیابی بلافاصله پس از استفاده برای جلوگیری از Replay Attack
+     */
+    public function deleteTwoFactorCode(int $id): bool
+    {
+        return (bool)$this->db->query("DELETE FROM two_factor_codes WHERE id = ?", [$id]);
+    }
+
     // --- Password Reset Methods ---
 
     public function createPasswordResetToken(string $email, string $token): bool

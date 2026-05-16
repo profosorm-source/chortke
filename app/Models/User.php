@@ -110,6 +110,19 @@ class User extends Model
         );
     }
 
+    /**
+     * CRIT-06 Fix: به‌روزرسانی اتمیک تایم‌اسلایس 2FA برای جلوگیری از Race Condition و Replay Attack
+     */
+    public function update2FATimeslice(int $userId, int $slice): bool
+    {
+        $stmt = $this->db->query(
+            "UPDATE users SET last_2fa_timeslice = ? 
+             WHERE id = ? AND (last_2fa_timeslice IS NULL OR last_2fa_timeslice < ?)",
+            [$slice, $userId, $slice]
+        );
+        return (bool)($stmt && $stmt->rowCount() > 0);
+    }
+
     public function searchWithFilters(array $filters = [], int $limit = 20, int $offset = 0): array
     {
         $query = $this->db->table('users')->whereNull('deleted_at');
