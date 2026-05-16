@@ -162,7 +162,7 @@ class TwoFactorController extends BaseUserController
 
             $this->session->set(SessionKeys::USER_ID,   $user->id);
             $this->session->set(SessionKeys::USERNAME,  $user->username  ?? '');
-            $this->session->set('email',     $user->email);
+            $this->session->set(SessionKeys::USER_EMAIL, $user->email);
             $this->session->set(SessionKeys::USER_ROLE, $user->role); 
             $this->session->set(SessionKeys::IS_ADMIN,  in_array($user->role, ['admin', 'super_admin'], true));
             $this->session->set(SessionKeys::LOGGED_IN, true);
