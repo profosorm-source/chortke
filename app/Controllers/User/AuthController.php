@@ -249,6 +249,9 @@ class AuthController extends BaseController
             return;
         }
 
+        // HIGH-H-07 Fix: Prevent session fixation on pending email verification
+        $this->session->regenerate(true);
+
         $this->view('user/verify-email-code', [
             'title' => 'تأیید ایمیل',
             'email' => $email

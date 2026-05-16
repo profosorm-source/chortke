@@ -67,8 +67,7 @@ class TwoFactorController extends BaseUserController
                 $user->two_factor_secret = $encryptedSecret;
             }
 
-            $data['secret']       = $this->twoFactorService->decryptSecret($user->two_factor_secret);
-            // HIGH-H2 Fix: Point to server-side QR generator route instead of exposing otpauth URL in view
+            // HIGH-H2 Fix: Do not expose the plain secret to the view
             $data['qr_code_url']  = url('two-factor/qr');
         }
 
@@ -161,15 +160,7 @@ class TwoFactorController extends BaseUserController
         if ($this->twoFactorService->verifyCode($user->two_factor_secret, $code, (int)$userId)) {
             $this->rateLimiter->clear($throttleKey);
 
-            // HIGH-01 Fix: regenerate(true) handles clearing the PENDING_2FA_USER_ID automatically
-            $this->session->regenerate(true); 
-
-            $this->session->set(SessionKeys::USER_ID,   $user->id);
-            $this->session->set(SessionKeys::USERNAME,  $user->username  ?? '');
-            $this->session->set(SessionKeys::USER_EMAIL, $user->email);
-            $this->session->set(SessionKeys::USER_ROLE, $user->role); 
-            $this->session->set(SessionKeys::IS_ADMIN,  in_array($user->role, ['admin', 'super_admin'], true));
-            $this->session->set(SessionKeys::LOGGED_IN, true);
+            $this->authService->finalizeSessionAfter2FA($user);
 
             $this->logger->activity('2fa.verified', 'تأیید موفق احراز هویت دو مرحله‌ای', $user->id, [
                 'channel' => 'auth',
