@@ -58,7 +58,11 @@ class CorsMiddleware
 
         // بررسی هدر ارسال شده از سوی مرورگر (و نرمال‌سازی آن)
         $requestOrigin = rtrim((string)$request->header('Origin', ''), '/');
-        $isAllowedOrigin = $requestOrigin !== '' && in_array($requestOrigin, $allowedOrigins, true);
+        
+        // MEDIUM-02 Fix: Validate URL scheme to prevent non-HTTP/HTTPS origin scheme injection (e.g. data://, javascript://)
+        $isValidScheme = str_starts_with($requestOrigin, 'http://') || str_starts_with($requestOrigin, 'https://');
+        
+        $isAllowedOrigin = $requestOrigin !== '' && $isValidScheme && in_array($requestOrigin, $allowedOrigins, true);
 
         // هدر Vary برای کش‌های میانی الزامی است
         $response->header('Vary', 'Origin');
