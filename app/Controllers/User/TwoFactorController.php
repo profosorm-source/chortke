@@ -180,8 +180,17 @@ class TwoFactorController extends BaseUserController
         if ($pendingIp) {
             $currentIp = $this->clientIp();
             // Normalize IPs to /24 for comparison (allow subnet changes, not complete IP changes)
-            $pendingSubnet = substr($pendingIp, 0, strrpos($pendingIp, '.'));
-            $currentSubnet = substr($currentIp, 0, strrpos($currentIp, '.'));
+            $normalize = function(string $ip): string {
+                if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+                    $packed = inet_pton($ip);
+                    if ($packed === false) return $ip;
+                    return inet_ntop(substr($packed, 0, 8) . str_repeat("\x00", 8));
+                }
+                return substr($ip, 0, strrpos($ip, '.') ?: 0);
+            };
+
+            $pendingSubnet = $normalize($pendingIp);
+            $currentSubnet = $normalize($currentIp);
             
             if ($pendingSubnet !== $currentSubnet) {
                 $this->logger->warning('2fa.verify.ip_changed', [
@@ -211,9 +220,10 @@ class TwoFactorController extends BaseUserController
             return;
         }
 
-        // Validate code format (6 digits)
-        if (!preg_match('/^[0-9]{6}$/', $code)) {
-            $this->response->json(['success' => false, 'message' => 'لطفاً کد ۶ رقمی معتبر وارد کنید.']);
+        $isTotp = preg_match('/^[0-9]{6}$/', $code);
+        $isRecovery = preg_match('/^[A-Z0-9]{24}$/i', $code);
+        if (!$isTotp && !$isRecovery) {
+            $this->response->json(['success' => false, 'message' => 'کد معتبر (۶ رقم یا کد بازیابی ۲۴ کاراکتری) وارد کنید.']);
             return;
         }
 

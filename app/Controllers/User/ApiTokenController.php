@@ -60,7 +60,8 @@ class ApiTokenController extends BaseUserController
             return;
         }
 
-        $result = $this->apiTokenService->createTokenForUser($userId, $name, $expiresIn);
+        $scope = trim($this->request->post('scope') ?? 'read');
+        $result = $this->apiTokenService->createTokenForUser($userId, $name, $expiresIn, $scope);
         if (!$result['success']) {
             $this->redirectWithError($result['message'] ?? 'خطا در ایجاد توکن', '/api-tokens');
             return;
