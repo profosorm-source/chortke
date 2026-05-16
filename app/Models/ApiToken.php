@@ -18,7 +18,9 @@ class ApiToken extends Model
         'read', 'write', 'admin', 'delete',
         'profile:read', 'profile:write', 
         'wallet:read', 'wallet:write', 
-        'transactions:read', 'tasks:read', 'tasks:write'
+        'transactions:read', 'tasks:read', 'tasks:write',
+        'security:read', 'security:write', 
+        'settings:read', 'settings:write'
     ];
 
     public function __construct(Database $db)

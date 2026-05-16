@@ -51,18 +51,29 @@ class SecurityModel extends Model
 
     public function createPasswordResetToken(string $email, string $token): bool
     {
-        $hashedToken = \hash('sha256', $token);
-        $this->db->query("DELETE FROM password_resets WHERE email = ?", [$email]);
+        // CRITICAL-C-03 Fix: Using HMAC-SHA256 with application key to prevent rainbow table attacks
+        $key = (string)config('app.key');
+        $hashedToken = hash_hmac('sha256', $token, $key);
+        
+        // LOW-L-01 Fix: Using ON DUPLICATE KEY UPDATE to prevent race conditions and handle unique constraints
         return (bool)$this->db->query(
-            "INSERT INTO password_resets (email, token, created_at) VALUES (?, ?, NOW())",
+            "INSERT INTO password_resets (email, token, created_at) VALUES (?, ?, NOW())
+             ON DUPLICATE KEY UPDATE token = VALUES(token), created_at = NOW()",
             [$email, $hashedToken]
         );
     }
 
-    public function findPasswordResetByToken(string $token): ?object
+    public function findPasswordResetByToken(string $token, int $timeout = 3600): ?object
     {
-        $hashedToken = \hash('sha256', $token);
-        return $this->db->fetch("SELECT * FROM password_resets WHERE token = ? LIMIT 1", [$hashedToken]);
+        // CRITICAL-C-03 Fix: Using HMAC-SHA256 with application key
+        $key = (string)config('app.key');
+        $hashedToken = hash_hmac('sha256', $token, $key);
+        
+        // HIGH-H-11 Fix: Enforcing TTL check at database level to prevent clock-drift bypasses
+        return $this->db->fetch(
+            "SELECT * FROM password_resets WHERE token = ? AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND) LIMIT 1",
+            [$hashedToken, $timeout]
+        );
     }
 
     public function deletePasswordResetByEmail(string $email): bool
@@ -131,6 +142,11 @@ class SecurityModel extends Model
     public function findSessionBySessionId(string $sessionId): ?object
     {
         return $this->db->fetch("SELECT * FROM user_sessions WHERE session_id = ? LIMIT 1", [$sessionId]);
+    }
+
+    public function findSessionById(int $id): ?object
+    {
+        return $this->db->fetch("SELECT * FROM user_sessions WHERE id = ? LIMIT 1", [$id]);
     }
 
     public function deactivateSession(int $id): bool
