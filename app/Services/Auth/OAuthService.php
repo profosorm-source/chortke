@@ -50,8 +50,10 @@ class OAuthService extends \App\Services\BaseService
         $state = bin2hex(random_bytes(16));
         $nonce = bin2hex(random_bytes(16));
         
-        // HIGH-H-15 Fix: State signing with application key to prevent state tampering/forgery
-        $signature = hash_hmac('sha256', $state, (string)config('app.key'));
+        // HIGH-H-15 Fix: State signing with IP and Session ID binding to prevent state tampering/forgery
+        $ip = $this->clientIp();
+        $sessionId = $this->session->getId();
+        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId, (string)config('app.key'));
 
         // 🛡️ Security Improvement: Storing cryptographic state with creation timestamp for TTL enforcement.
         $this->session->set(SessionKeys::OAUTH_STATE, [
@@ -59,8 +61,8 @@ class OAuthService extends \App\Services\BaseService
             'signature'  => $signature,
             'nonce'      => $nonce,
             'created_at' => time(),
-            'session_id' => $this->session->getId(),
-            'ip'         => $this->clientIp()
+            'session_id' => $sessionId,
+            'ip'         => $ip
         ]);
 
         return "https://accounts.google.com/o/oauth2/v2/auth?" . http_build_query([
@@ -108,9 +110,13 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Invalid state token match failed.'];
         }
 
-        // HIGH-H-15 Fix: Verify state signature
-        $expectedSignature = hash_hmac('sha256', $state, (string)config('app.key'));
+        // HIGH-H-15 Fix: Verify state signature (bound to original IP and Session ID)
+        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), (string)config('app.key'));
         if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
+            $this->logger->critical('oauth.google.state_signature_mismatch', [
+                'state' => $state,
+                'ip' => $this->clientIp()
+            ]);
             return ['success' => false, 'message' => 'State signature verification failed.'];
         }
 
@@ -459,15 +465,17 @@ class OAuthService extends \App\Services\BaseService
         $redirectUri = $this->buildRedirectUri('/auth/callback/facebook');
         $state = bin2hex(random_bytes(16));
         
-        // HIGH-H-15 Fix: State signing for Facebook
-        $signature = hash_hmac('sha256', $state, (string)config('app.key'));
+        // HIGH-H-15 Fix: State signing for Facebook with IP/Session binding
+        $ip = $this->clientIp();
+        $sessionId = $this->session->getId();
+        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId, (string)config('app.key'));
 
         $this->session->set(SessionKeys::OAUTH_STATE . '_facebook', [
             'token'      => $state,
             'signature'  => $signature,
             'created_at' => time(),
-            'session_id' => $this->session->getId(),
-            'ip'         => $this->clientIp()
+            'session_id' => $sessionId,
+            'ip'         => $ip
         ]);
 
         return "https://www.facebook.com/v18.0/dialog/oauth?" . http_build_query([
@@ -501,8 +509,12 @@ class OAuthService extends \App\Services\BaseService
         }
 
         // HIGH-H-15 Fix: Verify state signature for Facebook
-        $expectedSignature = hash_hmac('sha256', $state, (string)config('app.key'));
+        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), (string)config('app.key'));
         if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
+            $this->logger->critical('oauth.facebook.state_signature_mismatch', [
+                'state' => $state,
+                'ip' => $this->clientIp()
+            ]);
             return ['success' => false, 'message' => 'State signature verification failed.'];
         }
 

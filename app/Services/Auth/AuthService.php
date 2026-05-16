@@ -176,8 +176,12 @@ class AuthService extends \App\Services\BaseService
      */
     public function loginDirectly(object $user): array
     {
-        if ($user->status === 'banned' || $user->status === 'suspended' || $user->status === 'locked') {
-            return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.'];
+        if ($user->status === 'locked') {
+            return ['success' => false, 'message' => 'حساب کاربری شما قفل شده است.', 'code' => 'ACCOUNT_LOCKED'];
+        }
+
+        if (in_array($user->status, ['banned', 'suspended'], true)) {
+            return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.', 'code' => 'ACCOUNT_DISABLED'];
         }
 
         // HIGH-H-14 Fix: Enforce email verification check for direct/OAuth logins
@@ -197,6 +201,13 @@ class AuthService extends \App\Services\BaseService
             'auth.login', 
             new UserLoggedInEvent((int)$user->id, $this->clientIp(), get_user_agent())
         );
+
+        // 🛡️ Rate Limiting: Prevent abuse of direct/OAuth login flows
+        $ip = $this->clientIp();
+        if (!$this->rateLimiter->attempt('login_direct:' . hash('sha256', $ip), 20, 1, true)) {
+            $this->logger->warning('auth.login_directly.throttled', ['user_id' => $user->id, 'ip' => $ip]);
+            return ['success' => false, 'message' => 'تعداد تلاش‌های شما بیش از حد مجاز است.'];
+        }
 
         return [
             'success'      => true,
@@ -259,10 +270,20 @@ class AuthService extends \App\Services\BaseService
 
     public function finalizeSessionAfter2FA(object $user): void
     {
+        // CRITICAL-C1 Fix: Force session regeneration after 2FA completion 
+        // to prevent session fixation from pending state.
+        $this->session->regenerate(true);
+        
         $this->createSession($user, false);
         $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
         $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $user->email ?? $user->username));
         $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $this->clientIp()));
+        
+        // Record final login event after 2FA
+        $this->auditTrail->record('auth.login.2fa_completed', (int)$user->id, [
+            'ip' => $this->clientIp(),
+            'user_agent' => get_user_agent()
+        ]);
     }
 
     public function logout(): void

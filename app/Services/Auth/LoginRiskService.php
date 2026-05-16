@@ -224,6 +224,8 @@ class LoginRiskService extends \App\Services\BaseService
 
     private function buildKey(string $context, string $ip, ?string $identifier = null): string
     {
+        // LOW-05 Fix: Key generation depends on APP_KEY. 
+        // Note: Rotating APP_KEY will invalidate all existing risk scores, forcing captchas for everyone temporarily.
         $salt = (string)config('app.key');
         
         if ($identifier) {

@@ -247,19 +247,20 @@ class ApiTokenService extends \App\Services\BaseService
             }
         }
 
-        if (in_array($user->status, ['banned', 'suspended'], true)) {
+        // HIGH-H-07 Fix: Enforce account status check (locked, banned, suspended)
+        if (in_array($user->status, ['locked', 'banned', 'suspended'], true)) {
             return [
                 'success' => false,
-                'message' => 'حساب محدود شده است',
+                'message' => 'حساب کاربری شما غیرفعال یا مسدود شده است',
                 'status' => 403,
-                'code' => 'ACCOUNT_RESTRICTED',
+                'code' => 'ACCOUNT_DISABLED',
             ];
         }
 
         if ((string)$user->status !== 'active') {
             return [
                 'success' => false,
-                'message' => 'حساب کاربری غیرفعال است',
+                'message' => 'حساب کاربری فعال نیست',
                 'status' => 403,
                 'code' => 'ACCOUNT_INACTIVE',
             ];
