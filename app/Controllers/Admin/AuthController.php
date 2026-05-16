@@ -137,6 +137,13 @@ class AuthController extends BaseController
                 ]
             );
 
+            if (!empty($result['requires_2fa'])) {
+                // H22 Fix: مدیریت صحیح لاگین ادمین با احراز هویت دو مرحله ای
+                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
+                return redirect('/admin/verify-2fa');
+            }
+
+            // MEDIUM-M-08 Fix: Record audit trail ONLY after full authentication (2FA not required here)
             $this->auditTrail->record(
                 'admin.login',
                 (int)$user->id,
@@ -148,12 +155,6 @@ class AuthController extends BaseController
                 ],
                 (int)$user->id
             );
-
-            if (!empty($result['requires_2fa'])) {
-                // H22 Fix: مدیریت صحیح لاگین ادمین با احراز هویت دو مرحله ای
-                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
-                return redirect('/admin/verify-2fa');
-            }
 
             return redirect('/admin/dashboard');
         } catch (\Throwable $e) {
@@ -227,6 +228,20 @@ class AuthController extends BaseController
                 'تایید موفق 2FA پنل مدیریت',
                 (int)$userId,
                 ['channel' => 'admin_auth']
+            );
+
+            // MEDIUM-M-08 Fix: Record audit trail after successful 2FA completion
+            $this->auditTrail->record(
+                'admin.login',
+                (int)$userId,
+                [
+                    'channel' => 'admin_auth',
+                    'type' => 'admin',
+                    '2fa' => true,
+                    'ip' => get_client_ip(),
+                    'timestamp' => date('Y-m-d H:i:s'),
+                ],
+                (int)$userId
             );
 
             return $this->json(true, 'ورود موفقیت‌آمیز بود.', ['redirect' => url('/admin/dashboard')]);
