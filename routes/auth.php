@@ -33,8 +33,8 @@ $router->group(['middleware' => [GuestMiddleware::class, CSRFMiddleware::class]]
 });
 
 // ── تأیید دو مرحله‌ای (کاربر هنوز کاملاً لاگین نیست) ────────────────────
-$router->get('/verify-2fa',  [TwoFactorController::class, 'showVerify']);
-$router->post('/verify-2fa', [TwoFactorController::class, 'verify'], [CSRFMiddleware::class, RateLimitMiddleware::class]);
+$router->get('/verify-2fa',  [TwoFactorController::class, 'showVerify'], [GuestMiddleware::class]);
+$router->post('/verify-2fa', [TwoFactorController::class, 'verify'], [GuestMiddleware::class, CSRFMiddleware::class, RateLimitMiddleware::class]);
 
 // ── تأیید ایمیل ──────────────────────────────────────────────────────────
 $router->get('/email/verify',              [UserAuthController::class, 'verifyEmail']);
@@ -53,8 +53,8 @@ app()->router->group(['middleware' => [GuestMiddleware::class]], function ($rout
 });
 
 // OAuth callbacks (بغیر middleware — external providers سے) ─────────────────
-$router->get('/auth/callback/google',   [OAuthController::class, 'callbackGoogle'], [\App\Middleware\RateLimitMiddleware::class]);
-$router->get('/auth/callback/facebook', [OAuthController::class, 'callbackFacebook'], [\App\Middleware\RateLimitMiddleware::class]);
+$router->get('/auth/callback/google',   [OAuthController::class, 'callbackGoogle'], [GuestMiddleware::class, \App\Middleware\RateLimitMiddleware::class]);
+$router->get('/auth/callback/facebook', [OAuthController::class, 'callbackFacebook'], [GuestMiddleware::class, \App\Middleware\RateLimitMiddleware::class]);
 
 // ── Social Accounts Management (authenticated users only) ────────────────
 app()->router->group(['middleware' => [AuthMiddleware::class]], function ($router) {
