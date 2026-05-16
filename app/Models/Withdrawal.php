@@ -131,8 +131,10 @@ class Withdrawal extends Model
                 $this->db->beginTransaction();
             }
             
-            // 1. دریافت withdrawal
-            $withdrawal = $this->find($id);
+            // H14 Fix (BUG-05): دریافت رکورد درخواست برداشت با قفل بدبینانه ردیفی جهت جلوگیری از تداخل ادمین‌ها (BUG-12)
+            $stmt = $this->db->prepare("SELECT * FROM " . static::$table . " WHERE id = ? FOR UPDATE");
+            $stmt->execute([$id]);
+            $withdrawal = $stmt->fetch(\PDO::FETCH_OBJ);
             if (!$withdrawal) {
                 if ($startedTransaction) {
                     $this->db->rollback();
