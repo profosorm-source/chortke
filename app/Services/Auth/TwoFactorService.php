@@ -7,6 +7,7 @@ namespace App\Services\Auth;
 use App\Models\User;
 use App\Models\SecurityModel;
 use Core\Session;
+use Core\RateLimiter;
 use App\Contracts\LoggerInterface;
 /**
  * TwoFactorService
@@ -26,24 +27,34 @@ use App\Contracts\LoggerInterface;
  * - تاریخچه تغییرات ایمنی (AuditTrail) را تکمیل کنند
  * 
  * ⚠️ CAUTION: فرآیند Enable/Disable 2FA باید نیاز به بازتأیید رمز عبور کاربر داشته باشد
- * تا جلوی Account Takeover Attacks جریان یافته از طریق Session Hijacking را بگیرد.
+ * تا جلوگیری از Account Takeover Attacks جریان یافته از طریق Session Hijacking را بگیرد.
+ * 
+ * ⚠️ MEDIUM-M-14: Recovery codes have separate rate limiting to prevent brute-force attacks.
  */
 class TwoFactorService extends \App\Services\BaseService
 {
     private User $userModel;
     private SecurityModel $securityModel;
     private Session $session;
+    private ?RateLimiter $rateLimiter;
+
+    // MEDIUM-M-14 Fix: Rate limit for recovery code attempts (stricter than TOTP)
+    private const RECOVERY_CODE_RATE_LIMIT_MAX = 3;      // 3 attempts
+    private const RECOVERY_CODE_RATE_LIMIT_DECAY = 300;  // 5 minutes
+    private const RECOVERY_CODE_RATE_LIMIT_WINDOW = 3;   // per 3 attempts
 
     public function __construct(
         User $userModel,
         SecurityModel $securityModel,
         Session $session,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        ?RateLimiter $rateLimiter = null
     ) {
         parent::__construct($logger);
         $this->userModel = $userModel;
         $this->securityModel = $securityModel;
         $this->session = $session;
+        $this->rateLimiter = $rateLimiter;
     }
 
     public function generateSecret(): string
@@ -227,9 +238,43 @@ class TwoFactorService extends \App\Services\BaseService
         }
     }
 
+    /**
+     * MEDIUM-M-14 Fix: Verify recovery code with separate rate limiting
+     * 
+     * Recovery codes are high-value backup credentials that should have
+     * stricter rate limiting than regular TOTP codes. This prevents
+     * brute-force attacks on recovery codes.
+     * 
+     * @param int $userId User ID for rate limiting and code lookup
+     * @param string $code Recovery code to verify
+     * @return bool True if code is valid and not rate limited
+     */
     private function verifyRecoveryCode(int $userId, string $code): bool
     {
+        // MEDIUM-M-14 Fix: Check rate limit BEFORE attempting verification
+        // This prevents brute-force attacks on recovery codes
+        if ($this->rateLimiter !== null) {
+            $rateLimitKey = "2fa_recovery:" . $userId;
+            
+            // Strict rate limiting for recovery codes: only 3 attempts per 5 minutes
+            // failClosed=true ensures we deny on rate limiter failure (secure default)
+            if (!$this->rateLimiter->attempt($rateLimitKey, self::RECOVERY_CODE_RATE_LIMIT_MAX, self::RECOVERY_CODE_RATE_LIMIT_DECAY, true)) {
+                $this->logger->warning('2fa.recovery_code.rate_limited', ['user_id' => $userId]);
+                
+                // Clear rate limit on successful verification later
+                // On failure, the rate limit stays in effect
+                return false;
+            }
+        }
+        
         $code = strtoupper(trim($code));
+        
+        // Validate code format (recovery codes are 24 hex characters)
+        if (!preg_match('/^[A-Z0-9]{24}$/', $code)) {
+            $this->logger->warning('2fa.recovery_code.invalid_format', ['user_id' => $userId]);
+            return false;
+        }
+        
         $db = $this->securityModel->getDb();
         $db->beginTransaction();
         
@@ -267,6 +312,11 @@ class TwoFactorService extends \App\Services\BaseService
                 $this->securityModel->deleteTwoFactorCode((int)$matchedRecord->id);
                 $db->commit();
                 
+                // MEDIUM-M-14 Fix: Clear rate limit on successful verification
+                if ($this->rateLimiter !== null) {
+                    $this->rateLimiter->clear("2fa_recovery:" . $userId);
+                }
+                
                 $this->logger->info('2FA recovery code used', ['user_id' => $userId, 'code_id' => $matchedRecord->id]);
                 
                 // Check for legacy formats to trigger migration
@@ -279,6 +329,15 @@ class TwoFactorService extends \App\Services\BaseService
             }
 
             $db->rollBack();
+            
+            // Log failed attempt for security monitoring
+            $this->logger->warning('2fa.recovery_code.invalid', [
+                'user_id' => $userId,
+                'remaining_attempts' => $this->rateLimiter !== null 
+                    ? (self::RECOVERY_CODE_RATE_LIMIT_MAX - $this->rateLimiter->attempts("2fa_recovery:" . $userId))
+                    : 'unknown'
+            ]);
+            
             return false;
         } catch (\Throwable $e) {
             if ($db->inTransaction()) {
@@ -407,4 +466,3 @@ class TwoFactorService extends \App\Services\BaseService
         throw new \RuntimeException('امکان رمزگشایی کد تایید وجود ندارد. لطفاً با پشتیبانی تماس بگیرید.');
     }
 }
-

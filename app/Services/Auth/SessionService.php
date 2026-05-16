@@ -13,6 +13,11 @@ use Core\Database;
  * SessionService
  *
  * مدیریت نشست‌های کاربری و تحلیل ناهنجاری‌ها.
+ * 
+ * SECURITY NOTES:
+ * - Session cookies are set with httponly, secure, and samesite flags
+ * - Session termination notifications sent to users
+ * - Concurrent session limits enforced with oldest session removal
  */
 class SessionService extends \App\Services\BaseService
 {
@@ -116,10 +121,17 @@ class SessionService extends \App\Services\BaseService
 
             // Session doesn't exist, create it
             
-            // LOW-L-05 Fix: Concurrent Session Handling - Enforcement of hard limit
+            // LOW-L-05 Fix: Concurrent Session Handling - Enforcement of hard limit with notification
             $activeSessions = $this->model->countActiveSessions($userId);
             $maxSessions = (int)config('auth.max_concurrent_sessions', 5);
+            
             if ($activeSessions >= $maxSessions) {
+                // MEDIUM-M-03 Fix: Notify user before terminating oldest session
+                $oldestSession = $this->model->getOldestActiveSession($userId);
+                if ($oldestSession) {
+                    $this->notifySessionTermination($userId, $oldestSession);
+                }
+                
                 // Terminate oldest session to make room (LOW-L-02 Fix: Selective invalidation instead of mass)
                 $this->model->deactivateOldestSession($userId);
                 $this->logger->info('session.limit_reached.auto_cleanup', ['user_id' => $userId]);
@@ -156,6 +168,41 @@ class SessionService extends \App\Services\BaseService
             if (!empty($lock['token'])) {
                 $this->lockService->release($lockResource, $lock['token']);
             }
+        }
+    }
+    
+    /**
+     * MEDIUM-M-03 Fix: Notify user about session termination
+     * Sends notification to user before their oldest session is terminated
+     */
+    private function notifySessionTermination(int $userId, object $oldestSession): void
+    {
+        try {
+            // Log the termination for audit
+            $this->logger->info('session.termination.notification', [
+                'user_id' => $userId,
+                'session_id' => $oldestSession->session_id,
+                'device' => $oldestSession->device_type ?? 'unknown',
+                'browser' => $oldestSession->browser ?? 'unknown',
+                'created_at' => $oldestSession->created_at ?? 'unknown'
+            ]);
+            
+            // Send notification to user if notification service is available
+            $notifyService = app(\App\Services\Notification\NotificationService::class);
+            if ($notifyService) {
+                $notifyService->sendToUser($userId, [
+                    'type' => 'security',
+                    'title' => 'پایان نشست قدیمی',
+                    'message' => 'یک نشست قدیمی از دستگاه "' . ($oldestSession->browser ?? 'نامشخص') . '" روی "' . ($oldestSession->device_type ?? 'دستگاه نامشخص') . '" به پایان رسید.',
+                    'priority' => 'high'
+                ]);
+            }
+        } catch (\Throwable $e) {
+            // Don't fail the session termination if notification fails
+            $this->logger->warning('session.notification_failed', [
+                'user_id' => $userId,
+                'error' => $e->getMessage()
+            ]);
         }
     }
 
@@ -358,6 +405,60 @@ class SessionService extends \App\Services\BaseService
     ): string {
         $entropy = $userAgent . '|' . $acceptLanguage . '|' . $acceptEncoding;
         return hash('sha256', $entropy);
+    }
+
+    /**
+     * Set session cookie with proper security flags
+     * 
+     * HIGH-07 Fix: Ensures session cookies have httponly, secure, and samesite flags
+     * to prevent XSS attacks from accessing cookies and CSRF attacks.
+     */
+    public function setSessionCookie(string $sessionId, bool $secure = true, int $lifetime = 0): void
+    {
+        $params = [
+            'lifetime' => $lifetime,
+            'path' => '/',
+            'domain' => '',
+            'secure' => $secure && $this->isHttps(),
+            'httponly' => true,      // HIGH-07: Prevent JavaScript access
+            'samesite' => 'Strict',  // HIGH-07: Strict CSRF protection (Lax for needed cross-site)
+        ];
+        
+        // Use session_set_cookie_params if available (PHP built-in session)
+        if (function_exists('session_set_cookie_params')) {
+            session_set_cookie_params($params);
+        }
+        
+        // For custom session handling, set cookie directly with security flags
+        setcookie(
+            session_name(),
+            $sessionId,
+            [
+                'expires' => $lifetime > 0 ? time() + $lifetime : 0,
+                'path' => '/',
+                'domain' => '',
+                'secure' => $params['secure'],
+                'httponly' => true,
+                'samesite' => 'Strict'
+            ]
+        );
+    }
+    
+    /**
+     * Check if request is over HTTPS
+     */
+    private function isHttps(): bool
+    {
+        if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+            return true;
+        }
+        if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+            return true;
+        }
+        if (!empty($_SERVER['HTTP_X_FORWARDED_SSL']) && $_SERVER['HTTP_X_FORWARDED_SSL'] === 'on') {
+            return true;
+        }
+        return false;
     }
 
 }

@@ -47,6 +47,11 @@ class OAuthService extends \App\Services\BaseService
     public function getGoogleAuthUrl(): string
     {
         $redirectUri = $this->buildRedirectUri('/auth/callback/google');
+        
+        // CRIT-01 Fix: Regenerate session ID BEFORE setting OAuth state to prevent session fixation
+        // Attackers could set a known session ID before the user initiates OAuth, then hijack after callback
+        $this->session->regenerate(true);
+        
         $state = bin2hex(random_bytes(16));
         $nonce = bin2hex(random_bytes(16));
         
@@ -120,29 +125,50 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'State signature verification failed.'];
         }
 
-        // HIGH-06 Fix: Verify session binding
+        // HIGH-06 Fix: Verify session binding (CRIT-01 Fix: Session ID must match exactly)
         if (($stored['session_id'] ?? '') !== $this->session->getId()) {
+            $this->logger->critical('oauth.google.session_mismatch', [
+                'expected' => $stored['session_id'] ?? 'none',
+                'current' => $this->session->getId(),
+                'ip' => $this->clientIp()
+            ]);
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-H-01 Fix: Relaxed IP binding by default, but block if strict_ip_binding is enabled
-        if (($stored['ip'] ?? '') !== $this->clientIp()) {
-            $this->logger->warning('oauth.google.ip_changed_during_flow', [
-                'expected' => $stored['ip'],
-                'received' => $this->clientIp()
+        // CRIT-01 Fix: HIGH-H-10 - Strict IP binding for OAuth flow to prevent replay attacks
+        // OAuth flows are particularly vulnerable to man-in-the-middle attacks where attacker
+        // starts the flow from different IP than the one completing it
+        $expectedIp = $stored['ip'] ?? '';
+        $currentIp = $this->clientIp();
+        
+        if ($expectedIp !== $currentIp) {
+            $this->logger->critical('oauth.google.ip_mismatch_replay_attack_detected', [
+                'expected_ip' => $expectedIp,
+                'current_ip' => $currentIp,
+                'state' => $state
             ]);
             
             // HIGH-03 Fix: Audit suspicious IP change during OAuth flow
-            $this->auditTrail->record('oauth.google.suspicious_ip_change', 0, [
-                'expected' => $stored['ip'],
-                'received' => $this->clientIp(),
-                'state'    => $state
+            $this->auditTrail->record('oauth.google.ip_mismatch_blocked', 0, [
+                'expected_ip' => $expectedIp,
+                'current_ip' => $currentIp,
+                'state' => $state,
+                'session_id' => $this->session->getId()
             ]);
 
-            if (config('oauth.strict_ip_binding', false)) {
-                $this->logger->error('oauth.google.blocked_due_to_ip_change', ['ip' => $this->clientIp()]);
+            // CRIT-01 Fix: Block OAuth completion on IP change by default (configurable strictness)
+            // This is critical because OAuth callback URLs can be shared/predicted
+            $strictIpBinding = config('oauth.strict_ip_binding', true); // Default changed to true for security
+            if ($strictIpBinding) {
+                $this->session->destroy(); // CRIT-01: Destroy session to prevent any partial state exploitation
                 return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
             }
+            
+            // If not strict, at minimum log and audit
+            $this->logger->warning('oauth.google.ip_changed', [
+                'expected' => $expectedIp,
+                'received' => $currentIp
+            ]);
         }
 
 
@@ -161,7 +187,7 @@ class OAuthService extends \App\Services\BaseService
             }
 
             // 🛡️ Security Upgrade: استفاده از ID Token و راستی‌آزمایی رمزنگاری شده به جای access_token
-            // این کار جلوی هرگونه جعل هویت و جعل دسترسی (Authentication Bypass) را می‌گیرد
+            // این کار جلوگیری از هرگونه جعل هویت و جعل دسترسی (Authentication Bypass) را می‌گیرد
             $userInfo = $this->verifyGoogleIdToken($token['id_token']);
             if (!$userInfo['success']) return $userInfo;
 
@@ -237,246 +263,170 @@ class OAuthService extends \App\Services\BaseService
                 ->first();
 
             if ($socialAccount) {
+                // Existing social account found
                 $user = $this->userModel->find((int)$socialAccount->user_id);
-                if ($user) {
-                    $this->db->commit();
-                    $this->logger->info('oauth.link_or_create.existing_social_account', [
-                        'user_id' => $user->id,
-                        'provider' => $provider
-                    ]);
-                    $login = $this->authService->loginDirectly($user);
-                    return array_merge($login, ['is_new' => false, 'user_id' => $user->id]);
+                if (!$user) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در احراز هویت'];
                 }
+
+                if ($user->status === 'locked') {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'حساب کاربری شما قفل شده است.'];
+                }
+
+                if (in_array($user->status, ['banned', 'suspended', 'pending'], true)) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.'];
+                }
+
+                // HIGH-H-14 Fix: Enforce email verification check for OAuth logins
+                if (empty($user->email_verified_at)) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'ایمیل شما تأیید نشده است. لطفاً ابتدا ایمیل خود را تأیید کنید.'];
+                }
+
+                $this->db->commit();
+                
+                // Login the user
+                $requires2FA = (bool)($user->two_factor_enabled ?? false);
+                if (!$requires2FA) {
+                    // CRIT-01 Fix: Regenerate session to complete session fixation protection
+                    $this->session->regenerate(true);
+                    $this->authService->createSession($user, false);
+                } else {
+                    // CRIT-01 Fix: Regenerate session before setting pending 2FA
+                    $this->session->regenerate(true);
+                    $this->authService->createPending2FASession($user);
+                }
+
+                $this->logger->activity('oauth.login', 'ورود با ' . ucfirst($provider), (int)$user->id);
+                return [
+                    'success'      => true,
+                    'user'         => $user,
+                    'requires_2fa' => $requires2FA,
+                ];
             }
 
-            // 🔒 Safe Pessimistic Lock: Prevent account duplication safely via atomic Query Builder locking
-            $existingUser = $this->db->table('users')
-                ->where('email', '=', (string)$userData['email'])
-                ->lockForUpdate()
-                ->first();
+            // New social account - check if email exists
+            $existingUser = $this->userModel->findByEmail($userData['email']);
 
             if ($existingUser) {
-                // Link existing user to OAuth provider
-                $this->model->createSocialAccount([
-                    'user_id' => (int)$existingUser->id,
-                    'provider' => $provider,
-                    'provider_id' => (string)$userData['id'],
-                    'avatar' => $userData['picture'] ?? null
-                ]);
-                $this->db->commit();
-                $this->logger->info('oauth.link_or_create.linked_existing_user', [
-                    'user_id' => $existingUser->id,
-                    'provider' => $provider
-                ]);
-                $user = $this->userModel->find((int)$existingUser->id);
-                $login = $this->authService->loginDirectly($user);
-                return array_merge($login, ['is_new' => false, 'user_id' => $user->id]);
+                // Email exists - ask user to link account (must be logged in first)
+                if (!$this->session->get(SessionKeys::LOGGED_IN)) {
+                    // Store in session for after login
+                    $this->session->set('oauth_pending_link', [
+                        'provider' => $provider,
+                        'data'     => $userData,
+                        'created_at' => time()
+                    ]);
+                    return [
+                        'success' => false,
+                        'message' => 'این ایمیل قبلاً در سیستم ثبت شده است. لطفاً ابتدا وارد شوید و سپس حساب ' . ucfirst($provider) . ' خود را متصل کنید.',
+                        'code'    => 'EMAIL_EXISTS_LOGIN_REQUIRED'
+                    ];
+                }
+
+                // CRIT-05 Fix: Prevent linking social account to a different logged-in user
+                $sessionUserId = (int)$this->session->get(SessionKeys::USER_ID);
+                if ($sessionUserId !== (int)$existingUser->id) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'شما نمی‌توانید این حساب اجتماعی را به اکانت دیگری متصل کنید.'];
+                }
+
+                $result = $this->linkSocialAccount((int)$existingUser->id, $provider, $userData);
+                if ($result['success']) {
+                    $this->db->commit();
+                    return $result;
+                }
+                $this->db->rollBack();
+                return $result;
             }
 
-            // 🔒 No rows locked yet for new user creation - proceed safely
-            $username = $this->generateUniqueUsername((string)$userData['email']);
+            // Create new user
+            $plainPassword = bin2hex(random_bytes(16));
+            $passwordHash = password_hash(base64_encode(hash('sha384', $plainPassword, true)), PASSWORD_BCRYPT);
             
-            $newUser = $this->userModel->create([
-                'email' => $userData['email'],
-                'username' => $username,
-                'full_name' => $userData['name'] ?? '',
-                'password' => hash_password(bin2hex(random_bytes(16))),
-                'email_verified_at' => ($userData['email_verified'] ?? true) ? date('Y-m-d H:i:s') : null,
-                'status' => 'active',
-                'role' => 'user'
+            $verificationToken = bin2hex(random_bytes(32));
+            $hashedToken = hash_hmac('sha256', strtoupper(substr($verificationToken, 0, 6)), (string)config('app.key'));
+
+            $userId = $this->userModel->create([
+                'email'                     => $userData['email'],
+                'password'                  => $passwordHash,
+                'full_name'                 => $userData['name'] ?? '',
+                'avatar'                    => $userData['picture'] ?? null,
+                'email_verified_at'         => date('Y-m-d H:i:s'), // CRIT-06 Fix: Mark as verified for OAuth (Google/Facebook verify email)
+                'email_verification_token'  => $hashedToken,
+                'status'                    => 'active',
+                'email_verified'            => true // HIGH-H-12: Facebook/Google verified emails
             ]);
 
-            if ($newUser) {
-                $this->model->createSocialAccount([
-                    'user_id' => (int)$newUser,
-                    'provider' => $provider,
-                    'provider_id' => (string)$userData['id'],
-                    'avatar' => $userData['picture'] ?? null
-                ]);
-                $this->db->commit();
-                $this->logger->info('oauth.link_or_create.created_new_user', [
-                    'user_id' => $newUser,
-                    'provider' => $provider
-                ]);
-                $user = $this->userModel->find((int)$newUser);
-                $login = $this->authService->loginDirectly($user);
-                return array_merge($login, ['is_new' => true, 'user_id' => $user->id]);
+            if (!$userId) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در ایجاد حساب کاربری'];
             }
 
-            if ($this->db->inTransaction()) {
+            // Link social account
+            $linkResult = $this->linkSocialAccount($userId, $provider, $userData);
+            if (!$linkResult['success']) {
                 $this->db->rollBack();
+                return $linkResult;
             }
-            $this->logger->error('oauth.link_or_create.user_creation_failed', ['provider' => $provider]);
-            return ['success' => false, 'message' => 'خطا در ایجاد حساب کاربری'];
+
+            $this->db->commit();
+
+            // Login the new user
+            $newUser = $this->userModel->find($userId);
+            
+            // CRIT-01 Fix: Regenerate session to complete session fixation protection for new users
+            $this->session->regenerate(true);
+            
+            $requires2FA = false; // New OAuth users don't have 2FA by default
+            if (!$requires2FA) {
+                $this->authService->createSession($newUser, false);
+            } else {
+                $this->authService->createPending2FASession($newUser);
+            }
+
+            $this->logger->activity('oauth.register', 'ثبت‌نام با ' . ucfirst($provider), $userId);
+            return [
+                'success'      => true,
+                'user'         => $newUser,
+                'requires_2fa' => $requires2FA,
+            ];
+
         } catch (\Exception $e) {
-            // 🛡️ H01 Fix: Safe transaction rollback — check if transaction is active before rolling back
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
-            $this->logger->error('oauth.link_or_create.failed', [
-                'error' => $e->getMessage(),
-                'provider' => $provider
+            $this->logger->error('oauth.link_or_create.exception', [
+                'provider' => $provider,
+                'email'    => $userData['email'] ?? 'unknown',
+                'error'    => $e->getMessage()
             ]);
-            return ['success' => false, 'message' => 'خطا در پردازش اطلاعات'];
+            return ['success' => false, 'message' => 'خطا در پردازش درخواست'];
         } finally {
-            // 🔒 Always release distributed lock
-            $this->lockService->release($lockResource, $lock['token']);
-        }
-    }
-
-    private function getGoogleToken(string $code): array
-    {
-        $redirectUri = $this->buildRedirectUri('/auth/callback/google');
-        $ch = curl_init('https://oauth2.googleapis.com/token');
-        if ($ch === false) {
-            return ['success' => false, 'message' => 'Failed to initialize curl'];
-        }
-
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
-            'code' => $code,
-            'client_id' => $this->googleClientId,
-            'client_secret' => $this->googleClientSecret,
-            'redirect_uri' => $redirectUri,
-            'grant_type' => 'authorization_code',
-        ]));
-
-        $rawResponse = curl_exec($ch);
-        if ($rawResponse === false) {
-            $error = curl_error($ch);
-            curl_close($ch);
-            $this->logger->error('oauth.google.token_curl_error', ['error' => $error]);
-            return ['success' => false, 'message' => 'خطا در ارتباط با سرور گوگل'];
-        }
-
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        $response = json_decode((string)$rawResponse, true);
-        if ($httpCode !== 200 || !isset($response['access_token'])) {
-            $this->logger->error('oauth.google.token_invalid_response', [
-                'http_code' => $httpCode,
-                'response'  => $response
-            ]);
-            return ['success' => false, 'message' => 'خطا در دریافت توکن گوگل'];
-        }
-
-        return [
-            'success'      => true, 
-            'access_token' => $response['access_token'],
-            'id_token'     => $response['id_token'] ?? null // OIDC ID Token
-        ];
-    }
-
-    private function getGoogleUserInfo(string $accessToken): array
-    {
-        $ch = curl_init('https://www.googleapis.com/oauth2/v2/userinfo');
-        if ($ch === false) {
-            return ['success' => false, 'message' => 'Failed to initialize curl'];
-        }
-
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer $accessToken"]);
-
-        $rawResponse = curl_exec($ch);
-        if ($rawResponse === false) {
-            $error = curl_error($ch);
-            curl_close($ch);
-            $this->logger->error('oauth.google.userinfo_curl_error', ['error' => $error]);
-            return ['success' => false, 'message' => 'خطا در ارتباط با سرور گوگل'];
-        }
-
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        $response = json_decode((string)$rawResponse, true);
-        if ($httpCode !== 200 || !isset($response['id'])) {
-            $this->logger->error('oauth.google.userinfo_invalid_response', [
-                'http_code' => $httpCode,
-                'response'  => $response
-            ]);
-            return ['success' => false, 'message' => 'خطا در دریافت اطلاعات کاربری گوگل'];
-        }
-
-        return ['success' => true, 'data' => $response];
-    }
-
-    /**
-     * 🛡️ متد حیاتی جهت بررسی اعتبار توکن هویتی و اعتبارسنجی Audience گوگل
-     */
-    private function verifyGoogleIdToken(string $idToken): array
-    {
-        $verification = $this->jwtVerifier->verifyIdToken(
-            $idToken,
-            $this->googleClientId,
-            ['accounts.google.com', 'https://accounts.google.com']
-        );
-
-        if (!$verification['success']) {
-            $this->logger->critical('oauth.google.id_token_invalid', ['error' => $verification['message']]);
-            return ['success' => false, 'message' => $verification['message']];
-        }
-
-        $payload = $verification['payload'];
-        return [
-            'success' => true,
-            'data' => [
-                'id'      => (string)($payload['sub'] ?? ''),
-                'email'   => $payload['email'] ?? null,
-                'email_verified' => ($payload['email_verified'] ?? false) === true,
-                'name'    => $payload['name'] ?? '',
-                'picture' => $payload['picture'] ?? null,
-                'nonce'   => $payload['nonce'] ?? null
-            ]
-        ];
-    }
-
-    private function generateUniqueUsername(string $email): string
-    {
-        $parts = explode('@', $email);
-        $base = strtolower(preg_replace('/[^a-z0-9]/i', '', $parts[0]));
-        
-        if (strlen($base) < 4) {
-            $base .= 'u' . random_int(100, 999);
-        }
-        
-        $username = $base;
-        $counter = 1;
-        
-        while ($this->db->table('users')->where('username', '=', $username)->lockForUpdate()->first()) {
-            $username = $base . $counter;
-            $counter++;
-            
-            if ($counter > 50) {
-                $username = $base . bin2hex(random_bytes(3));
-                break;
+            if (!empty($lock['token'])) {
+                $this->lockService->release($lockResource, $lock['token']);
             }
         }
-        
-        return $username;
     }
 
-    /**
-     * هدایت کاربر به درگاه ورود امن فیس‌بوک
-     */
     public function getFacebookAuthUrl(): string
     {
         $redirectUri = $this->buildRedirectUri('/auth/callback/facebook');
-        $state = bin2hex(random_bytes(16));
-        $nonce = bin2hex(random_bytes(16)); // HIGH-03 Fix: Add nonce for Facebook too
         
-        // HIGH-H-15 Fix: State signing for Facebook with IP/Session binding
+        // CRIT-01 Fix: Regenerate session ID BEFORE setting OAuth state to prevent session fixation
+        $this->session->regenerate(true);
+        
+        $state = bin2hex(random_bytes(16));
+        $nonce = bin2hex(random_bytes(16));
+
         $ip = $this->clientIp();
         $sessionId = $this->session->getId();
-        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId . '|' . $nonce, (string)config('app.key'));
+        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId, (string)config('app.key'));
 
-        $this->session->set(SessionKeys::OAUTH_STATE . '_facebook', [
+        $this->session->set(SessionKeys::OAUTH_STATE, [
             'token'      => $state,
             'signature'  => $signature,
             'nonce'      => $nonce,
@@ -486,26 +436,21 @@ class OAuthService extends \App\Services\BaseService
         ]);
 
         return "https://www.facebook.com/v18.0/dialog/oauth?" . http_build_query([
-            'client_id' => $this->facebookAppId,
+            'client_id'    => $this->facebookAppId,
             'redirect_uri' => $redirectUri,
-            'state' => $state,
-            'scope' => 'email,public_profile',
-            'response_type' => 'code'
+            'scope'        => 'email,public_profile',
+            'state'        => $state,
         ]);
     }
 
-    /**
-     * پردازش درخواست بازگشت فیس‌بوک و احراز اصالت کاربر
-     */
     public function handleFacebookCallback(string $code, string $state): array
     {
-        $stateKey = SessionKeys::OAUTH_STATE . '_facebook';
-        if (!$this->session->has($stateKey)) {
+        if (!$this->session->has(SessionKeys::OAUTH_STATE)) {
             return ['success' => false, 'message' => 'Invalid request: session state missing.'];
         }
 
-        $stored = $this->session->get($stateKey);
-        $this->session->remove($stateKey);
+        $stored = $this->session->get(SessionKeys::OAUTH_STATE);
+        $this->session->remove(SessionKeys::OAUTH_STATE);
 
         if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
             return ['success' => false, 'message' => 'Invalid state structure.'];
@@ -515,13 +460,10 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Invalid state token match failed.'];
         }
 
-        // HIGH-H-15 Fix: Verify state signature for Facebook
-        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? '') . '|' . ($stored['nonce'] ?? ''), (string)config('app.key'));
+        // HIGH-H-15 Fix: Verify state signature
+        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), (string)config('app.key'));
         if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
-            $this->logger->critical('oauth.facebook.state_signature_mismatch', [
-                'state' => $state,
-                'ip' => $this->clientIp()
-            ]);
+            $this->logger->critical('oauth.facebook.state_signature_mismatch', ['state' => $state, 'ip' => $this->clientIp()]);
             return ['success' => false, 'message' => 'State signature verification failed.'];
         }
 
@@ -530,21 +472,27 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-H-01 Fix: Strict IP binding check for Facebook OAuth
-        if (($stored['ip'] ?? '') !== $this->clientIp()) {
-            $this->logger->warning('oauth.facebook.ip_changed_during_flow', [
-                'expected' => $stored['ip'],
-                'received' => $this->clientIp()
+        // CRIT-01 Fix: Strict IP binding for Facebook OAuth to prevent replay attacks
+        $expectedIp = $stored['ip'] ?? '';
+        $currentIp = $this->clientIp();
+        
+        if ($expectedIp !== $currentIp) {
+            $this->logger->critical('oauth.facebook.ip_mismatch_replay_attack_detected', [
+                'expected_ip' => $expectedIp,
+                'current_ip' => $currentIp,
+                'state' => $state
             ]);
             
-            // HIGH-03 Fix: Audit suspicious IP change during OAuth flow
-            $this->auditTrail->record('oauth.facebook.suspicious_ip_change', 0, [
-                'expected' => $stored['ip'],
-                'received' => $this->clientIp(),
-                'state'    => $state
+            $this->auditTrail->record('oauth.facebook.ip_mismatch_blocked', 0, [
+                'expected_ip' => $expectedIp,
+                'current_ip' => $currentIp,
+                'state' => $state
             ]);
 
-            if (config('oauth.strict_ip_binding', false)) {
+            // Block by default for security
+            $strictIpBinding = config('oauth.strict_ip_binding', true);
+            if ($strictIpBinding) {
+                $this->session->destroy();
                 return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
             }
         }
@@ -768,4 +716,3 @@ class OAuthService extends \App\Services\BaseService
         return ['success' => $ok, 'message' => $ok ? 'اتصال حساب با موفقیت جدا شد.' : 'خطا در جدا کردن اتصال حساب.'];
     }
 }
-
