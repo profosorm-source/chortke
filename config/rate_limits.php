@@ -4,6 +4,11 @@
  * 
  * تنظیمات محدودیت درخواست برای endpoint های مختلف
  * هر endpoint می‌تواند تنظیمات خاص خودش را داشته باشد
+ * 
+ * SECURITY NOTES:
+ * - Admin operations have appropriate rate limits (not overly permissive)
+ * - Critical endpoints use fail-closed rate limiting
+ * - Rate limits are configured per-action for granular control
  */
 
 return [
@@ -118,7 +123,12 @@ return [
 
     /**
      * Admin Operations
-     * محدودیت‌های ادمین (معمولاً سخت‌گیرتر نیستند)
+     * محدودیت‌های ادمین (سخت‌گیرانه‌تر از کاربران عادی برای امنیت)
+     * 
+     * LOW-03 Fix: Reduced admin.general from 500 to 100 requests per minute
+     * Previous value of 500 was dangerously high and could allow DoS attacks
+     * A value of 100 is reasonable for admin operations while still
+     * accommodating legitimate bulk operations.
      */
     'admin' => [
         'login' => [
@@ -126,9 +136,18 @@ return [
             'decay_minutes' => 10,
             'message' => 'تعداد تلاش‌های ورود ادمین بیش از حد. لطفاً 10 دقیقه صبر کنید.'
         ],
+        // LOW-03 Fix: Reduced from 500 to 100 requests per minute
+        // This prevents abuse while still allowing legitimate admin operations
         'general' => [
-            'max_attempts' => 500,
+            'max_attempts' => 100,  // Reduced from 500 for security
             'decay_minutes' => 1,
+            'message' => 'تعداد درخواست‌های ادمین بیش از حد مجاز است.'
+        ],
+        // Admin 2FA verification is stricter than user 2FA
+        '2fa_verify' => [
+            'max_attempts' => 3,
+            'decay_minutes' => 10,
+            'message' => 'تعداد تلاش‌های تایید 2FA ادمین بیش از حد. لطفاً 10 دقیقه صبر کنید.'
         ],
     ],
 
@@ -256,6 +275,13 @@ return [
         'disable' => [
             'max_attempts' => 3,
             'decay_minutes' => 60,
+        ],
+        // MEDIUM-M-14 Fix: Separate rate limit for recovery code attempts
+        // Recovery codes are high-value credentials and need stricter limits
+        'recovery_code' => [
+            'max_attempts' => 3,
+            'decay_minutes' => 5,  // 5 minutes instead of 10 for TOTP
+            'message' => 'تعداد تلاش‌های کد بازیابی بیش از حد. لطفاً 5 دقیقه صبر کنید.'
         ],
     ],
 ];
