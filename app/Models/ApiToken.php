@@ -14,6 +14,13 @@ class ApiToken extends Model
 {
     protected static string $table = 'api_tokens';
 
+    public const ALLOWED_SCOPES = [
+        'read', 'write', 'admin', 'delete',
+        'profile:read', 'profile:write', 
+        'wallet:read', 'wallet:write', 
+        'transactions:read', 'tasks:read', 'tasks:write'
+    ];
+
     public function __construct(Database $db)
     {
         parent::__construct($db);
@@ -135,10 +142,9 @@ class ApiToken extends Model
             throw new \InvalidArgumentException('Invalid token name');
         }
         
-        $validScopes = ['read', 'write', 'admin', 'delete'];
         $scopesArray = explode(',', $scopes);
         foreach ($scopesArray as $scope) {
-            if (!in_array(trim($scope), $validScopes)) {
+            if (!in_array(trim($scope), self::ALLOWED_SCOPES, true)) {
                 throw new \InvalidArgumentException("Invalid scope: {$scope}");
             }
         }
