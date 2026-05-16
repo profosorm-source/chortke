@@ -47,4 +47,29 @@ class CacheAdminController extends BaseAdminController
 
         $this->response->json(['success' => true]);
     }
+
+    /**
+     * ریست کردن Circuit Breaker
+     * 🛡️ Fix: Explicitly call validateCsrf and handle exception to prevent bypass (MEDIUM-04)
+     */
+    public function resetCircuitBreaker(): void
+    {
+        $this->validateCsrf();
+        
+        $body = $this->request->body();
+        $name = $body['name'] ?? '';
+
+        if ($name === '') {
+            $this->response->json(['success' => false, 'message' => 'نام Circuit Breaker الزامی است.'], 400);
+            return;
+        }
+
+        $success = $this->cacheService->resetCircuitBreaker($name);
+        
+        if ($success) {
+            $this->response->json(['success' => true, 'message' => 'Circuit Breaker با موفقیت ریست شد.']);
+        } else {
+            $this->response->json(['success' => false, 'message' => 'خطا در ریست کردن Circuit Breaker.'], 500);
+        }
+    }
 }

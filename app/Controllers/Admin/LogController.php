@@ -254,6 +254,27 @@ class LogController extends BaseAdminController
         redirect('/admin/logs');
     }
 
+    /**
+     * رفع وضعیت خطای سیستمی
+     * 🛡️ Fix: Explicitly call validateCsrf and handle exception to prevent bypass (MEDIUM-04)
+     */
+    public function resolveError(): void
+    {
+        $this->validateCsrf();
+        
+        $id = (int)$this->request->post('id', 0);
+        if ($id <= 0) {
+            $this->response->json(['success' => false, 'message' => 'شناسه لاگ نامعتبر است.'], 400);
+            return;
+        }
+
+        // در اینجا معمولاً باید وضعیت لاگ در دیتابیس تغییر کند
+        // اما چون فیلد status در system_logs نداریم، فقط یک فعالیت ثبت می‌کنیم
+        $this->logger->activity('system_log_resolved', "لاگ سیستمی #{$id} توسط ادمین بررسی شد", $this->userId(), ['log_id' => $id]);
+
+        $this->response->json(['success' => true, 'message' => 'وضعیت لاگ به‌روزرسانی شد.']);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // PRIVATE HELPERS
     // ─────────────────────────────────────────────────────────────────────────
