@@ -14,6 +14,7 @@ class WithdrawalController extends BaseUserController
     private BankCardService $bankCardService;
     private WalletService $walletService;
     private \App\Services\WithdrawalService $withdrawalService;
+    private \App\Services\UserService $userService;
     private \Core\Logger $logger;
 
     public function __construct(
@@ -21,6 +22,7 @@ class WithdrawalController extends BaseUserController
         \App\Services\WalletService $walletService,
         \App\Services\AntiFraud\RiskDecisionService $riskDecisionService,
         \App\Services\WithdrawalService $withdrawalService,
+        \App\Services\UserService $userService,
         \Core\Logger $logger
     ) {
         parent::__construct();
@@ -28,6 +30,7 @@ class WithdrawalController extends BaseUserController
         $this->walletService = $walletService;
         $this->riskDecisionService = $riskDecisionService;
         $this->withdrawalService = $withdrawalService;
+        $this->userService = $userService;
         $this->logger = $logger;
     }
 
