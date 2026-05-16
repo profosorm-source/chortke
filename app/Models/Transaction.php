@@ -101,7 +101,6 @@ class Transaction extends Model
         return $stmt ? $stmt->fetchAll(\PDO::FETCH_ASSOC) : [];
     }
 
-    
     /**
      * ثبت تغییر وضعیت در transaction_events (Immutable Audit Trail)
      * 
@@ -110,7 +109,11 @@ class Transaction extends Model
      * @param string $transactionId شناسه یکتا تراکنش
      * @param string $newStatus وضعیت جدید
      * @param string|null $reason دلیل تغییر
-     * @param int|nu    public function recordStatusChange(
+     * @param int|null $changedBy
+     * @param array|null $eventMetadata
+     * @return bool
+     */
+    public function recordStatusChange(
         string $transactionId,
         string $newStatus,
         ?string $reason = null,
@@ -127,7 +130,9 @@ class Transaction extends Model
             $transaction = $this->findByTransactionId($transactionId);
             
             if (!$transaction) {
-                if ($startedTransaction) { $this->db->rollBack(); }
+                if ($startedTransaction) { 
+                    $this->db->rollBack(); 
+                }
                 $this->logger->warning('transaction.not_found', [
                     'channel' => 'transaction',
                     'transaction_id' => $transactionId,
@@ -139,7 +144,9 @@ class Transaction extends Model
             
             // اگر وضعیت تغییری نکرده، نیازی به ثبت event نیست
             if ($previousStatus === $newStatus) {
-                if ($startedTransaction) { $this->db->commit(); }
+                if ($startedTransaction) { 
+                    $this->db->commit(); 
+                }
                 $this->logger->info('transaction.status.unchanged', [
                     'channel' => 'transaction',
                     'transaction_id' => $transactionId,
@@ -149,7 +156,7 @@ class Transaction extends Model
             }
             $eventMetadata = $eventMetadata ?? [];
 
-            // ✅ STEP 1: ثبت event در transaction_events (Immutable)
+            // ۱. ثبت event در transaction_events (Immutable)
             $eventSql = "INSERT INTO transaction_events (
                 transaction_id, 
                 event_type, 
@@ -183,9 +190,9 @@ class Transaction extends Model
             $eventStmt = $this->db->prepare($eventSql);
             $eventStmt->execute($eventParams);
             
-            // ✅ STEP 2: UPDATE تراکنش (برای backward compatibility و query performance)
+            // ۲. UPDATE تراکنش (برای backward compatibility و query performance)
             $updateSql = "UPDATE " . static::$table . " 
-                         SET status = :status, updated_at = NOW()";
+                          SET status = :status, updated_at = NOW()";
             
             $updateParams = [
                 'transaction_id' => $transactionId,
@@ -206,7 +213,7 @@ class Transaction extends Model
                 $this->db->commit();
             }
 
-            // ✅ لاگ موفقیت
+            // لاگ موفقیت
             $this->logger->info('transaction.status.changed', [
                 'channel' => 'transaction',
                 'transaction_id' => $transactionId,
@@ -226,17 +233,6 @@ class Transaction extends Model
                 'error' => $e->getMessage(),
             ]);
             return false;
-        }
-    });
-            return true;
-            
-        } catch (\PDOException $e) {
-           $this->logger->error('transaction.status_change.record.failed', [
-    'channel' => 'transaction',
-    'transaction_id' => $transactionId,
-    'error' => $e->getMessage(),
-]);
- return false;
         }
     }
     

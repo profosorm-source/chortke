@@ -40,7 +40,7 @@ class Wallet extends Model
     public function createForUser(int $userId): ?object
     {
         $sql = "
-            INSERT INTO `" . static::$table . "` (user_id, created_at, updated_at)
+            INSERT IGNORE INTO `" . static::$table . "` (user_id, created_at, updated_at)
             VALUES (:user_id, NOW(), NOW())
         ";
 
@@ -90,20 +90,20 @@ class Wallet extends Model
     /**
      * دریافت موجودی (بر اساس ارز)
      */
-    public function getBalance(int $userId, string $currency = 'irt'): float
+    public function getBalance(int $userId, string $currency = 'irt'): string
     {
         $wallet = $this->findByUserId($userId);
-        if (!$wallet) return 0.0;
+        if (!$wallet) return '0';
 
         $field = $this->currencyField($currency);
-        return (float)($wallet->{$field} ?? 0);
+        return (string)($wallet->{$field} ?? '0');
     }
 
     /**
      * ✅ دریافت موجودی با قفل - برای عملیات مالی
      * استفاده این متد الزامی است برای: Withdraw, Transfer, Purchase
      */
-    public function getBalanceForUpdate(int $userId, string $currency = 'irt'): float
+    public function getBalanceForUpdate(int $userId, string $currency = 'irt'): string
     {
         if (!$this->db->inTransaction()) {
             throw new \RuntimeException("getBalanceForUpdate must be called within an active database transaction.");
@@ -114,22 +114,22 @@ class Wallet extends Model
             ->lockForUpdate()
             ->first();
         
-        if (!$wallet) return 0.0;
+        if (!$wallet) return '0';
 
         $field = $this->currencyField($currency);
-        return (float)($wallet->{$field} ?? 0);
+        return (string)($wallet->{$field} ?? '0');
     }
 
     /**
      * دریافت موجودی قفل‌شده
      */
-    public function getLockedBalance(int $userId, string $currency = 'irt'): float
+    public function getLockedBalance(int $userId, string $currency = 'irt'): string
     {
         $wallet = $this->findByUserId($userId);
-        if (!$wallet) return 0.0;
+        if (!$wallet) return '0';
 
         $field = $this->lockedField($currency);
-        return (float)($wallet->{$field} ?? 0);
+        return (string)($wallet->{$field} ?? '0');
     }
 
     /**
@@ -169,8 +169,12 @@ class Wallet extends Model
      * بروزرسانی موجودی
      * M41: Frozen check merged into WHERE clause for atomic TOCTOU prevention
      */
-    public function updateBalance(int $userId, float $amount, string $currency = 'irt'): bool
+    public function updateBalance(int $userId, string $amount, string $currency = 'irt'): bool
     {
+        if (bccomp($amount, '0', 8) === 0) {
+            throw new \InvalidArgumentException("Zero amount not allowed");
+        }
+
         $field = $this->currencyField($currency);
 
         $sql = "
@@ -197,10 +201,10 @@ class Wallet extends Model
      * قفل کردن موجودی (برای برداشت)
      * M41: Frozen check merged into WHERE clause for atomic TOCTOU prevention
      */
-    public function lockBalance(int $userId, float $amount, string $currency = 'irt'): bool
+    public function lockBalance(int $userId, string $amount, string $currency = 'irt'): bool
     {
-        if ($amount < 0) {
-            throw new \InvalidArgumentException("Lock amount cannot be negative.");
+        if (bccomp($amount, '0', 8) <= 0) {
+            throw new \InvalidArgumentException("Lock amount must be positive.");
         }
 
         $balanceField = $this->currencyField($currency);
@@ -236,10 +240,10 @@ class Wallet extends Model
      * آزاد کردن موجودی قفل‌شده
      * M41: Frozen check merged into WHERE clause for atomic TOCTOU prevention
      */
-    public function unlockBalance(int $userId, float $amount, string $currency = 'irt'): bool
+    public function unlockBalance(int $userId, string $amount, string $currency = 'irt'): bool
     {
-        if ($amount < 0) {
-            throw new \InvalidArgumentException("Unlock amount cannot be negative.");
+        if (bccomp($amount, '0', 8) <= 0) {
+            throw new \InvalidArgumentException("Unlock amount must be positive.");
         }
 
         $balanceField = $this->currencyField($currency);
@@ -274,10 +278,10 @@ class Wallet extends Model
     /**
      * کسر از موجودی قفل‌شده (برای تکمیل برداشت)
      */
-    public function deductLocked(int $userId, float $amount, string $currency = 'irt'): bool
+    public function deductLocked(int $userId, string $amount, string $currency = 'irt'): bool
     {
-        if ($amount < 0) {
-            throw new \InvalidArgumentException("Deduction amount cannot be negative.");
+        if (bccomp($amount, '0', 8) <= 0) {
+            throw new \InvalidArgumentException("Deduction amount must be positive.");
         }
         if ($this->isFrozen($userId)) {
             throw new \Exception("Wallet is frozen for user {$userId}");
@@ -339,25 +343,26 @@ class Wallet extends Model
     /**
      * موجودی کل (آزاد + قفل‌شده)
      */
-    public function getTotalBalance(int $userId, string $currency = 'irt'): float
+    public function getTotalBalance(int $userId, string $currency = 'irt'): string
     {
         $wallet = $this->findByUserId($userId);
-        if (!$wallet) return 0.0;
+        if (!$wallet) return '0';
 
+        $scale = \strtolower(\trim($currency)) === 'usdt' ? 8 : 4;
         if (\strtolower(\trim($currency)) === 'usdt') {
-            return (float)$wallet->balance_usdt + (float)$wallet->locked_usdt;
+            return bcadd((string)$wallet->balance_usdt, (string)$wallet->locked_usdt, $scale);
         }
 
-        return (float)$wallet->balance_irt + (float)$wallet->locked_irt;
+        return bcadd((string)$wallet->balance_irt, (string)$wallet->locked_irt, $scale);
     }
 
     /**
      * تنظیم موجودی به مقدار مشخص (نه افزایش/کاهش)
      * برای استفاده داخل تراکنش‌ها با مقدار از پیش محاسبه‌شده
      */
-    public function setBalance(int $userId, float $newBalance, string $currency = 'irt'): bool
+    public function setBalance(int $userId, string $newBalance, string $currency = 'irt'): bool
     {
-        if ($newBalance < 0) {
+        if (bccomp($newBalance, '0', 8) < 0) {
             throw new \InvalidArgumentException("Balance cannot be negative: {$newBalance}");
         }
 
@@ -409,9 +414,9 @@ class Wallet extends Model
     /**
      * بروزرسانی موجودی و زمان آخرین برداشت با هم
      */
-    public function setBalanceAndWithdrawalTime(int $userId, float $newBalance, string $currency = 'irt'): bool
+    public function setBalanceAndWithdrawalTime(int $userId, string $newBalance, string $currency = 'irt'): bool
     {
-        if ($newBalance < 0) {
+        if (bccomp($newBalance, '0', 8) < 0) {
             throw new \InvalidArgumentException("Balance cannot be negative: {$newBalance}");
         }
 
