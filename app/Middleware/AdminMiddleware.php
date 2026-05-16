@@ -40,15 +40,31 @@ class AdminMiddleware extends BaseMiddleware
 
         $userId = (int)$session->get(SessionKeys::USER_ID);
         $role = (string)($session->get(SessionKeys::USER_ROLE) ?? '');
-        $lastVerify = (int)$session->get('admin_verify_time');
+        // HIGH-09 Fix: Use Redis for admin_verify_time instead of session to prevent manipulation
+        $redis = app(\Core\Redis::class);
+        $redisAvailable = $redis && $redis->isAvailable();
+        $verifyRedisKey = "admin_verify:{$userId}";
+        
+        $lastVerify = 0;
+        if ($redisAvailable) {
+            try { $lastVerify = (int)$redis->get($verifyRedisKey); } catch (\Throwable) {}
+        }
+        if ($lastVerify === 0) {
+            $lastVerify = (int)$session->get('admin_verify_time', 0);
+        }
 
         // 🚀 BUG FIX [H-01]: Periodic DB re-validation (Every 5 minutes)
-        // جلوگیری از دسترسی ادمین‌های اخراج شده یا تغییر نقش یافته
         if (time() - $lastVerify > 300) {
             try {
                 $user = $this->userModel->find($userId);
                 if (!$user || !RolePolicy::isAdmin($user->role ?? '')) {
                     $session->destroy();
+                    if ($redisAvailable) {
+                        try { 
+                            $redis->delete($verifyRedisKey);
+                            $redis->delete("session:activity:" . session_id()); 
+                        } catch (\Throwable) {}
+                    }
                     $response = new Response();
                     if ($request->isAjax()) {
                         return $response->json(['success' => false, 'message' => 'دسترسی شما منقضی یا محدود شده است.'], 403);
@@ -58,8 +74,14 @@ class AdminMiddleware extends BaseMiddleware
                 
                 // Sync session with DB and refresh flags
                 $session->set(SessionKeys::USER_ROLE, $user->role);
-                $session->set(SessionKeys::LOGGED_IN, true); // Re-assert logged in state
-                $session->set('admin_verify_time', time());
+                $session->set(SessionKeys::LOGGED_IN, true);
+                
+                $now = time();
+                $session->set('admin_verify_time', $now);
+                if ($redisAvailable) {
+                    try { $redis->set($verifyRedisKey, (string)$now, 600); } catch (\Throwable) {}
+                }
+                
                 $role = $user->role;
             } catch (\Throwable $e) {
                 $this->logger->error('admin.middleware.db_error', ['error' => $e->getMessage()]);

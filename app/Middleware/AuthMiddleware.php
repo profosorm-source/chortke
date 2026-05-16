@@ -128,16 +128,27 @@ class AuthMiddleware extends BaseMiddleware
             return $response;
         }
 
-        // HIGH-H-06 Fix: Periodic DB validation (Every 5 minutes)
-        // Ensure user is still active/not banned without hitting DB on every request
-        $lastVerify = (int)$session->get('user_verify_time', 0);
-        if (time() - $lastVerify > 300) {
+        // HIGH-H-06 Fix: Periodic DB validation (Every 2 minutes)
+        // HIGH-04 Fix: Using Redis for verification timestamp to prevent session-side manipulation
+        $verifyRedisKey = "user_verify:{$userId}";
+        $lastVerify = 0;
+        if ($redisAvailable) {
+            try { $lastVerify = (int)$this->redis->get($verifyRedisKey); } catch (\Throwable) {}
+        }
+        if ($lastVerify === 0) {
+            $lastVerify = (int)$session->get('user_verify_time', 0);
+        }
+
+        if (time() - $lastVerify > 120) { // Shortened to 2 minutes
             try {
                 $user = $this->userModel->find($userId);
                 if (!$user || (string)$user->status !== 'active') {
                     $session->destroy();
                     if ($redisAvailable) {
-                        try { $this->redis->delete($redisKey); } catch (\Throwable) {}
+                        try { 
+                            $this->redis->delete($redisKey); 
+                            $this->redis->delete($verifyRedisKey);
+                        } catch (\Throwable) {}
                     }
                     $response = new Response();
                     if ($request->isAjax()) {
@@ -145,7 +156,12 @@ class AuthMiddleware extends BaseMiddleware
                     }
                     return $response->redirect(url('login'));
                 }
-                $session->set('user_verify_time', time());
+                
+                $now = time();
+                $session->set('user_verify_time', $now);
+                if ($redisAvailable) {
+                    try { $this->redis->set($verifyRedisKey, (string)$now, 300); } catch (\Throwable) {}
+                }
             } catch (\Throwable $e) {
                 $this->logger->error('auth.middleware.db_error', ['error' => $e->getMessage()]);
                 $session->destroy();

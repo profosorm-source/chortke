@@ -76,15 +76,21 @@ class PermissionMiddleware extends BaseMiddleware
             return true;
         }
         
-        // MEDIUM-09 Fix: Use Redis for permission caching instead of session for better security and reactivity
+        // HIGH-05 Fix: Use Redis for permission caching with HMAC integrity protection
         $cacheKey = "user_permissions:{$userId}";
         $cachedPermissions = null;
+        $appKey = (string)config('app.key');
         
         if ($this->redis->isAvailable()) {
             try {
                 $cached = $this->redis->get($cacheKey);
-                if ($cached) {
-                    $cachedPermissions = json_decode($cached, true);
+                if ($cached && strpos($cached, '|') !== false) {
+                    [$mac, $data] = explode('|', $cached, 2);
+                    if (hash_equals($mac, hash_hmac('sha256', $data, $appKey))) {
+                        $cachedPermissions = json_decode($data, true);
+                    } else {
+                        $this->logger->critical('permission.cache_tampered', ['user_id' => $userId]);
+                    }
                 }
             } catch (\Throwable) {}
         }
@@ -97,7 +103,9 @@ class PermissionMiddleware extends BaseMiddleware
             
             if (!$isCritical && $this->redis->isAvailable()) {
                 try {
-                    $this->redis->set($cacheKey, json_encode($cachedPermissions), 30); // 30 seconds TTL
+                    $data = json_encode($cachedPermissions);
+                    $mac = hash_hmac('sha256', $data, $appKey);
+                    $this->redis->set($cacheKey, $mac . '|' . $data, 300); // Increased TTL to 5 min with integrity
                 } catch (\Throwable) {}
             }
         }

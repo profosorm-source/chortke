@@ -25,7 +25,8 @@ class GuestMiddleware extends BaseMiddleware
     public function handle(Request $request, Closure $next): Response
     {
         // CRITICAL-C3 Fix: Consistent check using SessionKeys and LOGGED_IN flag
-        if ($this->session->get(SessionKeys::LOGGED_IN)) {
+        // HIGH-07 Fix: Double check both flag and user_id to prevent session partial state bypass
+        if ($this->session->get(SessionKeys::LOGGED_IN) && (int)$this->session->get(SessionKeys::USER_ID) > 0) {
             $response = new Response();
             $response->redirect(url('dashboard'));
             return $response;

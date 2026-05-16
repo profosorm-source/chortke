@@ -88,7 +88,14 @@ class ApiAuthMiddleware
             }
         }
 
-        return $this->toResponse($next($request));
+        $response = $this->toResponse($next($request));
+        
+        // MED-04 Fix: Add token expiry header for client-side proactive management
+        if (!empty($user->expires_at)) {
+            $response->setHeader('X-Token-Expires-At', (string)$user->expires_at);
+        }
+        
+        return $response;
     }
     
     private function checkRateLimit(int $userId): array
@@ -126,8 +133,7 @@ class ApiAuthMiddleware
     private function extractToken(Request $request): ?string
     {
         $authHeader = $request->header('Authorization') 
-            ?? $request->header('authorization') 
-            ?? ($_SERVER['HTTP_AUTHORIZATION'] ?? '');
+            ?? $request->header('authorization');
 
         if (!preg_match('/Bearer\s+(.+)/i', (string)$authHeader, $m)) {
             return null;
