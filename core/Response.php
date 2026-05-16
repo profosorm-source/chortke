@@ -319,6 +319,16 @@ class Response
         header('X-Permitted-Cross-Domain-Policies: none');
         header('Expect-CT: max-age=86400, enforce');
         
+        // HIGH-11 Fix: Dynamic Content Security Policy (CSP) with Nonce
+        try {
+            $request = \Core\Container::getInstance()->make(\Core\Request::class);
+            $nonce = $request->nonce();
+            header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$nonce}' https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; frame-src 'self' https://www.google.com; connect-src 'self';");
+        } catch (\Throwable $e) {
+            // Fallback policy if request/nonce generation fails
+            header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;");
+        }
+        
         // HSTS (Strict-Transport-Security) only over HTTPS
         $isSecure = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') 
                     || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');

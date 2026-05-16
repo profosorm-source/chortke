@@ -23,6 +23,18 @@ class Request
     private ?array $parsedBody = null;
     private ?object $user = null;
     private array $attributes = [];
+    private ?string $nonce = null; // HIGH-11 Fix: CSP Nonce for secure script execution
+
+    /**
+     * HIGH-11 Fix: Generate or retrieve a single-use nonce for CSP
+     */
+    public function nonce(): string
+    {
+        if ($this->nonce === null) {
+            $this->nonce = bin2hex(random_bytes(16));
+        }
+        return $this->nonce;
+    }
 
     public function setUser(object $user): void
     {
