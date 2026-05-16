@@ -70,20 +70,17 @@ class AuthController extends BaseController
                 return view('admin/login');
             }
 
-            // CRIT-03 & HIGH-01 Fix: Use a single generic error message to prevent User Enumeration
+            // HIGH-03 Fix: Use a single generic error message to prevent User Enumeration
             $genericError = 'اطلاعات ورود نامعتبر است یا دسترسی شما محدود شده است.';
             
-            $adminUser = $this->authService->getUserByEmail($email);
             $result = $this->authService->login($email, $password, $remember);
 
-            if (!$adminUser || !in_array((string)($adminUser->role ?? ''), ['admin', 'super_admin', 'support'], true) 
-                || !($result['success'] ?? false)) {
-                
+            if (!($result['success'] ?? false)) {
                 $this->logger->warning('admin.login.failed', [
                     'channel' => 'admin_auth',
                     'email' => $email,
                     'ip' => get_client_ip(),
-                    'reason' => (!$adminUser || !in_array($adminUser->role, ['admin', 'super_admin', 'support'], true)) ? 'unauthorized_role' : 'auth_failed'
+                    'reason' => 'auth_failed'
                 ]);
 
                 $this->session->setFlash('error', $genericError);
@@ -104,6 +101,7 @@ class AuthController extends BaseController
                 return view('admin/login');
             }
 
+            // HIGH-03 Fix: Verify role from the object returned by login() directly
             if (!in_array((string)($user->role ?? ''), ['admin', 'super_admin', 'support'], true)) {
                 $this->logger->warning('admin.unauthorized_access', [
                     'channel' => 'admin_auth',
@@ -221,10 +219,7 @@ class AuthController extends BaseController
             $this->rateLimiter->clear($throttleKey);
             $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
             
-            // CRIT-02 Fix: Session Regeneration after successful 2FA
-            // Note: AuthService::verify2FA -> createSession already calls regenerate(true)
-            // But we ensure it here to be absolutely safe and to define admin-specific data.
-            $this->session->regenerate(true);
+            // CRITICAL-C1 Fix: Redundant regenerate() removed. AuthService::verify2FA -> createSession already handles this.
             $this->session->set('admin_verify_time', time());
             
             $this->logger->activity(
