@@ -8,7 +8,7 @@ class WithdrawalValidator extends Validator
 {
     protected array $rules = [
         'currency' => 'required|in:IRT,USDT',
-        'amount' => 'required|numeric|min:1',
+        'amount' => 'required|numeric|min:0.0001',
         'bank_card_id' => 'nullable|numeric',
         'crypto_wallet' => 'nullable|string|min:10|max:120',
         'crypto_network' => 'nullable|in:BNB20,TRC20,ERC20,TON,SOL',
