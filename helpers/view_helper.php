@@ -21,7 +21,7 @@ if (!function_exists('view')) {
 
         $data = array_merge($globals, (array)$data);
 
-        extract($data);
+        extract($data, EXTR_SKIP);
 
         $viewPath = __DIR__ . '/../views/' . str_replace('.', '/', $viewName) . '.php';
 

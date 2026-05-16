@@ -41,9 +41,13 @@ if (!function_exists('get_user_agent')) {
 if (!function_exists('secure_hash')) {
     function secure_hash(string $data, string $algo = 'sha256'): string
     {
+        $key = config('app.key');
+        if (!$key) {
+            throw new \RuntimeException('APP_KEY is missing from configuration');
+        }
         $allowedAlgos = ['sha256', 'sha384', 'sha512', 'blake2b'];
         if (!in_array($algo, $allowedAlgos, true)) $algo = 'sha256';
-        return hash_hmac($algo, $data, (string)config('app.key', ''));
+        return hash_hmac($algo, $data, (string)$key);
     }
 }
 
@@ -198,26 +202,45 @@ if (!function_exists('sanitize_url')) {
     {
         if (empty($url)) return '#';
         $url = trim((string)$url);
-        if (preg_match('/^https?:\/\//i', $url)) return e($url);
-        return '#';
+        
+        $parsed = parse_url($url);
+        $scheme = isset($parsed['scheme']) ? strtolower($parsed['scheme']) : '';
+        
+        if (!in_array($scheme, ['http', 'https'])) {
+            return '#';
+        }
+        
+        return htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
     }
 }
 
 if (!function_exists('hash_password')) {
     function hash_password(string $password): string
     {
+        // CRITICAL: SHA-384 pre-hash to avoid 72-byte truncation in bcrypt and increase entropy
+        $preHashed = base64_encode(hash('sha384', $password, true));
+
         if (defined('PASSWORD_ARGON2ID')) {
-            return password_hash($password, PASSWORD_ARGON2ID, ['memory_cost' => 65536, 'time_cost' => 4, 'threads' => 2]);
+            return password_hash($preHashed, PASSWORD_ARGON2ID, ['memory_cost' => 65536, 'time_cost' => 4, 'threads' => 2]);
         }
-        return password_hash($password, PASSWORD_BCRYPT, ['cost' => 14]);
+        return password_hash($preHashed, PASSWORD_BCRYPT, ['cost' => 14]);
     }
 }
+
 if (!function_exists('verify_password')) {
     function verify_password(string $password, string $hash): bool
     {
+        $preHashed = base64_encode(hash('sha384', $password, true));
+        
+        if (password_verify($preHashed, $hash)) {
+            return true;
+        }
+
+        // Fallback for legacy (non-prehashed) passwords
         return password_verify($password, $hash);
     }
 }
+
 
 if (!function_exists('is_mobile')) {
     function is_mobile(): bool

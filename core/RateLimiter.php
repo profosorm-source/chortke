@@ -77,7 +77,7 @@ class RateLimiter
      * @param int|null $decayMinutes بازه‌ی زمانی
      * @return bool true اگر تلاش مجاز است
      */
-    public function attempt(string $key, ?int $maxAttempts = null, ?int $decayMinutes = null): bool
+    public function attempt(string $key, ?int $maxAttempts = null, ?int $decayMinutes = null, bool $failClosed = false): bool
     {
         $maxAttempts = $maxAttempts ?? (int) config('rate_limits.default.max_attempts', 60);
         $decayMinutes = $decayMinutes ?? (int) config('rate_limits.default.decay_minutes', 1);
@@ -86,14 +86,15 @@ class RateLimiter
             // 🚀 BUG-13 Fix: Graceful degradation if Cache/Redis is down
             $allowed = $this->strategy->attempt($key, $maxAttempts, $decayMinutes);
         } catch (\Throwable $e) {
-            // If cache/redis is unavailable, fail open (allow the request) to prevent denial of service
+            // If cache/redis is unavailable, fail open by default, but fail closed if requested (security routes)
             if (function_exists('logger')) {
                 logger()->error('rate_limiter.cache_failed', [
                     'key' => $key,
-                    'error' => $e->getMessage()
+                    'error' => $e->getMessage(),
+                    'fail_closed' => $failClosed
                 ]);
             }
-            return true;
+            return $failClosed ? false : true;
         }
 
         if (!$allowed) {

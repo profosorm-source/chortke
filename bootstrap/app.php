@@ -111,6 +111,14 @@ if (config('app.key') === '') {
     throw new Exception('APP_KEY must be set in environment variables');
 }
 
+// CRITICAL-03 Fix: Mandatory security configuration validation at startup
+if (!defined('SECURITY_API_TOKEN_SECRET') || strlen(SECURITY_API_TOKEN_SECRET) < 32) {
+    // In production, this MUST fail early
+    if (config('app.env', 'production') === 'production') {
+        throw new Exception('SECURITY_API_TOKEN_SECRET is missing or too weak (min 32 chars)');
+    }
+}
+
 // Load config early to avoid circular dependency
 $config = config();
 

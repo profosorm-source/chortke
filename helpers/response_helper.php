@@ -7,29 +7,7 @@
 if (!function_exists('json_response')) {
     function json_response(mixed $data, int $statusCode = 200): void
     {
-        http_response_code($statusCode);
-        header('Content-Type: application/json; charset=utf-8');
-        header('Access-Control-Allow-Origin: *');
-        header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-        header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-        header('Vary: Origin');
-
-        try {
-            $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-            echo $json;
-        } catch (\JsonException $e) {
-            $payload = [
-                'success' => false,
-                'message' => 'Internal Server Error: Invalid JSON structure',
-            ];
-
-            if (config('app.debug')) {
-                $payload['error'] = $e->getMessage();
-            }
-
-            echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-        }
-
+        app(\Core\Response::class)->json($data, $statusCode);
         exit;
     }
 }
@@ -42,18 +20,26 @@ if (!function_exists('abort')) {
         ]);
         $statusCode = $statusCode === false ? 500 : $statusCode;
 
-        http_response_code($statusCode);
+        $response = app(\Core\Response::class);
+        $response->setStatusCode($statusCode);
+        
+        ob_start();
         $errorPage = __DIR__ . '/../views/errors/' . $statusCode . '.php';
 
         if (file_exists($errorPage)) {
+            $data = ['message' => $message];
+            extract($data, EXTR_SKIP);
             require $errorPage;
         } else {
             echo "<h1>Error {$statusCode}</h1>";
             if ($message) {
-                echo '<p>' . e($message) . '</p>';
+                echo '<p>' . htmlspecialchars($message, ENT_QUOTES, 'UTF-8') . '</p>';
             }
         }
-
+        
+        $content = ob_get_clean();
+        $response->setContent($content);
+        $response->send();
         exit;
     }
 }

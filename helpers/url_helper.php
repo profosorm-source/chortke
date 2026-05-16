@@ -14,7 +14,7 @@ if (!function_exists('url')) {
         }
 
         // ۱. اولویت با APP_URL تنظیم شده در config است
-        $baseUrl = config('app.url') ?: setting('site_url');
+        $baseUrl = config('app.url');
 
         if (!$baseUrl) {
             // ۳. در نهایت اگر هیچ‌کدام نبود، از SERVER تشخیص بده (Sanitized)
@@ -45,28 +45,9 @@ if (!function_exists('asset')) {
 }
 
 if (!function_exists('redirect')) {
-    function redirect(string $path): never
+    function redirect(string $path, int $statusCode = 302): never
     {
-        if (session_status() === PHP_SESSION_ACTIVE) {
-            session_write_close();
-        }
-
-        if (strpos($path, 'http://') === 0 || strpos($path, 'https://') === 0) {
-            $appUrl  = config('app.url', '');
-            $appHost = parse_url($appUrl, PHP_URL_HOST) ?? '';
-            $pathHost = parse_url($path, PHP_URL_HOST) ?? '';
-            $isSameHost = ($pathHost === $appHost) || ($appHost && str_ends_with($pathHost, '.' . $appHost));
-
-            if (!$isSameHost && $appHost) {
-                header('Location: ' . rtrim($appUrl, '/') . '/');
-                exit;
-            }
-
-            header("Location: {$path}");
-            exit;
-        }
-        
-        header("Location: " . url($path));
+        app(\Core\Response::class)->redirect($path, $statusCode);
         exit;
     }
 }
@@ -74,13 +55,7 @@ if (!function_exists('redirect')) {
 if (!function_exists('back')) {
     function back(): never
     {
-        $referer = $_SERVER['HTTP_REFERER'] ?? '';
-        $appHost = parse_url(config('app.url', ''), PHP_URL_HOST);
-        $refHost = parse_url($referer, PHP_URL_HOST);
-        
-        if ($refHost === $appHost) {
-            redirect($referer);
-        }
-        redirect(url('/'));
+        app(\Core\Response::class)->back();
+        exit;
     }
 }

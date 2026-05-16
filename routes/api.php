@@ -133,4 +133,9 @@ $r->group(['prefix' => '/api/v1'], function ($r) {
         $r->post('/submit-proof', [\App\Controllers\Api\VerificationController::class, 'submitProof']);
     });
 
+    /**
+     * SECURITY ENDPOINTS
+     */
+    $r->post('/security/csp-report', [\App\Controllers\Api\SecurityController::class, 'cspReport'], [\App\Middleware\RateLimitMiddleware::class]);
+
 });
