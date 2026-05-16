@@ -8,6 +8,7 @@ use Core\Request;
 use Core\Response;
 use Core\Session;
 use Closure;
+use App\Constants\SessionKeys;
 
 /**
  * SecurityHeadersMiddleware — اعمال هدرهای امنیتی به تمام پاسخ‌ها
@@ -33,7 +34,7 @@ class SecurityHeadersMiddleware
         }
 
         $env = config('app.env', 'production');
-        $nonce = $this->generateNonce();
+        $nonce = $this->generateNonce($request);
 
         // Content Security Policy
         $csp = $this->buildCSP($env, $nonce);
@@ -42,7 +43,9 @@ class SecurityHeadersMiddleware
         // جلوگیری از حملات رایج
         $response->header('X-Frame-Options', 'SAMEORIGIN');
         $response->header('X-Content-Type-Options', 'nosniff');
-        $response->header('X-XSS-Protection', '1; mode=block');
+        // MED-05 Fix: X-XSS-Protection is deprecated and can be used as an attack vector in old browsers.
+        // Modern CSP is sufficient.
+        $response->header('X-XSS-Protection', '0');
         $response->header('Referrer-Policy', 'strict-origin-when-cross-origin');
         
         // سیاست‌های دسترسی به سخت‌افزار
@@ -59,11 +62,8 @@ class SecurityHeadersMiddleware
         $response->header('Cross-Origin-Opener-Policy', 'same-origin');
         $response->header('Cross-Origin-Resource-Policy', 'same-site'); 
 
-        // حذف هدرهای افشاکننده
-        if (!headers_sent()) {
-            header_remove('X-Powered-By');
-        }
-        $response->header('Server', 'Chortke');
+        // LOW-02 Fix: Remove framework identification for security through obscurity
+        $response->header('Server', '');
         
         return $response;
     }
@@ -86,12 +86,13 @@ class SecurityHeadersMiddleware
         ]);
     }
     
-    private function generateNonce(): string
+    private function generateNonce(Request $request): string
     {
+        // HIGH-03 Fix: Nonce must be per-request. Storing in Session reduces entropy and increases leak risk.
         $nonce = base64_encode(random_bytes(16));
-        $this->session->set('csp_nonce', $nonce);
+        $request->setAttribute(SessionKeys::CSP_NONCE, $nonce);
         
-        // Ensure backward compatibility with legacy layout defines if needed.
+        // Ensure backward compatibility with legacy layout defines for current request only
         if (!defined('CSP_NONCE')) {
             define('CSP_NONCE', $nonce);
         }

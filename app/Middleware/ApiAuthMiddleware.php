@@ -40,9 +40,12 @@ class ApiAuthMiddleware
         // HIGH-08 Fix: Extract user_id from the validated token, not from the request body/query
         $requestingUserId = (int)$user->id;
         
-        // Fix M2: برای مسیرهای حساس، بررسی مالکیت الزامی است
+        // HIGH-05 Fix: Enforce ownership check for sensitive paths
         if ($this->isSensitivePath($request->uri())) {
-            // مالکیت همیشه با user_id استخراج شده از توکن چک می‌شود
+            $requestedUserId = (int)$request->get('user_id', 0);
+            if ($requestedUserId > 0 && $requestedUserId !== $requestingUserId) {
+                return $this->errorResponse('دسترسی غیرمجاز: ناهماهنگی در شناسه کاربری', 403, 'OWNERSHIP_VIOLATION');
+            }
         }
 
         if ($user->status !== 'active' && (int)$user->status !== 1) {

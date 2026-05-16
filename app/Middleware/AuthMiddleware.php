@@ -9,6 +9,7 @@ use Core\Response;
 use Core\Session;
 use Core\Redis;
 use Closure;
+use App\Constants\SessionKeys;
 
 /**
  * AuthMiddleware — مدیریت احراز هویت و انقضای نشست کاربر
@@ -98,8 +99,9 @@ class AuthMiddleware extends BaseMiddleware
         }
 
         // بررسی ورود کاربر
-        // HIGH-04 Fix: Check both user_id and logged_in flag
-        if (!$session->has('user_id') || !$session->get('logged_in')) {
+        // MED-08 Fix: Unified and robust check for both user_id and logged_in flag
+        $userId = (int)$session->get(SessionKeys::USER_ID, 0);
+        if ($userId <= 0 || !$session->get(SessionKeys::LOGGED_IN)) {
             $response = new Response();
             if ($request->isAjax()) {
                 return $response->json(['success' => false, 'message' => config('messages.auth.unauthorized')], 401);

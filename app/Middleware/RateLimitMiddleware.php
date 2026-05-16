@@ -10,6 +10,7 @@ use Core\RateLimiter;
 use Core\Session;
 use Closure;
 use App\Contracts\LoggerInterface;
+use App\Constants\SessionKeys;
 
 /**
  * RateLimitMiddleware — محدودسازی نرخ درخواست‌ها
@@ -151,12 +152,14 @@ class RateLimitMiddleware
         // CORE-043: Normalize components (trim, lowercase) to ensure hash uniqueness
         $cleanUri = strtolower(trim($cleanUri));
         
-        $userId = $this->session->get('user_id');
-        if ($userId) {
-            return 'rl_user_' . $userId . '_' . md5($cleanUri);
-        }
-        
+        $userId = $this->session->get(SessionKeys::USER_ID);
         $ip = function_exists('get_client_ip') ? get_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+
+        if ($userId) {
+            // HIGH-04 Fix: Combined IP + UserID for authenticated users to prevent scraping/DDoS 
+            // even with a valid account.
+            return 'rl_user_' . $userId . '_' . md5($ip) . '_' . md5($cleanUri);
+        }
         
         // HIGH-07 Fix: Only use IP for anonymous users. User-Agent is too easy to spoof and bypass limits.
         return 'rl_ip_' . md5($ip) . '_' . md5($cleanUri);
