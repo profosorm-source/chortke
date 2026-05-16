@@ -192,16 +192,18 @@ class TwoFactorService extends \App\Services\BaseService
             }
 
             // 2. MED-01 Fix: Graceful migration fallback for older SHA256-hashed codes
-            // Use hash_equals for timing-safe comparison
+            // MEDIUM-M4 Fix: Force migration to bcrypt by requiring regeneration after use
             if (hash_equals(hash('sha256', $code), $record->code)) {
                 $this->securityModel->markTwoFactorCodeAsUsed((int)$record->id);
-                $this->logger->warning('2FA recovery code used (LEGACY SHA256 - UPGRADE REQUIRED)', [
+                $this->logger->warning('2FA recovery code used (LEGACY SHA256 - MIGRATION TRIGGERED)', [
                     'user_id' => $userId, 
                     'code_id' => $record->id
                 ]);
                 
-                // Notify user to regenerate codes for better security
-                $this->session->setFlash('warning', 'شما از یک کد بازیابی قدیمی استفاده کردید. لطفاً برای امنیت بیشتر، کدهای بازیابی جدید دریافت کنید.');
+                // Set flag to force user to regenerate codes on next dashboard visit
+                $this->userModel->update($userId, ['force_2fa_regen' => 1]);
+                
+                $this->session->setFlash('warning', 'شما از یک کد بازیابی قدیمی استفاده کردید. برای امنیت بیشتر، سیستم شما را ملزم به دریافت کدهای جدید می‌کند.');
                 
                 return true;
             }

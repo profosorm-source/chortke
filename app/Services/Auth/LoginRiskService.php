@@ -45,7 +45,7 @@ class LoginRiskService extends \App\Services\BaseService
      * ثبت‌نام: همیشه حداقل math — با افزایش خطا سخت‌تر می‌شود
      * ورود: بر اساس تعداد تلاش ناموفق
      */
-    public function getCaptchaType(string $context = 'login', ?string $ip = null): ?string
+    public function getCaptchaType(string $context = 'login', ?string $ip = null, ?string $identifier = null): ?string
     {
         // Input validation
         if (empty($context) || strlen($context) > 50) {
@@ -61,7 +61,7 @@ class LoginRiskService extends \App\Services\BaseService
         }
 
         $resolvedIp = $this->resolveIp($ip);
-        $score = $this->getRiskScore($context, $resolvedIp);
+        $score = $this->getRiskScore($context, $resolvedIp, $identifier);
 
         if ($context === 'register') {
             $captchaType = $this->determineCaptchaTypeByScore($score);
@@ -99,10 +99,10 @@ class LoginRiskService extends \App\Services\BaseService
     /**
      * محاسبه امتیاز ریسک (0-100)
      */
-    public function getRiskScore(string $context = 'login', ?string $ip = null): int
+    public function getRiskScore(string $context = 'login', ?string $ip = null, ?string $identifier = null): int
     {
         $resolvedIp = $this->resolveIp($ip);
-        $failCount = $this->getFailCount($context, $resolvedIp);
+        $failCount = $this->getFailCount($context, $resolvedIp, $identifier);
 
         $score = 0;
 
@@ -134,10 +134,10 @@ class LoginRiskService extends \App\Services\BaseService
     /**
      * ثبت تلاش ناموفق
      */
-    public function recordFailure(string $context = 'login', ?string $ip = null): void
+    public function recordFailure(string $context = 'login', ?string $ip = null, ?string $identifier = null): void
     {
         $resolvedIp = $this->resolveIp($ip);
-        $key = $this->buildKey($context, $resolvedIp);
+        $key = $this->buildKey($context, $resolvedIp, $identifier);
 
         $data = $this->cache->get($key);
         if (!$data || !is_array($data)) {
@@ -181,10 +181,10 @@ class LoginRiskService extends \App\Services\BaseService
     /**
      * پاک کردن سابقه تلاش (بعد از لاگین موفق)
      */
-    public function clearFailures(string $context = 'login', ?string $ip = null): void
+    public function clearFailures(string $context = 'login', ?string $ip = null, ?string $identifier = null): void
     {
         $resolvedIp = $this->resolveIp($ip);
-        $key = $this->buildKey($context, $resolvedIp);
+        $key = $this->buildKey($context, $resolvedIp, $identifier);
         
         $data = $this->cache->get($key);
         if ($data && isset($data['count'])) {
@@ -201,10 +201,10 @@ class LoginRiskService extends \App\Services\BaseService
     /**
      * تعداد تلاش‌های ناموفق فعلی
      */
-    public function getFailCount(string $context = 'login', ?string $ip = null): int
+    public function getFailCount(string $context = 'login', ?string $ip = null, ?string $identifier = null): int
     {
         $resolvedIp = $this->resolveIp($ip);
-        $key = $this->buildKey($context, $resolvedIp);
+        $key = $this->buildKey($context, $resolvedIp, $identifier);
         $data = $this->cache->get($key);
 
         if (!$data || !is_array($data)) {
@@ -221,11 +221,18 @@ class LoginRiskService extends \App\Services\BaseService
         return (int)($data['count'] ?? 0);
     }
 
-    private function buildKey(string $context, string $ip): string
+    private function buildKey(string $context, string $ip, ?string $identifier = null): string
     {
-        // HIGH-06 Fix: Use HMAC-SHA256 with app key to prevent precomputation and cache poisoning
+        // MEDIUM-M6 Fix: Combine IP and Account Identifier for better brute-force detection
         $salt = (string)config('app.key');
-        return "login_risk_{$context}_" . hash_hmac('sha256', $ip, $salt);
+        $ipHash = hash_hmac('sha256', $ip, $salt);
+        
+        if ($identifier) {
+            $idHash = hash_hmac('sha256', strtolower(trim($identifier)), $salt);
+            return "login_risk_{$context}_ip_{$ipHash}_id_{$idHash}";
+        }
+        
+        return "login_risk_{$context}_{$ipHash}";
     }
 
     /**

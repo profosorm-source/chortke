@@ -107,15 +107,32 @@ class ApiTokenService extends \App\Services\BaseService
         $name = trim($name);
         $name = $name === '' ? 'api-token-' . date('Ymd') : mb_substr($name, 0, 80);
 
-        if (!in_array($scope, ApiToken::ALLOWED_SCOPES, true)) {
-            $scope = 'read';
+        // MEDIUM-M7 Fix: Robust scope validation for multiple scopes
+        $requestedScopes = explode(',', (string)$scope);
+        $finalScopes = [];
+        foreach ($requestedScopes as $s) {
+            $s = trim($s);
+            if (in_array($s, ApiToken::ALLOWED_SCOPES, true)) {
+                $finalScopes[] = $s;
+            }
+        }
+        $finalScopes = array_unique($finalScopes);
+        if (empty($finalScopes)) {
+            $finalScopes = ['read'];
         }
 
-        // فقط ادمین میتواند توکن با scope=admin بسازد
+        // فقط ادمین میتواند توکن با اسکوپ admin بسازد
         $user = $this->userModel->findById($userId);
-        if ($scope === 'admin' && (!$user || !in_array($user->role, ['admin', 'super_admin'], true))) {
-            $scope = 'read';
+        $isAdmin = $user && in_array($user->role, ['admin', 'super_admin'], true);
+        
+        if (in_array('admin', $finalScopes, true) && !$isAdmin) {
+            $finalScopes = array_diff($finalScopes, ['admin']);
+            if (empty($finalScopes)) {
+                $finalScopes = ['read'];
+            }
         }
+
+        $scope = implode(',', $finalScopes);
 
         $this->apiTokenModel->createToken($userId, $token, $name, $scope, $expiresAt);
 
