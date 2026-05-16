@@ -72,9 +72,7 @@ class AuthService extends \App\Services\BaseService
         // HIGH-H-18 Fix: Adding random jitter to neutralize timing analysis on rate-limited paths
         usleep(random_int(50, 150) * 1000);
 
-        return is_array($rateLimitCheck) 
-            && isset($rateLimitCheck['allowed']) 
-            && $rateLimitCheck['allowed'] === true;
+        return $rateLimitCheck === true;
     }
 
     /**
@@ -485,6 +483,10 @@ class AuthService extends \App\Services\BaseService
         // CRIT-04 Fix: Verify that the pending 2FA session was created recently
         // This prevents attackers from using old stolen sessions
         $createdAt = (int)$this->session->get('pending_2fa_created_at', 0);
+        if ($createdAt === 0 && $this->session->get('admin_pending_2fa')) {
+            $createdAt = (int)$this->session->get('admin_pending_2fa_created', 0);
+        }
+        
         if (time() - $createdAt > 600) { // 10 minute max
             $this->session->destroy();
             return ['success' => false, 'message' => 'نشست 2FA منقضی شده است. لطفاً دوباره وارد شوید.'];
@@ -493,6 +495,9 @@ class AuthService extends \App\Services\BaseService
         // CRIT-04 Fix: Verify IP consistency for 2FA pending sessions
         // If IP changed significantly (different /24), it might be an attack
         $pendingIp = $this->session->get('pending_2fa_ip');
+        if (empty($pendingIp) && $this->session->get('admin_pending_2fa')) {
+            $pendingIp = $this->session->get('admin_pending_2fa_ip');
+        }
         $currentIp = $this->clientIp();
         // Normalize IPs to /24 subnet for comparison
         // Normalize IPs to /24 subnet (IPv4) or /64 (IPv6) for comparison
@@ -652,7 +657,7 @@ class AuthService extends \App\Services\BaseService
         return $record !== null;
     }
 
-    public function resetPassword(string $token, string $newPassword): array
+    public function resetPassword(string $token, string $newPassword, ?string $email = null): array
     {
         // HIGH-H-11 Fix: The TTL check is now enforced inside findPasswordResetByToken (DB-level)
         $timeout = (int)config('auth.password_reset_ttl', 3600);
@@ -660,6 +665,16 @@ class AuthService extends \App\Services\BaseService
         
         if (!$record) {
             return ['success' => false, 'message' => 'لینک بازیابی نامعتبر یا منقضی شده است.'];
+        }
+
+        // CRITICAL-01 Fix: Enforce email/user session binding for token usage to prevent token stealing/reuse
+        if ($email !== null && mb_strtolower($record->email, 'UTF-8') !== mb_strtolower($email, 'UTF-8')) {
+            $this->logger->critical('auth.password_reset.email_mismatch', [
+                'token' => $token,
+                'expected' => $record->email,
+                'provided' => $email
+            ]);
+            return ['success' => false, 'message' => 'درخواست بازیابی نامعتبر است.'];
         }
 
         $user = $this->userModel->findByEmail($record->email);

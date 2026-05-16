@@ -161,38 +161,52 @@ class TwoFactorService extends \App\Services\BaseService
 
     public function enable(int $userId, string $code): array
     {
-        $user = $this->userModel->find($userId);
-        if (!$user || empty($user->two_factor_secret)) {
-            return ['success' => false, 'message' => 'Secret key یافت نشد.'];
+        // HIGH-06 Fix: Acquire a distributed lock to prevent concurrent 2FA setup replay race conditions
+        $lockResource = "2fa_enable:{$userId}";
+        $lock = $this->lockService->acquire($lockResource, ttl: 30, waitTimeout: 5);
+        if (!$lock['acquired']) {
+            $this->logger->warning('2fa.enable.lock_failed', ['user_id' => $userId]);
+            return ['success' => false, 'message' => 'سیستم مشغول است، لطفا دوباره تلاش کنید.'];
         }
 
-        // 🛡️ Domain Invariant Guard: Prevent repeated or corrupted 2FA activation states.
-        if (!empty($user->two_factor_enabled)) {
-            return ['success' => false, 'message' => 'احراز هویت دو مرحله‌ای قبلاً فعال شده است.'];
-        }
-
-        // HIGH-H-04 Fix: When enabling 2FA, ONLY accept TOTP codes (Recovery codes are not yet issued)
-        if (!$this->verifyTOTPCode($user->two_factor_secret, $code, $userId)) {
-            return ['success' => false, 'message' => 'کد وارد شده نامعتبر است.'];
-        }
-
-        $this->db->beginTransaction();
         try {
-            $recoveryCodes = $this->generateRecoveryCodes();
-            $this->saveRecoveryCodes($userId, $recoveryCodes);
-            $this->userModel->update($userId, ['two_factor_enabled' => 1]);
-            $this->db->commit();
-        } catch (\Throwable $e) {
-            $this->db->rollback();
-            $this->logger->error('2fa.enable.failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
-            return ['success' => false, 'message' => 'خطا در فعال‌سازی احراز هویت دو مرحله‌ای.'];
-        }
+            $user = $this->userModel->find($userId);
+            if (!$user || empty($user->two_factor_secret)) {
+                return ['success' => false, 'message' => 'Secret key یافت نشد.'];
+            }
 
-        return [
-            'success' => true,
-            'message' => 'احراز هویت دو مرحله‌ای فعال شد.',
-            'recovery_codes' => $recoveryCodes,
-        ];
+            // 🛡️ Domain Invariant Guard: Prevent repeated or corrupted 2FA activation states.
+            if (!empty($user->two_factor_enabled)) {
+                return ['success' => false, 'message' => 'احراز هویت دو مرحله‌ای قبلاً فعال شده است.'];
+            }
+
+            // HIGH-H-04 Fix: When enabling 2FA, ONLY accept TOTP codes (Recovery codes are not yet issued)
+            if (!$this->verifyTOTPCode($user->two_factor_secret, $code, $userId)) {
+                return ['success' => false, 'message' => 'کد وارد شده نامعتبر است.'];
+            }
+
+            $this->db->beginTransaction();
+            try {
+                $recoveryCodes = $this->generateRecoveryCodes();
+                $this->saveRecoveryCodes($userId, $recoveryCodes);
+                $this->userModel->update($userId, ['two_factor_enabled' => 1]);
+                $this->db->commit();
+            } catch (\Throwable $e) {
+                $this->db->rollback();
+                $this->logger->error('2fa.enable.failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+                return ['success' => false, 'message' => 'خطا در فعال‌سازی احراز هویت دو مرحله‌ای.'];
+            }
+
+            return [
+                'success' => true,
+                'message' => 'احراز هویت دو مرحله‌ای فعال شد.',
+                'recovery_codes' => $recoveryCodes,
+            ];
+        } finally {
+            if (!empty($lock['token'])) {
+                $this->lockService->release($lockResource, $lock['token']);
+            }
+        }
     }
 
     public function disable(int $userId, string $password): array

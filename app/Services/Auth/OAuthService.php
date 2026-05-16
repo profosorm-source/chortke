@@ -158,7 +158,7 @@ class OAuthService extends \App\Services\BaseService
 
             // CRIT-01 Fix: Block OAuth completion on IP change by default (configurable strictness)
             // This is critical because OAuth callback URLs can be shared/predicted
-            $strictIpBinding = config('oauth.strict_ip_binding', true); // Default changed to true for security
+            $strictIpBinding = config('oauth.strict_ip_binding', false); // Default false to prevent breaking NAT/VPN/Mobile users
             if ($strictIpBinding) {
                 $this->session->destroy(); // CRIT-01: Destroy session to prevent any partial state exploitation
                 return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
@@ -494,7 +494,7 @@ class OAuthService extends \App\Services\BaseService
             ]);
 
             // Block by default for security
-            $strictIpBinding = config('oauth.strict_ip_binding', true);
+            $strictIpBinding = config('oauth.strict_ip_binding', false); // Default false to prevent breaking NAT/VPN/Mobile users
             if ($strictIpBinding) {
                 $this->session->destroy();
                 return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
