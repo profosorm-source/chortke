@@ -35,3 +35,4 @@ $r->post('/admin/api-tokens/revoke-expired', [ApiTokenAdminController::class, 'r
 $r->get('/admin/cache',         [CacheAdminController::class, 'index'],  $admin);
 $r->post('/admin/cache/clear',  [CacheAdminController::class, 'clear'],  $admin);
 $r->post('/admin/cache/forget', [CacheAdminController::class, 'forget'], $admin);
+$r->post('/admin/cache/reset-circuit-breaker', [CacheAdminController::class, 'resetCircuitBreaker'], $admin);
