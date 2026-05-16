@@ -13,6 +13,10 @@ if ($isProduction && ($appUrl === 'http://localhost' || empty($appUrl) || !filte
     throw new \RuntimeException('Production environment detected but APP_URL is invalid or set to localhost in environment variables.');
 }
 
+if ($isProduction && (empty(env('GOOGLE_CLIENT_ID')) || empty(env('GOOGLE_CLIENT_SECRET')))) {
+    throw new \RuntimeException('Google OAuth credentials must be configured in production.');
+}
+
 return [
     'google' => [
         'client_id' => env('GOOGLE_CLIENT_ID', ''),

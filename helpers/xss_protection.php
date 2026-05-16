@@ -157,11 +157,29 @@ if (!function_exists('csp_nonce')) {
      */
     function csp_nonce(): string
     {
-        $session = \Core\Session::getInstance();
-        if (!$session->has('csp_nonce')) {
-            $session->set('csp_nonce', base64_encode(random_bytes(16)));
+        $nonce = null;
+
+        if (class_exists('\Core\Container')) {
+            try {
+                $container = \Core\Container::getInstance();
+                $request = $container->make(\Core\Request::class);
+                if ($request instanceof \Core\Request) {
+                    $nonce = $request->getAttribute(\App\Constants\SessionKeys::CSP_NONCE, null);
+                }
+            } catch (\Throwable) {
+                $nonce = null;
+            }
         }
-        return (string) $session->get('csp_nonce');
+
+        if (!$nonce) {
+            $session = \Core\Session::getInstance();
+            if (!$session->has('csp_nonce')) {
+                $session->set('csp_nonce', base64_encode(random_bytes(16)));
+            }
+            $nonce = (string) $session->get('csp_nonce');
+        }
+
+        return (string) $nonce;
     }
 }
 
