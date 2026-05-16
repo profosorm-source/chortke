@@ -81,10 +81,21 @@ class UserValidator
         
         if (empty($data['email']) && empty($data['identifier'])) {
             $errors['login'][] = 'نام کاربری یا ایمیل الزامی است.';
+        } else {
+            // MEDIUM-05 Fix: Enforce maximum input length limit to prevent CPU/memory exhaustion (DoS) from extremely large inputs
+            if (!empty($data['email']) && strlen((string)$data['email']) > 255) {
+                $errors['login'][] = 'ایمیل نامعتبر است (بیش از حد طولانی).';
+            }
+            if (!empty($data['identifier']) && strlen((string)$data['identifier']) > 255) {
+                $errors['login'][] = 'شناسه کاربری نامعتبر است (بیش از حد طولانی).';
+            }
         }
         
         if (empty($data['password'])) {
             $errors['password'][] = 'رمز عبور الزامی است.';
+        } elseif (strlen((string)$data['password']) > 255) {
+            // Prevent bcrypt CPU exhaustion / DoS
+            $errors['password'][] = 'رمز عبور نامعتبر است (بیش از حد طولانی).';
         }
         
         return $errors;

@@ -31,7 +31,7 @@ class PasswordPolicy
         $requireNumbers = (bool)config('auth.password.require_numbers', true);
         $requireSpecialChars = (bool)config('auth.password.require_special_chars', true); // HIGH-09: Default to true
         $preventCommonPasswords = (bool)config('auth.password.prevent_common', true);
-        $checkHibp = (bool)config('auth.password.check_hibp', false); // OFF by default due to privacy concerns
+        $checkHibp = (bool)config('auth.password.check_hibp', true); // Enabled by default as k-anonymity preserves privacy safely
 
         // HIGH-05 Fix: Use mb_strlen for characters and check byte length for bcrypt
         $charCount = mb_strlen($password, 'UTF-8');
