@@ -9,6 +9,14 @@ use App\Models\User;
 use App\Contracts\LoggerInterface;
 use Core\RateLimiter;
 
+/**
+ * ApiTokenService - API Token Management
+ * 
+ * SECURITY NOTES:
+ * - Scope isolation: Only admins can create tokens with 'admin' or '*' scopes
+ * - All tokens are HMAC-SHA256 hashed before database storage
+ * - Rate limiting on token operations prevents abuse
+ */
 class ApiTokenService extends \App\Services\BaseService
 {
     private ApiToken $apiTokenModel;
@@ -16,6 +24,17 @@ class ApiTokenService extends \App\Services\BaseService
     private RateLimiter $rateLimiter;
     private \App\Services\Auth\TwoFactorService $twoFactorService;
     private readonly string $dummyHash;
+
+    // HIGH-05 Fix: Define critical scopes that require admin privileges
+    private const ADMIN_SCOPES = ['admin', '*'];
+    private const READ_SCOPES = ['read'];
+    private const WRITE_SCOPES = ['write', 'read'];
+    private const SCOPE_HIERARCHY = [
+        'read' => 1,
+        'write' => 2,
+        'admin' => 3,
+        '*' => 4,
+    ];
 
     public function __construct(
         LoggerInterface $logger, 
@@ -65,6 +84,7 @@ class ApiTokenService extends \App\Services\BaseService
     public function revokeTokenByHash(string $token): array
     {
         // CRIT-01 Fix: Pass plain token to the model which handles HMAC-SHA256
+        // The model will hash the token before looking it up
         $record = $this->apiTokenModel->findByHash($token);
 
         if (!$record || (int)$record['revoked'] === 1) {
@@ -91,6 +111,12 @@ class ApiTokenService extends \App\Services\BaseService
         return $this->apiTokenModel->countActiveByUserId($userId);
     }
 
+    /**
+     * Create a new API token for a user
+     * 
+     * HIGH-05 Fix: Strict scope isolation - only admins can create tokens with
+     * privileged scopes ('admin', '*'). Regular users can only get basic scopes.
+     */
     public function createTokenForUser(int $userId, string $name, int $expiresIn, string $scope = 'read'): array
     {
         if ($name === '') {
@@ -115,37 +141,11 @@ class ApiTokenService extends \App\Services\BaseService
         $name = $name === '' ? 'api-token-' . date('Ymd') : mb_substr($name, 0, 80);
 
         // MEDIUM-M7 Fix: Robust scope validation for multiple scopes
-        $requestedScopes = explode(',', (string)$scope);
-        $finalScopes = [];
-        foreach ($requestedScopes as $s) {
-            $s = trim($s);
-            if (in_array($s, ApiToken::ALLOWED_SCOPES, true)) {
-                $finalScopes[] = $s;
-            }
-        }
-        $finalScopes = array_unique($finalScopes);
+        $requestedScopes = array_filter(array_map('trim', explode(',', (string)$scope)));
+        $finalScopes = $this->validateAndFilterScopes($requestedScopes, $userId);
+
         if (empty($finalScopes)) {
             $finalScopes = ['read'];
-        }
-
-        // فقط ادمین میتواند توکن با اسکوپ admin بسازد
-        $user = $this->userModel->findById($userId);
-        $isAdmin = $user && in_array($user->role, ['admin', 'super_admin'], true);
-        
-        if (in_array('admin', $finalScopes, true) && !$isAdmin) {
-            $finalScopes = array_diff($finalScopes, ['admin']);
-            if (empty($finalScopes)) {
-                $finalScopes = ['read'];
-            }
-        }
-
-        if (in_array('*', $finalScopes, true) && !$isAdmin) {
-            return [
-                'success' => false,
-                'message' => 'تنها ادمین می‌تواند توکن با دسترسی کامل بسازد',
-                'status' => 403,
-                'code' => 'FORBIDDEN_SCOPE'
-            ];
         }
 
         $scope = implode(',', $finalScopes);
@@ -167,6 +167,63 @@ class ApiTokenService extends \App\Services\BaseService
                 'expires_at' => $expiresAt,
             ],
         ];
+    }
+
+    /**
+     * HIGH-05 Fix: Validate and filter scopes based on user role
+     * 
+     * Only users with admin/super_admin roles can have:
+     * - 'admin' scope
+     * - '*' (wildcard) scope
+     * 
+     * Regular users are limited to: read, write
+     * 
+     * @param array $requestedScopes Scopes requested by the user
+     * @param int $userId User ID to check role
+     * @return array Filtered scopes that user is allowed to have
+     */
+    private function validateAndFilterScopes(array $requestedScopes, int $userId): array
+    {
+        // Get user role
+        $user = $this->userModel->findById($userId);
+        $isAdmin = $user && in_array($user->role, ['admin', 'super_admin'], true);
+        
+        $finalScopes = [];
+        foreach ($requestedScopes as $scope) {
+            $scope = mb_strtolower(trim($scope));
+            
+            // Validate scope format (alphanumeric and few special chars only)
+            if (!preg_match('/^[a-z0-9_*]{1,20}$/', $scope)) {
+                continue; // Skip invalid scope formats
+            }
+            
+            // HIGH-05 Fix: Block privileged scopes for non-admins
+            if (in_array($scope, self::ADMIN_SCOPES, true) && !$isAdmin) {
+                $this->logger->warning('api_token.scope_blocked', [
+                    'user_id' => $userId,
+                    'scope' => $scope,
+                    'reason' => 'non_admin_forbidden'
+                ]);
+                continue; // Skip this scope, don't add it
+            }
+            
+            // Check for scope hierarchy - deny if trying to get higher privilege than needed
+            if (!$isAdmin && isset(self::SCOPE_HIERARCHY[$scope]) && self::SCOPE_HIERARCHY[$scope] >= self::SCOPE_HIERARCHY['admin']) {
+                $this->logger->warning('api_token.scope_hierarchy_violation', [
+                    'user_id' => $userId,
+                    'scope' => $scope,
+                    'user_role' => $user->role ?? 'unknown'
+                ]);
+                continue;
+            }
+            
+            // Only allow known scopes
+            if (in_array($scope, ApiToken::ALLOWED_SCOPES, true)) {
+                $finalScopes[] = $scope;
+            }
+        }
+        
+        return array_unique($finalScopes);
     }
 
     public function revokeTokenById(int $userId, int $tokenId): array
@@ -192,6 +249,12 @@ class ApiTokenService extends \App\Services\BaseService
         return $this->dummyHash;
     }
 
+    /**
+     * Issue token via credentials (email/password)
+     * 
+     * HIGH-H-05 Fix: Requires 2FA if user has it enabled
+     * HIGH-05 Fix: Strict scope isolation enforced here as well
+     */
     public function issueToken(string $email, string $password, string $name, string $scopes, string $otp = ''): array
     {
         // MED-11: Rate limiting check (10 attempts per 60 seconds per IP)
@@ -298,23 +361,11 @@ class ApiTokenService extends \App\Services\BaseService
         }
         $name = mb_substr($name, 0, 80);
 
-        $requestedScopes = explode(',', preg_replace('/[^a-z0-9,:_-]/i', '', trim($scopes)));
-        $finalScopes = [];
-        foreach ($requestedScopes as $s) {
-            $s = trim($s);
-            if (in_array($s, ApiToken::ALLOWED_SCOPES, true)) {
-                $finalScopes[] = $s;
-            }
-        }
+        $requestedScopes = array_filter(array_map('trim', explode(',', preg_replace('/[^a-z0-9,:_-]/i', '', trim($scopes)))));
+        $finalScopes = $this->validateAndFilterScopes($requestedScopes, (int)$user->id);
+
         $finalScopes = array_unique($finalScopes);
-
-        // H20 Fix: فقط ادمین یا سوپرادمین مجاز به دریافت توکن با اسکوپ admin هستند
-        $isAdmin = in_array($user->role, ['admin', 'super_admin'], true);
-        if (in_array('admin', $finalScopes, true) && !$isAdmin) {
-            $finalScopes = array_diff($finalScopes, ['admin']);
-        }
-
-        $scopes = !empty($finalScopes) ? implode(',', array_unique($finalScopes)) : 'read';
+        $scopes = !empty($finalScopes) ? implode(',', $finalScopes) : 'read';
 
         $this->apiTokenModel->createToken($user->id, $token, $name, $scopes, $expiresAt);
 

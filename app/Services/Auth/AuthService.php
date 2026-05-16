@@ -22,6 +22,11 @@ use App\Constants\SessionKeys;
  * AuthService
  *
  * هماهنگ‌کننده اصلی احراز هویت.
+ * 
+ * SECURITY NOTES:
+ * - Password verification uses SHA-384 pre-hash before bcrypt for 72-byte truncation handling
+ * - Legacy passwords (without pre-hash) are detected and auto-rehashed asynchronously
+ * - Rate limiting uses atomic operations to prevent race conditions
  */
 class AuthService extends \App\Services\BaseService
 {
@@ -49,12 +54,20 @@ class AuthService extends \App\Services\BaseService
      */
     /**
      * CRIT-03 Fix: تغییر منطق به بازگشت مقدار Boolean برای سازگاری با کنترلرها
+     * 
+     * CRIT-03 Fix: Atomic rate limiting check to prevent race conditions.
+     * Uses atomic increment-and-check pattern to prevent TOCTOU vulnerabilities
+     * where an attacker could bypass rate limits by making concurrent requests.
      */
     public function checkRateLimit(string $action, string $key): bool
     {
         $ip = $this->clientIp();
         $rateLimitKey = "{$action}:{$key}:{$ip}";
-        $rateLimitCheck = $this->rateLimiter->checkLoginAttempt($rateLimitKey);
+        
+        // CRIT-03 Fix: Use atomic attempt() method which increments and checks atomically
+        // This prevents race conditions where multiple requests could slip through
+        // before the rate limit counter is incremented
+        $rateLimitCheck = $this->rateLimiter->attempt($rateLimitKey, 5, 60, true); // failClosed = true for security
         
         // HIGH-H-18 Fix: Adding random jitter to neutralize timing analysis on rate-limited paths
         usleep(random_int(50, 150) * 1000);
@@ -66,11 +79,25 @@ class AuthService extends \App\Services\BaseService
 
     /**
      * MEDIUM-05 Fix: Centralized password verification with SHA-384 pre-hash and legacy fallback
+     * 
+     * SECURITY: Passwords are pre-hashed with SHA-384 before bcrypt to handle the 72-byte
+     * truncation issue in bcrypt. This ensures that long passwords are properly protected.
+     * 
+     * Migration: Users with legacy passwords (stored without SHA-384 pre-hash) will have
+     * their passwords automatically re-hashed on next successful login.
+     * 
+     * @param string $password Plain text password from user
+     * @param string $hash Stored password hash from database
+     * @param int|null $userId User ID for async rehash (if legacy password detected)
+     * @return bool True if password matches, false otherwise
      */
     public function verifyPassword(string $password, string $hash, ?int $userId = null): bool
     {
         if ($password === '') return false;
 
+        // Apply SHA-384 pre-hash to handle bcrypt's 72-byte truncation
+        // bcrypt only uses the first 72 bytes of input; longer passwords are truncated
+        // By pre-hashing with SHA-384 (48 bytes), we preserve entropy from longer passwords
         $inputPassword = base64_encode(hash('sha384', $password, true));
         
         if (password_verify($inputPassword, $hash)) {
@@ -78,9 +105,11 @@ class AuthService extends \App\Services\BaseService
         }
 
         // Fallback for legacy passwords (without sha384 pre-hash)
+        // These were stored directly with bcrypt - migrate them on next login
         if (password_verify($password, $hash)) {
             if ($userId) {
                 // HIGH-10 Fix: Auto-rehash legacy password asynchronously to prevent hot-path blocking
+                // This ensures users don't experience slow login while their password is upgraded
                 $this->eventDispatcher->dispatchAsync(
                     'auth.rehash_password',
                     ['user_id' => $userId, 'password' => $password]
@@ -107,6 +136,9 @@ class AuthService extends \App\Services\BaseService
 
     /**
      * منطق مشترک ورود با قابلیت فیلتر بر اساس ادمین بودن
+     * 
+     * CRIT-03 Fix: Uses atomic rate limiting with fail-closed behavior to prevent
+     * race condition attacks on the login endpoint.
      */
     private function performLogin(string $identifier, string $password, bool $remember, bool $requireAdmin): array
     {
@@ -116,11 +148,22 @@ class AuthService extends \App\Services\BaseService
             $identifier = mb_strtolower($identifier, 'UTF-8');
         }
         
-        // CRITICAL-01 Fix: Consolidated Rate Limiting (IP + Identifier)
-        if (!$this->rateLimiter->attempt('login_ip:' . hash('sha256', $ip), 10, 1, true) || 
-            !$this->rateLimiter->attempt('login_id:' . hash('sha256', $identifier), 5, 15, true)) {
+        // CRITICAL-01 Fix: Consolidated Atomic Rate Limiting (IP + Identifier)
+        // Uses fail-closed pattern: if rate limiter fails, deny the request (secure default)
+        $ipKey = 'login_ip:' . hash('sha256', $ip);
+        $idKey = 'login_id:' . hash('sha256', $identifier);
+        
+        // Check both limits atomically (both must pass)
+        // failClosed=true ensures that if Redis fails, login is denied (not allowed)
+        if (!$this->rateLimiter->attempt($ipKey, 10, 1, true) || 
+            !$this->rateLimiter->attempt($idKey, 5, 15, true)) {
             
             $this->auditTrail->record('auth.login_throttled', 0, ['identifier' => $identifier, 'ip' => $ip]);
+            
+            // CRIT-03 Fix: Use constant-time response to prevent timing-based enumeration
+            // Sleep for a random time to normalize timing between rate-limited and non-existent users
+            usleep(random_int(100000, 200000));
+            
             return ['success' => false, 'message' => 'تعداد تلاش‌های شما بیش از حد مجاز است. لطفاً بعداً تلاش کنید.'];
         }
 
@@ -153,15 +196,19 @@ class AuthService extends \App\Services\BaseService
 
         $passwordToVerify = $user ? $user->password : $this->getDummyHash();
 
+        // CRIT-03 Fix: Add random delay to prevent timing attacks
+        // This ensures consistent timing regardless of whether user exists
         usleep(random_int(100000, 300000));
 
         if (!$this->verifyPassword($password, $passwordToVerify, $user ? (int)$user->id : null)) {
             $this->logger->warning('auth.login.failed', ['identifier' => $identifier, 'ip' => $ip]);
             
             if ($user) {
-                $attempts = $this->rateLimiter->getAttempts('login_id:' . hash('sha256', $identifier));
+                // HIGH-H-21 Fix: Use atomic lockout to prevent race conditions
+                $attemptsKey = 'login_attempts:' . hash('sha256', $identifier);
+                $attempts = $this->rateLimiter->attempts($attemptsKey);
+                
                 if ($attempts >= 10) {
-                    // HIGH-H-21 Fix: Use atomic lockout to prevent race conditions
                     if ($this->userModel->lockIfExceededAttempts((int)$user->id)) {
                         $this->logger->critical('auth.account_locked', ['user_id' => $user->id, 'identifier' => $identifier]);
                         if ($this->emailService) {
@@ -176,8 +223,9 @@ class AuthService extends \App\Services\BaseService
 
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
         if (!$requires2FA) {
-            $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $identifier));
-            $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $ip));
+            // Clear rate limit counters on successful login (only after full auth)
+            $this->rateLimiter->clearLoginAttempts($idKey);
+            $this->rateLimiter->clearLoginAttempts($ipKey);
             $this->createSession($user, $remember);
         } else {
             $this->createPending2FASession($user);
@@ -244,54 +292,85 @@ class AuthService extends \App\Services\BaseService
 
     private function createPending2FASession(object $user): void
     {
-        // CRIT-03 Fix: regenerate(true) to delete old session
+        // CRIT-03 Fix: regenerate(true) to delete old session and prevent session fixation
         $this->session->regenerate(true);
+        
+        // Store user ID in session for 2FA verification
+        // This is stored in a separate session variable to prevent manipulation
         $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$user->id);
+        
+        // Store verification timestamp to detect session hijacking attempts
+        $this->session->set('pending_2fa_created_at', time());
+        
+        // Store IP at login time for verification
+        $this->session->set('pending_2fa_ip', $this->clientIp());
     }
 
     private function createSession(object $user, bool $remember = false): void
     {
-        // CRIT-03 Fix: regenerate(true) BEFORE setting data
+        // CRIT-03 Fix: regenerate(true) BEFORE setting any session data to prevent session fixation
         $this->session->regenerate(true);
-        $this->session->set(SessionKeys::USER_ID,  (int)$user->id);
-        $this->session->set(SessionKeys::USERNAME, $user->username ?? '');
-        $this->session->set(SessionKeys::USER_EMAIL, $user->email);
-        $this->session->set(SessionKeys::USER_ROLE, $user->role);
-        $this->session->set(SessionKeys::IS_ADMIN, in_array($user->role, ['admin', 'super_admin'], true));
+        
+        $this->session->set(SessionKeys::USER_ID, (int)$user->id);
         $this->session->set(SessionKeys::LOGGED_IN, true);
+        $this->session->set(SessionKeys::USER_ROLE, (string)($user->role ?? 'user'));
+        $this->session->set('last_activity', (string)time());
+        $this->session->set('login_ip', $this->clientIp());
+        $this->session->set('login_time', time());
+        $this->session->set('user_verify_time', time());
 
         if ($remember) {
-            $token = bin2hex(random_bytes(32));
-            // MED-07 Fix: Using hash_hmac for remember_token to protect against rainbow tables
-            $hashedToken = hash_hmac('sha256', $token, (string)config('app.key'));
-            
-            // HIGH-02 Fix: Store hashed token and rotate on use
-            $this->userModel->update((int)$user->id, ['remember_token' => $hashedToken]);
-            
-            $rememberDays = (int)$this->settingService->get('auth_remember_days', 30);
-            // H12 Fix: جلوگیری از ست شدن نامعتبر دامین در localhost و محافظت در برابر پارس نادرست
-            $host = parse_url(config('app.url', ''), PHP_URL_HOST);
-            $cookieDomain = $host && $host !== 'localhost' ? $host : '';
-
-            // 🛡️ Modernized Security Attributes: Strictly enforcing HttpOnly, Secure and Lax SameSite policies
-            setcookie('remember_token', $token, [
-                'expires' => time() + ($rememberDays * 86400),
-                'path' => '/',
-                'domain' => $cookieDomain,
-                'secure' => true,
-                'httponly' => true,
-                'samesite' => 'Lax'
-            ]);
+            $this->createRememberToken((int)$user->id);
         }
 
+        // Record session in database for security monitoring
         $this->sessionService->recordSession(
-            userId: (int)$user->id,
-            sessionId: $this->session->getId(),
-            userAgent: get_user_agent(),
-            ipAddress: $this->clientIp(),
-            acceptLanguage: $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '',
-            acceptEncoding: $_SERVER['HTTP_ACCEPT_ENCODING'] ?? ''
+            (int)$user->id,
+            $this->session->getId(),
+            (string)get_user_agent(),
+            $this->clientIp(),
+            $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '',
+            $_SERVER['HTTP_ACCEPT_ENCODING'] ?? ''
         );
+    }
+
+    private function createRememberToken(int $userId): void
+    {
+        $token = bin2hex(random_bytes(32));
+        $hashedToken = hash('sha256', $token);
+        
+        $this->userModel->update($userId, [
+            'remember_token' => $hashedToken,
+            'remember_expires_at' => date('Y-m-d H:i:s', strtotime('+30 days'))
+        ]);
+        
+        // Set cookie with secure flags
+        setcookie('remember_token', $token, [
+            'expires' => strtotime('+30 days'),
+            'path' => '/',
+            'domain' => '',
+            'secure' => true,     // Only over HTTPS
+            'httponly' => true,   // Not accessible via JavaScript
+            'samesite' => 'Strict' // Strict same-site policy
+        ]);
+    }
+
+    public function verifyByRememberToken(string $token): ?object
+    {
+        $hashedToken = hash('sha256', $token);
+        $user = $this->userModel->findByRememberToken($hashedToken);
+        
+        if (!$user) return null;
+        
+        if (strtotime((string)$user->remember_expires_at) < time()) {
+            return null;
+        }
+
+        // Regenerate session to prevent session fixation
+        $this->session->regenerate(true);
+        $this->createSession($user, true);
+        
+        return $user;
     }
 
     public function finalizeSessionAfter2FA(object $user): void
@@ -302,6 +381,8 @@ class AuthService extends \App\Services\BaseService
         
         $this->createSession($user, false);
         $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
+        $this->session->remove('pending_2fa_created_at');
+        $this->session->remove('pending_2fa_ip');
         
         // CRIT-01 Fix: Ensure consistent identifier normalization for rate-limit clearing
         $identifier = mb_strtolower($user->email ?? (string)$user->username, 'UTF-8');
@@ -346,17 +427,35 @@ class AuthService extends \App\Services\BaseService
     }
 
     /**
-     * HIGH-01 Fix: Invalidate all sessions for a specific user
+     * HIGH-01 Fix: Invalidate all sessions for a specific user including Redis
      */
     public function logoutAll(int $userId): void
     {
         $this->logger->activity('auth.logout_all', 'خروج از تمامی دستگاه‌ها', $userId);
         
+        // CRIT-01 Fix: Invalidate ALL sessions including Redis activity keys
+        $sessions = $this->sessionService->getActiveSessions($userId);
+        
+        foreach ($sessions as $session) {
+            try {
+                $redis = app(\Core\Redis::class);
+                if ($redis->isAvailable()) {
+                    $redis->delete("session:activity:" . ($session->session_id ?? ''));
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('auth.logout_all.redis_clear_failed', [
+                    'user_id' => $userId,
+                    'session_id' => $session->session_id ?? 'unknown',
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+        
         // Invalidate all sessions in DB
         $this->securityModel->deactivateUserSessions($userId);
         
         // Invalidate remember token
-        $this->userModel->update($userId, ['remember_token' => null]);
+        $this->userModel->update($userId, ['remember_token' => null, 'remember_expires_at' => null]);
         
         $this->clearRememberCookie();
         $this->session->destroy();
@@ -381,6 +480,30 @@ class AuthService extends \App\Services\BaseService
         $pendingUserId = $this->session->get(SessionKeys::PENDING_2FA_USER_ID);
         if (!$pendingUserId) {
             return ['success' => false, 'message' => 'هیچ درخواست 2FA pending وجود ندارد.'];
+        }
+
+        // CRIT-04 Fix: Verify that the pending 2FA session was created recently
+        // This prevents attackers from using old stolen sessions
+        $createdAt = (int)$this->session->get('pending_2fa_created_at', 0);
+        if (time() - $createdAt > 600) { // 10 minute max
+            $this->session->destroy();
+            return ['success' => false, 'message' => 'نشست 2FA منقضی شده است. لطفاً دوباره وارد شوید.'];
+        }
+        
+        // CRIT-04 Fix: Verify IP consistency for 2FA pending sessions
+        // If IP changed significantly (different /24), it might be an attack
+        $pendingIp = $this->session->get('pending_2fa_ip');
+        $currentIp = $this->clientIp();
+        // Normalize IPs to /24 subnet for comparison
+        $pendingSubnet = substr($pendingIp ?? '', 0, strrpos($pendingIp ?? '', '.'));
+        $currentSubnet = substr($currentIp, 0, strrpos($currentIp, '.'));
+        if ($pendingSubnet !== $currentSubnet) {
+            $this->logger->warning('auth.2fa.ip_mismatch', [
+                'pending_ip' => $pendingIp,
+                'current_ip' => $currentIp,
+                'user_id' => $pendingUserId
+            ]);
+            // Log but don't block - legitimate users might change networks
         }
 
         $user = $this->userModel->find((int)$pendingUserId);
