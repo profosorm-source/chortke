@@ -25,8 +25,12 @@ class LogUserRegisteredActivity
 
             // 2. Resolve verified token and dispatch Verification Mail outside the HTTP pipeline
             $user = $this->userService->find($event->userId);
-            if ($this->emailService && $user && !empty($user->email_verification_token)) {
-                $this->emailService->sendVerificationEmail($event->userId, $user->email_verification_token);
+            if ($this->emailService && $user) {
+                // CRITICAL-02 Fix: Use the plain token from the event (not hashed in DB)
+                $token = $event->plainToken ?? $user->email_verification_token;
+                if (!empty($token)) {
+                    $this->emailService->sendVerificationEmail($event->userId, $token);
+                }
             }
         } catch (\Throwable $e) {
             $this->logger->error('listener.user_registered.failed', [

@@ -25,9 +25,16 @@ class GuestMiddleware extends BaseMiddleware
     public function handle(Request $request, Closure $next): Response
     {
         // CRITICAL-C3 Fix: Consistent check using SessionKeys and LOGGED_IN flag
-        if ($this->session->has(SessionKeys::USER_ID) && $this->session->get(SessionKeys::LOGGED_IN)) {
+        if ($this->session->get(SessionKeys::LOGGED_IN)) {
             $response = new Response();
             $response->redirect(url('dashboard'));
+            return $response;
+        }
+
+        // MEDIUM-09 Fix: Redirect users with pending 2FA to verification page
+        if ($this->session->has(SessionKeys::PENDING_2FA_USER_ID)) {
+            $response = new Response();
+            $response->redirect(url('verify-2fa'));
             return $response;
         }
 

@@ -48,7 +48,8 @@ class ApiAuthMiddleware
             }
         }
 
-        if ($user->status !== 'active' && (int)$user->status !== 1) {
+        $allowedStatuses = ['active', '1', 1];
+        if (!in_array($user->status, $allowedStatuses, true)) {
             return $this->errorResponse('حساب کاربری غیرفعال است', 403, 'ACCOUNT_DISABLED');
         }
 

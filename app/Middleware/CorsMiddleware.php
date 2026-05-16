@@ -54,7 +54,7 @@ class CorsMiddleware
         $allowedOrigins = array_values(array_unique($allowedOrigins));
 
         // بررسی هدر ارسال شده از سوی مرورگر (و نرمال‌سازی آن)
-        $requestOrigin = rtrim($_SERVER['HTTP_ORIGIN'] ?? '', '/');
+        $requestOrigin = rtrim((string)$request->header('Origin', ''), '/');
         $isAllowedOrigin = $requestOrigin !== '' && in_array($requestOrigin, $allowedOrigins, true);
 
         // هدر Vary برای کش‌های میانی الزامی است

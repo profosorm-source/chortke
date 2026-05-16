@@ -57,7 +57,6 @@ class AuthMiddleware extends BaseMiddleware
         $redisKey = "session:activity:" . $sessionId;
         
         $lastActivity = null;
-        $redisAvailable = $this->redis->isAvailable();
 
         // MED-08 Fix: Unified activity handling with robust fallbacks
         try {

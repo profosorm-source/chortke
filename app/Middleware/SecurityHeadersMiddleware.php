@@ -61,8 +61,8 @@ class SecurityHeadersMiddleware
         // require-corp فقط اگر واقعاً نیاز به ایزوله‌سازی پردازش باشد اعمال شود
         $response->header('Cross-Origin-Opener-Policy', 'same-origin');
         $response->header('Cross-Origin-Resource-Policy', 'same-site');
-        // LOW-L2 Fix: Add COEP for Spectre mitigation
-        $response->header('Cross-Origin-Embedder-Policy', 'require-corp');
+        // LOW-01 Fix: Using credentialless for COEP to avoid breaking cross-origin resources (like CDNs)
+        $response->header('Cross-Origin-Embedder-Policy', 'credentialless');
 
         // LOW-02 Fix: Remove framework identification for security through obscurity
         $response->header('Server', '');

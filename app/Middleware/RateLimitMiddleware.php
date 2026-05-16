@@ -27,14 +27,11 @@ class RateLimitMiddleware
      * تنظیمات پیش‌فرض برای مسیرهای خاص
      */
     private const ROUTE_LIMITS = [
-        '/login'            => [5,   5],
-        '/admin/login'      => [3,  10],
         '/register'         => [3,  30],
         '/forgot-password'  => [3,  60],
         '/reset-password'   => [3,  60],
         '/payment'          => [10,  1],
         '/withdrawal'       => [5,  60],
-        '/api/'             => [100, 1],
     ];
 
     public function __construct(RateLimiter $rateLimiter, LoggerInterface $logger, Session $session, int $maxAttempts = 60, int $decayMinutes = 1)
