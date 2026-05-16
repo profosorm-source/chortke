@@ -152,15 +152,44 @@ class BankCardService extends \App\Services\BaseService
 
     public function adminVerify(int $adminId, int $cardId, bool $approve, ?string $reason = null): array
     {
-        $card = $this->model->find($cardId);
-        if (!$card) return ['success' => false, 'message' => 'کارت یافت نشد'];
+        $this->db->beginTransaction();
+        try {
+            $card = $this->db->query(
+                "SELECT * FROM bank_cards WHERE id = :id FOR UPDATE",
+                ['id' => $cardId]
+            )->fetch(\PDO::FETCH_OBJ);
 
-        $status = $approve ? 'verified' : 'rejected';
-        $ok = $this->model->updateStatus($cardId, $status, $reason, $adminId);
-        
-        if (!$ok) return ['success' => false, 'message' => 'خطا در بروزرسانی وضیعت'];
+            if (!$card) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'کارت یافت نشد'];
+            }
 
-        return ['success' => true, 'message' => $approve ? 'کارت تأیید شد' : 'کارت رد شد'];
+            if (isset($card->deleted_at) && $card->deleted_at !== null) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'کارت حذف شده است و قابل تأیید نیست'];
+            }
+
+            if (($card->status ?? '') !== 'pending') {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'این کارت در وضعیت معلق قرار ندارد'];
+            }
+
+            $status = $approve ? 'verified' : 'rejected';
+            $ok = $this->model->updateStatus($cardId, $status, $reason, $adminId);
+            
+            if (!$ok) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در بروزرسانی وضعیت'];
+            }
+
+            $this->db->commit();
+            return ['success' => true, 'message' => $approve ? 'کارت تأیید شد' : 'کارت رد شد'];
+
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->logger->error('bankcard.admin_verify.failed', ['card_id' => $cardId, 'error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'خطا در فرآیند تأیید کارت بانکی'];
+        }
     }
 
     private function validateLuhn(string $cardNumber): bool

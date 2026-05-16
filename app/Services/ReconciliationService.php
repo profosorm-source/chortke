@@ -84,17 +84,19 @@ class ReconciliationService extends \App\Services\BaseService
                 return $result;
             }
 
-            // ۵. بررسی یکپارچگی دیتا پس از عملیات (Consistency Check)
+            // ۵. بررسی یکپارچگی دیتا پس از عملیات (Consistency Check) - Non-blocking Audit
             if ($transaction->user_id) {
                 $consistency = $this->verifyConsistency((int)$transaction->user_id, $currency);
                 if (!$consistency['valid']) {
-                    $this->logger->critical('reconciliation.consistency_failed', [
+                    $this->logger->error('reconciliation.consistency_drift_detected', [
                         'user_id' => $transaction->user_id,
                         'error' => $consistency['message']
                     ]);
-                    // در معماری بانکی، عدم تراز باعث رول‌بک می‌شود
-                    $this->db->rollBack();
-                    return ['success' => false, 'message' => 'عدم تطابق تراز مالی کاربر'];
+                    
+                    $this->auditTrail->record('reconciliation.consistency_drift', (int)$transaction->user_id, [
+                        'error' => $consistency['message'],
+                        'transaction_id' => $transaction->id
+                    ]);
                 }
             }
 
@@ -132,7 +134,13 @@ class ReconciliationService extends \App\Services\BaseService
      */
     private function processSuccessfulPayment(object $transaction, array $webhookData): array
     {
-        // جلوگیری از Double-Entry: اگر کیف پول قبلاً بر اساس این تراکنش شارژ شده باشد
+        // جلوگیری از Double-Entry: بررسی بر اساس فیلد تراکنش و بررسی شناسه تراکنش در دفتر کل (Ledger-based Idempotency)
+        $txId = (string)($transaction->transaction_id ?? $transaction->id);
+        $existingLedger = $this->ledgerModel->getByTransactionId($txId);
+        if (!empty($existingLedger)) {
+            return ['success' => true, 'message' => 'این تراکنش قبلاً در دفتر کل ثبت شده است و پردازش مجدد نادیده گرفته شد'];
+        }
+
         if (isset($transaction->balance_after) && isset($transaction->balance_before) && 
             (float)$transaction->balance_after > (float)$transaction->balance_before) {
             return ['success' => true, 'message' => 'Already processed'];
@@ -250,28 +258,38 @@ class ReconciliationService extends \App\Services\BaseService
     public function verifyConsistency(int $userId, string $currency = 'irt'): array
     {
         try {
+            $currency = strtolower($currency);
+            $scale = $currency === 'usdt' ? 8 : 4;
+
             // ۱. دریافت موجودی فعلی از کیف پول
             $wallet = $this->walletModel->findByUserId($userId);
             $balanceField = $currency === 'usdt' ? 'balance_usdt' : 'balance_irt';
-            $walletBalance = $wallet ? (float)($wallet->$balanceField ?? 0) : 0.0;
+            $walletBalance = $wallet ? (string)($wallet->$balanceField ?? '0') : '0';
 
             // ۲. دریافت جمع ریاضی تراکنش‌ها از دفتر کل (Ledger)
             $account = "wallet:{$userId}";
             $ledgerResult = $this->db->query(
-                "SELECT (SUM(debit) - SUM(credit)) as balance
+                "SELECT SUM(debit) as total_debit, SUM(credit) as total_credit
                  FROM ledger_entries 
                  WHERE account = ? AND currency = ?",
                 [$account, $currency]
             )->fetch();
             
-            $ledgerBalance = $ledgerResult ? (float)$ledgerResult->balance : 0.0;
+            $debitSum = $ledgerResult ? (string)($ledgerResult->total_debit ?? '0') : '0';
+            $creditSum = $ledgerResult ? (string)($ledgerResult->total_credit ?? '0') : '0';
+            $ledgerBalance = bcsub($debitSum, $creditSum, $scale);
 
-            // تلورانس خطا (معمولا صفر یا حداکثر ۱ واحد پول)
-            $tolerance = 0.1;
-            if (abs($walletBalance - $ledgerBalance) > $tolerance) {
+            // ۳. محاسبه تفاضل با BCMath
+            $diff = bcsub($walletBalance, $ledgerBalance, $scale);
+            $absDiff = (bccomp($diff, '0', $scale) < 0) ? bcmul($diff, '-1', $scale) : $diff;
+
+            // تلورانس مجاز بر اساس ارز
+            $tolerance = $currency === 'usdt' ? '0.0001' : '1.0000';
+
+            if (bccomp($absDiff, $tolerance, $scale) > 0) {
                 return [
                     'valid' => false,
-                    'message' => "عدم همخوانی بالانس. کیف پول: {$walletBalance}، دفتر کل: {$ledgerBalance}"
+                    'message' => "عدم همخوانی بالانس. کیف پول: {$walletBalance}، دفتر کل: {$ledgerBalance}، تفاضل: {$absDiff}"
                 ];
             }
 
@@ -282,7 +300,7 @@ class ReconciliationService extends \App\Services\BaseService
                 'currency' => $currency,
                 'error' => $e->getMessage()
             ]);
-            return ['valid' => false, 'message' => 'خطای سیستمی در سیستم ترازگیری'];
+            return ['valid' => false, 'message' => 'خطای سیستمی در سیستم ترازگیری: ' . $e->getMessage()];
         }
     }
 

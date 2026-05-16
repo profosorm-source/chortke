@@ -335,8 +335,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             ]);
 
             throw $e;
-        } catch (\Exception $e) {
-            if ($startedTransaction) {
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
 
@@ -510,7 +510,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'status'         => 'completed',
             ];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $this->logger->error('wallet.withdraw_in_transaction.failed', [
                 'user_id' => $userId,
                 'amount' => $amount,
@@ -669,8 +669,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             ]);
 
             throw $e;
-        } catch (\Exception $e) {
-            if ($startedTransaction) {
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
 
@@ -815,8 +815,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
                 return $result;
 
-            } catch (\Exception $e) {
-                if ($startedTransaction) {
+            } catch (\Throwable $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
                     $this->db->rollBack();
                 }
 
@@ -894,7 +894,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 }
                 return true;
 
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 if ($startedTransaction && $this->db->inTransaction()) {
                     $this->db->rollBack();
                 }
@@ -1004,7 +1004,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 }
                 return true;
 
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 if ($startedTransaction && $this->db->inTransaction()) {
                     $this->db->rollBack();
                 }
@@ -1024,7 +1024,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $result = ['can_withdraw' => false, 'message' => ''];
         $scale  = $this->getScale($currency);
 
-        $balance = $this->walletModel->getBalance($userId, $currency);
+        $balance = $this->db->inTransaction()
+            ? $this->walletModel->getBalanceForUpdate($userId, $currency)
+            : $this->walletModel->getBalance($userId, $currency);
         if (bccomp((string)$balance, (string)$amount, $scale) < 0) {
             $result['message'] = 'موجودی کافی نیست';
             return $result;

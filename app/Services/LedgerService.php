@@ -61,10 +61,7 @@ class LedgerService extends \App\Services\BaseService
             ]));
 
             if (!$debit || !$credit) {
-                if ($startedTransaction) {
-                    $this->db->rollBack();
-                }
-                return false;
+                throw new \RuntimeException("Failed to write debit/credit ledger entries for transaction ID: {$transactionId}");
             }
 
             if ($startedTransaction) {
@@ -72,14 +69,14 @@ class LedgerService extends \App\Services\BaseService
             }
             return true;
         } catch (\Throwable $e) {
-            if ($startedTransaction) {
+            if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
             $this->logError('ledger.record_double_entry.failed', [
                 'transaction_id' => $transactionId,
                 'error' => $e->getMessage(),
             ]);
-            return false;
+            throw $e;
         }
     }
 

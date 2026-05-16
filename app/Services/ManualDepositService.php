@@ -64,74 +64,97 @@ class ManualDepositService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'برای واریز دستی باید احراز هویت شما تأیید شده باشد'];
         }
 
-        $pending = $this->model->where('user_id', $userId)->whereIn('status', ['pending', 'under_review'])->first();
-        if ($pending) {
-            return ['success' => false, 'message' => 'شما یک درخواست واریز در انتظار دارید'];
-        }
-
-        $bankCardId = (int)($data['bank_card_id'] ?? 0);
-        $card = $this->bankCardModel
-            ->where('id', $bankCardId)
-            ->where('user_id', $userId)
-            ->where('status', 'verified')
-            ->where('deleted_at', null)
-            ->first();
-
-        if (!$card) {
-            return ['success' => false, 'message' => 'کارت بانکی نامعتبر یا تأیید نشده است'];
-        }
-
-        $amount = (float)($data['amount'] ?? 0);
-        if ($amount < 10000) return ['success' => false, 'message' => 'حداقل مبلغ واریز دستی ۱۰,۰۰۰ تومان است'];
-
-        $tracking = trim((string)($data['tracking_code'] ?? ''));
-        if ($tracking === '') return ['success' => false, 'message' => 'شماره پیگیری الزامی است'];
-
-        $existsTracking = $this->model->where('tracking_code', $tracking)->where('user_id', $userId)->first();
-        if ($existsTracking) return ['success' => false, 'message' => 'این شماره پیگیری قبلاً ثبت شده است'];
-
-        // H15 Fix: مانیتور و هشینگ تصویر فیش آپلود شده جهت پیشگیری قطعی از ارسال فیش‌های تکراری
-        $receiptHash = null;
-        if (!empty($receiptPath)) {
-            try {
-                $absPath = $this->uploadService->getPath($receiptPath);
-                if ($absPath && file_exists($absPath)) {
-                    $receiptHash = hash_file('sha256', $absPath);
-
-                    // بررسی وجود فیش تکراری در کل سیستم
-                    $duplicateReceipt = $this->model->where('receipt_hash', $receiptHash)->first();
-                    if ($duplicateReceipt) {
-                        // پاکسازی فایل تازه آپلود شده جهت جلوگیری از انباشت فایل هرز روی دیسک
-                        try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
-                        
-                        return ['success' => false, 'message' => 'این فیش بانکی قبلاً در سیستم آپلود و ثبت شده است. لطفاً تصویر معتبر و جدیدی ارسال کنید'];
-                    }
+        $this->db->beginTransaction();
+        try {
+            // ۱. بررسی عدم وجود درخواست معلق فعلی با قفل تراکنشی
+            $pending = $this->db->query(
+                "SELECT id FROM manual_deposits WHERE user_id = ? AND status IN ('pending', 'under_review') LIMIT 1 FOR UPDATE",
+                [$userId]
+            )->fetch();
+            
+            if ($pending) {
+                $this->db->rollBack();
+                if (!empty($receiptPath)) {
+                    try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
                 }
-            } catch (\Throwable $ex) {
-                $this->logger->error('manual_deposit.hash_calculation_failed', ['error' => $ex->getMessage()]);
+                return ['success' => false, 'message' => 'شما یک درخواست واریز در انتظار دارید'];
             }
+
+            // ۲. بررسی تکراری نبودن شماره پیگیری با قفل تراکنشی
+            $existsTracking = $this->db->query(
+                "SELECT id FROM manual_deposits WHERE tracking_code = ? LIMIT 1 FOR UPDATE",
+                [$tracking]
+            )->fetch();
+            
+            if ($existsTracking) {
+                $this->db->rollBack();
+                if (!empty($receiptPath)) {
+                    try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+                }
+                return ['success' => false, 'message' => 'این شماره پیگیری قبلاً ثبت شده است'];
+            }
+
+            // ۳. بررسی تکراری نبودن فیش بانکی با قفل تراکنشی
+            if ($receiptHash !== null) {
+                $duplicateReceipt = $this->db->query(
+                    "SELECT id FROM manual_deposits WHERE receipt_hash = ? LIMIT 1 FOR UPDATE",
+                    [$receiptHash]
+                )->fetch();
+                
+                if ($duplicateReceipt) {
+                    $this->db->rollBack();
+                    if (!empty($receiptPath)) {
+                        try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+                    }
+                    return ['success' => false, 'message' => 'این فیش بانکی قبلاً در سیستم آپلود و ثبت شده است. لطفاً تصویر معتبر و جدیدی ارسال کنید'];
+                }
+            }
+
+            $id = $this->model->create([
+                'user_id'       => $userId,
+                'amount'        => $amount,
+                'currency'      => 'irt',
+                'receipt_image' => $receiptPath,
+                'receipt_hash'  => $receiptHash,
+                'tracking_code' => $tracking,
+                'bank_name'     => $card ? $card->bank_name : 'نامشخص',
+                'description'   => $data['user_description'] ?? null,
+                'status'        => 'pending',
+            ]);
+
+            if (!$id) {
+                $this->db->rollBack();
+                if (!empty($receiptPath)) {
+                    try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+                }
+                return ['success' => false, 'message' => 'خطا در ایجاد درخواست واریز دستی'];
+            }
+
+            $this->db->commit();
+            
+            $depositId = (int)($id->id ?? 0);
+            $this->logger->info('manual_deposit.created', ['user_id' => $userId, 'id' => $depositId, 'amount' => $amount]);
+
+            return [
+                'success'    => true,
+                'message'    => 'درخواست واریز ثبت شد و در انتظار بررسی است',
+                'deposit_id' => $depositId,
+            ];
+
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
+            $this->logger->error('manual_deposit.create.failed', [
+                'user_id' => $userId,
+                'amount'  => $amount,
+                'error'   => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سیستمی در ثبت درخواست واریز'];
         }
-
-        $id = $this->model->create([
-            'user_id'       => $userId,
-            'amount'        => $amount,
-            'currency'      => 'irt',
-            'receipt_image' => $receiptPath,
-            'receipt_hash'  => $receiptHash,
-            'tracking_code' => $tracking,
-            'bank_name'     => $card ? $card->bank_name : 'نامشخص',
-            'description'   => $data['user_description'] ?? null,
-            'status'        => 'pending',
-        ]);
-
-        $depositId = $id ? (int)($id->id ?? 0) : 0;
-        $this->logger->info('manual_deposit.created', ['user_id' => $userId, 'id' => $depositId, 'amount' => $amount]);
-
-        return [
-            'success'    => true,
-            'message'    => 'درخواست واریز ثبت شد و در انتظار بررسی است',
-            'deposit_id' => $depositId,
-        ];
     }
 
     /**
@@ -173,22 +196,6 @@ class ManualDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => $ok['message'] ?? 'خطا در شارژ کیف پول'];
             }
 
-            // ✅ ۳. ثبت و تطبیق نهایی تراکنش جهت امنیت حداکثری و چک کردن Consistency
-            $reconciliation = $this->reconciliationService->reconcilePayment([
-                'transaction_id' => (string)$ok['transaction_id'],
-                'reference_id'   => 'manual_deposit_' . $depositId,
-                'user_id'        => (int)$d->user_id,
-                'amount'         => (float)$d->amount,
-                'currency'       => 'irt',
-                'status'         => 'success',
-                'gateway'        => 'manual_bank',
-            ]);
-
-            if (!$reconciliation['success']) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'تراکنش با موفقیت انجام شد ولی سیستم تطبیق خطا داد: ' . ($reconciliation['message'] ?? 'ناشناخته')];
-            }
-
             $this->model->update($depositId, [
                 'status'         => 'approved',
                 'admin_note'     => $note,
@@ -198,6 +205,31 @@ class ManualDepositService extends \App\Services\BaseService
             ]);
 
             $this->db->commit();
+
+            // Run reconciliation service call outside the main atomic database transaction block
+            try {
+                $reconciliation = $this->reconciliationService->reconcilePayment([
+                    'transaction_id' => (string)$ok['transaction_id'],
+                    'reference_id'   => 'manual_deposit_' . $depositId,
+                    'user_id'        => (int)$d->user_id,
+                    'amount'         => (float)$d->amount,
+                    'currency'       => 'irt',
+                    'status'         => 'success',
+                    'gateway'        => 'manual_bank',
+                ]);
+
+                if (!$reconciliation['success']) {
+                    $this->logger->warning('manual_deposit.reconcile_failed', [
+                        'deposit_id' => $depositId,
+                        'error' => $reconciliation['message'] ?? 'Unknown'
+                    ]);
+                }
+            } catch (\Throwable $reconEx) {
+                $this->logger->error('manual_deposit.reconcile_exception', [
+                    'deposit_id' => $depositId,
+                    'error' => $reconEx->getMessage()
+                ]);
+            }
 
             // حذف فیزیکی فایل فیش از هاست پس از تایید ادمین جهت حفظ فضا و حریم خصوصی
             if (!empty($d->receipt_image)) {
@@ -220,8 +252,10 @@ class ManualDepositService extends \App\Services\BaseService
 
             return ['success' => true, 'message' => 'واریز تأیید شد و کیف پول شارژ گردید'];
 
-        } catch (\Exception $e) {
-            $this->db->rollBack();
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             $this->logger->error('manual_deposit.approve.failed', ['id' => $depositId, 'err' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در تأیید واریز'];
         }
@@ -229,38 +263,56 @@ class ManualDepositService extends \App\Services\BaseService
 
     public function reject(int $adminId, int $depositId, string $reason): array
     {
-        $d = $this->model->find($depositId);
-        if (!$d) return ['success' => false, 'message' => 'درخواست یافت نشد'];
-        if (!in_array($d->status, ['pending', 'under_review'], true)) {
-            return ['success' => false, 'message' => 'این درخواست قبلاً بررسی شده است'];
+        $this->db->beginTransaction();
+        try {
+            $d = $this->db->query("SELECT * FROM manual_deposits WHERE id = ? FOR UPDATE", [$depositId])->fetch(\PDO::FETCH_OBJ);
+
+            if (!$d) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'درخواست یافت نشد'];
+            }
+
+            if (!in_array($d->status, ['pending', 'under_review'], true)) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'این درخواست قبلاً بررسی شده است'];
+            }
+
+            $this->model->update($depositId, [
+                'status'      => 'rejected',
+                'admin_note'  => $reason,
+                'reviewed_by' => $adminId,
+                'reviewed_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            $this->auditTrail->record('deposit.rejected', (int)$d->user_id, [
+                'deposit_id' => $depositId,
+                'amount'     => (float)$d->amount,
+                'reason'     => $reason,
+                'admin_id'   => $adminId,
+            ], $adminId);
+
+            $this->db->commit();
+
+            $this->notifier->send(
+                (int)$d->user_id,
+                \App\Models\Notification::TYPE_DEPOSIT,
+                'واریز دستی رد شد',
+                'درخواست واریز دستی شما رد شد. دلیل: ' . $reason,
+                ['deposit_id' => $depositId],
+                url('/wallet/manual-deposit/history'),
+                'مشاهده',
+                'high'
+            );
+
+            return ['success' => true, 'message' => 'رد شد'];
+
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            $this->logger->error('manual_deposit.reject.failed', ['id' => $depositId, 'err' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'خطا در رد درخواست واریز'];
         }
-
-        $this->model->update($depositId, [
-            'status'      => 'rejected',
-            'admin_note'  => $reason,
-            'reviewed_by' => $adminId,
-            'reviewed_at' => date('Y-m-d H:i:s'),
-        ]);
-
-        $this->auditTrail->record('deposit.rejected', (int)$d->user_id, [
-            'deposit_id' => $depositId,
-            'amount'     => (float)$d->amount,
-            'reason'     => $reason,
-            'admin_id'   => $adminId,
-        ], $adminId);
-
-        $this->notifier->send(
-            (int)$d->user_id,
-            \App\Models\Notification::TYPE_DEPOSIT,
-            'واریز دستی رد شد',
-            'درخواست واریز دستی شما رد شد. دلیل: ' . $reason,
-            ['deposit_id' => $depositId],
-            url('/wallet/manual-deposit/history'),
-            'مشاهده',
-            'high'
-        );
-
-        return ['success' => true, 'message' => 'رد شد'];
     }
 
     /**

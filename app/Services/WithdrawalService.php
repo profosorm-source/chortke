@@ -138,18 +138,20 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'درخواست برداشت به دلایل امنیتی مسدود شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از محدودیت تعداد تراکنش' : $risk['reason'])];
             }
 
+            $this->db->beginTransaction();
+
             // تکراری/pending
             if ($this->model->hasPending($userId)) {
+                $this->db->rollBack();
                 return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
             }
 
             // موجودی
             $can = $this->wallet->canWithdraw($userId, $amount, $currency);
             if (empty($can['can_withdraw'])) {
+                $this->db->rollBack();
                 return ['success' => false, 'message' => $can['message'] ?? 'موجودی کافی نیست'];
             }
-
-            $this->db->beginTransaction();
 
             // قفل پول و جلوگیری از Race condition
             $idempotencyKey = $this->uuid();
@@ -427,21 +429,10 @@ class WithdrawalService extends PaymentBaseService
                 'message'       => 'درخواست برداشت ثبت شد',
             ];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             // در صورت خطا، تراکنش را rollback کنیم
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
-            }
-
-            // اگر والت عملیات انجام شده، آن را برگردانیم
-            try {
-                $this->wallet->cancelWithdrawal($userId, $amount, strtolower($currency), null);
-            } catch (\Throwable $cancelError) {
-                $this->logger->error('withdrawal.cancel_failed', [
-                    'user_id' => $userId,
-                    'idempotency_key' => $idempotencyKey,
-                    'error' => $cancelError->getMessage()
-                ]);
             }
 
             $this->logger->error('withdrawal.create.failed', [
@@ -516,7 +507,7 @@ class WithdrawalService extends PaymentBaseService
 
             return ['success' => true, 'message' => 'برداشت تکمیل شد'];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $this->db->rollBack();
             $this->logger->error('withdrawal.approve.failed', ['id' => $withdrawalId, 'err' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در تکمیل برداشت'];
@@ -586,7 +577,7 @@ class WithdrawalService extends PaymentBaseService
 
             return ['success' => true, 'message' => 'برداشت رد شد و وجه برگشت داده شد'];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $this->db->rollBack();
             $this->logger->error('withdrawal.reject.failed', [
                 'id'  => $withdrawalId,
