@@ -15,11 +15,13 @@ class ExceptionHandler
 {
 	
 	private static bool $handlingException = false;
-    /**
-     * ثبت Handler برای خطاها و Exception ها
-     */
     public static function register(): void
     {
+        // Do not register exception handler under PHPUnit/testing environment
+        if (defined('PHPUNIT_COMPOSER_INSTALL') || defined('__PHPUNIT_PHAR__')) {
+            return;
+        }
+
         // تبدیل خطاهای PHP به Exception
         set_error_handler([self::class, 'handleError']);
         
