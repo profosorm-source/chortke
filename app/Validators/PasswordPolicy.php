@@ -5,9 +5,17 @@ namespace App\Validators;
  * Password Policy
  * 
  * سیاست و اعتبارسنجی رمز عبور
+ * 
+ * SECURITY NOTES:
+ * - Checks against Have I Been Pwned database using k-anonymity (only first 5 chars of SHA-1 sent)
+ * - Enforces minimum complexity requirements
+ * - Prevents common passwords and similarity to user info
  */
 class PasswordPolicy
 {
+    // LOW-01 Fix: HIBP k-anonymity API endpoint
+    private const HIBP_API_URL = 'https://api.pwnedpasswords.com/range/';
+    
     /**
      * اعتبارسنجی کامل رمز عبور
      */
@@ -23,6 +31,7 @@ class PasswordPolicy
         $requireNumbers = (bool)config('auth.password.require_numbers', true);
         $requireSpecialChars = (bool)config('auth.password.require_special_chars', true); // HIGH-09: Default to true
         $preventCommonPasswords = (bool)config('auth.password.prevent_common', true);
+        $checkHibp = (bool)config('auth.password.check_hibp', false); // OFF by default due to privacy concerns
 
         // HIGH-05 Fix: Use mb_strlen for characters and check byte length for bcrypt
         $charCount = mb_strlen($password, 'UTF-8');
@@ -55,7 +64,7 @@ class PasswordPolicy
         }
 
         // کاراکترهای خاص
-        if ($requireSpecialChars && !preg_match('/[!@#$%^&*()_+\-=\[\]{};:\'",.<>?\/\\|`~]/', $password)) {
+        if ($requireSpecialChars && !preg_match('/[!@#$%^&*()_+\\-=\\[\\]{};:\'",.<>?\/\\|`~]/', $password)) {
             $errors[] = "رمز عبور باید حداقل یک کاراکتر خاص داشته باشد.";
         }
 
@@ -67,6 +76,15 @@ class PasswordPolicy
         // HIGH-H-08 Fix: Check similarity to user info
         if (!empty($userInfo) && self::isSimilarToUserInfo($password, $userInfo)) {
             $errors[] = 'رمز عبور نباید شبیه اطلاعات شخصی شما (مانند نام کاربری یا ایمیل) باشد.';
+        }
+        
+        // LOW-01 Fix: Check against Have I Been Pwned database using k-anonymity
+        // This only sends the first 5 characters of the SHA-1 hash to HIBP, preserving privacy
+        if ($checkHibp && !empty($password)) {
+            $hibpResult = self::checkHibp($password);
+            if ($hibpResult['found']) {
+                $errors[] = "این رمز عبور در " . number_format($hibpResult['count']) . " دیتابیس سرقت اطلاعات یافت شده است. لطفاً رمز دیگری انتخاب کنید.";
+            }
         }
 
         return $errors;
@@ -113,7 +131,7 @@ class PasswordPolicy
         if (preg_match('/[a-z]/', $password)) $score += 15;
         if (preg_match('/[A-Z]/', $password)) $score += 15;
         if (preg_match('/[0-9]/', $password)) $score += 15;
-        if (preg_match('/[!@#$%^&*()_+\-=\[\]{};:\'",.<>?\/\\|`~]/', $password)) $score += 15;
+        if (preg_match('/[!@#$%^&*()_+\\-=\\[\\]{};:\'",.<>?\/\\|`~]/', $password)) $score += 15;
 
         // تنوع
         $uniqueChars = count(array_unique(str_split($password)));
@@ -206,5 +224,79 @@ class PasswordPolicy
         }
         
         return implode('', $chars);
+    }
+
+    /**
+     * LOW-01 Fix: Check password against Have I Been Pwned database using k-anonymity
+     * 
+     * This uses the HIBP API with k-anonymity model:
+     * 1. Hash the password with SHA-1
+     * 2. Send only the first 5 characters to HIBP
+     * 3. Check if the remaining hash appears in the response
+     * 
+     * This preserves user privacy - HIBP never sees the full password hash or the password itself.
+     * 
+     * @param string $password Plain text password to check
+     * @return array ['found' => bool, 'count' => int]
+     */
+    private static function checkHibp(string $password): array
+    {
+        try {
+            // Hash the password with SHA-1
+            $hash = strtoupper(sha1($password));
+            $prefix = substr($hash, 0, 5);
+            $suffix = substr($hash, 5);
+            
+            // Query HIBP API with k-anonymity
+            $ch = curl_init(self::HIBP_API_URL . $prefix);
+            if ($ch === false) {
+                return ['found' => false, 'count' => 0];
+            }
+            
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+                CURLOPT_TIMEOUT => 5,
+                CURLOPT_HTTPHEADER => [
+                    'User-Agent: ChortkeApp',
+                    'Add-Padding: true'  // HIBP recommends this for privacy
+                ]
+            ]);
+            
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            
+            if ($httpCode !== 200 || $response === false) {
+                // Don't fail validation if HIBP is unavailable
+                return ['found' => false, 'count' => 0];
+            }
+            
+            // Parse response - each line is "SUFFIX:COUNT"
+            $lines = explode("\n", $response);
+            foreach ($lines as $line) {
+                $parts = explode(':', trim($line));
+                if (count($parts) >= 2 && $parts[0] === $suffix) {
+                    $count = (int)$parts[1];
+                    // Only flag as breached if count is significant (> 100 occurrences)
+                    // This avoids false positives for very common password patterns
+                    if ($count > 100) {
+                        return ['found' => true, 'count' => $count];
+                    }
+                }
+            }
+            
+            return ['found' => false, 'count' => 0];
+            
+        } catch (\Throwable $e) {
+            // Don't fail validation if HIBP check fails
+            if (function_exists('logger')) {
+                logger()->warning('password_policy.hibp_check_failed', [
+                    'error' => $e->getMessage()
+                ]);
+            }
+            return ['found' => false, 'count' => 0];
+        }
     }
 }
