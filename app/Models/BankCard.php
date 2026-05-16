@@ -238,4 +238,16 @@ class BankCard extends Model
 
         return $stmt->execute(['id' => $id, 'user_id' => $userId]);
     }
+
+    /**
+     * دریافت کارت بر اساس شناسه و کاربر
+     */
+    public function findByIdAndUser(int $id, int $userId): ?object
+    {
+        $sql = "SELECT * FROM " . static::$table . "
+                WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL LIMIT 1";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['id' => $id, 'user_id' => $userId]);
+        return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
+    }
 }

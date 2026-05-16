@@ -17,17 +17,26 @@ class WithdrawalLimit extends Model
         'user_id', 'limit_date', 'withdrawal_count', 'last_withdrawal_at'
     ];
 
-    /**
-     * بررسی محدودیت روزانه
-     */
     public function checkDailyLimit(int $userId, int $limit): bool
     {
         $today = date('Y-m-d');
-        $row = $this->db->table(static::$table)
-            ->select('withdrawal_count')
-            ->where('user_id', '=', $userId)
-            ->where('limit_date', '=', $today)
-            ->first();
+        $now   = date('Y-m-d H:i:s');
+
+        // Pre-insert an empty limit record if it does not exist to allow lock acquisition
+        $insertSql = "INSERT IGNORE INTO " . static::$table . " 
+            (user_id, limit_date, withdrawal_count, last_withdrawal_at, created_at, updated_at)
+            VALUES (?, ?, 0, ?, ?, ?)";
+        
+        $stmt = $this->db->getPdo()->prepare($insertSql);
+        $stmt->execute([$userId, $today, $now, $now, $now]);
+
+        // Pessimistically lock the limit row for the user today
+        $lockSql = "SELECT withdrawal_count FROM " . static::$table . " 
+            WHERE user_id = ? AND limit_date = ? FOR UPDATE";
+        
+        $stmt = $this->db->getPdo()->prepare($lockSql);
+        $stmt->execute([$userId, $today]);
+        $row = $stmt->fetch(\PDO::FETCH_OBJ);
 
         if (!$row) {
             return true;
@@ -36,21 +45,20 @@ class WithdrawalLimit extends Model
     }
 
     /**
-     * افزایش شمارنده برداشت روزانه (UPSERT اتمیک)
+     * افزایش شمارنده برداشت روزانه
      */
     public function incrementDailyCount(int $userId): void
     {
         $today = date('Y-m-d');
         $now   = date('Y-m-d H:i:s');
 
-        $sql = "INSERT INTO " . static::$table . " 
-                    (user_id, limit_date, withdrawal_count, last_withdrawal_at, created_at, updated_at)
-                VALUES (?, ?, 1, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE 
-                    withdrawal_count = withdrawal_count + 1,
-                    last_withdrawal_at = VALUES(last_withdrawal_at),
-                    updated_at = VALUES(updated_at)";
+        $sql = "UPDATE " . static::$table . " 
+                SET withdrawal_count = withdrawal_count + 1,
+                    last_withdrawal_at = ?,
+                    updated_at = ?
+                WHERE user_id = ? AND limit_date = ?";
 
-        $this->db->query($sql, [$userId, $today, $now, $now, $now]);
+        $stmt = $this->db->getPdo()->prepare($sql);
+        $stmt->execute([$now, $now, $userId, $today]);
     }
 }

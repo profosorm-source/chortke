@@ -125,20 +125,12 @@ class Withdrawal extends Model
         ?int $processedBy = null,
         ?string $transactionId = null
     ): bool {
-        $startedTransaction = !$this->db->inTransaction();
         try {
-            if ($startedTransaction) {
-                $this->db->beginTransaction();
-            }
-            
             // H14 Fix (BUG-05): دریافت رکورد درخواست برداشت با قفل بدبینانه ردیفی جهت جلوگیری از تداخل ادمین‌ها (BUG-12)
             $stmt = $this->db->prepare("SELECT * FROM " . static::$table . " WHERE id = ? FOR UPDATE");
             $stmt->execute([$id]);
             $withdrawal = $stmt->fetch(\PDO::FETCH_OBJ);
             if (!$withdrawal) {
-                if ($startedTransaction) {
-                    $this->db->rollback();
-                }
                 return false;
             }
             
@@ -153,9 +145,6 @@ class Withdrawal extends Model
             $currentStatus = (string)($withdrawal->status ?? '');
             if (!isset($validTransitions[$currentStatus]) || 
                 !\in_array($status, $validTransitions[$currentStatus], true)) {
-                if ($startedTransaction) {
-                    $this->db->rollback();
-                }
                 return false;
             }
             
@@ -190,15 +179,9 @@ class Withdrawal extends Model
             $stmt = $this->db->prepare($sql);
             $stmt->execute($params);
             
-            if ($startedTransaction) {
-                $this->db->commit();
-            }
             return true;
             
         } catch (\Throwable $e) {
-            if ($startedTransaction && $this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
             throw $e;
         }
     }

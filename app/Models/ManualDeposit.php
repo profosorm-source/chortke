@@ -92,7 +92,8 @@ class ManualDeposit extends Model
         string $status,
         ?string $rejectionReason = null,
         ?int $reviewedBy = null,
-        ?string $transactionId = null
+        ?string $transactionId = null,
+        ?string $note = null
     ): bool {
         $sql = "UPDATE " . static::$table . " SET status = :status, updated_at = NOW()";
         $params = ['id' => $id, 'status' => $status];
@@ -112,10 +113,19 @@ class ManualDeposit extends Model
             $params['transaction_id'] = $transactionId;
         }
 
-        $sql .= " WHERE id = :id";
+        if ($note) {
+            $sql .= ", admin_note = :admin_note";
+            $params['admin_note'] = $note;
+        }
+
+        $sql .= " WHERE id = :id AND status IN ('pending', 'under_review')";
 
         $stmt = $this->db->prepare($sql);
-        return $stmt->execute($params);
+        $stmt->execute($params);
+        if ($stmt->rowCount() === 0) {
+            throw new \RuntimeException("Concurrent modification detected: status is not pending/under_review or row does not exist.");
+        }
+        return true;
     }
 
     /**
