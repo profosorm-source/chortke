@@ -106,18 +106,26 @@ if (empty($env)) {
     }
 }
 
-// Check APP_KEY
-if (config('app.key') === '') {
-    throw new Exception('APP_KEY must be set in environment variables');
+// 🛡️ CRITICAL Infrastructure Integrity Checks
+// These must run before any service starts to prevent insecure deployments
+
+// 1. Check APP_KEY (Mandatory, min 32 chars for AES-256)
+$appKey = (string)config('app.key');
+if (strlen($appKey) < 32) {
+    throw new Exception('APP_KEY must be set and be at least 32 characters long for secure encryption.');
 }
 
-// CRITICAL-03 Fix: Mandatory security configuration validation at startup
-if (!defined('SECURITY_API_TOKEN_SECRET') || strlen(SECURITY_API_TOKEN_SECRET) < 32) {
-    // In production, this MUST fail early
-    if (config('app.env', 'production') === 'production') {
-        throw new Exception('SECURITY_API_TOKEN_SECRET is missing or too weak (min 32 chars)');
-    }
+// 2. Check APP_URL (Mandatory for CSRF/OAuth integrity)
+$appUrl = (string)config('app.url');
+if (empty($appUrl) || !filter_var($appUrl, FILTER_VALIDATE_URL)) {
+    throw new Exception('APP_URL is missing or invalid. It is required for security validations (CSRF/CORS/OAuth).');
 }
+
+// 3. Check SECURITY_API_TOKEN_SECRET (Mandatory in all environments)
+if (!defined('SECURITY_API_TOKEN_SECRET') || strlen(SECURITY_API_TOKEN_SECRET) < 32) {
+    throw new Exception('SECURITY_API_TOKEN_SECRET is missing or too weak (min 32 chars). All environments must be secure.');
+}
+
 
 // Load config early to avoid circular dependency
 $config = config();
@@ -593,6 +601,13 @@ $container->singleton('oauth_config', function() {
     ];
 });
 
+$container->singleton(\App\Services\Auth\GoogleJwtVerifier::class, function($c) {
+    return new \App\Services\Auth\GoogleJwtVerifier(
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
 $container->singleton(\App\Services\Auth\OAuthService::class, function($c) {
     return new \App\Services\Auth\OAuthService(
         $c->make(\App\Models\SecurityModel::class),
@@ -604,6 +619,7 @@ $container->singleton(\App\Services\Auth\OAuthService::class, function($c) {
         $c->make(\Core\Session::class),
         $c->make(\Core\Database::class),
         $c->make(\App\Services\DistributedLockService::class),
+        $c->make(\App\Services\Auth\GoogleJwtVerifier::class),
         $c->make('oauth_config')
     );
 });

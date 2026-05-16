@@ -73,7 +73,9 @@ class CSRF
     private function validateOrigin(): bool
     {
         $appUrl = config('app.url');
-        if (!$appUrl) return true; // Fallback if not configured
+        if (!$appUrl || !filter_var($appUrl, FILTER_VALIDATE_URL)) {
+            return false; // Fail closed if application URL is missing or invalid
+        }
 
         $origin = $this->request->header('Origin');
         $referer = $this->request->header('Referer');
