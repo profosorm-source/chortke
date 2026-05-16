@@ -71,7 +71,10 @@ class AuthMiddleware extends BaseMiddleware
             $lastActivity = $session->get('last_activity');
         }
         
-        if ($lastActivity !== null) {
+        if ($lastActivity === null) {
+            // NEW-H-03 Fix: Initialize last_activity if missing to prevent timeout bypass
+            $session->set('last_activity', (string)$now);
+        } else {
             $lastActivityTime = (int)$lastActivity;
             
             // بررسی انقضای نشست (Idle Timeout)
@@ -102,6 +105,14 @@ class AuthMiddleware extends BaseMiddleware
         // HIGH-02 Fix: Always update session as backup to prevent fail-open if Redis goes down
         $session->set('last_activity', (string)$now);
 
+        // CRITICAL-05 Fix: Check for pending 2FA state BEFORE normal auth check
+        // This prevents users with pending 2FA from bypassing it if LOGGED_IN is true
+        if ($session->has(SessionKeys::PENDING_2FA_USER_ID)) {
+            $response = new Response();
+            $response->redirect(url('verify-2fa'));
+            return $response;
+        }
+
         // بررسی ورود کاربر
         // MED-08 Fix: Unified and robust check for both user_id and logged_in flag
         $userId = (int)$session->get(SessionKeys::USER_ID, 0);
@@ -110,13 +121,6 @@ class AuthMiddleware extends BaseMiddleware
             if ($session->has('pending_verification_email')) {
                 $response = new Response();
                 $response->redirect(url('email/verify-code'));
-                return $response;
-            }
-
-            // HIGH-H-06 Fix: Redirect users with pending 2FA to verification page
-            if ($session->has(SessionKeys::PENDING_2FA_USER_ID)) {
-                $response = new Response();
-                $response->redirect(url('verify-2fa'));
                 return $response;
             }
 

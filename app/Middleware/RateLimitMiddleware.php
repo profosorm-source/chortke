@@ -58,7 +58,8 @@ class RateLimitMiddleware extends BaseMiddleware
             $isCriticalPath = false;
             $requestUri = $request->uri();
             foreach (array_keys(self::ROUTE_LIMITS) as $pattern) {
-                if (str_contains($requestUri, $pattern)) {
+                // HIGH-H-09 Fix: Use str_starts_with instead of str_contains for strict pattern matching
+                if (str_starts_with($requestUri, $pattern)) {
                     $isCriticalPath = true;
                     break;
                 }
@@ -133,7 +134,8 @@ class RateLimitMiddleware extends BaseMiddleware
     {
         $uri = $request->uri();
         foreach (self::ROUTE_LIMITS as $pattern => $limits) {
-            if (str_contains($uri, $pattern)) {
+            // HIGH-H-09 Fix: Use str_starts_with instead of str_contains for strict pattern matching
+            if (str_starts_with($uri, $pattern)) {
                 return $limits;
             }
         }

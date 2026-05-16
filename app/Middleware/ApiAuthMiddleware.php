@@ -139,8 +139,9 @@ class ApiAuthMiddleware extends BaseMiddleware
             return null;
         }
 
-        $token = trim($m[1]);
-        return preg_match('/^[a-f0-9]{64}$/i', $token) ? $token : null;
+        $token = strtolower(trim($m[1]));
+        // HIGH-H-04 Fix: Case-insensitive token extraction normalized to lowercase
+        return preg_match('/^[a-f0-9]{64}$/', $token) ? $token : null;
     }
 
     private function validateToken(string $token, int $requestingUserId = 0): ?object
