@@ -234,9 +234,121 @@ class AuthController extends BaseController
         }
 
         $this->session->remove('register_referral_code');
+        
+        // HIGH-H-13 Fix: Store timestamp to enforce 15-minute expiration for pending verification
         $this->session->set('pending_verification_email', $data['email']);
+        $this->session->set('pending_verification_at', time());
+
         $this->session->setFlash('success', 'ثبت‌نام موفق! لطفاً ایمیل خود را تأیید کنید.');
         $this->response->redirect(url('email/verify-code'));
+    }
+
+    /**
+     * نمایش صفحه وارد کردن کد تأیید ایمیل
+     */
+    public function showVerifyEmail(): void
+    {
+        $email = $this->session->get('pending_verification_email');
+        if (!$email) {
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        // بررسی انقضا
+        $createdAt = (int)$this->session->get('pending_verification_at', 0);
+        if (time() - $createdAt > 900) { // 15 minutes
+            $this->session->remove('pending_verification_email');
+            $this->session->remove('pending_verification_at');
+            $this->session->setFlash('error', 'مهلت زمانی تأیید به پایان رسیده است. لطفاً دوباره ثبت‌نام کنید یا درخواست ارسال مجدد دهید.');
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        $this->view('user/verify-email-code', [
+            'title' => 'تأیید ایمیل',
+            'email' => $email
+        ]);
+    }
+
+    /**
+     * پردازش کد تأیید ایمیل
+     */
+    public function verifyEmailByCode(): void
+    {
+        $email = $this->session->get('pending_verification_email');
+        if (!$email) {
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        // HIGH-H-09 Fix: Rate limiting on email verification code to prevent brute-force
+        $ip = $this->request->ip();
+        $rateLimitKey = "verify_email:" . hash('sha256', "{$email}:{$ip}");
+        if (!$this->authService->checkRateLimit('verify_email', $rateLimitKey)) {
+             $this->session->setFlash('error', 'تعداد تلاش‌های ناموفق بیش از حد مجاز است.');
+             $this->response->redirect(url('email/verify-code'));
+             return;
+        }
+
+        $code = trim((string)$this->request->post('code', ''));
+        if (strlen($code) !== 6) {
+            $this->session->setFlash('error', 'کد وارد شده باید ۶ رقم باشد.');
+            $this->response->redirect(url('email/verify-code'));
+            return;
+        }
+
+        $user = $this->userService->findByEmail($email);
+        if (!$user || empty($user->email_verification_token)) {
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        // کد ۶ رقمی مطابق منطق EmailService (substr(token, 0, 6))
+        $expectedCode = strtoupper(substr((string)$user->email_verification_token, 0, 6));
+
+        if (!hash_equals($expectedCode, strtoupper($code))) {
+            $this->logger->warning('auth.email_verification.failed', ['email' => $email, 'ip' => $ip]);
+            $this->session->setFlash('error', 'کد تأیید اشتباه است.');
+            $this->response->redirect(url('email/verify-code'));
+            return;
+        }
+
+        // تایید موفق
+        $this->userService->verifyEmail((int)$user->id);
+        $this->session->remove('pending_verification_email');
+        $this->session->remove('pending_verification_at');
+
+        $this->session->setFlash('success', 'ایمیل شما با موفقیت تأیید شد. اکنون می‌توانید وارد شوید.');
+        $this->response->redirect(url('login'));
+    }
+
+    /**
+     * ارسال مجدد ایمیل تأیید
+     */
+    public function resendVerification(): void
+    {
+        $email = $this->session->get('pending_verification_email');
+        if (!$email) {
+            $this->jsonError('درخواست نامعتبر');
+            return;
+        }
+
+        // محدودیت زمانی برای ارسال مجدد (مثلاً هر ۲ دقیقه)
+        $rateLimitKey = "resend_email:" . hash('sha256', $email);
+        if (!$this->authService->checkRateLimit('resend_email', $rateLimitKey)) {
+            $this->jsonError('لطفاً چند دقیقه صبر کنید و سپس دوباره تلاش کنید.');
+            return;
+        }
+
+        $user = $this->userService->findByEmail($email);
+        if ($user && !empty($user->email_verification_token)) {
+             app(\App\Services\EmailService::class)->sendVerificationEmail((int)$user->id, $user->email_verification_token);
+             $this->session->set('pending_verification_at', time());
+             $this->jsonSuccess('ایمیل تأیید دوباره ارسال شد.');
+             return;
+        }
+
+        $this->jsonError('کاربر یافت نشد یا قبلاً تأیید شده است.');
     }
 
     /**

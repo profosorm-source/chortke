@@ -49,7 +49,10 @@ class TwoFactorController extends BaseUserController
 
         if (!$data['is_enabled']) {
             // HIGH-01 Fix: Require password re-verification before showing 2FA secret
-            if (!$this->session->get(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED)) {
+            // CRITICAL-C-01 Fix: Implementing 10-minute expiration for 2FA setup authorization
+            $authTime = (int)$this->session->get(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED);
+            if (!$authTime || (time() - $authTime) > 600) {
+                $this->session->remove(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED);
                 $this->view('user/security/confirm-password', [
                     'title' => 'تأیید رمز عبور',
                     'redirect_to' => url('security/two-factor')
@@ -94,7 +97,12 @@ class TwoFactorController extends BaseUserController
 
         $user = $this->userService->find($userId);
         if ($user && password_verify($password, $user->password)) {
-            $this->session->set(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED, true);
+            // CRITICAL-C-01 Fix: Store timestamp instead of boolean for expiration check
+            $this->session->set(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED, time());
+            
+            // HIGH-H-05 Fix: Regenerate session after password verification to prevent session fixation before sensitive 2FA setup
+            $this->session->regenerate(true);
+
             $this->rateLimiter->clear($throttleKey);
             $this->jsonSuccess('تأیید شد', ['redirect' => url('security/two-factor')]);
             return;
@@ -209,6 +217,10 @@ class TwoFactorController extends BaseUserController
 
         if ($result['success']) {
             $this->session->remove(SessionKeys::TWO_FACTOR_SETUP_AUTHORIZED);
+            
+            // HIGH-H-05 Fix: Regenerate session after enabling 2FA to ensure a clean, secure session state
+            $this->session->regenerate(true);
+
             $this->logger->activity('2fa.enabled', 'فعال‌سازی احراز هویت دو مرحله‌ای', $userId, [
                 'channel' => 'auth',
             ]);
