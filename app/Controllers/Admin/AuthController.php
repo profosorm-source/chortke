@@ -330,59 +330,54 @@ class AuthController extends BaseController
      */
     public function logout()
     {
-        // MED-02 Fix: Enforce POST + CSRF for admin logout
         if (!$this->request->isPost()) {
             return redirect('/admin/dashboard');
         }
         
-        app(\Core\CSRF::class)->validate();
-
+        $userId = null;
         try {
+            app(\Core\CSRF::class)->validate();
             $userId = user_id();
 
-            // خروج از پنل
-if ($userId) {
-    $this->logger->activity(
-    'admin.logout',
-    'خروج از پنل مدیریت',
-    $userId,
-    ['channel' => 'admin_auth']
-);
+            if ($userId) {
+                $this->logger->activity(
+                    'admin.logout',
+                    'خروج از پنل مدیریت',
+                    $userId,
+                    ['channel' => 'admin_auth']
+                );
 
-    $this->auditTrail->record(
-    'admin.logout',
-    $userId,
-    [
-        'channel' => 'admin_auth',
-        'type' => 'admin',
-    ],
-    $userId
-);
-}
+                $this->auditTrail->record(
+                    'admin.logout',
+                    $userId,
+                    [
+                        'channel' => 'admin_auth',
+                        'type' => 'admin',
+                    ],
+                    $userId
+                );
+            }
 
-// Clear admin-specific session flags
-$this->session->remove('admin_pending_2fa');
-$this->session->remove('admin_pending_2fa_created');
-$this->session->remove('admin_pending_2fa_ip');
-$this->session->remove('admin_verify_time');
-$this->session->remove('admin_session');
+            // Clear admin-specific session flags
+            $this->session->remove('admin_pending_2fa');
+            $this->session->remove('admin_pending_2fa_created');
+            $this->session->remove('admin_pending_2fa_ip');
+            $this->session->remove('admin_verify_time');
+            $this->session->remove('admin_session');
 
-$this->authService->logout();
+            $this->authService->logout();
 
-return redirect('/admin/login');
+            return redirect('/admin/login');
 
-// catch خروج
-} catch (\Exception $e) {
-    $this->logger->error('admin.logout.failed', [
-        'channel' => 'admin_auth',
-        'user_id' => $userId ?? null,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-    return redirect('/admin/login');
-}
+        } catch (\Throwable $e) {
+            $this->logger->error('admin.logout.failed', [
+                'channel' => 'admin_auth',
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e)
+            ]);
+            return redirect('/admin/login');
+        }
     }
 
     /**

@@ -28,6 +28,7 @@ class CacheAdminController extends BaseAdminController
 
     public function clear(): void
     {
+        $this->validateCsrf();
         $body = $this->request->body();
         $type = $body['type'] ?? 'all';
         $tag  = $body['tag'] ?? '';
@@ -38,6 +39,7 @@ class CacheAdminController extends BaseAdminController
 
     public function forget(): void
     {
+        $this->validateCsrf();
         $body = $this->request->body();
         $key  = $body['key'] ?? '';
 

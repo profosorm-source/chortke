@@ -8,16 +8,17 @@ use App\Services\AdvancedSearchService;
 
 class ApiTokenAdminController extends BaseAdminController
 {
-    private ApiTokenService $apiTokenService;
-    private AdvancedSearchService $searchService;
+    private \App\Services\AuditTrail $auditTrail;
 
     public function __construct(
         ApiTokenService $apiTokenService,
-        AdvancedSearchService $searchService
+        AdvancedSearchService $searchService,
+        \App\Services\AuditTrail $auditTrail
     ) {
         parent::__construct();
         $this->apiTokenService = $apiTokenService;
         $this->searchService = $searchService;
+        $this->auditTrail = $auditTrail;
     }
 
     public function index(): void
@@ -58,8 +59,19 @@ class ApiTokenAdminController extends BaseAdminController
 
     public function revoke(): void
     {
+        $this->validateCsrf();
         $id = (int)$this->request->param('id');
         $ok = $this->apiTokenService->revokeToken($id);
+        
+        if ($ok) {
+            $this->auditTrail->record(
+                'admin.api_token.revoke',
+                (int)user_id(),
+                ['token_id' => $id, 'action' => 'revoke', 'ip' => get_client_ip()],
+                (int)user_id()
+            );
+        }
+
         $this->response->json(['success' => $ok, 'message' => $ok ? 'باطل شد' : 'یافت نشد']);
     }
 
