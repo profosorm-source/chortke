@@ -7,6 +7,7 @@ namespace App\Controllers;
 use App\Services\Auth\OAuthService;
 use Core\Request;
 use Core\Response;
+use App\Constants\SessionKeys;
 
 /**
  * OAuthController — Social Login (Google + Facebook)
@@ -57,7 +58,7 @@ class OAuthController extends BaseController
         if ($result['success']) {
             // 🛡️ Security Hardening: Handling 2FA checkpoints for social logins
             if (!empty($result['requires_2fa'])) {
-                $this->session->set('pending_2fa_user', (int)$result['user_id']);
+                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$result['user_id']);
                 if ($this->request->isAjax()) {
                     $this->jsonSuccess('', ['redirect' => url('verify-2fa')]);
                     return;
@@ -106,7 +107,7 @@ class OAuthController extends BaseController
         if ($result['success']) {
             // 🛡️ Security Hardening: Handling 2FA checkpoints for social logins
             if (!empty($result['requires_2fa'])) {
-                $this->session->set('pending_2fa_user', (int)$result['user_id']);
+                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$result['user_id']);
                 if ($this->request->isAjax()) {
                     $this->jsonSuccess('', ['redirect' => url('verify-2fa')]);
                     return;
@@ -160,21 +161,21 @@ class OAuthController extends BaseController
         $this->requirePermission('user.manage_social_accounts');
 
         $provider = (string)$this->request->post('provider');
-        $userData = $this->request->post('user_data');
 
-        if (empty($provider) || empty($userData)) {
-            $this->jsonError('پارامترهای ارسالی نامعتبر است');
+        if (empty($provider)) {
+            $this->jsonError('انتخاب سرویس‌دهنده الزامی است');
             return;
         }
 
-        $result = $this->oauthService->linkSocialAccount($this->userId(), $provider, $userData);
-
-        if ($result['success']) {
-            $this->jsonSuccess($result['message'] ?? 'حساب با موفقیت متصل شد');
+        // CRIT-05 Fix: Redirect to OAuth flow instead of accepting user_data directly
+        $url = $this->oauthService->getAuthUrlForLinking($provider, (int)$this->userId());
+        
+        if ($this->request->isAjax()) {
+            $this->jsonSuccess('Redirecting to ' . $provider, ['redirect' => $url]);
             return;
         }
-        $this->jsonError($result['message'] ?? 'خطا در اتصال حساب');
-        return;
+        
+        $this->response->redirect($url);
     }
 
     /**
