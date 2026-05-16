@@ -165,6 +165,17 @@ class SecurityModel extends Model
         return (bool)$this->db->query($sql, $params);
     }
 
+    public function deactivateOldestSession(int $userId): bool
+    {
+        return (bool)$this->db->query(
+            "UPDATE user_sessions 
+             SET is_active = 0, updated_at = NOW() 
+             WHERE user_id = ? AND is_active = 1 
+             ORDER BY last_activity ASC LIMIT 1",
+            [$userId]
+        );
+    }
+
     public function countActiveSessions(int $userId): int
     {
         $row = $this->db->fetch(
