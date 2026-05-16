@@ -140,8 +140,13 @@ class PermissionMiddleware extends BaseMiddleware
      */
     public static function check(string $permission): bool
     {
-        // هدایت فراخوانی قدیمی به سیستم داینامیک جدید جهت یکپارچه‌سازی و ممیزی راحت کدهای برنامه
-        return app(self::class)->hasPermission($permission);
+        // HIGH-07 Fix: Cache the instance to prevent multiple DI resolutions and resource leakage
+        // (Redis/DB connections) during a single request.
+        static $instance = null;
+        if ($instance === null) {
+            $instance = app(self::class);
+        }
+        return $instance->hasPermission($permission);
     }
     
     /**

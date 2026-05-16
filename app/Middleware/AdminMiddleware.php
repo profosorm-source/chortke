@@ -16,13 +16,14 @@ use App\Constants\SessionKeys;
  */
 class AdminMiddleware extends BaseMiddleware
 {
-    private Session $session;
+    private \App\Contracts\LoggerInterface $logger;
     private \App\Models\User $userModel;
 
-    public function __construct(Session $session, \App\Models\User $userModel)
+    public function __construct(Session $session, \App\Models\User $userModel, \App\Contracts\LoggerInterface $logger)
     {
         $this->session = $session;
         $this->userModel = $userModel;
+        $this->logger = $logger;
     }
 
     public function handle(Request $request, Closure $next): Response
