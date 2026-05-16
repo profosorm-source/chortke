@@ -220,6 +220,10 @@ class AuthController extends BaseController
 
         $this->session->remove('register_referral_code');
         
+        // CRITICAL-01 Fix: Regenerate session ID immediately after registration
+        // to prevent session fixation attacks.
+        $this->session->regenerate(true);
+
         // HIGH-H-13 Fix: Store timestamp to enforce 15-minute expiration for pending verification
         $this->session->set('pending_verification_email', $data['email']);
         $this->session->set('pending_verification_at', time());
@@ -249,8 +253,8 @@ class AuthController extends BaseController
             return;
         }
 
-        // HIGH-H-07 Fix: Prevent session fixation on pending email verification
-        $this->session->regenerate(true);
+        // CRITICAL-01 Fix: regenerate(true) was moved to register() and resendVerification()
+        // to ensure it only happens when the verification state is initialized.
 
         $this->view('user/verify-email-code', [
             'title' => 'تأیید ایمیل',
@@ -332,11 +336,11 @@ class AuthController extends BaseController
             return;
         }
 
-        // محدودیت زمانی برای ارسال مجدد (مثلاً هر ۲ دقیقه)
+        // CRITICAL-04 Fix: Using RateLimiter directly to match correct signature and behavior
         $ip = $this->request->ip();
         $rateLimitKey = "resend_email:" . hash('sha256', "{$email}:{$ip}");
         
-        if (!$this->authService->checkRateLimit('resend_email', $rateLimitKey)) {
+        if (!$this->rateLimiter->attempt($rateLimitKey, 3, 120)) {
             $this->jsonError('لطفاً چند دقیقه صبر کنید و سپس دوباره تلاش کنید.');
             return;
         }
@@ -408,7 +412,19 @@ class AuthController extends BaseController
     {
         $token = $this->request->get('token');
         if (!$token) {
+            // Check if token is already in session (from previous redirect)
+            $token = $this->session->get('pw_reset_token');
+        }
+
+        if (!$token) {
             $this->response->redirect(url('login'));
+            return;
+        }
+
+        // CRITICAL-02 Fix: Move token to session and redirect to remove it from URL
+        if ($this->request->get('token')) {
+            $this->session->set('pw_reset_token', $token);
+            $this->response->redirect(url('reset-password'));
             return;
         }
 
@@ -424,6 +440,11 @@ class AuthController extends BaseController
     public function resetPassword(): void
     {
         $data = $this->request->all();
+        // CRITICAL-02 Fix: Use token from session if missing in request
+        if (empty($data['token'])) {
+            $data['token'] = $this->session->get('pw_reset_token');
+        }
+
         $validator = new Validator($data, [
             'token'            => 'required',
             'password'         => 'required|min:8',
@@ -432,7 +453,8 @@ class AuthController extends BaseController
 
         if ($validator->fails()) {
             $this->session->setFlash('error', 'رمز عبور معتبر وارد کنید.');
-            $this->response->redirect(url('reset-password?token=' . ($data['token'] ?? '')));
+            $redirectUrl = !empty($data['token']) ? url('reset-password') : url('forgot-password');
+            $this->response->redirect($redirectUrl);
             return;
         }
 
@@ -443,6 +465,7 @@ class AuthController extends BaseController
             return;
         }
 
+        $this->session->remove('pw_reset_token');
         $this->session->setFlash('success', 'رمز عبور با موفقیت تغییر یافت.');
         $this->response->redirect(url('login'));
     }
