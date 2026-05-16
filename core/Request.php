@@ -122,21 +122,7 @@ public function isJson(): bool
      */
     public function ip(): string
     {
-        $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-        
-        // H8 Fix: اگر فرستنده جزو پروکسی‌های معتبر بود، از X-Forwarded-For استفاده کن
-        $trustedProxies = (array)config('app.trusted_proxies', ['127.0.0.1']);
-        
-        if (in_array($clientIp, $trustedProxies, true) && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $forwarded = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-            // آخرین آی‌پی غیرجعلی که مستقیماً توسط لودبالانسر ما ثبت شده است
-            $resolvedIp = trim(end($forwarded));
-            if ($resolvedIp !== '') {
-                $clientIp = $resolvedIp;
-            }
-        }
-
-        return $clientIp;
+        return get_client_ip();
     }
 	 /**
      * دریافت User-Agent
@@ -346,7 +332,15 @@ private function parseBody(): array
         $trustedProxies = (array)config('app.trusted_proxies', ['127.0.0.1']);
         $clientIp = $_SERVER['REMOTE_ADDR'] ?? '';
 
-        if (in_array($clientIp, $trustedProxies, true)) {
+        $isTrusted = false;
+        foreach ($trustedProxies as $proxy) {
+            if (ip_in_range($clientIp, $proxy)) {
+                $isTrusted = true;
+                break;
+            }
+        }
+
+        if ($isTrusted) {
             if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') {
                 return true;
             }
