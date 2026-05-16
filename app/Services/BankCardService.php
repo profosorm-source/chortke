@@ -43,7 +43,7 @@ class BankCardService extends \App\Services\BaseService
         }
 
         $iban = trim((string)($data['iban'] ?? ''));
-        if ($iban !== '' && (!str_starts_with($iban, 'IR') || \strlen($iban) !== 26)) {
+        if ($iban !== '' && !$this->validateIban($iban)) {
             return ['success' => false, 'message' => 'شماره شبا نامعتبر است'];
         }
 
@@ -129,7 +129,7 @@ class BankCardService extends \App\Services\BaseService
         if ($holder === '' || \mb_strlen($holder, 'UTF-8') < 3) {
             return ['success' => false, 'message' => 'نام دارنده کارت نامعتبر است'];
         }
-        if ($iban !== '' && (!str_starts_with($iban, 'IR') || \strlen($iban) !== 26)) {
+        if ($iban !== '' && !$this->validateIban($iban)) {
             return ['success' => false, 'message' => 'شماره شبا نامعتبر است'];
         }
 
@@ -218,6 +218,22 @@ class BankCardService extends \App\Services\BaseService
             $this->logger->error('bankcard.admin_verify.failed', ['card_id' => $cardId, 'error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در فرآیند تأیید کارت بانکی'];
         }
+    }
+
+    private function validateIban(string $iban): bool
+    {
+        $iban = strtoupper(str_replace(' ', '', $iban));
+        if (strlen($iban) !== 26) {
+            return false;
+        }
+        if (substr($iban, 0, 2) !== 'IR') {
+            return false;
+        }
+        
+        $check = substr($iban, 4) . substr($iban, 0, 4);
+        $check = str_replace(['I', 'R'], ['18', '27'], $check);
+        
+        return bcmod($check, '97') === '1';
     }
 
     private function validateLuhn(string $cardNumber): bool

@@ -66,6 +66,13 @@ class ReconciliationService extends \App\Services\BaseService
                 $transaction = $this->createOrphanTransaction($webhookData);
             }
 
+            // H14 Fix (BUG-08): جلوگیری از ثبت موفقیت‌آمیز تراکنش‌های یتیم بدون کاربر مشخص
+            if (empty($transaction->user_id)) {
+                $this->db->rollBack();
+                $this->logger->error('reconciliation.orphan_no_user', ['external_id' => $externalId]);
+                return ['success' => false, 'message' => 'تراکنش ناشناخته بدون کاربر مشخص مجاز نیست'];
+            }
+
             // ۳. اگر تراکنش قبلاً نهایی شده، نادیده بگیر (Idempotency)
             if (in_array($transaction->status, ['completed', 'failed', 'cancelled'])) {
                 $this->db->rollBack();
@@ -152,13 +159,25 @@ class ReconciliationService extends \App\Services\BaseService
         $amount = (float)($webhookData['amount'] ?? $transaction->amount);
         $currency = strtolower((string)($webhookData['currency'] ?? $transaction->currency ?? 'irt'));
 
-        // ۱. آپدیت وضعیت تراکنش به کامل‌شده
-        $this->transactionModel->update((int)$transaction->id, [
-            'status' => 'completed',
-            'updated_at' => date('Y-m-d H:i:s'),
-            'verified_at' => date('Y-m-d H:i:s'),
-            'metadata' => json_encode(array_merge(json_decode($transaction->metadata ?? '{}', true), ['reconciled_webhook' => $webhookData]))
-        ]);
+        // ۱. آپدیت وضعیت تراکنش به کامل‌شده به صورت کاملاً اتمیک (BUG-04)
+        $affected = $this->db->execute(
+            "UPDATE transactions 
+             SET status = 'completed', 
+                 updated_at = :updated_at, 
+                 verified_at = :verified_at, 
+                 metadata = :metadata 
+             WHERE id = :id AND status = 'pending'",
+            [
+                'id' => (int)$transaction->id,
+                'updated_at' => date('Y-m-d H:i:s'),
+                'verified_at' => date('Y-m-d H:i:s'),
+                'metadata' => json_encode(array_merge(json_decode($transaction->metadata ?? '{}', true), ['reconciled_webhook' => $webhookData]))
+            ]
+        );
+
+        if ($affected === 0) {
+            return ['success' => false, 'message' => 'تراکنش قبلاً پردازش شده یا در وضعیت معلق نیست'];
+        }
 
         // ۲. اجرای منطق حسابداری بر اساس نوع تراکنش (Business Logic)
         switch ($transaction->type) {
@@ -207,15 +226,26 @@ class ReconciliationService extends \App\Services\BaseService
      */
     private function processFailedPayment(object $transaction, array $webhookData): array
     {
-        // ۱. آپدیت وضعیت تراکنش به شکست‌خورده
-        $this->transactionModel->update((int)$transaction->id, [
-            'status' => 'failed',
-            'updated_at' => date('Y-m-d H:i:s'),
-            'metadata' => json_encode(array_merge(json_decode($transaction->metadata ?? '{}', true), [
-                'failure_reason' => $webhookData['failure_reason'] ?? 'Gateway failure signal',
-                'reconciled_webhook' => $webhookData
-            ]))
-        ]);
+        // ۱. آپدیت وضعیت تراکنش به شکست‌خورده به صورت کاملاً اتمیک (BUG-04)
+        $affected = $this->db->execute(
+            "UPDATE transactions 
+             SET status = 'failed', 
+                 updated_at = :updated_at, 
+                 metadata = :metadata 
+             WHERE id = :id AND status = 'pending'",
+            [
+                'id' => (int)$transaction->id,
+                'updated_at' => date('Y-m-d H:i:s'),
+                'metadata' => json_encode(array_merge(json_decode($transaction->metadata ?? '{}', true), [
+                    'failure_reason' => $webhookData['failure_reason'] ?? 'Gateway failure signal',
+                    'reconciled_webhook' => $webhookData
+                ]))
+            ]
+        );
+
+        if ($affected === 0) {
+            return ['success' => false, 'message' => 'تراکنش قبلاً پردازش شده یا در وضعیت معلق نیست'];
+        }
 
         // ۲. اگر منطق خاصی برای بازگشت پول یا آنلاک کردن وجه نیاز است:
         if ($transaction->type === 'withdrawal' && $transaction->user_id) {

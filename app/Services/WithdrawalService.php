@@ -105,19 +105,14 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'مبلغ نامعتبر است'];
             }
 
+            $scale = strtolower($currency) === 'usdt' ? 8 : 4;
             $minAmount = (float)($this->settings->get('withdrawal_min_amount', 10000));
-            if ($amount < $minAmount) {
+            if (bccomp((string)$amount, (string)$minAmount, $scale) < 0) {
                 return ['success' => false, 'message' => "حداقل مبلغ برداشت " . $this->currencyService->formatAmount($minAmount, $currency) . " است"];
             }
 
             if (!$this->kycService->isApproved($userId)) {
                 return ['success' => false, 'message' => 'احراز هویت شما کامل نیست'];
-            }
-
-            // کارت
-            $card = $this->bankCardService->findVerifiedCardForUser($userId, $bankCardId);
-            if (!$card) {
-                return ['success' => false, 'message' => 'کارت بانکی معتبر یافت نشد'];
             }
 
             // 🛡️ گیت ضدتقلب متمرکز برداشت (Velocity, ATO, Geolocation)
@@ -140,13 +135,40 @@ class WithdrawalService extends PaymentBaseService
 
             $this->db->beginTransaction();
 
-            // تکراری/pending
-            if ($this->model->hasPending($userId)) {
+            // ۱. بررسی اتمیک تکراری بودن درخواست (Idempotency)
+            $existing = $this->db->query("SELECT * FROM withdrawals WHERE idempotency_key = ? LIMIT 1 FOR UPDATE", [$requestId])->fetch(\PDO::FETCH_OBJ);
+            if ($existing) {
+                $this->db->rollBack();
+                return ['success' => true, 'message' => 'درخواست برداشت با موفقیت ثبت شد'];
+            }
+
+            // ۲. اعمال قفل بدبینانه روی سطر کیف پول جهت سریالیزه کردن درخواست‌های مالی موازی
+            $walletLock = $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [$userId])->fetch();
+            if (!$walletLock) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'کیف پول یافت نشد'];
+            }
+
+            // ۳. کارت بانکی اجباری برای IRT
+            if (strtolower($currency) === 'irt') {
+                if ($bankCardId <= 0) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'کارت بانکی الزامی است'];
+                }
+                $card = $this->bankCardService->findVerifiedCardForUser($userId, $bankCardId);
+                if (!$card) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'کارت بانکی معتبر یافت نشد'];
+                }
+            }
+
+            // ۴. بررسی عدم وجود درخواست معلق فعلی با قفل تراکنشی
+            if ($this->model->hasPendingWithdrawal($userId, true)) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
             }
 
-            // موجودی
+            // ۵. بررسی موجودی با قفل تراکنشی
             $can = $this->wallet->canWithdraw($userId, $amount, $currency);
             if (empty($can['can_withdraw'])) {
                 $this->db->rollBack();
@@ -154,13 +176,12 @@ class WithdrawalService extends PaymentBaseService
             }
 
             // قفل پول و جلوگیری از Race condition
-            $idempotencyKey = $this->uuid();
             $debit = $this->wallet->withdraw($userId, $amount, $currency, [
                 'type' => 'withdrawal_request',
                 'request_id' => $requestId,
                 'ip' => $ip,
                 'fingerprint' => $fingerprint,
-                'idempotency_key' => $idempotencyKey,
+                'idempotency_key' => $requestId,
                 'bank_card_id' => $bankCardId,
             ]);
 
@@ -171,11 +192,11 @@ class WithdrawalService extends PaymentBaseService
 
             $withdrawalId = $this->model->create([
                 'user_id' => $userId,
-                'bank_card_id' => $bankCardId,
+                'bank_card_id' => $bankCardId ?: null,
                 'amount' => $amount,
                 'currency' => $currency,
                 'status' => 'pending',
-                'request_id' => $requestId,
+                'idempotency_key' => $requestId,
                 'ip_address' => $ip,
                 'device_fingerprint' => $fingerprint,
                 'transaction_id' => $debit['transaction_id'] ?? null,
@@ -289,33 +310,34 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'شما یک برداشت در حال بررسی دارید'];
             }
 
-            $min = (float)$this->settings->get(
+            $scale = strtoupper($currency) === 'USDT' ? 8 : 4;
+            $min = $this->settings->get(
                 $currency === 'IRT' ? 'min_withdrawal_irt' : 'min_withdrawal_usdt',
-                $currency === 'IRT' ? 50000 : 10
+                $currency === 'IRT' ? '50000' : '10'
             );
-            $max = (float)$this->settings->get(
+            $max = $this->settings->get(
                 $currency === 'IRT' ? 'max_withdrawal_irt' : 'max_withdrawal_usdt',
-                $currency === 'IRT' ? 50000000 : 100000
+                $currency === 'IRT' ? '50000000' : '100000'
             );
 
-            if ($amount < $min) {
+            if (bccomp((string)$amount, (string)$min, $scale) < 0) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => 'کمتر از حداقل برداشت (' . $this->currencyService->formatAmount($min, $currency) . ') است'];
+                return ['success' => false, 'message' => 'کمتر از حداقل برداشت (' . $this->currencyService->formatAmount((float)$min, $currency) . ') است'];
             }
-            if ($amount > $max) {
+            if (bccomp((string)$amount, (string)$max, $scale) > 0) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => 'بیشتر از حداکثر برداشت (' . $this->currencyService->formatAmount($max, $currency) . ') است'];
+                return ['success' => false, 'message' => 'بیشتر از حداکثر برداشت (' . $this->currencyService->formatAmount((float)$max, $currency) . ') است'];
             }
 
-            $feePercent = (float)$this->settings->get(
+            $feePercent = $this->settings->get(
                 $currency === 'IRT' ? 'withdrawal_fee_irt' : 'withdrawal_fee_usdt',
-                0
+                '0'
             );
-            $fee   = ($amount * $feePercent) / 100;
-            $final = $amount - $fee;
+            $fee   = bcdiv(bcmul((string)$amount, (string)$feePercent, $scale), '100', $scale);
+            $final = bcsub((string)$amount, (string)$fee, $scale);
 
             $availableApprox = $this->wallet->getBalance($userId, strtolower($currency));
-            if ($availableApprox < $amount) {
+            if (bccomp((string)$availableApprox, (string)$amount, $scale) < 0) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'موجودی کافی نیست'];
             }

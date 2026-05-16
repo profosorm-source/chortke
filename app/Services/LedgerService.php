@@ -30,6 +30,7 @@ class LedgerService extends \App\Services\BaseService
         string $debitAccount,
         string $creditAccount,
         float $amount,
+        string $currency = 'irt',
         string $description = null,
         array $metadata = []
     ): bool {
@@ -52,12 +53,14 @@ class LedgerService extends \App\Services\BaseService
                 'account' => $debitAccount,
                 'debit' => $amount,
                 'credit' => 0,
+                'currency' => $currency,
             ]));
 
             $credit = $this->recordEntry(array_merge($common, [
                 'account' => $creditAccount,
                 'debit' => 0,
                 'credit' => $amount,
+                'currency' => $currency,
             ]));
 
             if (!$debit || !$credit) {
