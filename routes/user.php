@@ -59,6 +59,7 @@ $r->post('/profile/delete-avatar',   [ProfileController::class, 'deleteAvatar'],
 
 // ── احراز هویت دو مرحله‌ای ───────────────────────────────────────────────
 $r->get('/two-factor',         [TwoFactorController::class, 'index'],   $auth);
+$r->get('/two-factor/qr',      [TwoFactorController::class, 'qrCode'],  $auth);
 $r->post('/two-factor/enable', [TwoFactorController::class, 'enable'],  $authCSRF);
 $r->post('/two-factor/disable',[TwoFactorController::class, 'disable'], $authCSRF);
 
