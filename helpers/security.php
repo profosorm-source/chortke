@@ -112,13 +112,76 @@ if (!function_exists('is_strong_password')) {
     }
 }
 
+if (!function_exists('ip_in_range')) {
+    function ip_in_range(string $ip, string $range): bool
+    {
+        if (strpos($range, '/') === false) {
+            return $ip === $range;
+        }
+        
+        list($subnet, $bits) = explode('/', $range);
+        $bits = (int)$bits;
+        
+        // Check if it's IPv6
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) && filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $ipBin = inet_pton($ip);
+            $subnetBin = inet_pton($subnet);
+            if ($ipBin === false || $subnetBin === false) {
+                return false;
+            }
+            
+            $ipHex = bin2hex($ipBin);
+            $subnetHex = bin2hex($subnetBin);
+            
+            $ipBits = '';
+            $subnetBits = '';
+            
+            for ($i = 0; $i < 32; $i++) {
+                $ipBits .= str_pad(base_convert($ipHex[$i], 16, 2), 4, '0', STR_PAD_LEFT);
+                $subnetBits .= str_pad(base_convert($subnetHex[$i], 16, 2), 4, '0', STR_PAD_LEFT);
+            }
+            
+            return substr($ipBits, 0, $bits) === substr($subnetBits, 0, $bits);
+        }
+        
+        // Check if it's IPv4
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $ipLong = ip2long($ip);
+            $subnetLong = ip2long($subnet);
+            if ($ipLong === false || $subnetLong === false) {
+                return false;
+            }
+            
+            $mask = (int)(~((1 << (32 - $bits)) - 1));
+            if ($bits === 0) {
+                $mask = 0;
+            }
+            
+            return ($ipLong & $mask) === ($subnetLong & $mask);
+        }
+        
+        return false;
+    }
+}
+
 if (!function_exists('get_client_ip')) {
     function get_client_ip(): string
     {
         $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
         $trustedProxies = (array)config('app.trusted_proxies', []);
+        if (empty($trustedProxies)) {
+            $trustedProxies = ['127.0.0.1', '::1'];
+        }
 
-        if (empty($trustedProxies) || !in_array($remoteAddr, $trustedProxies, true)) {
+        $isTrusted = false;
+        foreach ($trustedProxies as $proxy) {
+            if (ip_in_range($remoteAddr, $proxy)) {
+                $isTrusted = true;
+                break;
+            }
+        }
+
+        if (!$isTrusted) {
             return filter_var($remoteAddr, FILTER_VALIDATE_IP) ? $remoteAddr : '0.0.0.0';
         }
 
@@ -134,16 +197,19 @@ if (!function_exists('get_client_ip')) {
                 $ips = array_map('trim', explode(',', $_SERVER[$header]));
                 
                 foreach (array_reverse($ips) as $ip) {
-                    // بررسی معتبر بودن IP
                     if (!filter_var($ip, FILTER_VALIDATE_IP)) {
                         continue;
                     }
                     
-                    // رد کردن IP های Private و Reserved
-                    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-                        if (!in_array($ip, $trustedProxies, true)) {
-                            return $ip;
+                    $ipTrusted = false;
+                    foreach ($trustedProxies as $proxy) {
+                        if (ip_in_range($ip, $proxy)) {
+                            $ipTrusted = true;
+                            break;
                         }
+                    }
+                    if (!$ipTrusted) {
+                        return $ip;
                     }
                 }
             }
