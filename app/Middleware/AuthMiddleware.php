@@ -113,6 +113,13 @@ class AuthMiddleware extends BaseMiddleware
                 return $response;
             }
 
+            // HIGH-H-06 Fix: Redirect users with pending 2FA to verification page
+            if ($session->has(SessionKeys::PENDING_2FA_USER_ID)) {
+                $response = new Response();
+                $response->redirect(url('verify-2fa'));
+                return $response;
+            }
+
             $response = new Response();
             if ($request->isAjax()) {
                 return $response->json(['success' => false, 'message' => config('messages.auth.unauthorized')], 401);
@@ -125,19 +132,26 @@ class AuthMiddleware extends BaseMiddleware
         // Ensure user is still active/not banned without hitting DB on every request
         $lastVerify = (int)$session->get('user_verify_time', 0);
         if (time() - $lastVerify > 300) {
-            $user = $this->userModel->find($userId);
-            if (!$user || (string)$user->status !== 'active') {
+            try {
+                $user = $this->userModel->find($userId);
+                if (!$user || (string)$user->status !== 'active') {
+                    $session->destroy();
+                    if ($redisAvailable) {
+                        try { $this->redis->delete($redisKey); } catch (\Throwable) {}
+                    }
+                    $response = new Response();
+                    if ($request->isAjax()) {
+                        return $response->json(['success' => false, 'message' => 'حساب شما غیرفعال شده یا دسترسی با خطا مواجه شد.'], 403);
+                    }
+                    return $response->redirect(url('login'));
+                }
+                $session->set('user_verify_time', time());
+            } catch (\Throwable $e) {
+                $this->logger->error('auth.middleware.db_error', ['error' => $e->getMessage()]);
                 $session->destroy();
-                if ($redisAvailable) {
-                    try { $this->redis->delete($redisKey); } catch (\Throwable) {}
-                }
                 $response = new Response();
-                if ($request->isAjax()) {
-                    return $response->json(['success' => false, 'message' => 'حساب شما غیرفعال شده است.'], 403);
-                }
                 return $response->redirect(url('login'));
             }
-            $session->set('user_verify_time', time());
         }
 
         return $this->toResponse($next($request));

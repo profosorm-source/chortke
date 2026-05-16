@@ -90,7 +90,7 @@ class SecurityHeadersMiddleware
             "script-src {$scripts}",
             "style-src {$styles}",
             "font-src 'self' https://fonts.gstatic.com",
-            "img-src 'self' data: https:",
+            "img-src 'self' data: https://*.google.com https://*.gstatic.com https://cdn.jsdelivr.net",
             "frame-src https://www.google.com",
             "connect-src 'self' https://www.google.com",
             "frame-ancestors 'self'",

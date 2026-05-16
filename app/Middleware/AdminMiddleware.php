@@ -45,20 +45,28 @@ class AdminMiddleware extends BaseMiddleware
         // 🚀 BUG FIX [H-01]: Periodic DB re-validation (Every 5 minutes)
         // جلوگیری از دسترسی ادمین‌های اخراج شده یا تغییر نقش یافته
         if (time() - $lastVerify > 300) {
-            $user = $this->userModel->find($userId);
-            if (!$user || !RolePolicy::isAdmin($user->role ?? '')) {
+            try {
+                $user = $this->userModel->find($userId);
+                if (!$user || !RolePolicy::isAdmin($user->role ?? '')) {
+                    $session->destroy();
+                    $response = new Response();
+                    if ($request->isAjax()) {
+                        return $response->json(['success' => false, 'message' => 'دسترسی شما منقضی یا محدود شده است.'], 403);
+                    }
+                    return $response->redirect(url('login'));
+                }
+                
+                // Sync session with DB and refresh flags
+                $session->set(SessionKeys::USER_ROLE, $user->role);
+                $session->set(SessionKeys::LOGGED_IN, true); // Re-assert logged in state
+                $session->set('admin_verify_time', time());
+                $role = $user->role;
+            } catch (\Throwable $e) {
+                $this->logger->error('admin.middleware.db_error', ['error' => $e->getMessage()]);
                 $session->destroy();
                 $response = new Response();
-                if ($request->isAjax()) {
-                    return $response->json(['success' => false, 'message' => 'دسترسی شما منقضی شده است.'], 403);
-                }
                 return $response->redirect(url('login'));
             }
-            
-            // Sync session with DB
-            $session->set(SessionKeys::USER_ROLE, $user->role);
-            $session->set('admin_verify_time', time());
-            $role = $user->role;
         }
 
         if (!RolePolicy::isAdmin($role)) {

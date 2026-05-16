@@ -24,11 +24,16 @@ class CorsMiddleware
             $response->status(204);
         } else {
             // برای درخواست‌های معمولی اجازه اجرا بدهیم تا محتوا را بگیریم
-            $response = $next($request);
-            if (!$response instanceof Response) {
-                $content = (string)$response;
+            $result = $next($request);
+            if ($result instanceof Response) {
+                $response = $result;
+            } elseif ($result instanceof \Throwable) {
                 $response = new Response();
-                $response->setContent($content);
+                $response->status(500);
+                $response->setContent('Internal Server Error: ' . $result->getMessage());
+            } else {
+                $response = new Response();
+                $response->setContent((string)$result);
             }
         }
 
@@ -62,7 +67,14 @@ class CorsMiddleware
             $response->header('Access-Control-Allow-Origin', $requestOrigin);
             
             // MEDIUM-M5 Fix: Only allow credentials for trusted origins to prevent leak in case of compromised subdomains
-            $credentialOrigins = array_filter(array_map('trim', explode(',', (string)config('cors.credential_origins', ''))));
+            $credentialOriginsRaw = (string)config('cors.credential_origins', '');
+            $credentialOrigins = array_filter(array_map('trim', explode(',', $credentialOriginsRaw)));
+            
+            // LOW-L1 Fix: Ensure canonical app URL is always trusted for credentials if not explicitly configured otherwise
+            if (empty($credentialOrigins) && $appUrl !== '') {
+                $credentialOrigins[] = rtrim($appUrl, '/');
+            }
+
             if (in_array('*', $credentialOrigins, true)) {
                 throw new \RuntimeException('Wildcard credential_origins is not allowed in CORS configuration.');
             }

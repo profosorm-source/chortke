@@ -47,6 +47,13 @@ class HttpsMiddleware
             return $result;
         }
 
+        if ($result instanceof \Throwable) {
+            $response = new Response();
+            $response->status(500);
+            $response->setContent('Internal Server Error');
+            return $response;
+        }
+
         $response = new Response();
         $response->setContent((string)$result);
         return $response;

@@ -82,7 +82,7 @@ class RateLimitMiddleware
                 $retryAfter = $this->rateLimiter->availableIn($key);
 
                 $this->logger->warning('Rate limit exceeded', [
-                    'ip'          => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+                    'ip'          => $request->ip() ?? 'unknown',
                     'uri'         => $request->uri(),
                     'retry_after' => $retryAfter,
                 ]);
