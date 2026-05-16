@@ -275,13 +275,15 @@ class AuthController extends BaseController
         $result = $this->authService->verify2FA($code);
 
         if ($result['success']) {
+            // MEDIUM-02 Fix: Explicitly regenerate session on successful 2FA verification to prevent session fixation
+            $this->session->regenerate(true);
+
             $this->rateLimiter->clear($throttleKey);
             $this->session->remove(SessionKeys::PENDING_2FA_USER_ID);
             $this->session->remove('admin_pending_2fa');
             $this->session->remove('admin_pending_2fa_created');
             $this->session->remove('admin_pending_2fa_ip');
             
-            // CRITICAL-C1 Fix: Redundant regenerate() removed. AuthService::verify2FA -> createSession already handles this.
             $this->session->set('admin_verify_time', time());
             $this->session->set('admin_session', true); // Mark session as admin
             

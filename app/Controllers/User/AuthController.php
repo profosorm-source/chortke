@@ -58,7 +58,7 @@ class AuthController extends BaseController
         // consolidated IP + Identifier rate limiting.
 
         $data = $this->request->all();
-        $email = (string)($data['email'] ?? '');
+        $email = mb_strtolower(trim((string)($data['email'] ?? '')), 'UTF-8');
         $captchaType = $this->loginRiskService->getCaptchaType('login', null, $email);
         if ($captchaType !== null) {
             // ✅ استفاده از $this->request->input() به جای $_POST

@@ -123,6 +123,12 @@ class TwoFactorController extends BaseUserController
             $this->response->redirect(url('login'));
             return;
         }
+
+        // CRITICAL-02 Fix: Reject if it's admin pending
+        if ($this->session->get('admin_pending_2fa')) {
+            $this->response->redirect(url('/admin/login'));
+            return;
+        }
         
         // CRIT-04 Fix: Verify that the pending 2FA session has not expired
         $createdAt = (int)$this->session->get('pending_2fa_created_at', 0);
@@ -139,6 +145,17 @@ class TwoFactorController extends BaseUserController
 
     public function verify(): void
     {
+        // CRITICAL-02 Fix: Ensure user 2FA verification cannot handle admin pending sessions
+        if ($this->session->get('admin_pending_2fa')) {
+            $this->logger->warning('2fa.verify.admin_pending_in_user_controller', [
+                'pending_user_id' => (int)$this->session->get(SessionKeys::PENDING_2FA_USER_ID, 0),
+                'ip' => $this->request->ip()
+            ]);
+            $this->session->destroy();
+            $this->response->json(['success' => false, 'message' => 'نشست نامعتبر است.'], 401);
+            return;
+        }
+
         // CRIT-04 Fix: Validate pending_2fa_user_id comes from a valid session
         // This prevents attackers from manipulating the pending 2FA user ID
         $sessionUserId = (int)$this->session->get(SessionKeys::USER_ID, 0);
