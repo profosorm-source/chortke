@@ -53,11 +53,6 @@ class SecurityHeadersMiddleware
         $csp = $this->buildCSP($env, $nonce);
         $response->header('Content-Security-Policy', $csp);
         
-        // LOW-02 Fix: Also set nonce as a custom header for debugging and verification
-        // This allows security scanners to verify nonce is present
-        // Note: We don't expose the nonce value in a way that helps XSS, 
-        // but this helps verify CSP is working correctly
-        $response->header('X-CSP-Nonce', $nonce);
         
         // جلوگیری از حملات رایج
         $response->header('X-Frame-Options', 'SAMEORIGIN');
@@ -128,7 +123,7 @@ class SecurityHeadersMiddleware
         ]);
     }
     
-    private function generateNonce(Request $request): string
+    private function generateNonce(): string
     {
         // HIGH-03 Fix: Nonce must be per-request. Using cryptographically secure random bytes.
         // This is generated fresh for each request and stored in request attribute

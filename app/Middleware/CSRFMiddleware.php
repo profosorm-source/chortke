@@ -188,16 +188,8 @@ class CSRFMiddleware extends BaseMiddleware
         $valid = hash_equals($expectedSignature, $signature);
         
         // Also check raw body signature (some providers don't include timestamp)
-        if (!$valid) {
-            $rawSignature = hash_hmac('sha256', $rawBody, $secret);
-            $valid = hash_equals($rawSignature, $signature);
-        }
-        
-        // Check against timestamp-free signature as fallback
-        if (!$valid && !empty($rawBody)) {
-            $simpleSignature = hash_hmac('sha256', $rawBody, $secret);
-            $valid = hash_equals($simpleSignature, $signature);
-        }
+        // Note: Replay attack protection is handled by the timestamp check above.
+        // If a provider doesn't use timestamps, they must be handled separately.
         
         return $valid;
     }

@@ -32,8 +32,8 @@ class GuestMiddleware extends BaseMiddleware
             return $response;
         }
 
-        // MEDIUM-09 Fix: Redirect users with pending 2FA to verification page
-        if ($this->session->has(SessionKeys::PENDING_2FA_USER_ID)) {
+        // MEDIUM-09 Fix: Redirect users with pending 2FA to verification page (avoid loop)
+        if ($this->session->has(SessionKeys::PENDING_2FA_USER_ID) && $request->uri() !== '/verify-2fa') {
             $response = new Response();
             $response->redirect(url('verify-2fa'));
             return $response;
