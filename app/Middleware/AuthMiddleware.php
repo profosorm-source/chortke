@@ -48,33 +48,27 @@ class AuthMiddleware extends BaseMiddleware
         $lastActivity = null;
         $redisAvailable = $this->redis->isAvailable();
 
-        if ($redisAvailable) {
-            try {
+        // MED-08 Fix: Unified activity handling with robust fallbacks
+        try {
+            if ($redisAvailable) {
                 $lastActivity = $this->redis->get($redisKey);
-            } catch (\Throwable) {
-                $redisAvailable = false;
             }
+        } catch (\Throwable) {
+            $redisAvailable = false;
         }
 
-        if (!$redisAvailable) {
+        if (!$redisAvailable || $lastActivity === null) {
             $lastActivity = $session->get('last_activity');
         }
         
-        if ($lastActivity === null) {
-            // اولین بار است، ذخیره کنید
-            if ($redisAvailable) {
-                $this->redis->set($redisKey, (string)$now, $timeout + 60);
-            } else {
-                $session->set('last_activity', (string)$now);
-            }
-        } else {
+        if ($lastActivity !== null) {
             $lastActivityTime = (int)$lastActivity;
             
             // بررسی انقضای نشست (Idle Timeout)
             if (($now - $lastActivityTime) > $timeout) {
                 $session->destroy();
                 if ($redisAvailable) {
-                    $this->redis->delete($redisKey);
+                    try { $this->redis->delete($redisKey); } catch (\Throwable) {}
                 }
                 
                 $response = new Response();
@@ -86,17 +80,26 @@ class AuthMiddleware extends BaseMiddleware
                 $response->redirect(url('login'));
                 return $response;
             }
-            
-            // تمدید فعالیت در Redis یا سشن
-            if ($redisAvailable) {
+        }
+        
+        // تمدید فعالیت
+        $activityUpdated = false;
+        if ($redisAvailable) {
+            try {
                 $this->redis->set($redisKey, (string)$now, $timeout + 60);
-            } else {
-                $session->set('last_activity', (string)$now);
+                $activityUpdated = true;
+            } catch (\Throwable) {
+                $redisAvailable = false;
             }
+        }
+        
+        if (!$activityUpdated) {
+            $session->set('last_activity', (string)$now);
         }
 
         // بررسی ورود کاربر
-        if (!$session->has('user_id')) {
+        // HIGH-04 Fix: Check both user_id and logged_in flag
+        if (!$session->has('user_id') || !$session->get('logged_in')) {
             $response = new Response();
             if ($request->isAjax()) {
                 return $response->json(['success' => false, 'message' => config('messages.auth.unauthorized')], 401);

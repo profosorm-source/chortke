@@ -34,14 +34,11 @@ class UserValidator
         // Password
         if (empty($data['password'])) {
             $errors['password'][] = 'رمز عبور الزامی است.';
-        } elseif (strlen($data['password']) < 8) {
-            $errors['password'][] = 'رمز عبور باید حداقل 8 کاراکتر باشد.';
-        } elseif (!preg_match('/[A-Z]/', $data['password'])) {
-            $errors['password'][] = 'رمز عبور باید حداقل یک حرف بزرگ داشته باشد.';
-        } elseif (!preg_match('/[a-z]/', $data['password'])) {
-            $errors['password'][] = 'رمز عبور باید حداقل یک حرف کوچک داشته باشد.';
-        } elseif (!preg_match('/[0-9]/', $data['password'])) {
-            $errors['password'][] = 'رمز عبور باید حداقل یک عدد داشته باشد.';
+        } else {
+            $policyErrors = PasswordPolicy::validate($data['password']);
+            if (!empty($policyErrors)) {
+                $errors['password'] = array_merge($errors['password'] ?? [], $policyErrors);
+            }
         }
         
         // Password Confirmation
@@ -85,8 +82,12 @@ class UserValidator
         
         if (empty($data['new_password'])) {
             $errors['new_password'][] = 'رمز عبور جدید الزامی است.';
-        } elseif (strlen($data['new_password']) < 8) {
-            $errors['new_password'][] = 'رمز عبور جدید باید حداقل 8 کاراکتر باشد.';
+        } else {
+            // MED-11 Fix: Enforce full PasswordPolicy on password change
+            $policyErrors = PasswordPolicy::validate($data['new_password']);
+            if (!empty($policyErrors)) {
+                $errors['new_password'] = array_merge($errors['new_password'] ?? [], $policyErrors);
+            }
         }
         
         if (empty($data['new_password_confirmation'])) {

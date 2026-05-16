@@ -75,14 +75,33 @@ class PermissionMiddleware extends BaseMiddleware
         $cachedPermissions = $this->session->get('user_permissions');
         $cacheTime = $this->session->get('permissions_cache_time');
         
-        // 🚀 BUG FIX [M-01]: کاهش TTL کش سشن به ۶۰ ثانیه برای Revocation سریع‌تر
-        if ($cachedPermissions === null || $cacheTime === null || (time() - (int)$cacheTime) > 60) {
+        // HIGH-05 Fix: Force DB check for critical permissions to ensure immediate revocation
+        $isCritical = $this->isCriticalPermission($permission);
+        
+        if ($isCritical || $cachedPermissions === null || $cacheTime === null || (time() - (int)$cacheTime) > 60) {
             $cachedPermissions = $this->permissionModel->getUserPermissions($userId);
-            $this->session->set('user_permissions', $cachedPermissions);
-            $this->session->set('permissions_cache_time', time());
+            
+            if (!$isCritical) {
+                $this->session->set('user_permissions', $cachedPermissions);
+                $this->session->set('permissions_cache_time', time());
+            }
         }
         
         return in_array($permission, (array)$cachedPermissions, true);
+    }
+
+    /**
+     * بررسی آیا این دسترسی از نوع حساس/بحرانی است
+     */
+    private function isCriticalPermission(string $permission): bool
+    {
+        $criticalPrefixes = ['admin.', 'finance.', 'security.', 'user.delete', 'system.'];
+        foreach ($criticalPrefixes as $prefix) {
+            if (str_starts_with($permission, $prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /*

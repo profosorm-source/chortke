@@ -32,20 +32,17 @@ class ApiAuthMiddleware
             return $this->errorResponse('توکن API ارائه نشده', 401, 'MISSING_TOKEN');
         }
 
-        // ✅ امنیت: استخراج user_id از request و اطمینان از مالکیت توکن
-        $requestingUserId = (int)($request->get('user_id') ?? $request->post('user_id') ?? 0);
+        $user = $this->validateToken($token, 0); // Validate token first without ownership check
+        if (!$user) {
+            return $this->errorResponse('توکن نامعتبر یا منقضی شده', 401, 'INVALID_TOKEN');
+        }
+
+        // HIGH-08 Fix: Extract user_id from the validated token, not from the request body/query
+        $requestingUserId = (int)$user->id;
         
         // Fix M2: برای مسیرهای حساس، بررسی مالکیت الزامی است
         if ($this->isSensitivePath($request->uri())) {
-            if ($requestingUserId <= 0) {
-                return $this->errorResponse('برای این عملیات نیاز به شناسه کاربر است', 400, 'MISSING_USER_ID');
-            }
-        }
-        
-        $user = $this->validateToken($token, $requestingUserId);
-
-        if (!$user) {
-            return $this->errorResponse('توکن نامعتبر یا منقضی شده', 401, 'INVALID_TOKEN');
+            // مالکیت همیشه با user_id استخراج شده از توکن چک می‌شود
         }
 
         if ($user->status !== 'active' && (int)$user->status !== 1) {
@@ -129,7 +126,11 @@ class ApiAuthMiddleware
 
     private function validateToken(string $token, int $requestingUserId = 0): ?object
     {
-        $hashedToken = hash('sha256', $token);
+        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
+        if (!$secret || strlen($secret) < 32) {
+            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak');
+        }
+        $hashedToken = hash_hmac('sha256', $token, $secret);
         
         // ✅ امنیت: اگر requestingUserId فراهم شد، مالکیت توکن را بررسی کن
         $query = "SELECT u.*, at.id AS token_id, at.scopes

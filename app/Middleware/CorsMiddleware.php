@@ -59,6 +59,10 @@ class CorsMiddleware
             $response->header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
             $response->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-CSRF-TOKEN, Accept, Origin');
             $response->header('Access-Control-Max-Age', '600');
+        } elseif ($isOptions) {
+            // MED-06 Fix: If origin is not allowed for an OPTIONS request, return 403 instead of a misleading 204
+            $response->status(403);
+            $response->setContent('CORS Origin Not Allowed');
         }
 
         return $response;

@@ -8,53 +8,53 @@ namespace App\Validators;
  */
 class PasswordPolicy
 {
-    // تنظیمات پیش‌فرض
-    private static $minLength = 8;
-    private static $maxLength = 128;
-    private static $requireUppercase = true;
-    private static $requireLowercase = true;
-    private static $requireNumbers = true;
-    private static $requireSpecialChars = false;
-    private static $preventCommonPasswords = true;
-
     /**
      * اعتبارسنجی کامل رمز عبور
      */
     public static function validate($password)
     {
         $errors = [];
+        
+        // MED-09 Fix: Use config() instead of mutable static properties for shared-state environments
+        $minLength = (int)config('auth.password.min_length', 8);
+        $maxLength = (int)config('auth.password.max_length', 128);
+        $requireUppercase = (bool)config('auth.password.require_uppercase', true);
+        $requireLowercase = (bool)config('auth.password.require_lowercase', true);
+        $requireNumbers = (bool)config('auth.password.require_numbers', true);
+        $requireSpecialChars = (bool)config('auth.password.require_special_chars', true); // HIGH-09: Default to true
+        $preventCommonPasswords = (bool)config('auth.password.prevent_common', true);
 
         // طول
-        if (strlen($password) < self::$minLength) {
-            $errors[] = "رمز عبور باید حداقل " . self::$minLength . " کاراکتر باشد.";
+        if (strlen($password) < $minLength) {
+            $errors[] = "رمز عبور باید حداقل " . $minLength . " کاراکتر باشد.";
         }
 
-        if (strlen($password) > self::$maxLength) {
-            $errors[] = "رمز عبور نباید بیشتر از " . self::$maxLength . " کاراکتر باشد.";
+        if (strlen($password) > $maxLength) {
+            $errors[] = "رمز عبور نباید بیشتر از " . $maxLength . " کاراکتر باشد.";
         }
 
         // حروف بزرگ
-        if (self::$requireUppercase && !preg_match('/[A-Z]/', $password)) {
+        if ($requireUppercase && !preg_match('/[A-Z]/', $password)) {
             $errors[] = "رمز عبور باید حداقل یک حرف بزرگ انگلیسی داشته باشد.";
         }
 
         // حروف کوچک
-        if (self::$requireLowercase && !preg_match('/[a-z]/', $password)) {
+        if ($requireLowercase && !preg_match('/[a-z]/', $password)) {
             $errors[] = "رمز عبور باید حداقل یک حرف کوچک انگلیسی داشته باشد.";
         }
 
         // اعداد
-        if (self::$requireNumbers && !preg_match('/[0-9]/', $password)) {
+        if ($requireNumbers && !preg_match('/[0-9]/', $password)) {
             $errors[] = "رمز عبور باید حداقل یک عدد داشته باشد.";
         }
 
         // کاراکترهای خاص
-        if (self::$requireSpecialChars && !preg_match('/[!@#$%^&*()_+\-=\[\]{};:\'",.<>?\/\\|`~]/', $password)) {
+        if ($requireSpecialChars && !preg_match('/[!@#$%^&*()_+\-=\[\]{};:\'",.<>?\/\\|`~]/', $password)) {
             $errors[] = "رمز عبور باید حداقل یک کاراکتر خاص داشته باشد.";
         }
 
         // رمزهای رایج
-        if (self::$preventCommonPasswords && self::isCommonPassword($password)) {
+        if ($preventCommonPasswords && self::isCommonPassword($password)) {
             $errors[] = "این رمز عبور بسیار ضعیف و رایج است. لطفاً رمز قوی‌تری انتخاب کنید.";
         }
 
@@ -121,18 +121,6 @@ class PasswordPolicy
         return ['label' => 'عالی', 'color' => 'success'];
     }
 
-    /**
-     * تنظیم سیاست
-     */
-    public static function setPolicy(array $policy)
-    {
-        if (isset($policy['min_length'])) self::$minLength = $policy['min_length'];
-        if (isset($policy['max_length'])) self::$maxLength = $policy['max_length'];
-        if (isset($policy['require_uppercase'])) self::$requireUppercase = $policy['require_uppercase'];
-        if (isset($policy['require_lowercase'])) self::$requireLowercase = $policy['require_lowercase'];
-        if (isset($policy['require_numbers'])) self::$requireNumbers = $policy['require_numbers'];
-        if (isset($policy['require_special_chars'])) self::$requireSpecialChars = $policy['require_special_chars'];
-    }
 
     /**
      * بررسی شباهت با اطلاعات کاربر

@@ -157,8 +157,8 @@ class RateLimitMiddleware
         }
         
         $ip = function_exists('get_client_ip') ? get_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-        $ua = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
         
-        return 'rl_ip_' . md5($ip) . '_ua_' . md5($ua) . '_' . md5($cleanUri);
+        // HIGH-07 Fix: Only use IP for anonymous users. User-Agent is too easy to spoof and bypass limits.
+        return 'rl_ip_' . md5($ip) . '_' . md5($cleanUri);
     }
 }

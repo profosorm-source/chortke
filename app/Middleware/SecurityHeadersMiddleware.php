@@ -72,7 +72,7 @@ class SecurityHeadersMiddleware
     {
         // Synchronized whitelisted sources from previous hardcoded index configuration.
         $scripts = "'self' 'nonce-{$nonce}' https://cdn.jsdelivr.net https://code.jquery.com https://www.google.com https://www.gstatic.com";
-        $styles = "'self' 'unsafe-inline' 'nonce-{$nonce}' https://fonts.googleapis.com https://cdn.jsdelivr.net";
+        $styles = "'self' 'nonce-{$nonce}' https://fonts.googleapis.com https://cdn.jsdelivr.net";
         
         return implode('; ', [
             "default-src 'self'",
@@ -90,7 +90,6 @@ class SecurityHeadersMiddleware
     {
         $nonce = base64_encode(random_bytes(16));
         $this->session->set('csp_nonce', $nonce);
-        $_SESSION['csp_nonce'] = $nonce;
         
         // Ensure backward compatibility with legacy layout defines if needed.
         if (!defined('CSP_NONCE')) {
