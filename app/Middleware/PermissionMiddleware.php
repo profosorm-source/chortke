@@ -140,13 +140,9 @@ class PermissionMiddleware extends BaseMiddleware
      */
     public static function check(string $permission): bool
     {
-        // HIGH-07 Fix: Cache the instance to prevent multiple DI resolutions and resource leakage
-        // (Redis/DB connections) during a single request.
-        static $instance = null;
-        if ($instance === null) {
-            $instance = app(self::class);
-        }
-        return $instance->hasPermission($permission);
+        // HIGH-05 Fix: Remove static instance caching to prevent privilege escalation in persistent environments
+        // This ensures the permission check is fresh and request-scoped.
+        return app(self::class)->hasPermission($permission);
     }
     
     /**

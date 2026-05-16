@@ -13,7 +13,7 @@ use Closure;
 /**
  * CSRFMiddleware — محافظت در برابر حملات CSRF
  */
-class CSRFMiddleware
+class CSRFMiddleware extends BaseMiddleware
 {
     private LoggerInterface $logger;
     private CSRF $csrf;
@@ -26,6 +26,12 @@ class CSRFMiddleware
 
     public function handle(Request $request, Closure $next): Response
     {
+        // HIGH-03 Fix: CSRF Exemption for API and Webhook routes
+        $uri = $request->uri();
+        if (str_starts_with($uri, '/api/') || str_starts_with($uri, '/webhooks/')) {
+            return $this->toResponse($next($request));
+        }
+
         // فقط برای متدهای تغییر دهنده وضعیت
         if (in_array($request->method(), ['POST', 'PUT', 'PATCH', 'DELETE'])) {
             try {

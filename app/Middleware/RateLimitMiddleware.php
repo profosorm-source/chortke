@@ -15,7 +15,7 @@ use App\Constants\SessionKeys;
 /**
  * RateLimitMiddleware — محدودسازی نرخ درخواست‌ها
  */
-class RateLimitMiddleware
+class RateLimitMiddleware extends BaseMiddleware
 {
     private RateLimiter $rateLimiter;
     private LoggerInterface $logger;
@@ -27,6 +27,7 @@ class RateLimitMiddleware
      * تنظیمات پیش‌فرض برای مسیرهای خاص
      */
     private const ROUTE_LIMITS = [
+        '/login'                => [5,  60],
         '/register'             => [3,  30],
         '/forgot-password'      => [3,  60],
         '/reset-password'       => [3,  60],
@@ -100,14 +101,7 @@ class RateLimitMiddleware
             }
 
             $calledNext = true;
-            $response = $next($request);
-
-            // اطمینان از بازگشت آبجکت Response
-            if (!$response instanceof Response) {
-                $content = (string)$response;
-                $response = new Response();
-                $response->setContent($content);
-            }
+            $response = $this->toResponse($next($request));
 
             $remaining = max(0, $maxAttempts - $this->rateLimiter->hits($key));
             

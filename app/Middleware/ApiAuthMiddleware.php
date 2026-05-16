@@ -13,7 +13,7 @@ use Closure;
 /**
  * ApiAuthMiddleware — احراز هویت و کنترل دسترسی API
  */
-class ApiAuthMiddleware
+class ApiAuthMiddleware extends BaseMiddleware
 {
     private Database $db;
     private RateLimiter $rateLimiter;
