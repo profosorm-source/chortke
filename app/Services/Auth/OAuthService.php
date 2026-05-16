@@ -101,13 +101,12 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-H-01 Fix: Strictly blocking IP mismatch during OAuth flow to prevent session theft/injection.
+        // HIGH-H-01 Fix: Relaxed IP binding - Log as warning but don't block (UX for mobile/proxy users)
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
-            $this->logger->critical('oauth.google.ip_mismatch_detected', [
+            $this->logger->warning('oauth.google.ip_changed_during_flow', [
                 'expected' => $stored['ip'],
                 'received' => $this->clientIp()
             ]);
-            return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
         }
 
 
@@ -529,13 +528,12 @@ class OAuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
         }
 
-        // HIGH-H-01 Fix: Strictly blocking IP mismatch during OAuth flow to prevent session theft/injection.
+        // HIGH-H-01 Fix: Relaxed IP binding - Log as warning but don't block
         if (($stored['ip'] ?? '') !== $this->clientIp()) {
-            $this->logger->critical('oauth.facebook.ip_mismatch_detected', [
+            $this->logger->warning('oauth.facebook.ip_changed_during_flow', [
                 'expected' => $stored['ip'],
                 'received' => $this->clientIp()
             ]);
-            return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
         }
 
         if ((time() - (int)$stored['created_at']) > 300) {

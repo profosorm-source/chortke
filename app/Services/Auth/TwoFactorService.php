@@ -54,6 +54,7 @@ class TwoFactorService extends \App\Services\BaseService
         // 🔐 Cryptographic Hardening: Using standard secure random_bytes generation
         $bytes = random_bytes(32);
         for ($i = 0; $i < 32; $i++) {
+            // Note: 256 % 32 === 0, so no modulo bias exists here for a 32-char set
             $secret .= $chars[ord($bytes[$i]) % 32];
         }
         return $secret;
@@ -74,7 +75,7 @@ class TwoFactorService extends \App\Services\BaseService
              . "?secret=" . rawurlencode($plainSecret) . "&issuer=" . rawurlencode($appName);
     }
 
-    public function verifyCode(string $secret, string $code, ?int $userId = null): bool
+    public function verifyTOTPCode(string $secret, string $code, ?int $userId = null): bool
     {
         $secret = $this->decryptSecret($secret);
         $timeSlice = (int)floor(time() / 30);
@@ -106,6 +107,16 @@ class TwoFactorService extends \App\Services\BaseService
             }
         }
 
+        return false;
+    }
+
+    public function verifyCode(string $secret, string $code, ?int $userId = null): bool
+    {
+        // HIGH-H-04 Fix: Combined verification for TOTP and Recovery Codes (Standard login flow)
+        if ($this->verifyTOTPCode($secret, $code, $userId)) {
+            return true;
+        }
+
         if ($userId) {
             return $this->verifyRecoveryCode($userId, $code);
         }
@@ -134,7 +145,8 @@ class TwoFactorService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'احراز هویت دو مرحله‌ای قبلاً فعال شده است.'];
         }
 
-        if (!$this->verifyCode($user->two_factor_secret, $code, $userId)) {
+        // HIGH-H-04 Fix: When enabling 2FA, ONLY accept TOTP codes (Recovery codes are not yet issued)
+        if (!$this->verifyTOTPCode($user->two_factor_secret, $code, $userId)) {
             return ['success' => false, 'message' => 'کد وارد شده نامعتبر است.'];
         }
 

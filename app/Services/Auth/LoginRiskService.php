@@ -137,43 +137,44 @@ class LoginRiskService extends \App\Services\BaseService
     public function recordFailure(string $context = 'login', ?string $ip = null, ?string $identifier = null): void
     {
         $resolvedIp = $this->resolveIp($ip);
-        $key = $this->buildKey($context, $resolvedIp, $identifier);
-
-        $data = $this->cache->get($key);
-        if (!$data || !is_array($data)) {
-            $data = ['count' => 0, 'first_at' => time()];
-        }
-
         $windowSeconds = $this->getWindowSeconds();
+        $windowMinutes = (int)ceil($windowSeconds / 60);
 
-        // اگر بیشتر از بازه زمانی مجاز گذشته، ریست کن
-        if ((time() - ($data['first_at'] ?? 0)) > $windowSeconds) {
-            $data = ['count' => 0, 'first_at' => time()];
+        // 🛡️ MEDIUM-M-07 Fix: Record failure for both IP and Identifier separately
+        $keys = [$this->buildKey($context, $resolvedIp, null)];
+        if ($identifier) {
+            $keys[] = $this->buildKey($context, 'all_ips', $identifier);
         }
 
-        $data['count']++;
-        $data['last_at'] = time();
-        
-        // ذخیره در کش متناسب با بازه زمانی پیکربندی‌شده
-        $windowMinutes = (int)ceil($windowSeconds / 60);
-        $this->cache->put($key, $data, $windowMinutes); 
+        foreach ($keys as $key) {
+            $data = $this->cache->get($key);
+            if (!$data || !is_array($data) || (time() - ($data['first_at'] ?? 0)) > $windowSeconds) {
+                $data = ['count' => 0, 'first_at' => time()];
+            }
+
+            $data['count']++;
+            $data['last_at'] = time();
+            $this->cache->put($key, $data, $windowMinutes);
+        }
+
+        $currentCount = $this->getFailCount($context, $resolvedIp, $identifier);
         
         // لاگ تلاش ناموفق
-        $logLevel = $data['count'] >= 4 ? 'warning' : 'info';
+        $logLevel = $currentCount >= 4 ? 'warning' : 'info';
         $this->logger->{$logLevel}('login.failure.recorded', [
             'context' => $context,
             'ip' => $resolvedIp,
-            'fail_count' => $data['count'],
-            'first_at' => date('Y-m-d H:i:s', $data['first_at'])
+            'identifier' => $identifier,
+            'max_fail_count' => $currentCount
         ]);
         
         // هشدار برای تلاش‌های مشکوک
-        if ($data['count'] >= 5) {
+        if ($currentCount >= 5) {
             $this->logger->critical('login.suspicious.activity', [
                 'context' => $context,
                 'ip' => $resolvedIp,
-                'fail_count' => $data['count'],
-                'duration_minutes' => round((time() - $data['first_at']) / 60, 2)
+                'identifier' => $identifier,
+                'fail_count' => $currentCount
             ]);
         }
     }
@@ -184,18 +185,11 @@ class LoginRiskService extends \App\Services\BaseService
     public function clearFailures(string $context = 'login', ?string $ip = null, ?string $identifier = null): void
     {
         $resolvedIp = $this->resolveIp($ip);
-        $key = $this->buildKey($context, $resolvedIp, $identifier);
+        $this->cache->forget($this->buildKey($context, $resolvedIp, null));
         
-        $data = $this->cache->get($key);
-        if ($data && isset($data['count'])) {
-            $this->logger->info('login.failures.cleared', [
-                'context' => $context,
-                'ip' => $resolvedIp,
-                'previous_fail_count' => $data['count']
-            ]);
+        if ($identifier) {
+            $this->cache->forget($this->buildKey($context, 'all_ips', $identifier));
         }
-        
-        $this->cache->forget($key);
     }
 
     /**
@@ -204,35 +198,45 @@ class LoginRiskService extends \App\Services\BaseService
     public function getFailCount(string $context = 'login', ?string $ip = null, ?string $identifier = null): int
     {
         $resolvedIp = $this->resolveIp($ip);
-        $key = $this->buildKey($context, $resolvedIp, $identifier);
-        $data = $this->cache->get($key);
-
-        if (!$data || !is_array($data)) {
-            return 0;
-        }
-
         $windowSeconds = $this->getWindowSeconds();
 
-        // اگر بیشتر از بازه زمانی مجاز گذشته، صفر حساب کن
-        if ((time() - ($data['first_at'] ?? 0)) > $windowSeconds) {
-            return 0;
+        // 🛡️ MEDIUM-M-07 Fix: Aggregating risk from both IP and Identifier
+        $ipKey = $this->buildKey($context, $resolvedIp, null);
+        $ipData = $this->cache->get($ipKey);
+        $ipCount = $this->extractValidCount($ipData, $windowSeconds);
+
+        $idCount = 0;
+        if ($identifier) {
+            $idKey = $this->buildKey($context, 'all_ips', $identifier);
+            $idData = $this->cache->get($idKey);
+            $idCount = $this->extractValidCount($idData, $windowSeconds);
         }
 
+        return max($ipCount, $idCount);
+    }
+
+    private function extractValidCount($data, int $windowSeconds): int
+    {
+        if (!$data || !is_array($data)) return 0;
+        if ((time() - ($data['first_at'] ?? 0)) > $windowSeconds) return 0;
         return (int)($data['count'] ?? 0);
     }
 
     private function buildKey(string $context, string $ip, ?string $identifier = null): string
     {
-        // MEDIUM-M6 Fix: Combine IP and Account Identifier for better brute-force detection
         $salt = (string)config('app.key');
-        $ipHash = hash_hmac('sha256', $ip, $salt);
         
         if ($identifier) {
             $idHash = hash_hmac('sha256', strtolower(trim($identifier)), $salt);
+            if ($ip === 'all_ips') {
+                return "login_risk_{$context}_id_{$idHash}";
+            }
+            $ipHash = hash_hmac('sha256', $ip, $salt);
             return "login_risk_{$context}_ip_{$ipHash}_id_{$idHash}";
         }
         
-        return "login_risk_{$context}_{$ipHash}";
+        $ipHash = hash_hmac('sha256', $ip, $salt);
+        return "login_risk_{$context}_ip_{$ipHash}";
     }
 
     /**

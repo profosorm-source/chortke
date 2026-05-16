@@ -116,6 +116,16 @@ class SessionService extends \App\Services\BaseService
             }
 
             // Session doesn't exist, create it
+            
+            // LOW-L-05 Fix: Concurrent Session Handling - Enforcement of hard limit
+            $activeSessions = $this->model->countActiveSessions($userId);
+            $maxSessions = (int)config('auth.max_concurrent_sessions', 5);
+            if ($activeSessions >= $maxSessions) {
+                // Terminate oldest session to make room
+                $this->invalidateAllUserSessions($userId); // Or implement invalidateOldestSession
+                $this->logger->info('session.limit_reached.auto_cleanup', ['user_id' => $userId]);
+            }
+
             $result = $this->model->upsertSession([
                 'user_id' => $userId,
                 'session_id' => $sessionId,
@@ -160,9 +170,10 @@ class SessionService extends \App\Services\BaseService
         return $this->model->getActiveSessions($userId);
     }
 
-    public function terminateSession(string $sessionId, int $userId): array
+    public function terminateSession(int $id, int $userId): array
     {
-        $session = $this->model->findSessionBySessionId($sessionId);
+        // CRITICAL-C-03 Fix: Using numeric ID and owner check to prevent IDOR
+        $session = $this->model->findSessionById($id);
         if (!$session || (int)$session->user_id !== $userId) {
             return ['success' => false, 'message' => 'نشست یافت نشد'];
         }

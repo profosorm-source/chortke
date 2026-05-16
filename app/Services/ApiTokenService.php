@@ -15,14 +15,21 @@ class ApiTokenService extends \App\Services\BaseService
     private ApiToken $apiTokenModel;
     private User $userModel;
     private RateLimiter $rateLimiter;
+    private \App\Services\Auth\TwoFactorService $twoFactorService;
     private static string $dummyHash = '';
 
-    public function __construct(LoggerInterface $logger, ApiToken $apiTokenModel, User $userModel, RateLimiter $rateLimiter)
-    {
+    public function __construct(
+        LoggerInterface $logger, 
+        ApiToken $apiTokenModel, 
+        User $userModel, 
+        RateLimiter $rateLimiter,
+        \App\Services\Auth\TwoFactorService $twoFactorService
+    ) {
         parent::__construct($logger);
         $this->apiTokenModel = $apiTokenModel;
         $this->userModel = $userModel;
         $this->rateLimiter = $rateLimiter;
+        $this->twoFactorService = $twoFactorService;
     }
 
     public function getTokensForAdmin(
@@ -179,7 +186,7 @@ class ApiTokenService extends \App\Services\BaseService
         return self::$dummyHash;
     }
 
-    public function issueToken(string $email, string $password, string $name, string $scopes): array
+    public function issueToken(string $email, string $password, string $name, string $scopes, string $otp = ''): array
     {
         // MED-11: Rate limiting check (10 attempts per 60 seconds per IP)
         $ipKey = 'token_issue:' . ($this->clientIp() ?? 'unknown');
@@ -212,6 +219,26 @@ class ApiTokenService extends \App\Services\BaseService
                 'status' => 401,
                 'code' => 'INVALID_CREDENTIALS',
             ];
+        }
+
+        // HIGH-H-05 Fix: Enforce 2FA check for API token issuance
+        if (!empty($user->two_factor_enabled)) {
+            if (empty($otp)) {
+                return [
+                    'success' => false,
+                    'message' => 'کد 2FA الزامی است',
+                    'code' => 'REQUIRES_2FA',
+                    'status' => 403
+                ];
+            }
+            if (!$this->twoFactorService->verifyTOTPCode($user->two_factor_secret, $otp, (int)$user->id)) {
+                return [
+                    'success' => false,
+                    'message' => 'کد 2FA نامعتبر است',
+                    'code' => 'INVALID_2FA',
+                    'status' => 403
+                ];
+            }
         }
 
         if (in_array($user->status, ['banned', 'suspended'], true)) {

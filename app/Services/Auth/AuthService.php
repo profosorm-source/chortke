@@ -62,7 +62,7 @@ class AuthService extends \App\Services\BaseService
 
     public function login(string $identifier, string $password, bool $remember = false): array
     {
-        $rateLimitCheck = $this->rateLimiter->checkLoginAttempt($identifier);
+        $rateLimitCheck = $this->rateLimiter->checkLoginAttempt('login:' . $identifier);
         
         // H16 Fix: الگوی امن Fail-Closed؛ ممانعت از دور زدن نرخ درخواست در لاگین
         if (!is_array($rateLimitCheck) || !isset($rateLimitCheck['allowed']) || $rateLimitCheck['allowed'] !== true) {
@@ -136,12 +136,7 @@ class AuthService extends \App\Services\BaseService
         return [
             'success'      => true,
             'message'      => 'ورود موفقیت‌آمیز بود.',
-            'user'         => [
-                'id' => (int)$user->id,
-                'username' => $user->username ?? '',
-                'role' => $user->role,
-                'email' => $user->email ?? null,
-            ],
+            'user'         => $user,
             'requires_2fa' => $requires2FA,
         ];
     }
@@ -176,12 +171,7 @@ class AuthService extends \App\Services\BaseService
 
         return [
             'success'      => true,
-            'user'         => [
-                'id' => (int)$user->id,
-                'username' => $user->username ?? '',
-                'role' => $user->role,
-                'email' => $user->email ?? null,
-            ],
+            'user'         => $user,
             'requires_2fa' => $requires2FA,
         ];
     }
@@ -244,10 +234,11 @@ class AuthService extends \App\Services\BaseService
             // HIGH-06 & MEDIUM-07 Fix: Invalidate remember_token and sessions in DB
             $this->userModel->update((int)$userId, ['remember_token' => null]);
             
-            // Deactivate specific session or all? Usually logout only kills current, 
-            // but for security we can invalidate all or just current. 
-            // The requirement says "نشست در DB deactivate نمیشود"
-            $this->sessionService->terminateSession($this->session->getId(), (int)$userId);
+            // Deactivate current session in DB
+            $dbSession = $this->securityModel->findSessionBySessionId($this->session->getId());
+            if ($dbSession) {
+                $this->sessionService->terminateSession((int)$dbSession->id, (int)$userId);
+            }
         }
 
         if (isset($_COOKIE['remember_token'])) {
@@ -295,12 +286,7 @@ class AuthService extends \App\Services\BaseService
         return [
             'success' => true,
             'message' => 'احراز هویت دو مرحله‌ای تأیید شد.',
-            'user' => [
-                'id' => (int)$user->id,
-                'username' => $user->username ?? '',
-                'role' => $user->role,
-                'email' => $user->email ?? null,
-            ],
+            'user' => $user,
         ];
     }
 
@@ -328,7 +314,11 @@ class AuthService extends \App\Services\BaseService
         }
 
         // H23 Fix: اعمال سیاست پیچیدگی رمز عبور (Password Policy)
-        $policyErrors = \App\Validators\PasswordPolicy::validate($data['password'] ?? '');
+        $policyErrors = \App\Validators\PasswordPolicy::validate($data['password'] ?? '', [
+            'username' => $data['username'] ?? '',
+            'email' => $data['email'] ?? '',
+            'full_name' => $data['full_name'] ?? '',
+        ]);
         if (!empty($policyErrors)) {
             $errors = array_merge($errors, $policyErrors);
         }
