@@ -141,7 +141,7 @@ class OAuthService extends \App\Services\BaseService
         $expectedIp = $stored['ip'] ?? '';
         $currentIp = $this->clientIp();
         
-        if ($expectedIp !== $currentIp) {
+        if (!$this->matchIpSubnet($expectedIp, $currentIp)) {
             $this->logger->critical('oauth.google.ip_mismatch_replay_attack_detected', [
                 'expected_ip' => $expectedIp,
                 'current_ip' => $currentIp,
@@ -480,7 +480,7 @@ class OAuthService extends \App\Services\BaseService
         $expectedIp = $stored['ip'] ?? '';
         $currentIp = $this->clientIp();
         
-        if ($expectedIp !== $currentIp) {
+        if (!$this->matchIpSubnet($expectedIp, $currentIp)) {
             $this->logger->critical('oauth.facebook.ip_mismatch_replay_attack_detected', [
                 'expected_ip' => $expectedIp,
                 'current_ip' => $currentIp,
@@ -723,5 +723,30 @@ class OAuthService extends \App\Services\BaseService
             ->where('provider', '=', $provider)
             ->delete();
         return ['success' => $ok, 'message' => $ok ? 'اتصال حساب با موفقیت جدا شد.' : 'خطا در جدا کردن اتصال حساب.'];
+    }
+
+    /**
+     * Compare two IPs by subnet (/24 for IPv4 and /64 for IPv6) to allow small network changes
+     */
+    private function matchIpSubnet(string $ip1, string $ip2): bool
+    {
+        if ($ip1 === $ip2) {
+            return true;
+        }
+
+        $normalize = function(string $ip): string {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+                $packed = inet_pton($ip);
+                if ($packed === false) return $ip;
+                return inet_ntop(substr($packed, 0, 8) . str_repeat("\x00", 8));
+            }
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $pos = strrpos($ip, '.');
+                return $pos !== false ? substr($ip, 0, $pos) : $ip;
+            }
+            return $ip;
+        };
+
+        return $normalize($ip1) === $normalize($ip2);
     }
 }

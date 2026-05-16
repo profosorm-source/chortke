@@ -146,7 +146,26 @@ class LoginRiskService extends \App\Services\BaseService
             $keys[] = $this->buildKey($context, 'all_ips', $identifier);
         }
 
+        $redis = app(\Core\Redis::class);
+        $redisAvailable = $redis && $redis->isAvailable();
+
         foreach ($keys as $key) {
+            if ($redisAvailable) {
+                try {
+                    $raw = $redis->get($key);
+                    $data = $raw ? json_decode($raw, true) : null;
+                    if (!$data || !is_array($data) || (time() - ($data['first_at'] ?? 0)) > $windowSeconds) {
+                        $data = ['count' => 0, 'first_at' => time()];
+                    }
+                    $data['count']++;
+                    $data['last_at'] = time();
+                    $redis->set($key, json_encode($data), $windowSeconds);
+                    continue;
+                } catch (\Throwable $e) {
+                    $this->logger->warning('login_risk.redis_write_failed', ['error' => $e->getMessage()]);
+                }
+            }
+
             $data = $this->cache->get($key);
             if (!$data || !is_array($data) || (time() - ($data['first_at'] ?? 0)) > $windowSeconds) {
                 $data = ['count' => 0, 'first_at' => time()];
@@ -185,10 +204,24 @@ class LoginRiskService extends \App\Services\BaseService
     public function clearFailures(string $context = 'login', ?string $ip = null, ?string $identifier = null): void
     {
         $resolvedIp = $this->resolveIp($ip);
-        $this->cache->forget($this->buildKey($context, $resolvedIp, null));
-        
-        if ($identifier) {
-            $this->cache->forget($this->buildKey($context, 'all_ips', $identifier));
+        $ipKey = $this->buildKey($context, $resolvedIp, null);
+        $idKey = $identifier ? $this->buildKey($context, 'all_ips', $identifier) : null;
+
+        $redis = app(\Core\Redis::class);
+        if ($redis && $redis->isAvailable()) {
+            try {
+                $redis->delete($ipKey);
+                if ($idKey) {
+                    $redis->delete($idKey);
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('login_risk.redis_clear_failed', ['error' => $e->getMessage()]);
+            }
+        }
+
+        $this->cache->forget($ipKey);
+        if ($idKey) {
+            $this->cache->forget($idKey);
         }
     }
 
@@ -200,16 +233,43 @@ class LoginRiskService extends \App\Services\BaseService
         $resolvedIp = $this->resolveIp($ip);
         $windowSeconds = $this->getWindowSeconds();
 
+        $redis = app(\Core\Redis::class);
+        $redisAvailable = $redis && $redis->isAvailable();
+
         // 🛡️ MEDIUM-M-07 Fix: Aggregating risk from both IP and Identifier
         $ipKey = $this->buildKey($context, $resolvedIp, null);
-        $ipData = $this->cache->get($ipKey);
-        $ipCount = $this->extractValidCount($ipData, $windowSeconds);
+        $ipCount = 0;
+        
+        if ($redisAvailable) {
+            try {
+                $raw = $redis->get($ipKey);
+                $ipData = $raw ? json_decode($raw, true) : null;
+                $ipCount = $this->extractValidCount($ipData, $windowSeconds);
+            } catch (\Throwable $e) {
+                $redisAvailable = false;
+            }
+        }
+        if (!$redisAvailable) {
+            $ipData = $this->cache->get($ipKey);
+            $ipCount = $this->extractValidCount($ipData, $windowSeconds);
+        }
 
         $idCount = 0;
         if ($identifier) {
             $idKey = $this->buildKey($context, 'all_ips', $identifier);
-            $idData = $this->cache->get($idKey);
-            $idCount = $this->extractValidCount($idData, $windowSeconds);
+            if ($redisAvailable) {
+                try {
+                    $raw = $redis->get($idKey);
+                    $idData = $raw ? json_decode($raw, true) : null;
+                    $idCount = $this->extractValidCount($idData, $windowSeconds);
+                } catch (\Throwable $e) {
+                    $redisAvailable = false;
+                }
+            }
+            if (!$redisAvailable) {
+                $idData = $this->cache->get($idKey);
+                $idCount = $this->extractValidCount($idData, $windowSeconds);
+            }
         }
 
         // MEDIUM-M-01 Fix: Use max instead of sum to avoid double-counting the same attempts

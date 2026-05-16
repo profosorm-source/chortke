@@ -297,8 +297,6 @@ class TwoFactorService extends \App\Services\BaseService
                     $match = true;
                 } elseif (password_verify($code, $record->code)) {
                     $match = true;
-                } elseif (hash_equals(hash('sha256', $code), $record->code)) {
-                    $match = true;
                 }
 
                 if ($match && !$found) {
