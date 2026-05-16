@@ -197,14 +197,18 @@ $result = $this->profileService->updateProfile($userId, [
             redirect('profile');
         }
         
-        if (strlen($newPassword) < 8) {
-            $this->session->setFlash('error', 'رمز عبور جدید باید حداقل 8 کاراکتر باشد');
+        // MED-05 Fix: Enforce complex password policy (Uppercase, Lowercase, Digits, Symbols)
+        $complexityPattern = '/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/';
+        if (!preg_match($complexityPattern, $newPassword)) {
+            $this->session->setFlash('error', 'رمز عبور باید حداقل ۸ کاراکتر و شامل حروف بزرگ، حروف کوچک، عدد و نماد باشد.');
             redirect('profile');
+            return;
         }
         
         if ($newPassword !== $confirmPassword) {
             $this->session->setFlash('error', 'رمز عبور جدید و تکرار آن یکسان نیستند');
             redirect('profile');
+            return;
         }
         
         $user = $this->userService->findById($userId);

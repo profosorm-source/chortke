@@ -152,8 +152,10 @@ class TwoFactorController extends BaseUserController
         }
 
         $user = $this->userService->find((int)$userId);
-        if (!$user || empty($user->two_factor_secret)) {
-            $this->response->json(['success' => false, 'message' => 'خطا در احراز هویت.']);
+        if (!$user || empty($user->two_factor_secret) || !$user->two_factor_enabled) {
+            // CRIT-05 Fix: Ensure 2FA is actually enabled and secret exists. Atomic cleanup on failure.
+            $this->session->destroy();
+            $this->response->json(['success' => false, 'message' => 'خطا در احراز هویت.'], 401);
             return;
         }
 

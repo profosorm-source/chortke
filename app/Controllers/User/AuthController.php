@@ -272,9 +272,14 @@ class AuthController extends BaseController
         // HIGH-H-09 Fix: Rate limiting on email verification code to prevent brute-force
         $ip = $this->request->ip();
         $rateLimitKey = "verify_email:" . hash('sha256', "{$email}:{$ip}");
-        if (!$this->authService->checkRateLimit('verify_email', $rateLimitKey)) {
-             $this->session->setFlash('error', 'تعداد تلاش‌های ناموفق بیش از حد مجاز است.');
-             $this->response->redirect(url('email/verify-code'));
+        
+        // HIGH-08 Fix: Using attempt() to increment and check, with session destruction on excessive failures
+        $rateLimitId = "verify_email_attempts:" . hash('sha256', $email);
+        if (!$this->rateLimiter->attempt($rateLimitId, 5, 15)) {
+             $this->logger->critical('auth.email_verification.bruteforce_detected', ['email' => $email, 'ip' => $ip]);
+             $this->session->destroy();
+             $this->session->setFlash('error', 'تعداد تلاش‌های ناموفق بیش از حد مجاز است. نشست شما برای امنیت بیشتر بسته شد.');
+             $this->response->redirect(url('login'));
              return;
         }
 
@@ -465,7 +470,19 @@ class AuthController extends BaseController
             return;
         }
 
-        $this->authService->logout();
+        // HIGH-01 Fix: Verify session owner and support logout_all
+        $userId = (int)$this->session->get(SessionKeys::USER_ID, 0);
+        if ($userId <= 0) {
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        if ($this->request->post('logout_all') === '1') {
+            $this->authService->logoutAll($userId);
+        } else {
+            $this->authService->logout();
+        }
+
         $this->session->setFlash('success', 'با موفقیت خارج شدید.');
         $this->response->redirect(url('login'));
     }
