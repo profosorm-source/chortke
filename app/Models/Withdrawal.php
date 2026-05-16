@@ -93,25 +93,25 @@ class Withdrawal extends Model
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
-    /**
-     * بررسی وجود درخواست در انتظار
-     */
-    public function hasPendingWithdrawal(int $userId): bool
+    public function hasPendingWithdrawal(int $userId, bool $forUpdate = false): bool
     {
-        $sql = "SELECT COUNT(*) as count
+        $sql = "SELECT id
                 FROM " . static::$table . "
-                WHERE user_id = :user_id AND status IN ('pending', 'processing')";
+                WHERE user_id = :user_id AND status IN ('pending', 'processing') LIMIT 1";
+        if ($forUpdate) {
+            $sql .= " FOR UPDATE";
+        }
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute(['user_id' => $userId]);
 
         $result = $stmt->fetch(\PDO::FETCH_OBJ);
-        return ((int)($result->count ?? 0)) > 0;
+        return !empty($result);
     }
 
-    public function hasPending(int $userId): bool
+    public function hasPending(int $userId, bool $forUpdate = false): bool
     {
-        return $this->hasPendingWithdrawal($userId);
+        return $this->hasPendingWithdrawal($userId, $forUpdate);
     }
 
     /**
