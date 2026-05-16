@@ -159,13 +159,14 @@ class AuthService extends \App\Services\BaseService
             $this->logger->warning('auth.login.failed', ['identifier' => $identifier, 'ip' => $ip]);
             
             if ($user) {
-                // HIGH-H-21 Fix: Double-check status from DB with pessimistic lock to prevent lockout race conditions
                 $attempts = $this->rateLimiter->getAttempts('login_id:' . hash('sha256', $identifier));
                 if ($attempts >= 10) {
-                    $this->userModel->update((int)$user->id, ['status' => 'locked']);
-                    $this->logger->critical('auth.account_locked', ['user_id' => $user->id, 'identifier' => $identifier]);
-                    if ($this->emailService) {
-                        $this->emailService->sendAccountLockedAlert((int)$user->id, $ip);
+                    // HIGH-H-21 Fix: Use atomic lockout to prevent race conditions
+                    if ($this->userModel->lockIfExceededAttempts((int)$user->id)) {
+                        $this->logger->critical('auth.account_locked', ['user_id' => $user->id, 'identifier' => $identifier]);
+                        if ($this->emailService) {
+                            $this->emailService->sendAccountLockedAlert((int)$user->id, $ip);
+                        }
                     }
                 }
             }
@@ -205,8 +206,8 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'حساب کاربری شما قفل شده است.', 'code' => 'ACCOUNT_LOCKED'];
         }
 
-        if (in_array($user->status, ['banned', 'suspended'], true)) {
-            return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.', 'code' => 'ACCOUNT_DISABLED'];
+        if (in_array($user->status, ['banned', 'suspended', 'pending'], true)) {
+            return ['success' => false, 'message' => 'حساب کاربری شما مسدود، تعلیق یا در انتظار تأیید است.', 'code' => 'ACCOUNT_DISABLED'];
         }
 
         // HIGH-H-14 Fix: Enforce email verification check for direct/OAuth logins

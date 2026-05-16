@@ -199,6 +199,17 @@ class TwoFactorService extends \App\Services\BaseService
         ]);
         $this->securityModel->deleteTwoFactorCodes($userId);
 
+        // HIGH-H-01 Fix: Record the action in AuditTrail
+        try {
+            $auditTrail = app(\App\Services\AuditTrail::class);
+            $auditTrail->record('2fa.disabled', $userId, [
+                'ip' => function_exists('get_client_ip') ? get_client_ip() : 'unknown',
+                'user_agent' => function_exists('get_user_agent') ? get_user_agent() : '',
+            ], $userId);
+        } catch (\Throwable $e) {
+            $this->logger->error('2fa.disable.audit_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+        }
+
         return ['success' => true, 'message' => 'احراز هویت دو مرحله‌ای غیرفعال شد.'];
     }
 

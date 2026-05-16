@@ -212,7 +212,8 @@ class LoginRiskService extends \App\Services\BaseService
             $idCount = $this->extractValidCount($idData, $windowSeconds);
         }
 
-        return $ipCount + $idCount;
+        // MEDIUM-M-01 Fix: Use max instead of sum to avoid double-counting the same attempts
+        return max($ipCount, $idCount);
     }
 
     private function extractValidCount($data, int $windowSeconds): int
@@ -224,9 +225,9 @@ class LoginRiskService extends \App\Services\BaseService
 
     private function buildKey(string $context, string $ip, ?string $identifier = null): string
     {
-        // LOW-05 Fix: Key generation depends on APP_KEY. 
-        // Note: Rotating APP_KEY will invalidate all existing risk scores, forcing captchas for everyone temporarily.
-        $salt = (string)config('app.key');
+        // LOW-05 Fix: Key generation depends on a dedicated risk cache key for better isolation.
+        // Falls back to app.key if not configured.
+        $salt = (string)config('auth.risk_cache_key', config('app.key'));
         
         if ($identifier) {
             $idHash = hash_hmac('sha256', strtolower(trim($identifier)), $salt);
