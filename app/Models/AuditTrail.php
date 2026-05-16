@@ -213,4 +213,15 @@ class AuditTrail extends Model
     {
         return (int)$this->db->fetchColumn($sql, $params);
     }
+
+    public function update(int $id, array $data): bool
+    {
+        throw new \RuntimeException("Audit logs are strictly immutable and cannot be updated.");
+    }
+
+    public function delete(int $id): bool
+    {
+        throw new \RuntimeException("Physical deletion of audit logs is prohibited for compliance.");
+    }
 }
+

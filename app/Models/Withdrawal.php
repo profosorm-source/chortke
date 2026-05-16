@@ -109,6 +109,11 @@ class Withdrawal extends Model
         return ((int)($result->count ?? 0)) > 0;
     }
 
+    public function hasPending(int $userId): bool
+    {
+        return $this->hasPendingWithdrawal($userId);
+    }
+
     /**
      * بروزرسانی وضعیت
      * M43: Financial logic removed - TransactionService responsibility
@@ -120,13 +125,18 @@ class Withdrawal extends Model
         ?int $processedBy = null,
         ?string $transactionId = null
     ): bool {
+        $startedTransaction = !$this->db->inTransaction();
         try {
-            $this->db->beginTransaction();
+            if ($startedTransaction) {
+                $this->db->beginTransaction();
+            }
             
             // 1. دریافت withdrawal
             $withdrawal = $this->find($id);
             if (!$withdrawal) {
-                $this->db->rollback();
+                if ($startedTransaction) {
+                    $this->db->rollback();
+                }
                 return false;
             }
             
@@ -141,7 +151,9 @@ class Withdrawal extends Model
             $currentStatus = (string)($withdrawal->status ?? '');
             if (!isset($validTransitions[$currentStatus]) || 
                 !\in_array($status, $validTransitions[$currentStatus], true)) {
-                $this->db->rollback();
+                if ($startedTransaction) {
+                    $this->db->rollback();
+                }
                 return false;
             }
             
@@ -176,14 +188,16 @@ class Withdrawal extends Model
             $stmt = $this->db->prepare($sql);
             $stmt->execute($params);
             
-            $this->db->commit();
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
             return true;
             
-        } finally {
-            // M-05: Always ensure transaction is rolled back if still active
-            if ($this->db->inTransaction()) {
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
+            throw $e;
         }
     }
 
