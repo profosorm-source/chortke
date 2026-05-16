@@ -154,14 +154,15 @@ class PermissionMiddleware extends BaseMiddleware
     | جلوگیری شود. در آینده پیشنهاد می‌شود دسترسی‌ها از طریق تزریق کلاسی کنترل شوند.
     */
 
-    /**
-     * @deprecated به جای متدهای استاتیک از تزریق وابستگی Middleware استفاده کنید.
-     */
     public static function check(string $permission): bool
     {
         // HIGH-05 Fix: Remove static instance caching to prevent privilege escalation in persistent environments
-        // This ensures the permission check is fresh and request-scoped.
-        return app(self::class)->hasPermission($permission);
+        // This ensures the permission check is fresh and request-scoped by instantiating a new instance.
+        return (new self(
+            app(\Core\Session::class),
+            app(\App\Models\Permission::class),
+            app(\Core\Redis::class)
+        ))->hasPermission($permission);
     }
     
     /**

@@ -41,9 +41,9 @@ class CorsMiddleware
         $allowedOriginsRaw = (string)config('cors.allowed_origins', '');
         $allowedOrigins = array_filter(array_map('trim', explode(',', $allowedOriginsRaw)));
 
-        // MEDIUM-M-02 Fix: Explicit check for wildcard origins to prevent fail-open security configurations
+        // HIGH-04 Fix: Instead of crashing on wildcard origins, filter them out for security
         if (in_array('*', $allowedOrigins, true)) {
-            throw new \RuntimeException('Wildcard CORS origin is not allowed in CORS configuration.');
+            $allowedOrigins = array_filter($allowedOrigins, fn($o) => $o !== '*');
         }
 
         // ۲. اضافه کردن دامنه اصلی سایت (Canonical URL)
@@ -75,8 +75,9 @@ class CorsMiddleware
                 $credentialOrigins[] = rtrim($appUrl, '/');
             }
 
+            // HIGH-04 Fix: Instead of crashing on wildcard in credential origins, filter it out for security
             if (in_array('*', $credentialOrigins, true)) {
-                throw new \RuntimeException('Wildcard credential_origins is not allowed in CORS configuration.');
+                $credentialOrigins = array_filter($credentialOrigins, fn($o) => $o !== '*');
             }
             if (in_array($requestOrigin, $credentialOrigins, true)) {
                 $response->header('Access-Control-Allow-Credentials', 'true');
