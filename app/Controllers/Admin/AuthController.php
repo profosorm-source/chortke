@@ -165,7 +165,8 @@ class AuthController extends BaseController
             ]);
 
             $this->session->setFlash('error', 'خطای سرور، لطفا دوباره تلاش کنید.');
-            return view('admin/login');
+            // MED-10 Fix: Use redirect instead of view() to follow PRG pattern and prevent double submit
+            return redirect('/admin/login');
         }
     }
 
@@ -311,5 +312,19 @@ return redirect('/admin/login');
     ]);
     return redirect('/admin/login');
 }
+    }
+
+    /**
+     * MEDIUM-02 Fix: Normalize IPv6 to /64 prefix for consistent security checks
+     */
+    private function normalizeIp(string $ip): string
+    {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $packed = inet_pton($ip);
+            if ($packed === false) return $ip;
+            $packed = substr($packed, 0, 8) . str_repeat("\x00", 8); // /64 mask
+            return inet_ntop($packed);
+        }
+        return $ip;
     }
 }
