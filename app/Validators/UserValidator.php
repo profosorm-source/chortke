@@ -68,9 +68,16 @@ class UserValidator
     /**
      * Validation برای Login
      */
-    public static function validateLogin($data)
+    public static function validateLogin(&$data)
     {
         $errors = [];
+
+        if (!empty($data['email'])) {
+            $data['email'] = mb_strtolower(trim((string)$data['email']), 'UTF-8');
+        }
+        if (!empty($data['identifier'])) {
+            $data['identifier'] = mb_strtolower(trim((string)$data['identifier']), 'UTF-8');
+        }
         
         if (empty($data['email']) && empty($data['identifier'])) {
             $errors['login'][] = 'نام کاربری یا ایمیل الزامی است.';
