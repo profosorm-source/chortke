@@ -111,6 +111,20 @@ class User extends Model
     }
 
     /**
+     * CRITICAL-03 Fix: Atomic check and update for account lockout to prevent race conditions.
+     * Checks if the user status is 'active' and updates it to 'locked' if rowCount matches.
+     */
+    public function lockIfExceededAttempts(int $userId): bool
+    {
+        $stmt = $this->db->query(
+            "UPDATE users SET status = 'locked', updated_at = NOW() 
+             WHERE id = ? AND status = 'active'",
+            [$userId]
+        );
+        return (bool)($stmt && $stmt->rowCount() === 1);
+    }
+
+    /**
      * CRIT-06 Fix: به‌روزرسانی اتمیک تایم‌اسلایس 2FA برای جلوگیری از Race Condition و Replay Attack
      */
     public function update2FATimeslice(int $userId, int $slice): bool
