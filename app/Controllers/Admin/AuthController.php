@@ -75,7 +75,7 @@ class AuthController extends BaseController
             // HIGH-03 Fix: Use a single generic error message to prevent User Enumeration
             $genericError = 'اطلاعات ورود نامعتبر است یا دسترسی شما محدود شده است.';
             
-            $result = $this->authService->login($email, $password, $remember);
+            $result = $this->authService->loginAsAdmin($email, $password, $remember);
 
             if (!($result['success'] ?? false)) {
                 $this->logger->warning('admin.login.failed', [
@@ -86,7 +86,8 @@ class AuthController extends BaseController
                 ]);
 
                 $this->session->setFlash('error', $genericError);
-                return view('admin/login');
+                // MED-09 Fix: Use redirect instead of view() to follow PRG pattern
+                return redirect('/admin/login');
             }
 
             // پاک کردن تلاش‌های ناموفق در صورت ورود موفق
@@ -103,20 +104,14 @@ class AuthController extends BaseController
                 return view('admin/login');
             }
 
-            // HIGH-03 Fix: Verify role from the object returned by login() directly
+            // CRIT-02 Fix: Role is already verified inside loginAsAdmin
+            // Double check here just for defense-in-depth, but we use redirect to prevent double submit
             if (!in_array((string)($user->role ?? ''), ['admin', 'super_admin', 'support'], true)) {
-                $this->logger->warning('admin.unauthorized_access', [
-                    'channel' => 'admin_auth',
-                    'user_id' => (int)($user->id ?? 0),
-                    'email' => $email,
-                ]);
-
                 $this->authService->logout();
                 $this->session->setFlash('error', $genericError);
-                return view('admin/login');
+                return redirect('/admin/login');
             }
 
-            // استفاده از PolicyService (Sprint 5) برای authorization
             if (!$this->policyService->isAdmin($user)) {
                 $this->logger->warning('admin.not_authorized', [
                     'user_id' => $user->id,
@@ -124,7 +119,7 @@ class AuthController extends BaseController
                 ]);
                 $this->authService->logout();
                 $this->session->setFlash('error', $genericError);
-                return view('admin/login');
+                return redirect('/admin/login');
             }
 
             $this->logger->activity(
@@ -233,6 +228,19 @@ class AuthController extends BaseController
             );
 
             // CRITICAL-04 Fix: Record specific 'admin.login.2fa_completed' event after 2FA
+            // HIGH-02 Fix: Record audit trail for admin login with 2FA
+            $this->auditTrail->record(
+                'admin.login',
+                (int)$userId,
+                [
+                    'channel' => 'admin_auth',
+                    'type' => 'admin_with_2fa',
+                    'ip' => get_client_ip(),
+                    'timestamp' => date('Y-m-d H:i:s'),
+                ],
+                (int)$userId
+            );
+
             $this->auditTrail->record(
                 'admin.login.2fa_completed',
                 (int)$userId,
