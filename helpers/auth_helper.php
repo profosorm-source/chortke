@@ -33,3 +33,35 @@ if (!function_exists('is_admin')) {
         return ($session->get('user_role') === 'admin');
     }
 }
+
+/**
+ * Centralized password verification helper
+ */
+if (!function_exists('verify_user_password')) {
+    function verify_user_password(string $password, string $hash, ?int $userId = null): bool
+    {
+        if ($password === '') return false;
+        
+        $inputPassword = base64_encode(hash('sha384', $password, true));
+        
+        if (password_verify($inputPassword, $hash)) {
+            return true;
+        }
+
+        // Fallback for legacy passwords
+        if (password_verify($password, $hash)) {
+            if ($userId) {
+                // Resolve UserService via Container to trigger auto-rehash
+                try {
+                    $userService = \Core\Application::getInstance()->container->make(\App\Services\User\UserService::class);
+                    $userService->changePassword($userId, $password);
+                } catch (\Throwable $e) {
+                    // Silently fail if UserService cannot be resolved (e.g. during early boot)
+                }
+            }
+            return true;
+        }
+
+        return false;
+    }
+}
