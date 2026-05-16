@@ -103,36 +103,54 @@ class TicketController extends BaseAdminController
         ]);
     }
     
-    /**
-     * ارسال پاسخ
-     */
     public function reply()
     {
-                        
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
         $data = $this->request->json();
+        $ticketId = (int) ($data['ticket_id'] ?? 0);
+        $message = trim($data['message'] ?? '');
+
+        if (!$ticketId || empty($message)) {
+            return $this->response->json(['success' => false, 'message' => 'ارسال پیام الزامی است.']);
+        }
         
         $result = $this->ticketService->reply(
-            (int) $data['ticket_id'],
+            $ticketId,
             user_id(),
-            $data['message'],
+            $message,
             true // isAdmin
         );
+
+        if ($result['success'] ?? false) {
+            $this->logger->activity('ticket_admin_reply', 
+                "ادمین پاسخ داد به تیکت #{$ticketId}", 
+                user_id(), 
+                ['ticket_id' => $ticketId, 'message_length' => mb_strlen($message)]
+            );
+        }
         
         return $this->response->json($result);
     }
     
-    /**
-     * تغییر وضعیت
-     */
     public function changeStatus()
     {
-                        
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
         $data = $this->request->json();
         $ticketId = (int) ($data['id'] ?? 0);
         $status = $data['status'] ?? '';
         
         if (!$ticketId || !$status) {
             return $this->response->json(['success' => false, 'message' => 'داده‌های ناقص.']);
+        }
+
+        // H-02: Status Whitelist Validation
+        $allowedStatuses = ['open', 'answered', 'in_progress', 'on_hold', 'closed'];
+        if (!in_array($status, $allowedStatuses, true)) {
+            return $this->response->json(['success' => false, 'message' => 'وضعیت نامعتبر است.']);
         }
         
         if ($this->ticketService->updateStatus($ticketId, $status)) {
@@ -147,12 +165,11 @@ class TicketController extends BaseAdminController
         return $this->response->json(['success' => false, 'message' => 'خطا در تغییر وضعیت.']);
     }
     
-    /**
-     * تخصیص به ادمین
-     */
     public function assign()
     {
-                        
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
         $data = $this->request->json();
         $ticketId = (int) ($data['ticket_id'] ?? 0);
         $adminId = (int) ($data['admin_id'] ?? 0);
@@ -160,8 +177,14 @@ class TicketController extends BaseAdminController
         if (!$ticketId) {
             return $this->response->json(['success' => false, 'message' => 'داده‌های ناقص.']);
         }
+
+        // H-03: Admin Verification
+        if ($adminId > 0 && !$this->policyService->isAdminById($adminId)) {
+            return $this->response->json(['success' => false, 'message' => 'شناسه مدیر نامعتبر است.']);
+        }
         
         if ($this->ticketService->assignTo($ticketId, $adminId)) {
+            $this->logger->activity('ticket_assigned', "تیکت #{$ticketId} به مدیر {$adminId} تخصیص داده شد", user_id(), []);
             return $this->response->json([
                 'success' => true,
                 'message' => 'تیکت تخصیص داده شد.'

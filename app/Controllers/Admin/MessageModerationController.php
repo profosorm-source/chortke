@@ -10,12 +10,13 @@ use App\Services\MessageModerationService;
  * MessageModerationController
  * مدیریت و مدرسیون پیام‌های کاربران
  */
-class MessageModerationController extends Controller
+class MessageModerationController extends BaseAdminController
 {
     protected MessageModerationService $moderationService;
 
     public function __construct(MessageModerationService $moderationService)
     {
+        parent::__construct();
         $this->moderationService = $moderationService;
     }
 
@@ -25,23 +26,23 @@ class MessageModerationController extends Controller
      */
     public function reports(): void
     {
-        $status = request()->input('status', 'pending');
-        $page   = (int) request()->input('page', 1);
+        $status = $this->request->input('status', 'pending');
+        $page   = (int) $this->request->input('page', 1);
         $limit  = 20;
         $offset = ($page - 1) * $limit;
 
         // Use service to get reports
-        $result = $this->moderationService->getReportsPaginated($status, $limit, $offset);
+        $result = $this->moderationService->getReports($status, $limit, $offset);
         $reports = $result['reports'] ?? [];
         $total = $result['total'] ?? 0;
 
-        view('admin/messages/reports', [
+        $this->view('admin/messages/reports', [
             'reports'      => $reports,
             'status'       => $status,
             'page'         => $page,
             'total'        => $total,
             'per_page'     => $limit,
-            'total_pages'  => ceil($total / $limit)
+            'total_pages'  => ceil($total / max(1, $limit))
         ]);
     }
 
@@ -51,31 +52,19 @@ class MessageModerationController extends Controller
      */
     public function show(): void
     {
-        $id = (int) request()->param('id');
+        $id = (int) $this->request->param('id');
 
-        $report = $this->db->table('message_reports')
-            ->join('direct_messages', 'message_reports.message_id', '=', 'direct_messages.id')
-            ->select([
-                'message_reports.*',
-                'direct_messages.*'
-            ])
-            ->where('message_reports.id', '=', $id)
-            ->first();
+        $report = $this->moderationService->getReportDetail($id);
 
         if (!$report) {
-            response()->json(['error' => 'گزارش یافت نشد'], 404);
+            $this->response->json(['error' => 'گزارش یافت نشد'], 404);
             return;
         }
 
-        // دریافت کل پیام‌های این کاربر برای تاریخچه
-        $user_messages = $this->db->table('direct_messages')
-            ->where('sender_id', '=', $report['sender_id'])
-            ->select(['id', 'message', 'created_at', 'recipient_id'])
-            ->orderBy('created_at', 'DESC')
-            ->limit(10)
-            ->get();
+        // دریافت کل پیام‌های این کاربر برای تاریخچه (بدون recipient_id برای حفظ حریم خصوصی)
+        $user_messages = $this->moderationService->getUserMessages((int)$report['sender_id'], 10);
 
-        view('admin/messages/report-detail', [
+        $this->view('admin/messages/report-detail', [
             'report'          => $report,
             'user_messages'   => $user_messages
         ]);
@@ -87,56 +76,23 @@ class MessageModerationController extends Controller
      */
     public function approve(): void
     {
-        if (!request()->isPost()) {
-            response()->json(['error' => 'Method not allowed'], 405);
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
+        if (!$this->request->isPost()) {
+            $this->response->json(['error' => 'Method not allowed'], 405);
             return;
         }
 
-        $id     = (int) request()->input('report_id');
-        $action = request()->input('action', 'warn');
+        $id     = (int) $this->request->input('report_id');
+        $action = $this->request->input('action', 'warn');
 
-        $report = $this->db->table('message_reports')
-            ->where('id', '=', $id)
-            ->first();
+        $result = $this->moderationService->approveReport($id, $action, (int)user_id());
 
-        if (!$report) {
-            response()->json(['error' => 'گزارش یافت نشد'], 404);
-            return;
-        }
-
-        try {
-            // بروزرسانی وضعیت گزارش
-            $this->db->table('message_reports')
-                ->where('id', '=', $id)
-                ->update([
-                    'status'     => 'resolved',
-                    'reviewed_by' => auth()->id(),
-                    'reviewed_at' => now()
-                ]);
-
-            // اقدام بر حسب نوع
-            switch ($action) {
-                case 'warn':
-                    $this->warnUser($report['sender_id']);
-                    break;
-                case 'delete':
-                    $this->deleteMessage($report['message_id']);
-                    break;
-                case 'ban':
-                    $this->banUser($report['sender_id']);
-                    break;
-            }
-
-            $this->logger->info('Message report approved', [
-                'report_id' => $id,
-                'action'   => $action,
-                'admin_id' => auth()->id()
-            ]);
-
-            response()->json(['success' => true, 'message' => 'گزارش تایید شد']);
-        } catch (\Exception $e) {
-            $this->logger->error('Failed to approve message report', ['error' => $e->getMessage()]);
-            response()->json(['error' => 'خطا در پردازش'], 500);
+        if ($result['success']) {
+            $this->response->json(['success' => true, 'message' => $result['message']]);
+        } else {
+            $this->response->json(['error' => $result['message']], 500);
         }
     }
 
@@ -146,73 +102,26 @@ class MessageModerationController extends Controller
      */
     public function dismiss(): void
     {
-        if (!request()->isPost()) {
-            response()->json(['error' => 'Method not allowed'], 405);
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
+        if (!$this->request->isPost()) {
+            $this->response->json(['error' => 'Method not allowed'], 405);
             return;
         }
 
-        $id = (int) request()->input('report_id');
+        $id = (int) $this->request->input('report_id');
 
-        $this->db->table('message_reports')
-            ->where('id', '=', $id)
-            ->update([
-                'status'     => 'dismissed',
-                'reviewed_by' => auth()->id(),
-                'reviewed_at' => now()
-            ]);
+        $ok = $this->moderationService->dismissReport($id, (int)user_id());
 
         $this->logger->info('Message report dismissed', [
             'report_id' => $id,
-            'admin_id' => auth()->id()
+            'admin_id' => user_id()
         ]);
 
-        response()->json(['success' => true, 'message' => 'گزارش رد شد']);
+        $this->response->json(['success' => true, 'message' => 'گزارش رد شد']);
     }
 
-    /**
-     * حذف پیام
-     * @param int $messageId
-     * @return void
-     */
-    protected function deleteMessage(int $messageId): void
-    {
-        $this->db->table('direct_messages')
-            ->where('id', '=', $messageId)
-            ->update([
-                'message'    => '[پیام حذف‌شده توسط مدیریت]',
-                'deleted_at' => now(),
-                'deleted_by' => 'admin'
-            ]);
-    }
-
-    /**
-     * هشدار به کاربر
-     * @param int $userId
-     * @return void
-     */
-    protected function warnUser(int $userId): void
-    {
-        $this->db->table('users')
-            ->where('id', '=', $userId)
-            ->update([
-                'warning_count' => $this->db->raw('warning_count + 1')
-            ]);
-    }
-
-    /**
-     * مسدود کردن کاربر
-     * @param int $userId
-     * @return void
-     */
-    protected function banUser(int $userId): void
-    {
-        $this->db->table('users')
-            ->where('id', '=', $userId)
-            ->update([
-                'status' => 'banned',
-                'banned_reason' => 'Inappropriate messaging'
-            ]);
-    }
 
     /**
      * لیست کاربران مسدود
@@ -220,34 +129,30 @@ class MessageModerationController extends Controller
      */
     public function blockedUsers(): void
     {
-        $page   = (int) request()->input('page', 1);
+        $page   = (int) $this->request->input('page', 1);
         $limit  = 20;
         $offset = ($page - 1) * $limit;
 
-        $blocked = $this->db->table('user_blocks')
-            ->join('users', 'user_blocks.blocker_id', '=', 'users.id')
-            ->join('users as blocked_user', 'user_blocks.blocked_id', '=', 'blocked_user.id')
-            ->select([
-                'user_blocks.id',
-                'user_blocks.reason',
-                'user_blocks.created_at',
-                'users.name as blocker_name',
-                'blocked_user.name as blocked_name',
-                'blocked_user.email'
-            ])
-            ->orderBy('user_blocks.created_at', 'DESC')
-            ->limit($limit)
-            ->offset($offset)
-            ->get();
+        $blocked = $this->moderationService->getBlockedUsers($limit, $offset);
+        $total = $this->moderationService->getBlockedUsersCount();
 
-        $total = $this->db->table('user_blocks')->count();
+        // M05: Redaction of sensitive PII in administrative views
+        foreach ($blocked as &$user) {
+            if (!empty($user['blocked_email'])) {
+                $email = $user['blocked_email'];
+                $parts = explode('@', $email);
+                if (count($parts) === 2) {
+                    $user['blocked_email'] = substr($parts[0], 0, 2) . '***@' . $parts[1];
+                }
+            }
+        }
 
-        view('admin/messages/blocked-users', [
+        $this->view('admin/messages/blocked-users', [
             'blocked'      => $blocked,
             'page'         => $page,
             'total'        => $total,
             'per_page'     => $limit,
-            'total_pages'  => ceil($total / $limit)
+            'total_pages'  => ceil($total / max(1, $limit))
         ]);
     }
 
@@ -257,31 +162,11 @@ class MessageModerationController extends Controller
      */
     public function stats(): void
     {
-        $stats = [
-            'total_messages'   => $this->db->table('direct_messages')->count(),
-            'total_reports'    => $this->db->table('message_reports')->count(),
-            'pending_reports'  => $this->db->table('message_reports')
-                ->where('status', '=', 'pending')
-                ->count(),
-            'total_blocks'     => $this->db->table('user_blocks')->count(),
-            'today_messages'   => $this->db->table('direct_messages')
-                ->where('created_at', '>=', date('Y-m-d 00:00:00'))
-                ->count(),
-            'today_reports'    => $this->db->table('message_reports')
-                ->where('created_at', '>=', date('Y-m-d 00:00:00'))
-                ->count()
-        ];
+        $result = $this->moderationService->getStats();
+        $stats = $result['stats'] ?? [];
+        $top_reporters = $result['top_reporters'] ?? [];
 
-        // نسبت بزرگ‌ترین گزارش‌دهندگان
-        $top_reporters = $this->db->table('message_reports')
-            ->join('users', 'message_reports.reporter_id', '=', 'users.id')
-            ->select(['users.name', 'users.id', $this->db->raw('COUNT(*) as count')])
-            ->groupBy('reporter_id')
-            ->orderBy('count', 'DESC')
-            ->limit(5)
-            ->get();
-
-        view('admin/messages/stats', [
+        $this->view('admin/messages/stats', [
             'stats'        => $stats,
             'top_reporters' => $top_reporters
         ]);

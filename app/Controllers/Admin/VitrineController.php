@@ -16,24 +16,18 @@ use App\Services\AuditTrail;
  */
 class VitrineController extends BaseAdminController
 {
-    private VitrineListing $listing;
-    private VitrineRequest $requestModel;
     private VitrineService $service;
     private VitrineSettingsService $settingsService;
     private WalletService  $wallet;
     private AuditTrail $auditTrail;
 
     public function __construct(
-        VitrineListing $listing,
-        VitrineRequest $requestModel,
         VitrineService $service,
         VitrineSettingsService $settingsService,
         WalletService  $wallet,
         AuditTrail $auditTrail
     ) {
         parent::__construct();
-        $this->listing          = $listing;
-        $this->requestModel     = $requestModel;
         $this->service          = $service;
         $this->settingsService  = $settingsService;
         $this->wallet           = $wallet;
@@ -55,21 +49,15 @@ class VitrineController extends BaseAdminController
 
         $page     = max(1, (int) ($this->request->get('page') ?? 1));
         $perPage  = 30;
-        $listings = $this->listing->adminList($filters, $perPage, ($page - 1) * $perPage);
-        $total    = $this->listing->adminCount($filters);
-        $stats    = $this->listing->adminStats();
+        
+        $data = $this->service->getAdminIndexData($filters, $perPage, ($page - 1) * $perPage);
 
-        view('admin.vitrine.index', [
+        view('admin.vitrine.index', array_merge($data, [
             'title'      => 'مدیریت ویترین',
-            'listings'   => $listings,
-            'total'      => $total,
             'page'       => $page,
-            'pages'      => (int) ceil($total / $perPage),
+            'pages'      => (int) ceil($data['total'] / $perPage),
             'filters'    => $filters,
-            'stats'      => $stats,
-            'statuses'   => $this->listing->statuses(),
-            'categories' => $this->listing->categories(),
-        ]);
+        ]));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -94,7 +82,7 @@ class VitrineController extends BaseAdminController
         }
 
         // ✅ Prevent self-approval
-        $listing = $this->listing->find($id);
+        $listing = $this->service->getSafe($id);
         if (!$listing) {
             $this->response->json(['success' => false, 'message' => 'آگهی یافت نشد.'], 404);
             return;
@@ -152,7 +140,7 @@ class VitrineController extends BaseAdminController
         }
 
         $adminId = (int)admin_id();
-        $result = $this->service->adminRejectListing($id, e($reason, ENT_QUOTES, 'UTF-8'), $adminId);
+        $result = $this->service->adminRejectListing($id, $reason, $adminId);
 
         if (!empty($result['success'])) {
             $this->auditTrail->record('vitrine.admin_rejected', $adminId, [
@@ -173,7 +161,7 @@ class VitrineController extends BaseAdminController
     public function showDispute(): void
     {
         $id      = (int) $this->request->param('id');
-        $listing = $this->listing->find($id);
+        $listing = $this->service->getSafe($id);
 
         if (!$listing) {
             $this->session->setFlash('error', 'آگهی یافت نشد.');
@@ -228,7 +216,7 @@ class VitrineController extends BaseAdminController
         }
 
         $id      = (int) $this->request->param('id');
-        $listing = $this->listing->find($id);
+        $listing = $this->service->getSafe($id);
 
         if (!$listing || $listing->status !== VitrineListing::STATUS_IN_ESCROW) {
             $this->response->json([

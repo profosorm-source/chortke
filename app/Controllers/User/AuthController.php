@@ -132,7 +132,7 @@ class AuthController extends BaseController
         }
 
         if (!empty($result['requires_2fa'])) {
-            $this->session->set('pending_2fa_user', (int)$result['user']->id);
+            $this->session->set('pending_2fa_user_id', (int)$result['user']->id);
             $this->response->redirect(url('verify-2fa'));
             return;
         }
@@ -178,9 +178,9 @@ class AuthController extends BaseController
 
         $captchaType = $this->loginRiskService->getCaptchaType('register');
         if ($captchaType !== null) {
-            $captchaToken = trim((string)($_POST['captcha_token'] ?? ''));
-            $captchaResp  = trim((string)($_POST['captcha_response'] ?? ''));
-            $recaptchaResp = trim((string)($_POST['g-recaptcha-response'] ?? ''));
+            $captchaToken = trim((string)$this->request->input('captcha_token', ''));
+            $captchaResp  = trim((string)$this->request->input('captcha_response', ''));
+            $recaptchaResp = trim((string)$this->request->input('g-recaptcha-response', ''));
 
             if ($captchaType === 'recaptcha_v2') {
                 if ($recaptchaResp === '' || !$this->captchaService->verify('', '', $recaptchaResp)) {
@@ -320,6 +320,14 @@ class AuthController extends BaseController
      */
     public function logout(): void
     {
+        // MED-02 Fix: Enforce POST + CSRF for logout
+        if (!$this->request->isPost()) {
+            $this->response->redirect(url('dashboard'));
+            return;
+        }
+        
+        app(\Core\CSRF::class)->validate();
+
         $this->authService->logout();
         $this->session->setFlash('success', 'با موفقیت خارج شدید.');
         $this->response->redirect(url('login'));

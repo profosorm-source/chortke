@@ -47,7 +47,7 @@ class AuditTrailController extends BaseAdminController
             $search = trim($this->request->get('search') ?? '');
             $dateFrom = $this->request->get('date_from');
             $dateTo = $this->request->get('date_to');
-            $perPage = 50;
+            $perPage = min(max(1, (int)($this->request->get('per_page') ?? 50)), 100);
             $offset = ($page - 1) * $perPage;
 
             $filters = [];
@@ -178,7 +178,8 @@ class AuditTrailController extends BaseAdminController
     {
         try {
             $userId = (int)$this->request->param('user_id');
-            $limit = (int)($this->request->get('limit') ?? 100);
+            // 🚀 BUG FIX [L-04]: Cap limit to prevent memory exhaustion
+            $limit = min(max(1, (int)($this->request->get('limit') ?? 100)), 500);
 
             $history = $this->auditTrail->getForUser($userId, $limit);
 
@@ -213,6 +214,8 @@ class AuditTrailController extends BaseAdminController
             'from' => $this->request->get('from'),
             'to' => $this->request->get('to'),
             'user_id' => $this->request->get('user_id'),
+            // 🚀 BUG FIX [H-07]: Max rows for export to prevent DoS
+            'limit' => 5000, 
         ]);
 
         $this->exportService->exportAuditTrail($filters);

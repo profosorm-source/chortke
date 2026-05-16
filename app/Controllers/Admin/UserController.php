@@ -9,13 +9,16 @@ use App\Controllers\Admin\BaseAdminController;
 class UserController extends BaseAdminController
 {
     private UserService $userService;
+    private \App\Services\User\AccountDeletionService $deletionService;
 
     public function __construct(
-        UserService $userService
+        UserService $userService,
+        \App\Services\User\AccountDeletionService $deletionService
     )
     {
         parent::__construct();
         $this->userService = $userService;
+        $this->deletionService = $deletionService;
     }
 
     /**
@@ -84,6 +87,18 @@ class UserController extends BaseAdminController
             return;
         }
 
+        // ✅ Check mobile uniqueness
+        if (!empty($validated->mobile)) {
+            $existingMobile = $this->userService->findByMobile($validated->mobile);
+            if ($existingMobile) {
+                $this->response->json([
+                    'success' => false,
+                    'errors' => ['mobile' => ['این شماره موبایل قبلاً ثبت شده است']]
+                ], 422);
+                return;
+            }
+        }
+
         $userId = $this->userService->register([
             'full_name' => $validated->full_name,
             'email' => $validated->email,
@@ -119,13 +134,13 @@ class UserController extends BaseAdminController
         $this->view('admin.users.edit', ['user' => $user]);
     }
 
-     /**
+      /**
      * 🔄 تغییر از JSON به Redirect + Flash
      * چون این یک فرم با صفحه است
      */
     /**
- * به‌روزرسانی کاربر
- */
+  * به‌روزرسانی کاربر
+  */
 public function update(int $id): void
 {
     $user = $this->userService->find($id);
@@ -181,15 +196,13 @@ public function update(int $id): void
             return;
         }
 
-        $result = $this->userService->update($id, [
-            'deleted_at' => date('Y-m-d H:i:s'),
-            'status' => 'inactive'
-        ]);
+        // ✅ Use AccountDeletionService for consistent deletion
+        $result = $this->deletionService->deleteUserAccount($id, 'Deleted by Admin');
 
         if ($result) {
             $this->response->json(['success' => true, 'message' => 'کاربر با موفقیت حذف شد']);
         } else {
-            $this->response->json(['success' => false, 'message' => 'خطا در حذف کاربر'], 500);
+            $this->response->json(['success' => false, 'message' => 'خطا در حذف کاربر یا کاربر دارای موجودی است'], 500);
         }
     }
 	/**

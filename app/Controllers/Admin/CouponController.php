@@ -209,7 +209,7 @@ class CouponController extends BaseAdminController
         $id = (int)$this->request->input('id');
         if (!$id) $id = (int)($this->request->body()['id'] ?? 0);
 
-        if ($this->couponModel->delete($id)) {
+        if ($this->couponService->delete($id)) {
             $this->logger->info('coupon_deleted', [
                 'coupon_id' => $id,
                 'admin_id' => user_id()
@@ -236,7 +236,7 @@ class CouponController extends BaseAdminController
             return;
         }
 
-        if ($this->couponModel->toggleActive($id)) {
+        if ($this->couponService->toggle($id)) {
             $this->logger->info('coupon_toggled', [
                 'coupon_id' => $id,
                 'admin_id' => user_id()
@@ -278,7 +278,7 @@ class CouponController extends BaseAdminController
      */
     public function redemptions(): void
     {
-        $redemptions = $this->redemptionModel->all();
+        $redemptions = $this->couponService->getRedemptions();
 
         view('admin/coupons/redemptions', [
             'redemptions' => $redemptions,

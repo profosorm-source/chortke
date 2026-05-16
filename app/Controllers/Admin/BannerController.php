@@ -12,13 +12,22 @@ class BannerController extends BaseAdminController
     private BannerService $bannerService;
     private UploadService $uploadService;
     private AdvancedSearchService $searchService;
+    private \App\Models\Ads $banner;
+    private \App\Models\BannerPlacement $placement;
 
-    public function __construct(BannerService $bannerService, UploadService $uploadService, AdvancedSearchService $searchService)
-    {
+    public function __construct(
+        BannerService $bannerService, 
+        UploadService $uploadService, 
+        AdvancedSearchService $searchService,
+        \App\Models\Ads $banner,
+        \App\Models\BannerPlacement $placement
+    ) {
         parent::__construct();
         $this->bannerService = $bannerService;
         $this->uploadService = $uploadService;
         $this->searchService = $searchService;
+        $this->banner = $banner;
+        $this->placement = $placement;
     }
 
     public function index()
@@ -59,6 +68,9 @@ class BannerController extends BaseAdminController
 
     public function store()
     {
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
         $title = trim($this->request->input('title', ''));
         $placement = trim($this->request->input('placement', ''));
 
@@ -80,11 +92,17 @@ class BannerController extends BaseAdminController
             }
         }
 
+        $link = $this->request->input('link', '');
+        if (!empty($link) && (!filter_var($link, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $link))) {
+            $this->session->setFlash('error', 'لینک معتبر نیست (باید با http یا https شروع شود)');
+            return redirect('/admin/banners/create');
+        }
+
         $data = [
             'type' => 'banner', // اجبار نوع متمرکز
             'title' => $title,
             'image_path' => $imagePath,
-            'link' => $this->request->input('link'),
+            'link' => $link,
             'placement' => $placement,
             'banner_type' => $this->request->input('banner_type', 'system'),
             'category' => $this->request->input('category'),
@@ -120,7 +138,22 @@ class BannerController extends BaseAdminController
 
     public function update()
     {
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
         $id = (int)$this->request->input('id', 0);
+        $banner = $this->banner->find($id);
+
+        if (!$banner || $banner->type !== 'banner') {
+            $this->session->setFlash('error', 'بنر یافت نشد');
+            return redirect('/admin/banners');
+        }
+
+        $link = $this->request->input('link', '');
+        if (!empty($link) && (!filter_var($link, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $link))) {
+            $this->session->setFlash('error', 'لینک معتبر نیست (باید با http یا https شروع شود)');
+            return redirect('/admin/banners/edit?id=' . $id);
+        }
 
         // استفاده از UploadService (Sprint 6)
         $imagePath = null;
@@ -137,7 +170,7 @@ class BannerController extends BaseAdminController
 
         $data = [
             'title' => $this->request->input('title', ''),
-            'link' => $this->request->input('link'),
+            'link' => $link,
             'placement' => $this->request->input('placement', ''),
             'category' => $this->request->input('category'),
             'sort_order' => (int)$this->request->input('sort_order', 0),
@@ -160,7 +193,17 @@ class BannerController extends BaseAdminController
 
     public function approve()
     {
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
         $id = (int)$this->request->input('id', 0);
+        $banner = $this->banner->find($id);
+
+        if (!$banner || $banner->type !== 'banner') {
+            $this->session->setFlash('error', 'بنر یافت نشد');
+            return redirect('/admin/banners');
+        }
+
         // آپدیت مستقیم و صریح به کمک متدهای پیش‌فرض Core
         $this->banner->update($id, [
             'status' => 'active',
@@ -173,7 +216,17 @@ class BannerController extends BaseAdminController
 
     public function reject()
     {
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
         $id = (int)$this->request->input('id', 0);
+        $banner = $this->banner->find($id);
+
+        if (!$banner || $banner->type !== 'banner') {
+            $this->session->setFlash('error', 'بنر یافت نشد');
+            return redirect('/admin/banners');
+        }
+
         $reason = $this->request->input('reason', 'رد شد');
         $this->banner->update($id, [
             'status' => 'rejected',
@@ -186,7 +239,17 @@ class BannerController extends BaseAdminController
 
     public function delete()
     {
+        // CORE-036: CSRF Protection
+        $this->validateCsrf();
+
         $id = (int)$this->request->input('id', 0);
+        $banner = $this->banner->find($id);
+
+        if (!$banner || $banner->type !== 'banner') {
+            $this->session->setFlash('error', 'بنر یافت نشد');
+            return redirect('/admin/banners');
+        }
+
         // استفاده از مکانیزم قدرتمند داخلی softDelete کلاس Core\Model
         $this->banner->delete($id);
         $this->session->setFlash('success', 'بنر حذف شد');

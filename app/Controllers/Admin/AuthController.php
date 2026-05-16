@@ -67,6 +67,14 @@ class AuthController extends BaseController
                 return view('admin/login');
             }
 
+            // HIGH-02 Fix: Check role BEFORE login to prevent race condition and session leakage
+            $adminUser = $this->authService->getUserByEmail($email);
+            if (!$adminUser || !in_array((string)($adminUser->role ?? ''), ['admin', 'super_admin', 'support'], true)) {
+                $this->logger->warning('admin.login.unauthorized_role_attempt', ['email' => $email]);
+                $this->session->setFlash('error', 'شما اجازه دسترسی به این بخش را ندارید.');
+                return view('admin/login');
+            }
+
             $result = $this->authService->login($email, $password, $remember);
 
             if (!($result['success'] ?? false)) {
@@ -220,6 +228,13 @@ class AuthController extends BaseController
      */
     public function logout()
     {
+        // MED-02 Fix: Enforce POST + CSRF for admin logout
+        if (!$this->request->isPost()) {
+            return redirect('/admin/dashboard');
+        }
+        
+        app(\Core\CSRF::class)->validate();
+
         try {
             $userId = user_id();
 

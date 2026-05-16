@@ -31,9 +31,10 @@ abstract class BaseAdminController extends BaseController
         ?\Core\Request $request = null,
         ?\Core\Response $response = null,
         ?\App\Services\Shared\PolicyService $policyService = null,
-        ?\App\Contracts\LoggerInterface $logger = null
+        ?\App\Contracts\LoggerInterface $logger = null,
+        ?\Core\CSRF $csrf = null
     ) {
-        parent::__construct($session, $request, $response, $policyService, $logger);
+        parent::__construct($session, $request, $response, $policyService, $logger, $csrf);
         $this->requireAuth();
         $this->requireAdmin();
     }

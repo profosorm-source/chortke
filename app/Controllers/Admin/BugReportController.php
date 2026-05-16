@@ -102,12 +102,9 @@ class BugReportController extends BaseAdminController
         $status = $data['status'] ?? '';
         $note = $data['note'] ?? null;
 
-        // Map standard admin update in Tickets architecture
-        // Tickets have simpler status. We can use update() here.
-        $db = \Core\Database::getInstance();
-        $ok = $db->query("UPDATE tickets SET status = ?, updated_at = NOW() WHERE id = ?", [$status, $id]);
+        $ok = $this->ticketService->updateStatus($id, $status, user_id());
 
-        $this->response->json(['success' => (bool)$ok]);
+        $this->response->json(['success' => $ok]);
     }
 
     /**
@@ -121,10 +118,9 @@ class BugReportController extends BaseAdminController
 
         $priority = $data['priority'] ?? '';
         
-        $db = \Core\Database::getInstance();
-        $ok = $db->query("UPDATE tickets SET priority = ?, updated_at = NOW() WHERE id = ?", [$priority, $id]);
+        $ok = $this->ticketService->updatePriority($id, $priority, user_id());
 
-        $this->response->json(['success' => (bool)$ok]);
+        $this->response->json(['success' => $ok]);
     }
 
     /**

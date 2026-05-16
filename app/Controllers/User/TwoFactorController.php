@@ -66,7 +66,7 @@ class TwoFactorController extends BaseUserController
 
     public function showVerify(): void
     {
-        $userId = $this->session->get('pending_2fa_user');
+        $userId = $this->session->get('pending_2fa_user_id');
         if (!$userId) {
             $this->response->redirect(url('login'));
             return;
@@ -79,7 +79,7 @@ class TwoFactorController extends BaseUserController
 
     public function verify(): void
     {
-        $userId = $this->session->get('pending_2fa_user');
+        $userId = $this->session->get('pending_2fa_user_id');
         if (!$userId) {
             if ($this->request->isAjax()) {
                 $this->jsonError('نشست نامعتبر است.', [], 401);
@@ -112,20 +112,20 @@ class TwoFactorController extends BaseUserController
         }
 
         if ($this->twoFactorService->verifyCode($user->two_factor_secret, $code, (int)$userId)) {
-            // ورود موفق -> پاک کردن محدودیت
             $this->rateLimiter->clear($throttleKey);
 
-            $this->session->remove('pending_2fa_user');
+            $this->session->remove('pending_2fa_user_id');
             
-            // اصلاح لاجیک سشن برای مدیریت دسترسی و جلوگیری از خطای میدلویر
+            // CRIT-03 Fix: regenerate(true) BEFORE setting sensitive session data
+            $this->session->regenerate(true); 
+
             $this->session->set('user_id',   $user->id);
             $this->session->set('username',  $user->username  ?? '');
             $this->session->set('email',     $user->email);
             $this->session->set('role',      $user->role);
-            $this->session->set('user_role', $user->role); // متغیر کلیدی اضافه شد
+            $this->session->set('user_role', $user->role); 
             $this->session->set('is_admin',  in_array($user->role, ['admin', 'super_admin'], true));
             $this->session->set('logged_in', true);
-            $this->session->regenerate();
 
             $this->logger->activity('2fa.verified', 'تأیید موفق احراز هویت دو مرحله‌ای', $user->id, [
                 'channel' => 'auth',
@@ -148,6 +148,16 @@ class TwoFactorController extends BaseUserController
         $userId = $this->userId();
         if (!$userId) {
             $this->jsonError('لطفاً وارد شوید.', [], 401);
+            return;
+        }
+
+        // CRIT-04 Fix: Rate limiting on 2FA enablement
+        $throttleKey = '2fa_enable:' . $userId . ':' . $this->request->ip();
+        if (!$this->rateLimiter->attempt($throttleKey, 5, 1)) {
+            $this->response->json([
+                'success' => false,
+                'message' => 'تعداد تلاش‌های شما برای فعال‌سازی بیش از حد مجاز است. لطفاً یک دقیقه صبر کنید.'
+            ], 429);
             return;
         }
 

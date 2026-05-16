@@ -133,6 +133,12 @@ class AccountDeletionManagementController extends BaseAdminController
                 return redirect('/admin/account-deletion/pending');
             }
 
+            // ✅ CSRF protection
+            if (!csrf_verify()) {
+                $this->session->setFlash('error', 'خطای اعتبارسنجی CSRF');
+                return redirect('/admin/account-deletion/pending');
+            }
+
             // بررسی وجود درخواست
             $deletion = $this->deletionLogModel->getUserDeletionRequest($userId);
             if (!$deletion) {
@@ -171,6 +177,12 @@ class AccountDeletionManagementController extends BaseAdminController
 
             if (!$userId) {
                 $this->session->setFlash('error', 'شناسه کاربر الزامی است');
+                return redirect('/admin/account-deletion/pending');
+            }
+
+            // ✅ CSRF protection
+            if (!csrf_verify()) {
+                $this->session->setFlash('error', 'خطای اعتبارسنجی CSRF');
                 return redirect('/admin/account-deletion/pending');
             }
 
@@ -213,12 +225,28 @@ class AccountDeletionManagementController extends BaseAdminController
 
             $deletion = $this->deletionLogModel->getUserDeletionRequest($userId);
 
+            // ✅ Mask Email PII
+            $email = $user['email'] ?? '';
+            if (strpos($email, '@') !== false) {
+                [$name, $domain] = explode('@', $email);
+                $maskedEmail = substr($name, 0, 1) . '***@' . $domain;
+            } else {
+                $maskedEmail = '***';
+            }
+
+            // ✅ Access Control for Deletion Reason
+            $showReason = false;
+            $currentUser = user();
+            if ($currentUser && isset($currentUser->role) && $currentUser->role === 'super_admin') {
+                $showReason = true;
+            }
+
             return $this->response->json([
                 'success' => true,
                 'user' => [
                     'id' => $user['id'],
-                    'username' => $user['username'] ?? $user['email'],
-                    'email' => $user['email'],
+                    'username' => $user['username'] ?? $maskedEmail,
+                    'email' => $maskedEmail,
                     'created_at' => $user['created_at'],
                     'last_activity' => $user['last_activity_at'] ?? 'N/A'
                 ],
@@ -226,7 +254,7 @@ class AccountDeletionManagementController extends BaseAdminController
                     'requested_at' => $deletion['requested_at'],
                     'expires_at' => $deletion['expires_at'],
                     'status' => $deletion['status'],
-                    'reason' => $deletion['reason'] ?? ''
+                    'reason' => $showReason ? ($deletion['reason'] ?? '') : 'HIDDEN'
                 ] : null
             ]);
 

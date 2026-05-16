@@ -12,16 +12,19 @@ class SeoAdController extends BaseAdminController
     private Ads $model;
     private SeoExecution $executionModel;
     private AnalyticsService $analytics;
+    private \App\Services\SeoService $seoService;
 
     public function __construct(
         Ads $m, 
         SeoExecution $e,
-        AnalyticsService $a
+        AnalyticsService $a,
+        \App\Services\SeoService $s
     ) {
         parent::__construct();
         $this->model = $m;
         $this->executionModel = $e;
         $this->analytics = $a;
+        $this->seoService = $s;
     }
 
     public function index(): void
@@ -49,10 +52,7 @@ class SeoAdController extends BaseAdminController
 
     public function approve(): void
     {
-        $ok = $this->model->db->table('ads')->where('id', '=', (int)$this->request->param('id'))->update([
-            'status' => 'active', 
-            'updated_at' => date('Y-m-d H:i:s')
-        ]);
+        $ok = $this->seoService->approveAd((int)$this->request->param('id'));
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }
@@ -60,21 +60,14 @@ class SeoAdController extends BaseAdminController
     public function reject(): void
     {
         $reason = trim($this->request->post('reason') ?? '');
-        $ok = $this->model->db->table('ads')->where('id', '=', (int)$this->request->param('id'))->update([
-            'status' => 'rejected', 
-            'rejection_reason' => $reason ?: 'مدیر رد کرد',
-            'updated_at' => date('Y-m-d H:i:s')
-        ]);
+        $ok = $this->seoService->rejectAd((int)$this->request->param('id'), $reason);
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }
 
     public function pause(): void
     {
-        $ok = $this->model->db->table('ads')->where('id', '=', (int)$this->request->param('id'))->update([
-            'status' => 'paused', 
-            'updated_at' => date('Y-m-d H:i:s')
-        ]);
+        $ok = $this->seoService->pauseAd((int)$this->request->param('id'));
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }
