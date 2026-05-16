@@ -15,7 +15,7 @@ return [
         'key' => env('APP_KEY', ''),
         'trusted_proxies' => array_filter(array_map('trim', explode(',', env('TRUSTED_PROXIES', '127.0.0.1')))),
         'safe_mode' => env('APP_SAFE_MODE', false),
-        'version' => env('APP_VERSION', '1.0.0'),
+        'version' => env('APP_VERSION', '2.4.0-hardened'),
         'release' => env('APP_RELEASE', '1.0.0'),
         // Fix L4: لیست سفید مسیرهایی که در Safe Mode مجاز برای تغییر هستند
         'safe_mode_whitelist' => env('SAFE_MODE_WHITELIST', '/login,/logout,/verify-2fa')
