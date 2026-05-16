@@ -106,7 +106,12 @@ class ApiTokenService extends \App\Services\BaseService
         $name = trim($name);
         $name = $name === '' ? 'api-token-' . date('Ymd') : mb_substr($name, 0, 80);
 
-        $validScopes = ['read', 'write', 'admin'];
+        $validScopes = [
+            'read', 'write', 'admin', 
+            'profile:read', 'profile:write', 
+            'wallet:read', 'wallet:write', 
+            'transactions:read', 'tasks:read', 'tasks:write'
+        ];
         if (!in_array($scope, $validScopes, true)) {
             $scope = 'read';
         }
@@ -234,8 +239,13 @@ class ApiTokenService extends \App\Services\BaseService
         }
         $name = mb_substr($name, 0, 80);
 
-        $requestedScopes = explode(',', preg_replace('/[^a-z0-9,_-]/i', '', trim($scopes)));
-        $validScopesList = ['read', 'write', 'admin'];
+        $requestedScopes = explode(',', preg_replace('/[^a-z0-9,:_-]/i', '', trim($scopes)));
+        $validScopesList = [
+            'read', 'write', 'admin', 
+            'profile:read', 'profile:write', 
+            'wallet:read', 'wallet:write', 
+            'transactions:read', 'tasks:read', 'tasks:write'
+        ];
         $finalScopes = [];
         foreach ($requestedScopes as $s) {
             $s = trim($s);
