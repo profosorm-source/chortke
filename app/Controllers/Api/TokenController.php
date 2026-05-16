@@ -46,22 +46,21 @@ class TokenController extends BaseApiController
             $this->error('فرمت ایمیل نامعتبر است', 422, 'INVALID_EMAIL');
         }
 
-        // Rate limit برای endpoint صدور توکن
-        if ($this->isIssueRateLimited($email)) {
+        $key = $this->issueRateLimitKey($email);
+        if (!$this->rateLimiter->attempt($key, 8, 10, true)) {
             $this->error('تعداد تلاش بیش از حد مجاز است. چند دقیقه دیگر تلاش کنید', 429, 'RATE_LIMITED');
+            return;
         }
 
         $result = $this->service->issueToken(
             $email,
             $password,
             trim((string)($data['token_name'] ?? '')),
-            trim((string)($data['scopes'] ?? 'read'))
+            trim((string)($data['scopes'] ?? 'read')),
+            trim((string)($data['otp'] ?? ''))
         );
 
         if (!$result['success']) {
-            if (!empty($result['code']) && $result['code'] === 'INVALID_CREDENTIALS') {
-                $this->hitIssueRateLimit($email);
-            }
 
             if (!empty($result['validation'])) {
                 $this->validationError($result['validation']);
@@ -81,14 +80,21 @@ class TokenController extends BaseApiController
      */
     public function revoke(): void
     {
-        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+        $userId = $this->userId();
+        if (!$userId) {
+            $this->error('احراز هویت نشده', 401);
+            return;
+        }
+
+        $authHeader = $this->request->header('Authorization') ?? '';
         $token      = str_starts_with($authHeader, 'Bearer ') ? trim(substr($authHeader, 7)) : null;
 
         if (!$token) {
             $this->error('توکن یافت نشد', 400);
+            return;
         }
 
-        $result = $this->service->revokeTokenByHash($token);
+        $result = $this->service->revokeTokenByHashForUser($token, $userId);
 
         if (!$result['success']) {
             $this->error($result['message'], $result['status'] ?? 404, $result['code'] ?? 'TOKEN_NOT_FOUND');
@@ -129,31 +135,15 @@ class TokenController extends BaseApiController
         $this->success(null, 'توکن باطل شد');
     }
 	
-	private function issueRateLimitKey(string $email): string
-{
-    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-    return 'api_token_issue_rl_' . sha1($ip . '|' . $email);
-}
+    private function issueRateLimitKey(string $email): string
+    {
+        $ip = $this->request->ip() ?? 'unknown';
+        return 'api_token_issue_rl_' . hash_hmac('sha256', $ip . '|' . mb_strtolower($email), (string)config('app.key'));
+    }
 
-private function isIssueRateLimited(string $email): bool
-{
-    $key = $this->issueRateLimitKey($email);
-
-    $maxAttempts = 8;
-    return $this->rateLimiter->hits($key) >= $maxAttempts;
-}
-
-private function hitIssueRateLimit(string $email): void
-{
-    $key = $this->issueRateLimitKey($email);
-
-    // همان پنجره قبلی: 10 دقیقه با حداکثر 8 تلاش
-    $this->rateLimiter->attempt($key, 8, 10);
-}
-
-private function clearIssueRateLimit(string $email): void
-{
-    $this->rateLimiter->clear($this->issueRateLimitKey($email));
-}
+    private function clearIssueRateLimit(string $email): void
+    {
+        $this->rateLimiter->clear($this->issueRateLimitKey($email));
+    }
 
 }
