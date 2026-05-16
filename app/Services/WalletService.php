@@ -18,7 +18,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     private \Core\IdempotencyKey $idempotencyKey;
     // 🛡️ H14 Fix: Load supported currencies from config instead of hardcoding
     private array $supportedCurrencies = ['irt', 'usdt'];
-    private const SUPPORTED_NETWORKS   = ['TRC20', 'BEP20', 'ERC20', 'TON', 'SOL'];
+    private const SUPPORTED_NETWORKS   = ['TRC20', 'BNB20', 'ERC20', 'TON', 'SOL'];
     private const MIN_AMOUNT           = 0.01;
 
     private Wallet      $walletModel;
@@ -78,6 +78,38 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         return $wallet;
     }
 
+    public function getWalletBalances(int $userId): array
+    {
+        $wallet = $this->getOrCreateWallet($userId);
+        if (!$wallet) {
+            return [];
+        }
+
+        $irtBalance = (string)($wallet->balance_irt ?? '0');
+        $irtLocked = (string)($wallet->locked_irt ?? '0');
+        $irtAvailable = bcsub($irtBalance, $irtLocked, 4);
+        if (bccomp($irtAvailable, '0', 4) < 0) {
+            $irtAvailable = '0';
+        }
+
+        $usdtBalance = (string)($wallet->balance_usdt ?? '0');
+        $usdtLocked = (string)($wallet->locked_usdt ?? '0');
+        $usdtAvailable = bcsub($usdtBalance, $usdtLocked, 8);
+        if (bccomp($usdtAvailable, '0', 8) < 0) {
+            $usdtAvailable = '0';
+        }
+
+        return [
+            'irt_balance'        => (float)$irtBalance,
+            'irt_locked'         => (float)$irtLocked,
+            'irt_available'      => (float)$irtAvailable,
+            'usdt_balance'       => (float)$usdtBalance,
+            'usdt_locked'        => (float)$usdtLocked,
+            'usdt_available'     => (float)$usdtAvailable,
+            'last_withdrawal_at' => $wallet->last_withdrawal_at ?? null,
+        ];
+    }
+
     private function ledger(): LedgerService
     {
         return $this->ledgerService;
@@ -107,21 +139,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             $userId, 'deposit', $amount, $currency,
             $metadata['gateway_transaction_id'] ?? '',
             $metadata['ref_id']                 ?? '',
+            $metadata['deposit_id']             ?? '',
+            $metadata['tracking_code']          ?? '',
         ]));
-
-        $idempotencyService = $this->idempotencyKey;
-        $check = $idempotencyService->check($idempotencyKey, $userId, 'wallet_deposit', [
-            'amount' => $amount, 'currency' => $currency, 'ip' => $ipAddress,
-        ]);
-
-        if ($check['is_duplicate']) {
-            $this->logger->warning('wallet.deposit.duplicate', [
-                'channel' => 'wallet',
-                'log_id' => $logId,
-                'idempotency_key' => $idempotencyKey,
-            ]);
-            return $this->standardizeResponse($check['result']);
-        }
 
         // Wraps existing logic inside a Distributed Lock specific to this User's Wallet
         return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $metadata, $idempotencyKey, $requestId, $ipAddress, $deviceFingerprint, $logId) {
@@ -149,21 +169,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             $userId, 'deposit_tx', $amount, $currency,
             $metadata['gateway_transaction_id'] ?? '',
             $metadata['ref_id']                 ?? '',
+            $metadata['deposit_id']             ?? '',
+            $metadata['tracking_code']          ?? '',
         ]));
-
-        $idempotencyService = $this->idempotencyKey;
-        $check = $idempotencyService->check($idempotencyKey, $userId, 'wallet_deposit_tx', [
-            'amount' => $amount, 'currency' => $currency, 'ip' => $ipAddress,
-        ]);
-
-        if ($check['is_duplicate']) {
-            $this->logger->warning('wallet.deposit_tx.duplicate', [
-                'channel' => 'wallet',
-                'log_id' => $logId,
-                'idempotency_key' => $idempotencyKey,
-            ]);
-            return $this->standardizeResponse($check['result']);
-        }
 
         return $this->processDepositTransaction(
             $userId, $amount, $currency, $metadata, $idempotencyKey,
@@ -215,6 +223,23 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 $this->db->beginTransaction();
             }
 
+            // H14 Fix (BUG-03): بررسی توکن تکراری بلافاصله داخل بلاک تراکنش جهت ممانعت از نشت توکن در صورت شکست
+            $check = $idempotencyService->check($idempotencyKey, $userId, 'wallet_deposit', [
+                'amount' => $amount, 'currency' => $currency, 'ip' => $ipAddress,
+            ]);
+
+            if ($check['is_duplicate']) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                $this->logger->warning('wallet.deposit.duplicate', [
+                    'channel' => 'wallet',
+                    'log_id' => $logId,
+                    'idempotency_key' => $idempotencyKey,
+                ]);
+                return $this->standardizeResponse($check['result']);
+            }
+
             $wallet = $this->walletModel->findByUserIdForUpdate($userId);
             if (!$wallet) {
                 throw new \RuntimeException('خطا در دریافت wallet');
@@ -263,10 +288,13 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 "wallet:{$userId}",
                 'external_payment',
                 $amount,
+                $currency,
                 $metadata['description'] ?? 'واریز وجه',
                 [
                     'gateway' => $metadata['gateway'] ?? null,
                     'ref_id' => $metadata['ref_id'] ?? null,
+                    'balance_before' => $balanceBefore,
+                    'balance_after' => $balanceAfter,
                 ]
             );
 
@@ -785,8 +813,13 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     "platform_revenue",
                     "wallet:{$userId}",
                     $amount,
+                    $currency,
                     $metadata['description'] ?? 'پرداخت هزینه',
-                    ['type' => $metadata['type'] ?? 'payment']
+                    [
+                        'type' => $metadata['type'] ?? 'payment',
+                        'balance_before' => $balanceBefore,
+                        'balance_after' => $balanceAfter,
+                    ]
                 );
 
                 $result = $this->standardizeResponse([
@@ -880,8 +913,12 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                                 'platform_cash',
                                 'withdrawal_pending',
                                 $amount,
+                                $currency,
                                 'Withdrawal completed',
-                                ['user_id' => $userId]
+                                [
+                                    'user_id' => $userId,
+                                    'balance_snapshot' => 'Locked balance deducted'
+                                ]
                             );
                         }
                     }
@@ -963,8 +1000,13 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                                 "wallet:{$userId}",
                                 'withdrawal_pending',
                                 $amount,
+                                $currency,
                                 'Withdrawal refund',
-                                ['original_transaction' => $transactionId]
+                                [
+                                    'original_transaction' => $transactionId,
+                                    'balance_before' => $balanceBefore,
+                                    'balance_after' => $balanceAfter,
+                                ]
                             );
                         }
                     } else {
@@ -1159,8 +1201,13 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     "wallet:{$fromUserId}",
                     "wallet:{$toUserId}",
                     $amount,
+                    $currency,
                     $description ?: "انتقال به کاربر {$toUserId}",
-                    ['counterparty' => $toUserId]
+                    [
+                        'counterparty' => $toUserId,
+                        'balance_before' => $fromBalance,
+                        'balance_after' => (float)bcsub((string)$fromBalance, (string)$amount, $scale),
+                    ]
                 );
             }
 
@@ -1170,8 +1217,13 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     "wallet:{$fromUserId}",
                     "wallet:{$toUserId}",
                     $amount,
+                    $currency,
                     $description ?: "دریافت از کاربر {$fromUserId}",
-                    ['counterparty' => $fromUserId]
+                    [
+                        'counterparty' => $fromUserId,
+                        'balance_before' => $toBalanceBefore,
+                        'balance_after' => (float)bcadd((string)$toBalanceBefore, (string)$amount, $scale),
+                    ]
                 );
             }
 
@@ -1311,8 +1363,13 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     $debitAccount,
                     $creditAccount,
                     $reversalAmount,
+                    $currency,
                     $description,
-                    ['original_transaction' => $transactionId]
+                    [
+                        'original_transaction' => $transactionId,
+                        'balance_before' => $balanceBefore,
+                        'balance_after' => $balanceAfter,
+                    ]
                 );
 
                 $this->transactionModel->recordStatusChange(

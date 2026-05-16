@@ -52,19 +52,25 @@ class ReconciliationService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'کد پیگیری معتبر نیست'];
         }
 
+        // ۱. یافتن تراکنش متناظر بدون قفل ردیفی در ابتدا جهت ایجاد ایمن رکوردهای یتیم خارج از تراکنش اصلی
+        $transaction = $this->db->query(
+            "SELECT * FROM transactions WHERE external_id = :ext_id OR gateway_transaction_id = :ext_id OR transaction_id = :ext_id LIMIT 1",
+            ['ext_id' => (string)$externalId]
+        )->fetch(\PDO::FETCH_OBJ);
+
+        // ۲. اگر تراکنش وجود نداشت، یک تراکنش یتیم/ناشناخته خارج از تراکنش اصلی ثبت کن تا از هدررفت داده جلوگیری شود (BUG-17)
+        if (!$transaction) {
+            $transaction = $this->createOrphanTransaction($webhookData);
+        }
+
         try {
             $this->db->beginTransaction();
 
-            // ۱. یافتن تراکنش متناظر با قفل بدبینانه ردیفی جهت ممانعت از رفتارهای وب‌هوکی موازی (BUG-02)
+            // ۳. قفل بدبینانه ردیفی روی تراکنش جهت ممانعت از رفتارهای وب‌هوکی موازی
             $transaction = $this->db->query(
-                "SELECT * FROM transactions WHERE external_id = :ext_id OR gateway_transaction_id = :ext_id OR transaction_id = :ext_id LIMIT 1 FOR UPDATE",
-                ['ext_id' => (string)$externalId]
+                "SELECT * FROM transactions WHERE id = :id FOR UPDATE",
+                ['id' => $transaction->id]
             )->fetch(\PDO::FETCH_OBJ);
-
-            // ۲. اگر تراکنش وجود نداشت، یک تراکنش یتیم/ناشناخته ثبت کن تا از هدررفت داده جلوگیری شود (BUG-14)
-            if (!$transaction) {
-                $transaction = $this->createOrphanTransaction($webhookData);
-            }
 
             // H14 Fix (BUG-08): جلوگیری از ثبت موفقیت‌آمیز تراکنش‌های یتیم بدون کاربر مشخص
             if (empty($transaction->user_id)) {
@@ -156,8 +162,29 @@ class ReconciliationService extends \App\Services\BaseService
             return ['success' => true, 'message' => 'Already processed'];
         }
 
-        $amount = (float)($webhookData['amount'] ?? $transaction->amount);
-        $currency = strtolower((string)($webhookData['currency'] ?? $transaction->currency ?? 'irt'));
+        $webhookAmount = $webhookData['amount'] ?? null;
+        $scale = strtolower((string)($transaction->currency ?? 'irt')) === 'usdt' ? 8 : 4;
+        if ($webhookAmount !== null && bccomp((string)$webhookAmount, (string)$transaction->amount, $scale) !== 0) {
+            $this->logger->error('reconciliation.amount_mismatch', [
+                'transaction_id' => $transaction->id,
+                'transaction_amount' => $transaction->amount,
+                'webhook_amount' => $webhookAmount,
+            ]);
+            return ['success' => false, 'message' => 'مبلغ تراکنش با مبلغ پرداخت شده مطابقت ندارد'];
+        }
+
+        $currency = strtolower((string)($transaction->currency ?? 'irt'));
+        $webhookCurrency = isset($webhookData['currency']) ? strtolower((string)$webhookData['currency']) : null;
+        if ($webhookCurrency !== null && $webhookCurrency !== $currency) {
+            $this->logger->error('reconciliation.currency_mismatch', [
+                'transaction_id' => $transaction->id,
+                'transaction_currency' => $currency,
+                'webhook_currency' => $webhookCurrency,
+            ]);
+            return ['success' => false, 'message' => 'ارز تراکنش با ارز پرداخت شده مطابقت ندارد'];
+        }
+
+        $amount = (float)$transaction->amount;
 
         // ۱. آپدیت وضعیت تراکنش به کامل‌شده به صورت کاملاً اتمیک (BUG-04)
         $affected = $this->db->execute(
@@ -268,31 +295,50 @@ class ReconciliationService extends \App\Services\BaseService
     {
         $externalId = (string)($webhookData['transaction_id'] ?? $webhookData['reference_id'] ?? 'orphan_' . time());
         
-        // H14 Fix (BUG-14): بررسی مجدد و با قفل بدبینانه قبل از ساخت تراکنش ناشناس جهت ممانعت از درج موازی ردیف‌های یتیم تکراری
-        $existing = $this->db->query(
-            "SELECT * FROM transactions WHERE external_id = ? LIMIT 1 FOR UPDATE",
-            [$externalId]
-        )->fetch(\PDO::FETCH_OBJ);
+        $startedTransaction = !$this->db->inTransaction();
+        try {
+            if ($startedTransaction) {
+                $this->db->beginTransaction();
+            }
 
-        if ($existing) {
-            return $existing;
+            // H14 Fix (BUG-14): بررسی مجدد و با قفل بدبینانه قبل از ساخت تراکنش ناشناس جهت ممانعت از درج موازی ردیف‌های یتیم تکراری
+            $existing = $this->db->query(
+                "SELECT * FROM transactions WHERE external_id = ? LIMIT 1 FOR UPDATE",
+                [$externalId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            if ($existing) {
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                return $existing;
+            }
+
+            $id = $this->transactionModel->create([
+                'user_id' => $webhookData['user_id'] ?? null,
+                'type' => 'orphan_payment',
+                'amount' => (float)($webhookData['amount'] ?? 0),
+                'currency' => strtolower((string)($webhookData['currency'] ?? 'irt')),
+                'status' => 'pending',
+                'external_id' => $externalId,
+                'gateway' => $webhookData['gateway'] ?? 'unknown',
+                'metadata' => json_encode($webhookData),
+                'created_at' => date('Y-m-d H:i:s')
+            ]);
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+
+            // دریافت مدل ثبت شده جدید
+            return $this->db->query("SELECT * FROM transactions WHERE id = ?", [$id])->fetch(\PDO::FETCH_OBJ)
+                   ?? $this->transactionModel->find((int)$id);
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
         }
-
-        $id = $this->transactionModel->create([
-            'user_id' => $webhookData['user_id'] ?? null,
-            'type' => 'orphan_payment',
-            'amount' => (float)($webhookData['amount'] ?? 0),
-            'currency' => strtolower((string)($webhookData['currency'] ?? 'irt')),
-            'status' => 'pending',
-            'external_id' => $externalId,
-            'gateway' => $webhookData['gateway'] ?? 'unknown',
-            'metadata' => json_encode($webhookData),
-            'created_at' => date('Y-m-d H:i:s')
-        ]);
-
-        // دریافت مدل ثبت شده جدید
-        return $this->db->query("SELECT * FROM transactions WHERE id = ?", [$id])->fetch(\PDO::FETCH_OBJ)
-               ?? $this->transactionModel->find((int)$id);
     }
 
     /**

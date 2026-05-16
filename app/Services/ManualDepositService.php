@@ -73,13 +73,19 @@ class ManualDepositService extends \App\Services\BaseService
 
         $receiptHash = null;
         if (!empty($receiptPath) && \file_exists($receiptPath)) {
-            $receiptHash = \md5_file($receiptPath);
+            $receiptHash = \hash_file('sha256', $receiptPath);
         }
 
         $cardId = (int)($data['card_id'] ?? $data['bank_card_id'] ?? 0);
         $card = null;
         if ($cardId > 0) {
-            $card = $this->bankCardModel->find($cardId);
+            $card = $this->bankCardModel->findByIdAndUser($cardId, $userId);
+            if (!$card || $card->status !== 'verified') {
+                if (!empty($receiptPath)) {
+                    try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+                }
+                return ['success' => false, 'message' => 'کارت معتبر یافت نشد'];
+            }
         }
 
         // ممانعت از ثبت واریز ریالی در صورت فعال بودن حالت تتر-تنها
@@ -231,13 +237,14 @@ class ManualDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => $ok['message'] ?? 'خطا در شارژ کیف پول'];
             }
 
-            $this->model->update($depositId, [
-                'status'         => 'approved',
-                'admin_note'     => $note,
-                'reviewed_by'    => $adminId,
-                'reviewed_at'    => date('Y-m-d H:i:s'),
-                'transaction_id' => $ok['transaction_id'],
-            ]);
+            $this->model->updateStatus(
+                $depositId,
+                'approved',
+                null,
+                $adminId,
+                $ok['transaction_id'],
+                $note
+            );
 
             $this->db->commit();
 
@@ -312,12 +319,14 @@ class ManualDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'این درخواست قبلاً بررسی شده است'];
             }
 
-            $this->model->update($depositId, [
-                'status'      => 'rejected',
-                'admin_note'  => $reason,
-                'reviewed_by' => $adminId,
-                'reviewed_at' => date('Y-m-d H:i:s'),
-            ]);
+            $this->model->updateStatus(
+                $depositId,
+                'rejected',
+                $reason,
+                $adminId,
+                null,
+                $reason
+            );
 
             $this->auditTrail->record('deposit.rejected', (int)$d->user_id, [
                 'deposit_id' => $depositId,

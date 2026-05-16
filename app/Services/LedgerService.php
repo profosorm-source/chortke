@@ -38,11 +38,13 @@ class LedgerService extends \App\Services\BaseService
             return false;
         }
 
-        $startedTransaction = !$this->db->inTransaction();
+        if (!$this->db->inTransaction()) {
+            throw new \RuntimeException(
+                'recordDoubleEntry MUST be called within an active transaction'
+            );
+        }
+
         try {
-            if ($startedTransaction) {
-                $this->db->beginTransaction();
-            }
             $common = [
                 'transaction_id' => $transactionId,
                 'description' => $description,
@@ -67,14 +69,8 @@ class LedgerService extends \App\Services\BaseService
                 throw new \RuntimeException("Failed to write debit/credit ledger entries for transaction ID: {$transactionId}");
             }
 
-            if ($startedTransaction) {
-                $this->db->commit();
-            }
             return true;
         } catch (\Throwable $e) {
-            if ($startedTransaction && $this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
             $this->logError('ledger.record_double_entry.failed', [
                 'transaction_id' => $transactionId,
                 'error' => $e->getMessage(),
@@ -90,10 +86,10 @@ class LedgerService extends \App\Services\BaseService
         $row = $stmt->fetch();
         if (!$row) return true;
 
-        $debit = (float) ($row['total_debit'] ?? 0);
-        $credit = (float) ($row['total_credit'] ?? 0);
+        $debit = (string) ($row['total_debit'] ?? '0');
+        $credit = (string) ($row['total_credit'] ?? '0');
 
-        return bccomp((string)$debit, (string)$credit, 8) === 0;
+        return bccomp($debit, $credit, 8) === 0;
     }
 
     public function isLedgerBalanced(): bool
@@ -102,9 +98,9 @@ class LedgerService extends \App\Services\BaseService
         $row = $stmt->fetch();
         if (!$row) return true;
 
-        $debit = (float) ($row['total_debit'] ?? 0);
-        $credit = (float) ($row['total_credit'] ?? 0);
+        $debit = (string) ($row['total_debit'] ?? '0');
+        $credit = (string) ($row['total_credit'] ?? '0');
 
-        return bccomp((string)$debit, (string)$credit, 8) === 0;
+        return bccomp($debit, $credit, 8) === 0;
     }
 }

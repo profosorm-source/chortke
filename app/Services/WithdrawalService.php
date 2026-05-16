@@ -136,7 +136,15 @@ class WithdrawalService extends PaymentBaseService
             $this->db->beginTransaction();
 
             // ۱. بررسی اتمیک تکراری بودن درخواست (Idempotency)
-            $existing = $this->db->query("SELECT * FROM withdrawals WHERE idempotency_key = ? LIMIT 1 FOR UPDATE", [$requestId])->fetch(\PDO::FETCH_OBJ);
+            $idempotencyKey = $payload['idempotency_key'] ?? $payload['request_id'] ?? hash('sha256', implode('|', [
+                $userId,
+                'withdrawal_user_request',
+                $amount,
+                $currency,
+                $bankCardId,
+            ]));
+
+            $existing = $this->db->query("SELECT * FROM withdrawals WHERE idempotency_key = ? LIMIT 1 FOR UPDATE", [$idempotencyKey])->fetch(\PDO::FETCH_OBJ);
             if ($existing) {
                 $this->db->rollBack();
                 return ['success' => true, 'message' => 'درخواست برداشت با موفقیت ثبت شد'];
@@ -181,7 +189,7 @@ class WithdrawalService extends PaymentBaseService
                 'request_id' => $requestId,
                 'ip' => $ip,
                 'fingerprint' => $fingerprint,
-                'idempotency_key' => $requestId,
+                'idempotency_key' => $idempotencyKey,
                 'bank_card_id' => $bankCardId,
             ]);
 
@@ -196,7 +204,7 @@ class WithdrawalService extends PaymentBaseService
                 'amount' => $amount,
                 'currency' => $currency,
                 'status' => 'pending',
-                'idempotency_key' => $requestId,
+                'idempotency_key' => $idempotencyKey,
                 'ip_address' => $ip,
                 'device_fingerprint' => $fingerprint,
                 'transaction_id' => $debit['transaction_id'] ?? null,
@@ -379,7 +387,15 @@ class WithdrawalService extends PaymentBaseService
                 $withdrawalData['crypto_wallet']  = $addr;
             }
 
-            $idempotencyKey = $this->uuid();
+            $idempotencyKey = $data['idempotency_key'] ?? $data['request_id'] ?? hash('sha256', implode('|', [
+                $userId,
+                'withdrawal_create',
+                $amount,
+                $currency,
+                $data['bank_card_id'] ?? $data['card_id'] ?? '',
+                $data['crypto_wallet'] ?? '',
+                $data['crypto_network'] ?? '',
+            ]));
 
             // بررسی idempotency تحت تراکنش
             $existing = $this->model->where('idempotency_key', $idempotencyKey)->first();

@@ -82,30 +82,39 @@ class ScheduledPaymentService extends \App\Services\BaseService
                 $status = $payment->frequency === 'one_time' ? 'completed' : 'active';
                 $this->scheduledPaymentModel->updateNextRun((int)$payment->id, $nextRun, $status);
 
+                $this->db->commit();
+
                 // ✅ **تطبیق scheduled payment با wallet و ledger**
                 // تأیید: آیا scheduled payment واقعاً از wallet کاهش پیدا کرد؟
-                $reconciliation = $this->reconciliationService->reconcilePayment([
-                    'transaction_id' => 'scheduled_' . $txId,
-                    'reference_id' => 'scheduled_payment_' . $payment->id,
-                    'user_id' => (int)$payment->user_id,
-                    'amount' => (float)$payment->amount,
-                    'currency' => $payment->currency,
-                    'status' => 'success',
-                    'gateway' => 'scheduled_charge',
-                    'description' => "تطبیق scheduled payment - Frequency: {$payment->frequency}, Next: {$nextRun}",
-                    'timestamp' => time(),
-                ]);
+                // انتقال به بعد از commit برای جلوگیری از commit تو در تو در MySQL
+                try {
+                    $reconciliation = $this->reconciliationService->reconcilePayment([
+                        'transaction_id' => 'scheduled_' . $txId,
+                        'reference_id' => 'scheduled_payment_' . $payment->id,
+                        'user_id' => (int)$payment->user_id,
+                        'amount' => (float)$payment->amount,
+                        'currency' => $payment->currency,
+                        'status' => 'success',
+                        'gateway' => 'scheduled_charge',
+                        'description' => "تطبیق scheduled payment - Frequency: {$payment->frequency}, Next: {$nextRun}",
+                        'timestamp' => time(),
+                    ]);
 
-                if (!$reconciliation['success']) {
-                    $this->logger->warning('scheduled_payment.reconciliation_failed', [
+                    if (!$reconciliation['success']) {
+                        $this->logger->warning('scheduled_payment.reconciliation_failed', [
+                            'payment_id' => $payment->id,
+                            'user_id' => $payment->user_id,
+                            'amount' => $payment->amount,
+                            'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
+                        ]);
+                    }
+                } catch (\Throwable $reconcileEx) {
+                    $this->logger->error('scheduled_payment.reconciliation_exception', [
                         'payment_id' => $payment->id,
-                        'user_id' => $payment->user_id,
-                        'amount' => $payment->amount,
-                        'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
+                        'error' => $reconcileEx->getMessage()
                     ]);
                 }
 
-                $this->db->commit();
                 $processed++;
                 $details[] = ['id' => $payment->id, 'status' => $status];
             } catch (\Exception $e) {

@@ -66,8 +66,9 @@ class BankCardService extends \App\Services\BaseService
 
             // H14 Fix (BUG-13): بررسی با قفل ردیفی بدبینانه جهت ممانعت از ثبت همزمان کارت
             $encryptedCardNumber = $this->encryption->encrypt($cardNumber);
-            $stmt = $this->db->prepare("SELECT id FROM bank_cards WHERE card_number = ? AND deleted_at IS NULL FOR UPDATE");
-            $stmt->execute([$encryptedCardNumber]);
+            $cardHash = hash_hmac('sha256', $cardNumber, (string)config('app.key'));
+            $stmt = $this->db->prepare("SELECT id FROM bank_cards WHERE card_hash = ? AND deleted_at IS NULL FOR UPDATE");
+            $stmt->execute([$cardHash]);
             if ($stmt->fetch()) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
@@ -78,6 +79,7 @@ class BankCardService extends \App\Services\BaseService
             $id = $this->model->create([
                 'user_id' => $userId,
                 'card_number' => $encryptedCardNumber,
+                'card_hash' => $cardHash,
                 'owner_name' => $this->encryption->encrypt($holder),
                 'bank_name' => $bankName,
                 'shaba' => $iban ?: null,
@@ -200,6 +202,19 @@ class BankCardService extends \App\Services\BaseService
             if (($card->status ?? '') !== 'pending') {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'این کارت در وضعیت معلق قرار ندارد'];
+            }
+
+            if ($approve) {
+                $user = $this->userModel->find((int)$card->user_id);
+                if (!$user) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'کاربر یافت نشد'];
+                }
+                $decryptedOwnerName = $this->encryption->decrypt((string)$card->owner_name);
+                if (!$this->matchName($decryptedOwnerName, (string)$user->full_name)) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'نام دارنده کارت با نام کاربری شما مطابقت ندارد'];
+                }
             }
 
             $status = $approve ? 'verified' : 'rejected';
