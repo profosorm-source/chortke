@@ -141,18 +141,37 @@ class PasswordPolicy
      */
     public static function isSimilarToUserInfo($password, $userInfo = [])
     {
-        $password = strtolower($password);
-
+        $normalizedPassword = self::normalizeText($password);
         foreach ($userInfo as $info) {
-            $info = strtolower($info);
+            $normalizedInfo = self::normalizeText((string)$info);
             
             // اگر رمز شامل نام کاربری، ایمیل یا نام باشد
-            if (strlen($info) > 3 && strpos($password, $info) !== false) {
+            if (mb_strlen($normalizedInfo, 'UTF-8') > 3 && mb_strpos($normalizedPassword, $normalizedInfo, 0, 'UTF-8') !== false) {
+                return true;
+            }
+
+            if (function_exists('similar_text')) {
+                similar_text($normalizedPassword, $normalizedInfo, $percent);
+                if ((int)$percent >= 75) {
+                    return true;
+                }
+            }
+
+            if (function_exists('levenshtein') && levenshtein($normalizedPassword, $normalizedInfo) <= 2) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static function normalizeText(string $text): string
+    {
+        $normalized = mb_strtolower($text, 'UTF-8');
+        if (class_exists('Normalizer')) {
+            $normalized = \Normalizer::normalize($normalized, \Normalizer::FORM_D) ?: $normalized;
+        }
+        return $normalized;
     }
 
     /**
