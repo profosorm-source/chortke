@@ -35,6 +35,9 @@ class SessionController extends BaseUserController
      */
     public function terminate(int $id): void
     {
+        // LOW-03 Fix: Explicit CSRF protection for session termination
+        app(\Core\CSRF::class)->validate();
+
         $userId = user_id();
 
         $result = $this->sessionService->terminateSession($id, $userId);

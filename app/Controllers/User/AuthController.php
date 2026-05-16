@@ -297,12 +297,6 @@ class AuthController extends BaseController
         $hashedInput = hash_hmac('sha256', $inputCode, (string)config('app.key'));
         
         $isValid = hash_equals((string)$user->email_verification_token, $hashedInput);
-        
-        // Fallback for legacy plaintext tokens
-        if (!$isValid && strlen((string)$user->email_verification_token) > 6) {
-            $legacyCode = strtoupper(substr((string)$user->email_verification_token, 0, 6));
-            $isValid = hash_equals($legacyCode, $inputCode);
-        }
 
         if (!$isValid) {
             $this->logger->warning('auth.email_verification.failed', ['email' => $email, 'ip' => $ip]);
@@ -326,27 +320,37 @@ class AuthController extends BaseController
     public function resendVerification(): void
     {
         $email = $this->session->get('pending_verification_email');
+        $genericMsg = 'در صورت وجود حساب، ایمیل ارسال شد.';
+        
         if (!$email) {
-            $this->jsonError('درخواست نامعتبر');
+            $this->jsonSuccess($genericMsg);
             return;
         }
 
         // محدودیت زمانی برای ارسال مجدد (مثلاً هر ۲ دقیقه)
-        $rateLimitKey = "resend_email:" . hash('sha256', $email);
+        $ip = $this->request->ip();
+        $rateLimitKey = "resend_email:" . hash('sha256', "{$email}:{$ip}");
+        
         if (!$this->authService->checkRateLimit('resend_email', $rateLimitKey)) {
             $this->jsonError('لطفاً چند دقیقه صبر کنید و سپس دوباره تلاش کنید.');
             return;
         }
 
         $user = $this->userService->findByEmail($email);
-        if ($user && !empty($user->email_verification_token)) {
-             app(\App\Services\EmailService::class)->sendVerificationEmail((int)$user->id, $user->email_verification_token);
-             $this->session->set('pending_verification_at', time());
-             $this->jsonSuccess('ایمیل تأیید دوباره ارسال شد.');
-             return;
+        
+        // HIGH-H-08 Fix: Rotate verification token on resend to prevent use of leaked tokens
+        if ($user && empty($user->email_verified_at)) {
+            $newToken = bin2hex(random_bytes(32));
+            $hashedToken = hash_hmac('sha256', strtoupper(substr($newToken, 0, 6)), (string)config('app.key'));
+            
+            $this->userService->update((int)$user->id, ['email_verification_token' => $hashedToken]);
+            
+            app(\App\Services\EmailService::class)->sendVerificationEmail((int)$user->id, $newToken);
+            $this->session->set('pending_verification_at', time());
         }
 
-        $this->jsonError('کاربر یافت نشد یا قبلاً تأیید شده است.');
+        // Always return success to prevent enumeration
+        $this->jsonSuccess($genericMsg);
     }
 
     /**
@@ -362,25 +366,33 @@ class AuthController extends BaseController
      */
     public function forgotPassword(): void
     {
-        try {
-            $this->authService->checkRateLimit('auth', 'forgot_password');
-        } catch (\Exception $e) {
-            if ($e->getCode() === 429) {
-                $this->session->setFlash('error', $e->getMessage());
-                $this->response->redirect(url('forgot-password'));
-                return;
-            }
-        }
+        $email = (string)$this->request->input('email', '');
+        $ip = $this->request->ip();
+        $genericMsg = 'در صورت وجود حساب، لینک بازیابی ارسال شد.';
 
-        $email = $this->request->input('email');
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $this->session->setFlash('error', 'ایمیل معتبر وارد کنید.');
+        // CRITICAL-03 Fix: Combined IP + Email rate limiting using non-exception pattern
+        $emailKey = hash('sha256', mb_strtolower(trim($email)));
+        $rateLimitIp = "forgot_pwd_ip:" . hash('sha256', $ip);
+        $rateLimitEmail = "forgot_pwd_email:{$emailKey}";
+
+        $rateLimiter = app(\Core\RateLimiter::class);
+        if (!$rateLimiter->attempt($rateLimitIp, 5, 60) || 
+            !$rateLimiter->attempt($rateLimitEmail, 3, 3600)) {
+            
+            $this->session->setFlash('error', 'تعداد درخواست‌های بازیابی بیش از حد مجاز است. لطفاً بعداً تلاش کنید.');
             $this->response->redirect(url('forgot-password'));
             return;
         }
 
-        $result = $this->authService->requestPasswordReset((string)$email);
-        $this->session->setFlash('success', $result['message']);
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            // Anti-enumeration: still show success but don't process
+            $this->session->setFlash('success', $genericMsg);
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        $result = $this->authService->requestPasswordReset($email);
+        $this->session->setFlash('success', $genericMsg);
         $this->response->redirect(url('login'));
     }
 
