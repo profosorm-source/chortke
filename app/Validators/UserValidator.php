@@ -27,8 +27,12 @@ class UserValidator
         // Email
         if (empty($data['email'])) {
             $errors['email'][] = 'ایمیل الزامی است.';
-        } elseif (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
-            $errors['email'][] = 'فرمت ایمیل نامعتبر است.';
+        } else {
+            // LOW-L-03 Fix: Normalize email to prevent enumeration and duplicates via casing
+            $data['email'] = mb_strtolower(trim((string)$data['email']), 'UTF-8');
+            if (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
+                $errors['email'][] = 'فرمت ایمیل نامعتبر است.';
+            }
         }
         
         // Password
@@ -36,6 +40,16 @@ class UserValidator
             $errors['password'][] = 'رمز عبور الزامی است.';
         } else {
             $policyErrors = PasswordPolicy::validate($data['password']);
+            
+            // MEDIUM-M8 Fix: Prevent passwords similar to username or email
+            if (PasswordPolicy::isSimilarToUserInfo($data['password'], [
+                $data['username'] ?? '',
+                $data['email'] ?? '',
+                $data['full_name'] ?? ''
+            ])) {
+                $policyErrors[] = 'رمز عبور نباید شبیه نام کاربری، ایمیل یا نام شما باشد.';
+            }
+
             if (!empty($policyErrors)) {
                 $errors['password'] = array_merge($errors['password'] ?? [], $policyErrors);
             }

@@ -11,7 +11,7 @@ class PasswordPolicy
     /**
      * اعتبارسنجی کامل رمز عبور
      */
-    public static function validate($password)
+    public static function validate($password, array $userInfo = [])
     {
         $errors = [];
         
@@ -36,9 +36,8 @@ class PasswordPolicy
             $errors[] = "رمز عبور نباید بیشتر از " . $maxLength . " کاراکتر باشد.";
         }
         
-        if ($byteCount > 72) {
-            $errors[] = "طول رمز عبور به دلیل محدودیت‌های امنیتی نباید از ۷۲ بایت تجاوز کند.";
-        }
+        // MEDIUM-M-04 Fix: Removed 72-byte hard limit. 
+        // Passwords should be truncated or pre-hashed (sha384) before bcrypt to support long passwords.
 
         // حروف بزرگ
         if ($requireUppercase && !preg_match('/[A-Z]/', $password)) {
@@ -63,6 +62,11 @@ class PasswordPolicy
         // رمزهای رایج
         if ($preventCommonPasswords && self::isCommonPassword($password)) {
             $errors[] = "این رمز عبور بسیار ضعیف و رایج است. لطفاً رمز قوی‌تری انتخاب کنید.";
+        }
+
+        // HIGH-H-08 Fix: Check similarity to user info
+        if (!empty($userInfo) && self::isSimilarToUserInfo($password, $userInfo)) {
+            $errors[] = 'رمز عبور نباید شبیه اطلاعات شخصی شما (مانند نام کاربری یا ایمیل) باشد.';
         }
 
         return $errors;
@@ -175,7 +179,13 @@ class PasswordPolicy
             $password .= $all[random_int(0, strlen($all) - 1)];
         }
 
-        // مخلوط کردن
-        return str_shuffle($password);
+        // LOW-L4 Fix: Use secure Fisher-Yates shuffle with CSPRNG instead of mt_rand-based str_shuffle
+        $chars = str_split($password);
+        for ($i = count($chars) - 1; $i > 0; $i--) {
+            $j = random_int(0, $i);
+            [$chars[$i], $chars[$j]] = [$chars[$j], $chars[$i]];
+        }
+        
+        return implode('', $chars);
     }
 }
