@@ -156,12 +156,12 @@ class RateLimitMiddleware extends BaseMiddleware
         if ($userId) {
             // HIGH-04 Fix: Combined IP + UserID for authenticated users to prevent scraping/DDoS 
             // even with a valid account.
-            return 'rl_user_' . $userId . '_' . md5($ip) . '_' . md5($cleanUri);
+            return 'rl_user_' . $userId . '_' . hash('sha256', $ip) . '_' . hash('sha256', $cleanUri);
         }
         
         // MEDIUM-06 Fix: Normalize IPv6 to /64 prefix to prevent rate limit bypass
         $normalizedIp = $this->normalizeIp($ip);
-        return 'rl_ip_' . md5($normalizedIp) . '_' . md5($cleanUri);
+        return 'rl_ip_' . hash('sha256', $normalizedIp) . '_' . hash('sha256', $cleanUri);
     }
 
     /**

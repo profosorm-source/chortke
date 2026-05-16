@@ -54,8 +54,8 @@ class AdminMiddleware extends BaseMiddleware
             $lastVerify = (int)$session->get('admin_verify_time', 0);
         }
 
-        // 🚀 BUG FIX [H-01]: Periodic DB re-validation (Every 60 seconds)
-        if (time() - $lastVerify > 60) {
+        // 🚀 BUG FIX [H-01]: Periodic DB re-validation (Every 15 seconds for enhanced role revocation)
+        if (time() - $lastVerify > 15) {
             try {
                 $user = $this->userModel->find($userId);
                 if (!$user || !RolePolicy::isAdmin($user->role ?? '')) {

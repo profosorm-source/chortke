@@ -206,6 +206,17 @@ class ApiAuthMiddleware extends BaseMiddleware
             return null;
         }
         
+        // MEDIUM-01 Fix: Check negative cache in Redis before DB query to prevent denial of service (DoS) from invalid token floods
+        $redis = app(\Core\Redis::class);
+        $redisAvailable = $redis && $redis->isAvailable();
+        if ($redisAvailable) {
+            try {
+                if ($redis->get("token_revoked:{$hashedToken}")) {
+                    return null;
+                }
+            } catch (\Throwable $e) {}
+        }
+
         // ✅ Use the pre-hashed token directly in the query
         // No additional hashing needed - token is already HMAC-SHA256 hashed
         $query = "SELECT u.*, at.id AS token_id, at.scopes
@@ -226,7 +237,16 @@ class ApiAuthMiddleware extends BaseMiddleware
         
         // Use prepared statements to prevent SQL injection
         // The hashed token is safe to use in SQL as it's guaranteed to be hex characters
-        return $this->db->fetch($query, $params) ?: null;
+        $result = $this->db->fetch($query, $params) ?: null;
+
+        // Populate negative cache if token is invalid or revoked to save DB resources
+        if ($result === null && $redisAvailable) {
+            try {
+                $redis->set("token_revoked:{$hashedToken}", "1", 3600); // negative cache for 1 hour
+            } catch (\Throwable $e) {}
+        }
+
+        return $result;
     }
 
     /**
