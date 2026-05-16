@@ -252,30 +252,19 @@ class TwoFactorController extends BaseUserController
             $user->two_factor_secret
         );
 
-        // Render QR using Google Charts API as a server-side proxy
-        // Since it's done server-to-server, the secret is never exposed to the client's browser/logs.
-        $qrServiceUrl = "https://chart.googleapis.com/chart?chs=200x200&cht=qr&chl=" . urlencode($otpAuthUrl) . "&choe=UTF-8";
-        
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $qrServiceUrl);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        $image = curl_exec($ch);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($image === false || empty($image)) {
-            $this->logger->error('2fa.qr_proxy.failed', ['error' => $error]);
-            $this->response->setStatusCode(502);
-            $this->response->setContent('Failed to generate QR');
-            return;
+        // Render QR locally using the internal QRCode library
+        try {
+            $svg = \Core\Lib\QRCode::svg($otpAuthUrl);
+            
+            $this->response->header('Content-Type', 'image/svg+xml');
+            $this->response->header('Cache-Control', 'no-store, no-cache, must-revalidate');
+            $this->response->header('Pragma', 'no-cache');
+            $this->response->setContent($svg);
+        } catch (\Throwable $e) {
+            $this->logger->error('2fa.qr_generation.failed', ['error' => $e->getMessage()]);
+            $this->response->setStatusCode(500);
+            $this->response->setContent('Internal Server Error: QR Generation failed');
         }
-
-        $this->response->header('Content-Type', 'image/png');
-        $this->response->header('Cache-Control', 'no-store, no-cache, must-revalidate');
-        $this->response->header('Pragma', 'no-cache');
-        $this->response->setContent($image);
     }
 
     public function disable(): void
