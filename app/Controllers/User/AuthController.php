@@ -52,13 +52,14 @@ class AuthController extends BaseController
         // CRITICAL-01 Fix: Redundant checkRateLimit removed. AuthService::login now handles 
         // consolidated IP + Identifier rate limiting.
 
-        $email = (string)$this->request->input('email', '');
+        $data = $this->request->all();
+        $email = (string)($data['email'] ?? '');
         $captchaType = $this->loginRiskService->getCaptchaType('login', null, $email);
         if ($captchaType !== null) {
             // ✅ استفاده از $this->request->input() به جای $_POST
-            $captchaToken = trim((string)$this->request->input('captcha_token', ''));
-            $captchaResp = trim((string)$this->request->input('captcha_response', ''));
-            $recaptchaResp = trim((string)$this->request->input('g-recaptcha-response', ''));
+            $captchaToken = trim((string)($data['captcha_token'] ?? ''));
+            $captchaResp = trim((string)($data['captcha_response'] ?? ''));
+            $recaptchaResp = trim((string)($data['g-recaptcha-response'] ?? ''));
 
             if ($captchaType === 'recaptcha_v2') {
                 if ($recaptchaResp === '' || !$this->captchaService->verify('', '', $recaptchaResp)) {
@@ -90,18 +91,18 @@ class AuthController extends BaseController
         }
 
         // 🛡️ گیت ضدتقلب و امنیت هوشمند
-        $user = $this->userService->findByEmail((string)$data['email']);
+        $user = $this->userService->findByEmail($email);
         $userId = $user ? (int)$user->id : 0;
 
         $risk = $this->fraudGuard->checkAction($userId, 'auth.login', [
-            'email'      => (string)$data['email'],
+            'email'      => $email,
             'ip'         => $this->request->ip(),
             'user_agent' => $this->request->userAgent()
         ]);
 
         if (!$risk['allowed']) {
             $this->logger->warning('auth.login_blocked_by_fraud_guard', [
-                'email' => $data['email'],
+                'email' => $email,
                 'reason' => $risk['reason']
             ]);
             $this->session->setFlash('error', 'درخواست ورود به دلیل تشخیص فعالیت غیرمجاز مسدود گردید.');
@@ -110,7 +111,7 @@ class AuthController extends BaseController
         }
 
         $remember = ($data['remember'] ?? '') === 'on';
-        $result = $this->authService->login($data['email'], $data['password'], $remember);
+        $result = $this->authService->login($email, (string)($data['password'] ?? ''), $remember);
 
         if (!$result['success']) {
             $this->loginRiskService->recordFailure('login', null, (string)$data['email']);
