@@ -156,7 +156,7 @@ class ManualDepositController extends BaseUserController
                 function() use ($userId, $data, $receiptPath) {
                     return $this->depositService->create($userId, [
                         'bank_card_id' => (int)$data['bank_card_id'],
-                        'amount' => (float)$data['amount'],
+                        'amount' => (string)$data['amount'],
                         'tracking_code' => (string)$data['tracking_code'],
                         'user_description' => (string)($data['user_description'] ?? ''),
                     ], $receiptPath);
