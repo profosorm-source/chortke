@@ -115,11 +115,14 @@ class WithdrawalController extends BaseUserController
     $userId = (int) user_id();
 
     try {
+        $idempotencyKey = $this->request->header('Idempotency-Key') ?? $this->request->header('X-Idempotency-Key') ?? $this->request->input('idempotency_key');
+
         $payload = [
             'amount' => $this->request->input('amount'),
             'currency' => $this->request->input('currency') ?? 'irt',
             'bank_card_id' => $this->request->input('bank_card_id'),
             'request_id' => $this->request->header('X-Request-ID') ?? bin2hex(random_bytes(8)),
+            'idempotency_key' => $idempotencyKey,
             'ip' => get_client_ip(),
             'user_agent' => get_user_agent(),
             'fingerprint' => generate_device_fingerprint(),
