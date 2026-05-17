@@ -54,9 +54,8 @@ class ManualDepositService extends \App\Services\BaseService
 
     public function create(int $userId, array $data, ?string $receiptPath): array
     {
-        // H14 Fix (BUG-04): تعریف و استخراج کامل متغیرهای ورودی پیش از شروع تراکنش
-        $amount = (float)($data['amount'] ?? 0);
-        if ($amount <= 0) {
+        $amount = isset($data['amount']) ? (string)$data['amount'] : '0';
+        if (bccomp($amount, '0', 4) <= 0) {
             if (!empty($receiptPath)) {
                 try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
             }
@@ -106,6 +105,20 @@ class ManualDepositService extends \App\Services\BaseService
 
         $this->db->beginTransaction();
         try {
+            // بررسی مجدد وضعیت احراز هویت کاربر داخل تراکنش با قفل FOR SHARE جهت جلوگیری از Race Condition
+            $userLock = $this->db->query(
+                "SELECT id, kyc_status FROM users WHERE id = ? FOR SHARE",
+                [$userId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            if (!$userLock || $userLock->kyc_status !== 'verified') {
+                $this->db->rollBack();
+                if (!empty($receiptPath)) {
+                    try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+                }
+                return ['success' => false, 'message' => 'برای واریز دستی باید احراز هویت شما تأیید شده باشد'];
+            }
+
             // ۱. بررسی عدم وجود درخواست معلق فعلی با قفل تراکنشی
             $pending = $this->db->query(
                 "SELECT id FROM manual_deposits WHERE user_id = ? AND status IN ('pending', 'under_review') LIMIT 1 FOR UPDATE",
@@ -206,7 +219,16 @@ class ManualDepositService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // H14 Fix: اعمال قفل ردیفی جهت جلوگیری از Race Condition و شارژ مضاعف
+            $temp = $this->db->query("SELECT user_id FROM manual_deposits WHERE id = ?", [$depositId])->fetch(\PDO::FETCH_OBJ);
+            if (!$temp) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'درخواست یافت نشد'];
+            }
+
+            // 1. Lock Wallet row to establish consistent lock order hierarchy (Wallet -> ManualDeposit)
+            $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [$temp->user_id])->fetch();
+
+            // 2. Lock manual deposit row
             $d = $this->db->query("SELECT * FROM manual_deposits WHERE id = ? FOR UPDATE", [$depositId])->fetch(\PDO::FETCH_OBJ);
 
             if (!$d) {
@@ -219,9 +241,22 @@ class ManualDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'این درخواست قبلاً بررسی شده است'];
             }
 
+            // Transition status to transitional 'processing' state first
+            $this->model->updateStatus(
+                $depositId,
+                'processing',
+                null,
+                $adminId,
+                null,
+                null,
+                ['pending', 'under_review']
+            );
+
+            $amountStr = (string)$d->amount;
+
             $ok = $this->wallet->depositInTransaction(
                 (int)$d->user_id,
-                (float)$d->amount,
+                $amountStr,
                 'irt',
                 [
                     'type'          => 'manual_deposit',
@@ -243,7 +278,8 @@ class ManualDepositService extends \App\Services\BaseService
                 null,
                 $adminId,
                 $ok['transaction_id'],
-                $note
+                $note,
+                ['processing']
             );
 
             $this->db->commit();
@@ -254,7 +290,7 @@ class ManualDepositService extends \App\Services\BaseService
                     'transaction_id' => (string)$ok['transaction_id'],
                     'reference_id'   => 'manual_deposit_' . $depositId,
                     'user_id'        => (int)$d->user_id,
-                    'amount'         => (float)$d->amount,
+                    'amount'         => (float)$amountStr,
                     'currency'       => 'irt',
                     'status'         => 'success',
                     'gateway'        => 'manual_bank',
@@ -284,13 +320,15 @@ class ManualDepositService extends \App\Services\BaseService
 
             $this->auditTrail->record('deposit.approved', (int)$d->user_id, [
                 'deposit_id'     => $depositId,
-                'amount'         => (float)$d->amount,
+                'amount'         => $amountStr,
                 'tracking_code'  => $d->tracking_code,
                 'admin_id'       => $adminId,
                 'transaction_id' => $ok['transaction_id'],
+                'balance_before' => $ok['balance_before'] ?? null,
+                'balance_after'  => $ok['balance_after'] ?? null,
             ], $adminId);
 
-            $this->notifier->depositSuccess((int)$d->user_id, (float)$d->amount, 'IRT');
+            $this->notifier->depositSuccess((int)$d->user_id, $amountStr, 'IRT');
 
             return ['success' => true, 'message' => 'واریز تأیید شد و کیف پول شارژ گردید'];
 
@@ -307,6 +345,16 @@ class ManualDepositService extends \App\Services\BaseService
     {
         $this->db->beginTransaction();
         try {
+            $temp = $this->db->query("SELECT user_id FROM manual_deposits WHERE id = ?", [$depositId])->fetch(\PDO::FETCH_OBJ);
+            if (!$temp) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'درخواست یافت نشد'];
+            }
+
+            // 1. Lock Wallet row to establish consistent lock order hierarchy (Wallet -> ManualDeposit)
+            $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [$temp->user_id])->fetch();
+
+            // 2. Lock manual deposit row
             $d = $this->db->query("SELECT * FROM manual_deposits WHERE id = ? FOR UPDATE", [$depositId])->fetch(\PDO::FETCH_OBJ);
 
             if (!$d) {
@@ -319,18 +367,21 @@ class ManualDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'این درخواست قبلاً بررسی شده است'];
             }
 
+            $amountStr = (string)$d->amount;
+
             $this->model->updateStatus(
                 $depositId,
                 'rejected',
                 $reason,
                 $adminId,
                 null,
-                $reason
+                $reason,
+                ['pending', 'under_review']
             );
 
             $this->auditTrail->record('deposit.rejected', (int)$d->user_id, [
                 'deposit_id' => $depositId,
-                'amount'     => (float)$d->amount,
+                'amount'     => $amountStr,
                 'reason'     => $reason,
                 'admin_id'   => $adminId,
             ], $adminId);

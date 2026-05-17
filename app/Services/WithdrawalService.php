@@ -290,10 +290,15 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'کیف پول یافت نشد'];
             }
 
-            $userLock = $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$userId])->fetch();
+            $userLock = $this->db->query("SELECT id, kyc_status FROM users WHERE id = ? FOR UPDATE", [$userId])->fetch(\PDO::FETCH_OBJ);
             if (!$userLock) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'کاربر یافت نشد'];
+            }
+
+            if ($userLock->kyc_status !== 'verified') {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'برای برداشت باید احراز هویت تأیید شده باشد'];
             }
 
             $limitCheck = $this->check($userId, $amount, $currency);
