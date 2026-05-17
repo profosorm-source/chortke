@@ -34,13 +34,11 @@ class LedgerEntry extends Model
         // Unique constraint check to prevent duplicate posting of the same leg
         $stmt = $this->db->prepare(
             "SELECT id FROM ledger_entries 
-             WHERE transaction_id = ? AND account = ? AND debit = ? AND credit = ? AND currency = ? LIMIT 1"
+             WHERE transaction_id = ? AND account = ? AND currency = ? LIMIT 1 FOR UPDATE"
         );
         $stmt->execute([
             $data['transaction_id'],
             $data['account'],
-            $debitVal,
-            $creditVal,
             $data['currency'] ?? 'irt'
         ]);
         if ($stmt->fetch()) {

@@ -93,7 +93,10 @@ class BankCard extends Model
      */
     public function setDefault(int $id, int $userId): bool
     {
-        $this->db->beginTransaction();
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
         try {
             // ابتدا همه کارت‌های کاربر را غیرپیش‌فرض کن (فقط حذف‌نشده‌ها)
             $stmt = $this->db->prepare(
@@ -112,14 +115,18 @@ class BankCard extends Model
 
             $ok = $stmt->execute(['id' => $id, 'user_id' => $userId]);
             if ($ok) {
-                $this->db->commit();
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
                 return true;
             }
 
-            $this->db->rollBack();
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             return false;
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
+            if ($startedTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
             throw $e;
@@ -218,40 +225,49 @@ class BankCard extends Model
      */
     public function deleteForUser(int $id, int $userId): bool
     {
-        $this->db->beginTransaction();
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
         try {
             // Lock the card row itself FOR UPDATE to ensure exclusive deletion process
             $card = $this->db->query("SELECT id FROM " . static::$table . " WHERE id = ? AND user_id = ? FOR UPDATE", [$id, $userId])->fetch(\PDO::FETCH_OBJ);
             if (!$card) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return false;
             }
 
-            // بررسی اینکه کارت در manual_deposits استفاده نشده باشد
+            // بررسی اینکه کارت در manual_deposits فعال استفاده نشده باشد (BUG-18)
             $stmt = $this->db->prepare("
                 SELECT COUNT(*) as count
                 FROM manual_deposits
-                WHERE card_id = :card_id
+                WHERE card_id = :card_id AND status NOT IN ('rejected', 'cancelled')
             ");
             $stmt->execute(['card_id' => $id]);
             $result = $stmt->fetch(\PDO::FETCH_OBJ);
 
             if (((int)($result->count ?? 0)) > 0) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return false;
             }
 
-            // بررسی اینکه کارت در withdrawals استفاده نشده باشد (خیلی مهم)
+            // بررسی اینکه کارت در withdrawals فعال استفاده نشده باشد (BUG-18)
             $stmt = $this->db->prepare("
                 SELECT COUNT(*) as count
                 FROM withdrawals
-                WHERE card_id = :card_id
+                WHERE card_id = :card_id AND status NOT IN ('rejected', 'cancelled', 'failed')
             ");
             $stmt->execute(['card_id' => $id]);
             $result2 = $stmt->fetch(\PDO::FETCH_OBJ);
 
             if (((int)($result2->count ?? 0)) > 0) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return false;
             }
 
@@ -264,14 +280,18 @@ class BankCard extends Model
 
             $ok = $stmt->execute(['id' => $id, 'user_id' => $userId]);
             if ($ok) {
-                $this->db->commit();
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
                 return true;
             }
 
-            $this->db->rollBack();
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             return false;
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
+            if ($startedTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
             throw $e;

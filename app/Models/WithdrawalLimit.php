@@ -45,20 +45,29 @@ class WithdrawalLimit extends Model
     }
 
     /**
-     * افزایش شمارنده برداشت روزانه
+     * افزایش شمارنده برداشت روزانه به صورت کاملاً اتمیک و با گارانتی سقف برداشت
      */
-    public function incrementDailyCount(int $userId): void
+    public function incrementDailyCount(int $userId, int $limit): bool
     {
         $today = date('Y-m-d');
         $now   = date('Y-m-d H:i:s');
+
+        // Pre-insert an empty limit record if it does not exist to allow lock acquisition
+        $insertSql = "INSERT IGNORE INTO " . static::$table . " 
+            (user_id, limit_date, withdrawal_count, last_withdrawal_at, created_at, updated_at)
+            VALUES (?, ?, 0, ?, ?, ?)";
+        
+        $stmt = $this->db->prepare($insertSql);
+        $stmt->execute([$userId, $today, $now, $now, $now]);
 
         $sql = "UPDATE " . static::$table . " 
                 SET withdrawal_count = withdrawal_count + 1,
                     last_withdrawal_at = ?,
                     updated_at = ?
-                WHERE user_id = ? AND limit_date = ?";
+                WHERE user_id = ? AND limit_date = ? AND withdrawal_count < ?";
 
         $stmt = $this->db->prepare($sql);
-        $stmt->execute([$now, $now, $userId, $today]);
+        $stmt->execute([$now, $now, $userId, $today, $limit]);
+        return $stmt->rowCount() > 0;
     }
 }
