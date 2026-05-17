@@ -469,6 +469,13 @@ public function lastInsertId(): int
                 $this->transactionLevel = 0;
                 throw new \RuntimeException("PDO BeginTransaction failed: " . $e->getMessage(), (int)$e->getCode(), $e);
             }
+        } else {
+            // H24 Fix: Create a database SAVEPOINT for nested transactions
+            try {
+                $this->pdo->exec("SAVEPOINT trans_" . $this->transactionLevel);
+            } catch (\Throwable $e) {
+                throw new \RuntimeException("PDO SAVEPOINT creation failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+            }
         }
         $this->transactionLevel++;
     }
@@ -494,24 +501,51 @@ public function lastInsertId(): int
                 $this->transactionLevel = 0;
                 throw new \RuntimeException("PDO Commit failed: " . $e->getMessage(), (int)$e->getCode(), $e);
             }
+        } else {
+            // Nested commit: Release the savepoint
+            try {
+                $this->pdo->exec("RELEASE SAVEPOINT trans_" . $this->transactionLevel);
+            } catch (\Throwable $e) {
+                // Fallback for database engines that do not support RELEASE SAVEPOINT (e.g. sqlite/mssql, though MySQL supports it)
+            }
         }
     }
 
     /**
      * Rollback
-     * H24 Upgrade: هر کجای زنجیره رخ دهد، بلافاصله کل زنجیره تراکنش باطل می‌شود
+     * H24 Upgrade: هر کجای زنجیره رخ دهد، به سطح تراکنش مربوطه بازنشانی می‌شود
      */
     public function rollback(): void
     {
-        $this->transactionLevel = 0; // بازنشانی فوری کل زنجیره
-        
-        if ($this->pdo->inTransaction()) {
-            try {
-                if (!$this->pdo->rollBack()) {
-                     throw new \RuntimeException('PDO Rollback returned false');
+        if ($this->transactionLevel <= 0) {
+            $this->transactionLevel = 0;
+            return;
+        }
+
+        $this->transactionLevel--;
+        if ($this->transactionLevel === 0) {
+            if ($this->pdo->inTransaction()) {
+                try {
+                    if (!$this->pdo->rollBack()) {
+                         throw new \RuntimeException('PDO Rollback returned false');
+                    }
+                } catch (\Throwable $e) {
+                    throw new \RuntimeException("PDO Rollback failed: " . $e->getMessage(), (int)$e->getCode(), $e);
                 }
-            } catch (\Throwable $e) {
-                throw new \RuntimeException("PDO Rollback failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+            }
+        } else {
+            // Nested rollback: Rollback to the savepoint
+            if ($this->pdo->inTransaction()) {
+                try {
+                    $this->pdo->exec("ROLLBACK TO SAVEPOINT trans_" . $this->transactionLevel);
+                } catch (\Throwable $e) {
+                    // Reset everything if savepoint rollback fails
+                    $this->transactionLevel = 0;
+                    if ($this->pdo->inTransaction()) {
+                        $this->pdo->rollBack();
+                    }
+                    throw new \RuntimeException("PDO Nested Rollback failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+                }
             }
         }
     }
