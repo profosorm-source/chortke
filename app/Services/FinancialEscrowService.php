@@ -47,15 +47,16 @@ class FinancialEscrowService extends \App\Services\BaseService
         int    $executionId,
         int    $executorId,
         int    $advertiserId,
-        float  $reward
+        string $reward
     ): array {
         try {
             $this->db->beginTransaction();
 
             // ✅ Verify advertiser has sufficient balance
-            $advertiserBalance = $this->userModel->getWalletBalance($advertiserId);
+            $balances = $this->wallet->getWalletBalances($advertiserId);
+            $advertiserBalance = $balances['irt_available'] ?? '0';
 
-            if ($advertiserBalance < $reward) {
+            if (bccomp($advertiserBalance, $reward, 4) < 0) {
                 $this->db->rollBack();
                 return ['ok' => false, 'error' => 'Insufficient advertiser balance'];
             }
@@ -118,7 +119,7 @@ class FinancialEscrowService extends \App\Services\BaseService
         int    $executionId,
         int    $executorId,
         int    $advertiserId,
-        float  $amount
+        string $amount
     ): array {
         try {
             $this->db->beginTransaction();
@@ -231,15 +232,16 @@ class FinancialEscrowService extends \App\Services\BaseService
         int    $orderId,
         int    $buyerId,
         int    $sellerId,
-        float  $amount
+        string $amount
     ): array {
         try {
             $this->db->beginTransaction();
 
             // ✅ Verify buyer balance
-            $buyerBalance = $this->userModel->getWalletBalance($buyerId);
+            $balances = $this->wallet->getWalletBalances($buyerId);
+            $buyerBalance = $balances['irt_available'] ?? '0';
 
-            if ($buyerBalance < $amount) {
+            if (bccomp($buyerBalance, $amount, 4) < 0) {
                 $this->db->rollBack();
                 return ['ok' => false, 'error' => 'Insufficient buyer balance'];
             }
@@ -280,7 +282,7 @@ class FinancialEscrowService extends \App\Services\BaseService
     /**
      * تحویل پول به فروشنده (اینفلوئنسر)
      */
-    public function releaseInfluencerOrderFunds(int $orderId, int $sellerId, float $amount): array
+    public function releaseInfluencerOrderFunds(int $orderId, int $sellerId, string $amount): array
     {
         try {
             $this->db->beginTransaction();
@@ -326,15 +328,16 @@ class FinancialEscrowService extends \App\Services\BaseService
         int    $listingId,
         int    $buyerId,
         int    $sellerId,
-        float  $amount
+        string $amount
     ): array {
         try {
             $this->db->beginTransaction();
 
             // ✅ Verify buyer
-            $buyerBalance = $this->userModel->getWalletBalance($buyerId);
+            $balances = $this->wallet->getWalletBalances($buyerId);
+            $buyerBalance = $balances['usdt_available'] ?? '0';
 
-            if ($buyerBalance < $amount) {
+            if (bccomp($buyerBalance, $amount, 8) < 0) {
                 $this->db->rollBack();
                 return ['ok' => false, 'error' => 'Insufficient balance'];
             }
@@ -371,7 +374,7 @@ class FinancialEscrowService extends \App\Services\BaseService
     /**
      * تحویل پول به فروشنده (ویترین)
      */
-    public function releaseVitrineFunds(int $listingId, int $sellerId, float $amount): array
+    public function releaseVitrineFunds(int $listingId, int $sellerId, string $amount): array
     {
         try {
             $this->db->beginTransaction();
@@ -390,8 +393,8 @@ class FinancialEscrowService extends \App\Services\BaseService
             }
 
             // ✅ Calculate commission & transfer net
-            $commission = $amount * 0.05; // 5% commission
-            $netAmount = $amount - $commission;
+            $commission = bcmul($amount, '0.05', 8); // 5% commission
+            $netAmount = bcsub($amount, $commission, 8);
 
             $this->wallet->deposit($sellerId, $netAmount, 'usdt', [
                 'type' => 'vitrine_sale',
@@ -486,8 +489,10 @@ class FinancialEscrowService extends \App\Services\BaseService
                 return ['ok' => false, 'error' => 'Not in disputed state'];
             }
 
-            $refundAmount = $escrow->amount * ($refundPercent / 100);
-            $releaseAmount = $escrow->amount - $refundAmount;
+            $scale = strtolower((string)$escrow->currency) === 'usdt' ? 8 : 4;
+            $percent = bcdiv((string)$refundPercent, '100', 8);
+            $refundAmount = bcmul((string)$escrow->amount, $percent, $scale);
+            $releaseAmount = bcsub((string)$escrow->amount, $refundAmount, $scale);
 
             if ($verdict === 'favor_seller') {
                 // Release all to seller

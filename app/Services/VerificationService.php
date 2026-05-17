@@ -212,6 +212,12 @@ class VerificationService extends \App\Services\BaseService
                 return ['ok' => false, 'error' => 'تایید معتبر نیست'];
             }
 
+            $profile = $this->profileModel->findProfileForUpdate($verification->profile_id);
+            if (!$profile) {
+                $this->db->rollBack();
+                return ['ok' => false, 'error' => 'پروفایل یافت نشد'];
+            }
+
             $this->verificationModel->updateStatus($verificationId, 'approved', [
                 'approved_at' => date('Y-m-d H:i:s'),
                 'approved_by' => $adminId,
@@ -251,6 +257,12 @@ class VerificationService extends \App\Services\BaseService
             if (!$verification) {
                 $this->db->rollBack();
                 return ['ok' => false, 'error' => 'تایید یافت نشد'];
+            }
+
+            $profile = $this->profileModel->findProfileForUpdate($verification->profile_id);
+            if (!$profile) {
+                $this->db->rollBack();
+                return ['ok' => false, 'error' => 'پروفایل یافت نشد'];
             }
 
             $this->verificationModel->updateStatus($verificationId, 'rejected', [

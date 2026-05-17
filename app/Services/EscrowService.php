@@ -37,7 +37,7 @@ class EscrowService extends \App\Services\BaseService
         string $orderType,
         int    $buyerId,
         int    $sellerId,
-        float  $amount,
+        string $amount,
         string $currency = 'USDT'
     ): array {
         try {
@@ -52,7 +52,7 @@ class EscrowService extends \App\Services\BaseService
             }
 
             // ✅ Validate amount
-            if ($amount <= 0) {
+            if (bccomp($amount, '0', 8) <= 0) {
                 $this->db->rollBack();
                 return ['ok' => false, 'error' => 'Invalid amount'];
             }
@@ -144,6 +144,10 @@ class EscrowService extends \App\Services\BaseService
     /**
      * تحویل funds به فروشنده (in_escrow → released)
      * ✅ Final state - cannot be reversed
+     */
+    /**
+     * ⚠️ NOTE: This method only updates the escrow state. The caller is responsible
+     * for depositing the released funds into the seller's wallet (e.g., using WalletService).
      */
     public function releaseFunds(int $escrowId, int $sellerId, string $releasedBy): array
     {

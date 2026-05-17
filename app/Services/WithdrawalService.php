@@ -133,6 +133,19 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'درخواست برداشت به دلایل امنیتی مسدود شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از محدودیت تعداد تراکنش' : $risk['reason'])];
             }
 
+            if ($this->model->hasPendingWithdrawal($userId, false)) {
+                return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
+            }
+
+            $dayWindow = date('Y-m-d');
+            $idempotencyKey = $payload['idempotency_key'] ?? $payload['request_id'] ?? hash('sha256', implode('|', [
+                $userId,
+                'withdrawal_user_request',
+                $amount,
+                $currency,
+                $dayWindow
+            ]));
+
             // Lock Wallet first, then check pending status to avoid deadlocks
             $this->db->beginTransaction();
 
@@ -141,14 +154,6 @@ class WithdrawalService extends PaymentBaseService
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'کیف پول یافت نشد'];
             }
-
-            $idempotencyKey = $payload['idempotency_key'] ?? $payload['request_id'] ?? hash('sha256', implode('|', [
-                $userId,
-                'withdrawal_user_request',
-                $amount,
-                $currency,
-                $bankCardId,
-            ]));
 
             $existing = $this->db->query("SELECT * FROM withdrawals WHERE idempotency_key = ? LIMIT 1 FOR UPDATE", [$idempotencyKey])->fetch(\PDO::FETCH_OBJ);
             if ($existing) {
@@ -376,6 +381,7 @@ class WithdrawalService extends PaymentBaseService
                 $withdrawalData['crypto_wallet']  = $addr;
             }
 
+            $dayWindow = date('Y-m-d');
             $idempotencyKey = $data['idempotency_key'] ?? $data['request_id'] ?? hash('sha256', implode('|', [
                 $userId,
                 'withdrawal_create',
@@ -384,6 +390,7 @@ class WithdrawalService extends PaymentBaseService
                 $data['bank_card_id'] ?? $data['card_id'] ?? '',
                 $data['crypto_wallet'] ?? '',
                 $data['crypto_network'] ?? '',
+                $dayWindow
             ]));
 
             $existing = $this->model->where('idempotency_key', $idempotencyKey)->first();
