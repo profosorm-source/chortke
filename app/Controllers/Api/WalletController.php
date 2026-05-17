@@ -60,7 +60,7 @@ class WalletController extends BaseApiController
         $items = array_map(fn($tx) => [
             'id'          => $tx->id,
             'type'        => $tx->type,
-            'amount'      => (float)$tx->amount,
+            'amount'      => (string)$tx->amount,
             'currency'    => $tx->currency,
             'status'      => $tx->status,
             'description' => $tx->description,
