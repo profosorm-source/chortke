@@ -554,6 +554,20 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 throw new \RuntimeException('خطا در ثبت تراکنش');
             }
 
+            $this->ledger()->recordDoubleEntry(
+                $transaction->transaction_id,
+                $metadata['debit_account'] ?? 'platform_cash',
+                "wallet:{$userId}",
+                $amount,
+                $currency,
+                $metadata['description'] ?? 'برداشت داخلی',
+                [
+                    'type' => $metadata['type'] ?? 'internal_withdraw',
+                    'balance_before' => $balanceBefore,
+                    'balance_after' => $balanceAfter,
+                ]
+            );
+
             // Record audit trail
             $this->auditTrail->record('wallet.internal_debited', $userId, [
                 'amount'         => $amount,

@@ -138,12 +138,12 @@ class WithdrawalService extends PaymentBaseService
             }
 
             $idempotencyKey = $payload['idempotency_key'] ?? hash('sha256', implode('|', [
-                $userId,
-                'withdrawal_user_request',
-                $amount,
-                $currency,
-                $payload['request_id'] ?? $requestId,
-                microtime(true)
+                'withdrawal',
+                (string)$userId,
+                (string)$amount,
+                strtolower($currency),
+                (string)$bankCardId,
+                (string)($payload['request_id'] ?? $requestId)
             ]));
 
             // Lock Wallet first, then check pending status to avoid deadlocks

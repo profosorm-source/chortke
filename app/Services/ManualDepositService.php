@@ -209,6 +209,25 @@ class ManualDepositService extends \App\Services\BaseService
                 'deposit_id' => $depositId,
             ];
 
+        } catch (\PDOException $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
+            if ($e->getCode() === '23000' || strpos($e->getMessage(), '1062') !== false) {
+                if (strpos($e->getMessage(), 'receipt_hash') !== false || strpos($e->getMessage(), 'uq_receipt_hash') !== false) {
+                    return ['success' => false, 'message' => 'این فیش بانکی قبلاً در سیستم آپلود و ثبت شده است. لطفاً تصویر معتبر و جدیدی ارسال کنید'];
+                }
+                return ['success' => false, 'message' => 'این شماره پیگیری قبلاً ثبت شده است'];
+            }
+            $this->logger->error('manual_deposit.create.failed', [
+                'user_id' => $userId,
+                'amount'  => $amount,
+                'error'   => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سیستمی در ثبت درخواست واریز'];
         } catch (\Throwable $e) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
