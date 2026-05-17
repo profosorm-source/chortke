@@ -56,63 +56,80 @@ class BankCardService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'نام دارنده کارت با نام کاربری شما مطابقت ندارد'];
         }
 
-        $this->db->beginTransaction();
-        try {
-            $count = (int)$this->model->countUserCards($userId);
-            if ($count >= 4) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'حداکثر ۴ کارت بانکی مجاز است'];
+        $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('bank_card_creation', [
+            'user_id' => $userId,
+            'card_number' => $cardNumber,
+        ]);
+
+        return \Core\IdempotencyKey::wrap($idempotencyKey, $userId, 'bank_card_creation', function() use ($userId, $cardNumber, $holder, $iban) {
+            $startedTransaction = !$this->db->inTransaction();
+            if ($startedTransaction) {
+                $this->db->beginTransaction();
             }
+            try {
+                $count = (int)$this->model->countUserCards($userId);
+                if ($count >= 4) {
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
+                    return ['success' => false, 'message' => 'حداکثر ۴ کارت بانکی مجاز است'];
+                }
 
-            // H14 Fix (BUG-13): بررسی با قفل ردیفی بدبینانه جهت ممانعت از ثبت همزمان کارت
-            $encryptedCardNumber = $this->encryption->encrypt($cardNumber);
-            $cardHash = hash_hmac('sha256', $cardNumber, (string)config('app.key'));
-            $stmt = $this->db->prepare("SELECT id FROM bank_cards WHERE card_hash = ? AND deleted_at IS NULL FOR UPDATE");
-            $stmt->execute([$cardHash]);
-            if ($stmt->fetch()) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
+                $encryptedCardNumber = $this->encryption->encrypt($cardNumber);
+                $cardHash = hash_hmac('sha256', $cardNumber, (string)config('app.key'));
+                $stmt = $this->db->prepare("SELECT id FROM bank_cards WHERE card_hash = ? AND deleted_at IS NULL FOR UPDATE");
+                $stmt->execute([$cardHash]);
+                if ($stmt->fetch()) {
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
+                    return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
+                }
+
+                $bankName = $this->detectBankName($cardNumber);
+
+                $id = $this->model->create([
+                    'user_id' => $userId,
+                    'card_number' => $encryptedCardNumber,
+                    'card_hash' => $cardHash,
+                    'owner_name' => $this->encryption->encrypt($holder),
+                    'bank_name' => $bankName,
+                    'shaba' => $iban ?: null,
+                    'status' => 'pending',
+                    'is_default' => $count === 0,
+                ]);
+
+                if (!$id) {
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
+                    return ['success' => false, 'message' => 'خطا در ایجاد کارت'];
+                }
+
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
+                $this->logger->info('bankcard.created', ['user_id' => $userId, 'card_id' => $id->id ?? 0]);
+
+                $message = 'کارت ثبت شد و در انتظار تأیید است';
+                return ['success' => true, 'message' => $message, 'card_id' => (int)($id->id ?? 0)];
+
+            } catch (\PDOException $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                // خطای کلید یکتا (کارت تکراری)
+                if ((string)$e->getCode() === '23000' || $e->errorInfo[1] === 1062) {
+                    return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
+                }
+                throw $e;
+            } catch (\Throwable $e) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                throw $e;
             }
-
-            $bankName = $this->detectBankName($cardNumber);
-
-            $id = $this->model->create([
-                'user_id' => $userId,
-                'card_number' => $encryptedCardNumber,
-                'card_hash' => $cardHash,
-                'owner_name' => $this->encryption->encrypt($holder),
-                'bank_name' => $bankName,
-                'shaba' => $iban ?: null,
-                'status' => 'pending',
-                'is_default' => $count === 0,
-            ]);
-
-            if (!$id) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در ایجاد کارت'];
-            }
-
-            $this->db->commit();
-            $this->logger->info('bankcard.created', ['user_id' => $userId, 'card_id' => $id->id ?? 0]);
-
-            $message = 'کارت ثبت شد و در انتظار تأیید است';
-            return ['success' => true, 'message' => $message, 'card_id' => (int)($id->id ?? 0)];
-
-        } catch (\PDOException $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            // خطای کلید یکتا (کارت تکراری)
-            if ((string)$e->getCode() === '23000' || $e->errorInfo[1] === 1062) {
-                return ['success' => false, 'message' => 'این شماره کارت قبلاً ثبت شده است'];
-            }
-            throw $e;
-        } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            throw $e;
-        }
+        });
     }
 
     public function updateByUser(int $userId, int $cardId, array $data): array
@@ -182,7 +199,10 @@ class BankCardService extends \App\Services\BaseService
 
     public function adminVerify(int $adminId, int $cardId, bool $approve, ?string $reason = null): array
     {
-        $this->db->beginTransaction();
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
         try {
             $card = $this->db->query(
                 "SELECT * FROM bank_cards WHERE id = :id FOR UPDATE",
@@ -190,17 +210,23 @@ class BankCardService extends \App\Services\BaseService
             )->fetch(\PDO::FETCH_OBJ);
 
             if (!$card) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return ['success' => false, 'message' => 'کارت یافت نشد'];
             }
 
             if (isset($card->deleted_at) && $card->deleted_at !== null) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return ['success' => false, 'message' => 'کارت حذف شده است و قابل تأیید نیست'];
             }
 
             if (($card->status ?? '') !== 'pending') {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return ['success' => false, 'message' => 'این کارت در وضعیت معلق قرار ندارد'];
             }
 
@@ -212,18 +238,24 @@ class BankCardService extends \App\Services\BaseService
                 )->fetch(\PDO::FETCH_OBJ);
 
                 if (!$user) {
-                    $this->db->rollBack();
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
                     return ['success' => false, 'message' => 'کاربر یافت نشد'];
                 }
 
                 if (($user->kyc_status ?? '') !== 'verified') {
-                    $this->db->rollBack();
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
                     return ['success' => false, 'message' => 'کاربر احراز هویت نشده است'];
                 }
 
                 $decryptedOwnerName = $this->encryption->decrypt((string)$card->owner_name);
                 if (!$this->matchName($decryptedOwnerName, (string)$user->full_name)) {
-                    $this->db->rollBack();
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
                     return ['success' => false, 'message' => 'نام دارنده کارت با نام احراز هویت شده کاربر مطابقت ندارد'];
                 }
             }
@@ -232,15 +264,21 @@ class BankCardService extends \App\Services\BaseService
             $ok = $this->model->updateStatus($cardId, $status, $reason, $adminId);
             
             if (!$ok) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return ['success' => false, 'message' => 'خطا در بروزرسانی وضعیت'];
             }
 
-            $this->db->commit();
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
             return ['success' => true, 'message' => $approve ? 'کارت تأیید شد' : 'کارت رد شد'];
 
         } catch (\Throwable $e) {
-            $this->db->rollBack();
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             $this->logger->error('bankcard.admin_verify.failed', ['card_id' => $cardId, 'error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در فرآیند تأیید کارت بانکی'];
         }

@@ -185,12 +185,17 @@ class UserService extends \App\Services\BaseService
 
     public function updateUser(int $id, array $data): array
     {
-        $this->db->beginTransaction();
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
         try {
             if (isset($data['email'])) {
                 $existing = $this->findByEmail($data['email']);
                 if ($existing && (int)$existing->id !== $id) {
-                    $this->db->rollBack();
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
                     return [
                         'success' => false, 
                         'errors' => ['email' => ['این ایمیل قبلاً توسط کاربر دیگری ثبت شده است']]
@@ -216,14 +221,18 @@ class UserService extends \App\Services\BaseService
             $ok = $this->model->update($id, $updateData);
             
             if ($ok) {
-                $this->db->commit();
+                if ($startedTransaction) {
+                    $this->db->commit();
+                }
                 return ['success' => true, 'message' => 'کاربر با موفقیت بروزرسانی شد'];
             }
 
-            $this->db->rollBack();
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             return ['success' => false, 'message' => 'خطا در ذخیره مشخصات کاربر'];
         } catch (\Exception $e) {
-            if ($this->db->inTransaction()) {
+            if ($startedTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
             $this->logger->error('user.update_failed', ['user_id' => $id, 'error' => $e->getMessage()]);

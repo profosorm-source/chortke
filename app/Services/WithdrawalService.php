@@ -591,9 +591,11 @@ class WithdrawalService extends PaymentBaseService
      */
     public function adminReject(int $adminId, int $withdrawalId, string $reason): array
     {
-        try {
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
             $this->db->beginTransaction();
-
+        }
+        try {
             // 1. Fetch user_id without locking first
             $temp = $this->db->query(
                 "SELECT user_id FROM withdrawals WHERE id = :id",
@@ -601,7 +603,9 @@ class WithdrawalService extends PaymentBaseService
             )->fetch(\PDO::FETCH_OBJ);
 
             if (!$temp) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return ['success' => false, 'message' => 'برداشت یافت نشد'];
             }
 
@@ -618,12 +622,16 @@ class WithdrawalService extends PaymentBaseService
             )->fetch(\PDO::FETCH_OBJ);
 
             if (!$w) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return ['success' => false, 'message' => 'برداشت یافت نشد'];
             }
 
             if (!$this->stateMachine->canTransition('withdrawal', (string)$w->status, 'rejected')) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return ['success' => false, 'message' => 'امکان رد این درخواست وجود ندارد (وضعیت نامعتبر)'];
             }
 
@@ -632,7 +640,9 @@ class WithdrawalService extends PaymentBaseService
             $currency = strtolower((string)$w->currency);
 
             if (!$this->wallet->cancelWithdrawal($userId, $amount, $currency, $w->transaction_id)) {
-                $this->db->rollBack();
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 return ['success' => false, 'message' => 'خطا در بازگشت وجه'];
             }
 
@@ -643,7 +653,23 @@ class WithdrawalService extends PaymentBaseService
                 'processed_at' => date('Y-m-d H:i:s'),
             ]);
 
-            $this->db->commit();
+            // ✅ ثبت تغییر وضعیت تراکنش
+            if (method_exists($this, 'recordTransactionStatusChange')) {
+                $this->recordTransactionStatusChange(
+                    (string)$w->transaction_id,
+                    'cancelled',
+                    "رد توسط ادمین: {$reason}",
+                    $adminId,
+                    [
+                        'rejection_reason' => $reason,
+                        'withdrawal_id' => $withdrawalId
+                    ]
+                );
+            }
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
 
             $this->auditTrail->record('withdrawal.rejected', $userId, [
                 'withdrawal_id' => (int)$withdrawalId,
@@ -658,7 +684,7 @@ class WithdrawalService extends PaymentBaseService
             return ['success' => true, 'message' => 'برداشت رد شد و وجه برگشت داده شد'];
 
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
+            if ($startedTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
             $this->logger->error('withdrawal.reject.failed', [
