@@ -125,22 +125,22 @@ $r->post('/admin/bank-cards/verify', [AdminBankCardController::class, 'verify'],
 $r->post('/admin/bank-cards/reject', [AdminBankCardController::class, 'reject'], $admin);
 
 // ── واریز دستی ─────────────────────────────────────────────────────────────
-$r->get('/admin/manual-deposits',         [AdminManualDepositController::class, 'index'],  $admin);
-$r->get('/admin/manual-deposits/review',  [AdminManualDepositController::class, 'review'], $admin);
-$r->post('/admin/manual-deposits/verify', [AdminManualDepositController::class, 'verify'], $admin);
-$r->post('/admin/manual-deposits/reject', [AdminManualDepositController::class, 'reject'], $admin);
+$r->get('/admin/manual-deposits',         [AdminManualDepositController::class, 'index'],  array_merge($admin, [PermissionMiddleware::class . ':finance.deposit.view']));
+$r->get('/admin/manual-deposits/review',  [AdminManualDepositController::class, 'review'], array_merge($admin, [PermissionMiddleware::class . ':finance.deposit.view']));
+$r->post('/admin/manual-deposits/verify', [AdminManualDepositController::class, 'verify'], array_merge($admin, [PermissionMiddleware::class . ':finance.deposit.approve']));
+$r->post('/admin/manual-deposits/reject', [AdminManualDepositController::class, 'reject'], array_merge($admin, [PermissionMiddleware::class . ':finance.deposit.approve']));
 
 // ── واریز کریپتو ───────────────────────────────────────────────────────────
-$r->get('/admin/crypto-deposits',         [AdminCryptoDepositController::class, 'index'],  $admin);
-$r->get('/admin/crypto-deposits/review',  [AdminCryptoDepositController::class, 'review'], $admin);
-$r->post('/admin/crypto-deposits/verify', [AdminCryptoDepositController::class, 'verify'], $admin);
-$r->post('/admin/crypto-deposits/reject', [AdminCryptoDepositController::class, 'reject'], $admin);
+$r->get('/admin/crypto-deposits',         [AdminCryptoDepositController::class, 'index'],  array_merge($admin, [PermissionMiddleware::class . ':finance.crypto.view']));
+$r->get('/admin/crypto-deposits/review',  [AdminCryptoDepositController::class, 'review'], array_merge($admin, [PermissionMiddleware::class . ':finance.crypto.view']));
+$r->post('/admin/crypto-deposits/verify', [AdminCryptoDepositController::class, 'verify'], array_merge($admin, [PermissionMiddleware::class . ':finance.crypto.approve']));
+$r->post('/admin/crypto-deposits/reject', [AdminCryptoDepositController::class, 'reject'], array_merge($admin, [PermissionMiddleware::class . ':finance.crypto.approve']));
 
 // ── برداشت‌ها ────────────────────────────────────────────────────────────────
-$r->get('/admin/withdrawals',         [AdminWithdrawalController::class, 'index'],   $admin);
-$r->get('/admin/withdrawals/review',  [AdminWithdrawalController::class, 'review'],  $admin);
-$r->post('/admin/withdrawals/process',[AdminWithdrawalController::class, 'process'], $admin);
-$r->post('/admin/withdrawals/reject', [AdminWithdrawalController::class, 'reject'],  $admin);
+$r->get('/admin/withdrawals',         [AdminWithdrawalController::class, 'index'],   array_merge($admin, [PermissionMiddleware::class . ':finance.withdrawal.view']));
+$r->get('/admin/withdrawals/review',  [AdminWithdrawalController::class, 'review'],  array_merge($admin, [PermissionMiddleware::class . ':finance.withdrawal.view']));
+$r->post('/admin/withdrawals/process',[AdminWithdrawalController::class, 'process'], array_merge($admin, [PermissionMiddleware::class . ':finance.withdrawal.approve']));
+$r->post('/admin/withdrawals/reject', [AdminWithdrawalController::class, 'reject'],  array_merge($admin, [PermissionMiddleware::class . ':finance.withdrawal.approve']));
 
 // ── تراکنش‌ها ────────────────────────────────────────────────────────────────
 $r->get('/admin/transactions',       [AdminTransactionController::class, 'index'], $admin);
