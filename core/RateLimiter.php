@@ -163,7 +163,7 @@ class RateLimiter
         $this->setStrategy('token_bucket');
 
         try {
-            $allowed = $this->attempt($key, 5, 15);
+            $allowed = $this->attempt($key, 5, 15, true);
         } finally {
             // Restore previous strategy
             $this->setStrategy($originalStrategy);
