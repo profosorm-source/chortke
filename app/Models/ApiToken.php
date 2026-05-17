@@ -127,6 +127,42 @@ class ApiToken extends Model
         return true;
     }
 
+    public function revokeForUser(int $id, int $userId): bool
+    {
+        $this->validateId($id);
+        $this->validateId($userId, 'user_id');
+
+        $stmt = $this->db->prepare(
+            "UPDATE api_tokens 
+             SET revoked = 1, revoked_at = NOW() 
+             WHERE id = ? AND user_id = ? AND revoked = 0"
+        );
+        $stmt->execute([$id, $userId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public function revokeByHashForUser(string $plainToken, int $userId): bool
+    {
+        if (empty($plainToken)) {
+            throw new \InvalidArgumentException('Token cannot be empty');
+        }
+        $this->validateId($userId, 'user_id');
+
+        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
+        if (!$secret || strlen($secret) < 32) {
+            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak');
+        }
+        $hashedToken = hash_hmac('sha256', $plainToken, $secret);
+
+        $stmt = $this->db->prepare(
+            "UPDATE api_tokens 
+             SET revoked = 1, revoked_at = NOW() 
+             WHERE token = ? AND user_id = ? AND revoked = 0"
+        );
+        $stmt->execute([$hashedToken, $userId]);
+        return $stmt->rowCount() > 0;
+    }
+
     public function createToken(
         int $userId, 
         string $plainToken, 

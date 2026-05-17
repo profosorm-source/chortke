@@ -203,40 +203,64 @@ class BankCard extends Model
      */
     public function deleteForUser(int $id, int $userId): bool
     {
-        // بررسی اینکه کارت در manual_deposits استفاده نشده باشد
-        $stmt = $this->db->prepare("
-            SELECT COUNT(*) as count
-            FROM manual_deposits
-            WHERE card_id = :card_id
-        ");
-        $stmt->execute(['card_id' => $id]);
-        $result = $stmt->fetch(\PDO::FETCH_OBJ);
+        $this->db->beginTransaction();
+        try {
+            // Lock the card row itself FOR UPDATE to ensure exclusive deletion process
+            $card = $this->db->query("SELECT id FROM " . static::$table . " WHERE id = ? AND user_id = ? FOR UPDATE", [$id, $userId])->fetch(\PDO::FETCH_OBJ);
+            if (!$card) {
+                $this->db->rollBack();
+                return false;
+            }
 
-        if (((int)($result->count ?? 0)) > 0) {
+            // بررسی اینکه کارت در manual_deposits استفاده نشده باشد
+            $stmt = $this->db->prepare("
+                SELECT COUNT(*) as count
+                FROM manual_deposits
+                WHERE card_id = :card_id
+            ");
+            $stmt->execute(['card_id' => $id]);
+            $result = $stmt->fetch(\PDO::FETCH_OBJ);
+
+            if (((int)($result->count ?? 0)) > 0) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            // بررسی اینکه کارت در withdrawals استفاده نشده باشد (خیلی مهم)
+            $stmt = $this->db->prepare("
+                SELECT COUNT(*) as count
+                FROM withdrawals
+                WHERE card_id = :card_id
+            ");
+            $stmt->execute(['card_id' => $id]);
+            $result2 = $stmt->fetch(\PDO::FETCH_OBJ);
+
+            if (((int)($result2->count ?? 0)) > 0) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            // Soft Delete
+            $stmt = $this->db->prepare("
+                UPDATE " . static::$table . "
+                SET deleted_at = NOW(), updated_at = NOW(), is_default = 0
+                WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL
+            ");
+
+            $ok = $stmt->execute(['id' => $id, 'user_id' => $userId]);
+            if ($ok) {
+                $this->db->commit();
+                return true;
+            }
+
+            $this->db->rollBack();
             return false;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
         }
-
-        // بررسی اینکه کارت در withdrawals استفاده نشده باشد (خیلی مهم)
-        $stmt = $this->db->prepare("
-            SELECT COUNT(*) as count
-            FROM withdrawals
-            WHERE card_id = :card_id
-        ");
-        $stmt->execute(['card_id' => $id]);
-        $result2 = $stmt->fetch(\PDO::FETCH_OBJ);
-
-        if (((int)($result2->count ?? 0)) > 0) {
-            return false;
-        }
-
-        // Soft Delete
-        $stmt = $this->db->prepare("
-            UPDATE " . static::$table . "
-            SET deleted_at = NOW(), updated_at = NOW(), is_default = 0
-            WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL
-        ");
-
-        return $stmt->execute(['id' => $id, 'user_id' => $userId]);
     }
 
     /**

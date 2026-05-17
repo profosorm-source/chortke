@@ -98,7 +98,7 @@ class Withdrawal extends Model
         $sql = "SELECT id
                 FROM " . static::$table . "
                 WHERE user_id = :user_id AND status IN ('pending', 'processing') LIMIT 1";
-        if ($forUpdate) {
+        if ($forUpdate && $this->db->inTransaction()) {
             $sql .= " FOR UPDATE";
         }
 
@@ -125,6 +125,10 @@ class Withdrawal extends Model
         ?int $processedBy = null,
         ?string $transactionId = null
     ): bool {
+        if (!$this->db->inTransaction()) {
+            throw new \RuntimeException('Withdrawal::updateStatus() requires an active database transaction.');
+        }
+
         try {
             // H14 Fix (BUG-05): دریافت رکورد درخواست برداشت با قفل بدبینانه ردیفی جهت جلوگیری از تداخل ادمین‌ها (BUG-12)
             $stmt = $this->db->prepare("SELECT * FROM " . static::$table . " WHERE id = ? FOR UPDATE");

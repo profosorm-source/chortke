@@ -27,14 +27,14 @@ class WithdrawalLimit extends Model
             (user_id, limit_date, withdrawal_count, last_withdrawal_at, created_at, updated_at)
             VALUES (?, ?, 0, ?, ?, ?)";
         
-        $stmt = $this->db->getPdo()->prepare($insertSql);
+        $stmt = $this->db->prepare($insertSql);
         $stmt->execute([$userId, $today, $now, $now, $now]);
 
         // Pessimistically lock the limit row for the user today
         $lockSql = "SELECT withdrawal_count FROM " . static::$table . " 
             WHERE user_id = ? AND limit_date = ? FOR UPDATE";
         
-        $stmt = $this->db->getPdo()->prepare($lockSql);
+        $stmt = $this->db->prepare($lockSql);
         $stmt->execute([$userId, $today]);
         $row = $stmt->fetch(\PDO::FETCH_OBJ);
 
@@ -58,7 +58,7 @@ class WithdrawalLimit extends Model
                     updated_at = ?
                 WHERE user_id = ? AND limit_date = ?";
 
-        $stmt = $this->db->getPdo()->prepare($sql);
+        $stmt = $this->db->prepare($sql);
         $stmt->execute([$now, $now, $userId, $today]);
     }
 }
