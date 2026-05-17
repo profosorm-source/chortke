@@ -251,91 +251,44 @@ public function __construct(
 
         try {
             $withdrawalId = (int)$data['withdrawal_id'];
-            $withdrawal = $this->withdrawalService->findById($withdrawalId);
+            $result = $this->withdrawalService->adminReject($adminId, $withdrawalId, $data['rejection_reason']);
 
-            if (!$withdrawal) {
-                $this->response->json([
-                    'success' => false,
-                    'message' => 'درخواست یافت نشد'
-                ]);
-                return;
-            }
-
-            if ($withdrawal->status !== 'pending') {
-                $this->response->json([
-                    'success' => false,
-                    'message' => 'این درخواست قبلاً پردازش شده است'
-                ]);
-                return;
-            }
-
-            // ✅ لغو برداشت (آزادسازی موجودی قفل‌شده)
-            $cancelled = $this->walletService->cancelWithdrawal(
-                $withdrawal->user_id,
-                (float)$withdrawal->amount,
-                $withdrawal->currency,
-                $withdrawal->transaction_id
-            );
-
-            if (!$cancelled) {
-                throw new \RuntimeException('خطا در آزادسازی موجودی');
-            }
-
-            // ✅ بروزرسانی وضعیت
-            $updated = $this->withdrawalService->updateStatus(
-                $withdrawalId,
-                'rejected',
-                $data['rejection_reason'],
-                $adminId
-            );
-
-            if ($updated) {
-                // ✅ ثبت تغییر وضعیت در transaction_events
-                $this->withdrawalService->recordTransactionStatusChange(
-                    $withdrawal->transaction_id,
-                    'cancelled',
-                    "رد توسط ادمین: {$data['rejection_reason']}",
-                    $adminId,
-                    [
-                        'rejection_reason' => $data['rejection_reason'],
-                        'withdrawal_id' => $withdrawalId,
-                        'request_id' => $requestId
-                    ]
-                );
-
+            if (!empty($result['success'])) {
                 // ✅ ثبت لاگ
                 $this->logger->info('withdrawal.reject.completed', [
-    'channel' => 'withdrawal',
-    'request_id' => $requestId,
-    'withdrawal_id' => $withdrawalId,
-    'user_id' => $withdrawal->user_id,
-    'reason' => $data['rejection_reason'] ?? null,
-]);
+                    'channel' => 'withdrawal',
+                    'request_id' => $requestId,
+                    'withdrawal_id' => $withdrawalId,
+                    'reason' => $data['rejection_reason'] ?? null,
+                ]);
 
-$this->response->json([
-    'success' => true,
-    'message' => 'برداشت رد شد و موجودی به کاربر بازگردانده شد'
-]);
+                $this->response->json([
+                    'success' => true,
+                    'message' => $result['message'] ?? 'برداشت رد شد و موجودی به کاربر بازگردانده شد'
+                ]);
             } else {
-                throw new \RuntimeException('خطا در رد برداشت');
+                $this->response->json([
+                    'success' => false,
+                    'message' => $result['message'] ?? 'خطا در رد برداشت'
+                ]);
             }
 
         } catch (\Exception $e) {
-    $this->logger->error('withdrawal.reject.failed', [
-    'channel' => 'withdrawal',
-    'request_id' => $requestId,
-    'withdrawal_id' => $withdrawalId ?? null,
-    'admin_id' => $adminId ?? null,
-    'error' => $e->getMessage(),
-    'exception' => get_class($e),
-    'file' => $e->getFile(),
-    'line' => $e->getLine(),
-]);
+            $this->logger->error('withdrawal.reject.failed', [
+                'channel' => 'withdrawal',
+                'request_id' => $requestId,
+                'withdrawal_id' => $withdrawalId ?? null,
+                'admin_id' => $adminId ?? null,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
 
-$this->response->json([
-    'success' => false,
-    'message' => 'خطا در رد برداشت'
-]);
+            $this->response->json([
+                'success' => false,
+                'message' => 'خطا در رد برداشت'
+            ]);
         }
     }
 }
