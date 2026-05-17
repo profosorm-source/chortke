@@ -175,7 +175,21 @@ class Escrow extends Model
             ]);
         } catch (\Throwable $e) {
             // M-09: Audit logging must not break business transactions
-            // Log the failure but don't throw - transaction should continue
+            // Log the failure to monitoring system but don't throw to avoid disrupting critical transactions
+            try {
+                $container = \Core\Container::getInstance();
+                if ($container && $container->has(\App\Contracts\LoggerInterface::class)) {
+                    $logger = $container->get(\App\Contracts\LoggerInterface::class);
+                    $logger->critical('escrow.audit_log_failed', [
+                        'escrow_id' => $escrowId,
+                        'action' => $action,
+                        'amount' => $amount,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            } catch (\Throwable $logEx) {
+                // Prevent secondary log exceptions from propagating
+            }
             return false;
         }
     }

@@ -93,22 +93,37 @@ class BankCard extends Model
      */
     public function setDefault(int $id, int $userId): bool
     {
-        // ابتدا همه کارت‌های کاربر را غیرپیش‌فرض کن (فقط حذف‌نشده‌ها)
-        $stmt = $this->db->prepare(
-            "UPDATE " . static::$table . "
-             SET is_default = 0, updated_at = NOW()
-             WHERE user_id = :user_id AND deleted_at IS NULL"
-        );
-        $stmt->execute(['user_id' => $userId]);
+        $this->db->beginTransaction();
+        try {
+            // ابتدا همه کارت‌های کاربر را غیرپیش‌فرض کن (فقط حذف‌نشده‌ها)
+            $stmt = $this->db->prepare(
+                "UPDATE " . static::$table . "
+                 SET is_default = 0, updated_at = NOW()
+                 WHERE user_id = :user_id AND deleted_at IS NULL"
+            );
+            $stmt->execute(['user_id' => $userId]);
 
-        // کارت انتخابی را پیش‌فرض کن (فقط حذف‌نشده)
-        $stmt = $this->db->prepare(
-            "UPDATE " . static::$table . "
-             SET is_default = 1, updated_at = NOW()
-             WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL"
-        );
+            // کارت انتخابی را پیش‌فرض کن (فقط حذف‌نشده)
+            $stmt = $this->db->prepare(
+                "UPDATE " . static::$table . "
+                 SET is_default = 1, updated_at = NOW()
+                 WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL"
+            );
 
-        return $stmt->execute(['id' => $id, 'user_id' => $userId]);
+            $ok = $stmt->execute(['id' => $id, 'user_id' => $userId]);
+            if ($ok) {
+                $this->db->commit();
+                return true;
+            }
+
+            $this->db->rollBack();
+            return false;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**

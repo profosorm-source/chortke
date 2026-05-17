@@ -126,7 +126,7 @@ class Withdrawal extends Model
         ?string $transactionId = null
     ): bool {
         if (!$this->db->inTransaction()) {
-            throw new \RuntimeException('Withdrawal::updateStatus() requires an active database transaction.');
+            throw new \RuntimeException('Withdrawal::updateStatus() requires an active transaction.');
         }
 
         try {

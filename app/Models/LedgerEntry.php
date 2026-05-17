@@ -10,10 +10,44 @@ class LedgerEntry extends Model
 
     public function create(array $data): ?object
     {
-        $data['transaction_id'] = $data['transaction_id'] ?? '';
+        $transactionId = trim((string)($data['transaction_id'] ?? ''));
+        if ($transactionId === '') {
+            throw new \InvalidArgumentException('LedgerEntry requires a valid transaction_id');
+        }
+        $data['transaction_id'] = $transactionId;
+
         $data['account'] = $data['account'] ?? 'unknown';
-        $data['debit'] = $data['debit'] ?? 0;
-        $data['credit'] = $data['credit'] ?? 0;
+        $debitVal = (string)($data['debit'] ?? '0');
+        $creditVal = (string)($data['credit'] ?? '0');
+
+        if (bccomp($debitVal, '0', 8) < 0 || bccomp($creditVal, '0', 8) < 0) {
+            throw new \InvalidArgumentException('debit and credit must be non-negative values');
+        }
+
+        $hasDebit = bccomp($debitVal, '0', 8) > 0;
+        $hasCredit = bccomp($creditVal, '0', 8) > 0;
+
+        if (($hasDebit && $hasCredit) || (!$hasDebit && !$hasCredit)) {
+            throw new \InvalidArgumentException('LedgerEntry must have either debit or credit, but not both or neither');
+        }
+
+        // Unique constraint check to prevent duplicate posting of the same leg
+        $stmt = $this->db->prepare(
+            "SELECT id FROM ledger_entries 
+             WHERE transaction_id = ? AND account = ? AND debit = ? AND credit = ? LIMIT 1"
+        );
+        $stmt->execute([
+            $data['transaction_id'],
+            $data['account'],
+            $debitVal,
+            $creditVal
+        ]);
+        if ($stmt->fetch()) {
+            throw new \RuntimeException('Duplicate ledger entry leg detected for transaction ' . $data['transaction_id']);
+        }
+
+        $data['debit'] = $debitVal;
+        $data['credit'] = $creditVal;
         $data['currency'] = $data['currency'] ?? 'irt';
         $data['description'] = $data['description'] ?? null;
         $data['metadata'] = isset($data['metadata']) && is_array($data['metadata']) ? json_encode($data['metadata'], JSON_UNESCAPED_UNICODE) : ($data['metadata'] ?? null);
