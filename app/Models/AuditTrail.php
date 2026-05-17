@@ -18,6 +18,31 @@ class AuditTrail extends Model
         if (!isset($data['actor_id']) && !isset($data['user_id'])) {
             $data['actor_id'] = self::SYSTEM_ACTOR_ID;
         }
+
+        // Fetch the hash of the immediately preceding audit log row
+        $lastRow = $this->db->fetch("SELECT hash FROM " . static::$table . " ORDER BY id DESC LIMIT 1");
+        $prevHash = $lastRow ? $lastRow->hash : null;
+        
+        $genesisHash = str_repeat('0', 64);
+        $effectivePrevHash = $prevHash ?? $genesisHash;
+
+        // Construct current payload to hash
+        $payload = json_encode([
+            'request_id' => $data['request_id'] ?? null,
+            'event' => $data['event'] ?? '',
+            'user_id' => $data['user_id'] ?? null,
+            'actor_id' => $data['actor_id'] ?? self::SYSTEM_ACTOR_ID,
+            'context' => $data['context'] ?? '{}',
+            'ip_address' => $data['ip_address'] ?? null,
+            'user_agent' => $data['user_agent'] ?? null,
+            'created_at' => $data['created_at'] ?? date('Y-m-d H:i:s'),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $hash = hash('sha256', $effectivePrevHash . '|' . $payload);
+
+        $data['prev_hash'] = $prevHash;
+        $data['hash'] = $hash;
+
         return $this->create($data);
     }
 

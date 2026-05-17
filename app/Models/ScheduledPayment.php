@@ -31,7 +31,7 @@ class ScheduledPayment extends Model
         $sql = "SELECT * FROM " . static::$table . " 
                 WHERE status = 'active' AND next_run_at <= NOW() 
                 ORDER BY next_run_at ASC 
-                LIMIT :limit FOR UPDATE";
+                LIMIT :limit FOR UPDATE SKIP LOCKED";
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
         $stmt->execute();

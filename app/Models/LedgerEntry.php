@@ -34,13 +34,14 @@ class LedgerEntry extends Model
         // Unique constraint check to prevent duplicate posting of the same leg
         $stmt = $this->db->prepare(
             "SELECT id FROM ledger_entries 
-             WHERE transaction_id = ? AND account = ? AND debit = ? AND credit = ? LIMIT 1"
+             WHERE transaction_id = ? AND account = ? AND debit = ? AND credit = ? AND currency = ? LIMIT 1"
         );
         $stmt->execute([
             $data['transaction_id'],
             $data['account'],
             $debitVal,
-            $creditVal
+            $creditVal,
+            $data['currency'] ?? 'irt'
         ]);
         if ($stmt->fetch()) {
             throw new \RuntimeException('Duplicate ledger entry leg detected for transaction ' . $data['transaction_id']);
@@ -54,7 +55,14 @@ class LedgerEntry extends Model
         $data['created_at'] = $data['created_at'] ?? date('Y-m-d H:i:s');
         $data['updated_at'] = $data['updated_at'] ?? date('Y-m-d H:i:s');
 
-        $id = parent::create($data);
+        try {
+            $id = parent::create($data);
+        } catch (\PDOException $e) {
+            if ($e->getCode() === '23000' || strpos($e->getMessage(), '1062') !== false) {
+                throw new \RuntimeException('Duplicate ledger entry leg detected for transaction ' . $data['transaction_id'], 0, $e);
+            }
+            throw $e;
+        }
         return is_int($id) ? $this->find($id) : null;
     }
 
