@@ -89,6 +89,34 @@ class ManualDepositService extends \App\Services\BaseService
             $receiptHash = \hash_file('sha256', $receiptPath);
         }
 
+        $dateStr = $data['deposit_date'] ?? '';
+        $timeStr = $data['deposit_time'] ?? '';
+
+        // Validate time format (HH:MM)
+        if (!preg_match('/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/', $timeStr)) {
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
+            return ['success' => false, 'message' => 'فرمت ساعت واریز نامعتبر است (باید HH:MM باشد)'];
+        }
+
+        try {
+            $date = new \DateTime($dateStr);
+            $now = new \DateTime();
+            $diff = $date->diff($now);
+            if ($diff->days > 7 || $date > $now) {
+                if (!empty($receiptPath)) {
+                    try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+                }
+                return ['success' => false, 'message' => 'تاریخ فیش واریزی باید نهایتاً مربوط به ۷ روز گذشته باشد و در آینده نباشد.'];
+            }
+        } catch (\Throwable $e) {
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
+            return ['success' => false, 'message' => 'تاریخ واریز نامعتبر است'];
+        }
+
         $cardId = (int)($data['card_id'] ?? $data['bank_card_id'] ?? 0);
         $card = null;
         if ($cardId > 0) {
@@ -186,6 +214,8 @@ class ManualDepositService extends \App\Services\BaseService
                 'receipt_hash'  => $receiptHash,
                 'tracking_code' => $tracking,
                 'bank_name'     => $card ? $card->bank_name : 'نامشخص',
+                'deposit_date'  => $dateStr,
+                'deposit_time'  => $timeStr,
                 'description'   => $data['user_description'] ?? null,
                 'status'        => 'pending',
             ]);

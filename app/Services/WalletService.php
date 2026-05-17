@@ -1327,6 +1327,15 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         return $this->walletModel->getBalance($userId, $currency);
     }
 
+    public function getBalanceForUpdate(int $userId, string $currency = 'irt'): string
+    {
+        $currency = strtolower($currency);
+        if (!in_array($currency, $this->supportedCurrencies, true)) {
+            return '0';
+        }
+        return $this->walletModel->getBalanceForUpdate($userId, $currency);
+    }
+
     public function isWalletFrozen(int $userId): bool
     {
         return $this->walletModel->isFrozen($userId);

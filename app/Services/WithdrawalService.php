@@ -49,6 +49,8 @@ class WithdrawalService extends PaymentBaseService
         'admin'         => ['daily'=>999,'weekly'=>9999,'monthly'=>99999,'multiplier'=>100.0],
     ];
 
+    private \Core\Encryption $encryption;
+
     public function __construct(
         Database               $db,
         WalletService          $walletService,
@@ -68,7 +70,8 @@ class WithdrawalService extends PaymentBaseService
         StateMachineService    $stateMachine,
         ReconciliationService  $reconciliation,
         CurrencyServiceInterface $currencyService,
-        \App\Services\AntiFraud\FraudGuardService $fraudGuard
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        \Core\Encryption       $encryption
     ) {
         parent::__construct($logger);
         $this->db               = $db;
@@ -89,6 +92,7 @@ class WithdrawalService extends PaymentBaseService
         $this->reconciliation   = $reconciliation;
         $this->currencyService  = $currencyService;
         $this->fraudGuard       = $fraudGuard;
+        $this->encryption       = $encryption;
     }
 
     public function requestFromUser(int $userId, array $payload): array
@@ -137,14 +141,19 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
             }
 
-            $idempotencyKey = $payload['idempotency_key'] ?? hash('sha256', implode('|', [
-                'withdrawal',
-                (string)$userId,
-                (string)$amount,
-                strtolower($currency),
-                (string)$bankCardId,
-                (string)($payload['request_id'] ?? $requestId)
-            ]));
+            $idempotencyKey = $payload['idempotency_key'] ?? null;
+            if (empty($idempotencyKey)) {
+                $timeBucket = (int)(time() / 300); // 5-minute time bucket
+                $destination = (string)($bankCardId ?: ($payload['crypto_wallet'] ?? ''));
+                $idempotencyKey = hash('sha256', implode('|', [
+                    'withdrawal_deterministic',
+                    (string)$userId,
+                    (string)$amount,
+                    strtolower($currency),
+                    $destination,
+                    (string)$timeBucket
+                ]));
+            }
 
             // Lock Wallet first, then check pending status to avoid deadlocks
             $this->db->beginTransaction();
@@ -165,6 +174,11 @@ class WithdrawalService extends PaymentBaseService
                 }
             }
 
+            if ($this->model->hasPendingWithdrawal($userId, true)) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
+            }
+
             // Bank Card validation for IRT
             if (strtolower($currency) === 'irt') {
                 if ($bankCardId <= 0) {
@@ -176,11 +190,6 @@ class WithdrawalService extends PaymentBaseService
                     $this->db->rollBack();
                     return ['success' => false, 'message' => 'کارت بانکی معتبر یافت نشد'];
                 }
-            }
-
-            if ($this->model->hasPendingWithdrawal($userId, true)) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
             }
 
             $can = $this->wallet->canWithdraw($userId, $amount, $currency);
@@ -226,6 +235,9 @@ class WithdrawalService extends PaymentBaseService
         } catch (\Exception $e) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
+            }
+            if ($e->getCode() === '23000' || strpos($e->getMessage(), '23000') !== false || strpos($e->getMessage(), '1062') !== false) {
+                return ['success' => true, 'message' => 'درخواست برداشت با موفقیت ثبت شد'];
             }
             $this->logger->error('withdrawal.request.failed', [
                 'user_id' => $userId,
@@ -451,7 +463,8 @@ class WithdrawalService extends PaymentBaseService
             }
 
             $id = (int)$idObj->id;
-            $this->increaseDailyLimit($userId);
+            $dailyLimitValue = (int)($limitCheck['limits']['daily_count'] ?? 1000);
+            $this->increaseDailyLimit($userId, $dailyLimitValue);
 
             $this->auditTrail->record('withdrawal.requested', $userId, [
                 'withdrawal_id' => (int)$id,
@@ -836,9 +849,11 @@ class WithdrawalService extends PaymentBaseService
         return $this->limitModel->checkDailyLimit($userId, $limit);
     }
 
-    private function increaseDailyLimit(int $userId): void
+    private function increaseDailyLimit(int $userId, int $limit): void
     {
-        $this->limitModel->incrementDailyCount($userId);
+        if (!$this->limitModel->incrementDailyCount($userId, $limit)) {
+            throw new \RuntimeException('تعداد برداشت روزانه شما از حد مجاز فراتر رفته است');
+        }
     }
 
     public function recordTransactionStatusChange(
@@ -856,7 +871,13 @@ class WithdrawalService extends PaymentBaseService
 
     public function getAll(?string $status = null, ?string $currency = null, int $limit = 50, int $offset = 0): array
     {
-        return $this->model->getAll($status, $currency, $limit, $offset);
+        $records = $this->model->getAll($status, $currency, $limit, $offset);
+        foreach ($records as $record) {
+            if (!empty($record->card_number)) {
+                $record->card_number = $this->encryption->decrypt((string)$record->card_number);
+            }
+        }
+        return $records;
     }
 
     public function countAll(?string $status = null, ?string $currency = null): int
@@ -866,7 +887,13 @@ class WithdrawalService extends PaymentBaseService
 
     public function getPendingWithdrawals(int $limit = 50, int $offset = 0): array
     {
-        return $this->model->getPendingWithdrawals($limit, $offset);
+        $records = $this->model->getPendingWithdrawals($limit, $offset);
+        foreach ($records as $record) {
+            if (!empty($record->card_number)) {
+                $record->card_number = $this->encryption->decrypt((string)$record->card_number);
+            }
+        }
+        return $records;
     }
 
     public function countPendingWithdrawals(): int
@@ -881,7 +908,11 @@ class WithdrawalService extends PaymentBaseService
 
     public function findById(int $id): ?object
     {
-        return $this->model->find($id);
+        $record = $this->model->find($id);
+        if ($record && !empty($record->card_number)) {
+            $record->card_number = $this->encryption->decrypt((string)$record->card_number);
+        }
+        return $record;
     }
 
     public function updateStatus(
@@ -906,7 +937,13 @@ class WithdrawalService extends PaymentBaseService
         int $limit = 50,
         int $offset = 0
     ): array {
-        return $this->model->getUserWithdrawals($userId, $status, $currency, $limit, $offset);
+        $records = $this->model->getUserWithdrawals($userId, $status, $currency, $limit, $offset);
+        foreach ($records as $record) {
+            if (!empty($record->card_number)) {
+                $record->card_number = $this->encryption->decrypt((string)$record->card_number);
+            }
+        }
+        return $records;
     }
 
     /**

@@ -93,9 +93,12 @@ class StateMachineService extends \App\Services\BaseService
         'cancelled' => [],
     ];
 
-    public function __construct(LoggerInterface $logger)
+    private \Core\Database $db;
+
+    public function __construct(LoggerInterface $logger, \Core\Database $db)
     {
         parent::__construct($logger);
+        $this->db = $db;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -178,5 +181,75 @@ class StateMachineService extends \App\Services\BaseService
     {
         $transitions = $this->getAllowedTransitions($entity, $status);
         return empty($transitions);
+    }
+
+    /**
+     * Executing a state transition in Serializable Transaction with FOR UPDATE locking
+     */
+    public function executeTransition(
+        string $entity,
+        string $table,
+        int $id,
+        string $newStatus,
+        callable $onSuccess
+    ): array {
+        $startedTransaction = !$this->db->inTransaction();
+        try {
+            if ($startedTransaction) {
+                $this->db->exec("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+                $this->db->beginTransaction();
+            }
+
+            // Lock entity record FOR UPDATE
+            $stmt = $this->db->prepare("SELECT status FROM {$table} WHERE id = :id FOR UPDATE");
+            $stmt->execute(['id' => $id]);
+            $record = $stmt->fetch(\PDO::FETCH_OBJ);
+
+            if (!$record) {
+                if ($startedTransaction) {
+                    $this->db->rollBack();
+                }
+                return ['success' => false, 'message' => 'رکورد مورد نظر یافت نشد.'];
+            }
+
+            $currentStatus = (string)$record->status;
+
+            if (!$this->canTransition($entity, $currentStatus, $newStatus)) {
+                if ($startedTransaction) {
+                    $this->db->rollBack();
+                }
+                return [
+                    'success' => false,
+                    'message' => "تغییر وضعیت غیرمجاز از {$currentStatus} به {$newStatus}."
+                ];
+            }
+
+            $callbackResult = $onSuccess($currentStatus);
+
+            $updateStmt = $this->db->prepare("UPDATE {$table} SET status = :status, updated_at = NOW() WHERE id = :id");
+            $updateStmt->execute(['status' => $newStatus, 'id' => $id]);
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+
+            return [
+                'success' => true,
+                'message' => 'تغییر وضعیت با موفقیت انجام شد.',
+                'data' => $callbackResult
+            ];
+
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            $this->logger->error('state_machine.transition_failed', [
+                'entity' => $entity,
+                'id' => $id,
+                'new_status' => $newStatus,
+                'error' => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سرور: ' . $e->getMessage()];
+        }
     }
 }

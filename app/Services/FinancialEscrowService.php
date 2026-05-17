@@ -56,8 +56,7 @@ class FinancialEscrowService extends \App\Services\BaseService
             $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$advertiserId])->fetch();
 
             // ✅ Verify advertiser has sufficient balance
-            $balances = $this->wallet->getWalletBalances($advertiserId);
-            $advertiserBalance = $balances['irt_available'] ?? '0';
+            $advertiserBalance = $this->wallet->getBalanceForUpdate($advertiserId, 'irt');
 
             if (bccomp($advertiserBalance, $reward, 4) < 0) {
                 $this->db->rollBack();
@@ -71,7 +70,7 @@ class FinancialEscrowService extends \App\Services\BaseService
                 $executorId,
                 $advertiserId,
                 $reward,
-                'IRR'
+                'IRT'
             );
 
             if (!$result['ok']) {
@@ -149,7 +148,7 @@ class FinancialEscrowService extends \App\Services\BaseService
             }
 
             // ✅ Release via core escrow service
-            $result = $this->escrow->releaseFunds($escrow->id, $advertiserId, 'admin_release');
+            $result = $this->escrow->releaseFunds($escrow->id, $executorId, 'admin_release');
             if (!$result['ok']) {
                 $this->db->rollBack();
                 return $result;
@@ -258,8 +257,7 @@ class FinancialEscrowService extends \App\Services\BaseService
             $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$buyerId])->fetch();
 
             // ✅ Verify buyer balance
-            $balances = $this->wallet->getWalletBalances($buyerId);
-            $buyerBalance = $balances['irt_available'] ?? '0';
+            $buyerBalance = $this->wallet->getBalanceForUpdate($buyerId, 'irt');
 
             if (bccomp($buyerBalance, $amount, 4) < 0) {
                 $this->db->rollBack();
@@ -273,7 +271,7 @@ class FinancialEscrowService extends \App\Services\BaseService
                 $buyerId,
                 $sellerId,
                 $amount,
-                'IRR'
+                'IRT'
             );
 
             if (!$result['ok']) {
@@ -357,8 +355,7 @@ class FinancialEscrowService extends \App\Services\BaseService
             $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$buyerId])->fetch();
 
             // ✅ Verify buyer
-            $balances = $this->wallet->getWalletBalances($buyerId);
-            $buyerBalance = $balances['usdt_available'] ?? '0';
+            $buyerBalance = $this->wallet->getBalanceForUpdate($buyerId, 'usdt');
 
             if (bccomp($buyerBalance, $amount, 8) < 0) {
                 $this->db->rollBack();

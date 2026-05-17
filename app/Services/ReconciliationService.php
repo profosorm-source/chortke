@@ -94,7 +94,7 @@ class ReconciliationService extends \App\Services\BaseService
             }
 
             // MED-05: Lock Wallet first to establish consistent lock order hierarchy (Wallet -> Transaction)
-            $userId = $transaction->user_id ?? $webhookData['user_id'] ?? null;
+            $userId = $transaction->user_id ?? null;
             if ($userId) {
                 $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$userId])->fetch();
             }
@@ -321,7 +321,7 @@ class ReconciliationService extends \App\Services\BaseService
         }
 
         $id = $this->transactionModel->create([
-            'user_id' => $webhookData['user_id'] ?? null,
+            'user_id' => null, // Never trust or assign user_id directly from raw webhook data
             'type' => 'orphan_payment',
             'amount' => (string)($webhookData['amount'] ?? '0'),
             'currency' => strtolower((string)($webhookData['currency'] ?? 'irt')),
