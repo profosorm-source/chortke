@@ -145,13 +145,24 @@ class ManualDepositController extends BaseUserController
                 }
             }
 
-            // استفاده از ManualDepositService برای ایجاد درخواست
-            $result = $this->depositService->create($userId, [
-                'bank_card_id' => (int)$data['bank_card_id'],
-                'amount' => (float)$data['amount'],
-                'tracking_code' => (string)$data['tracking_code'],
-                'user_description' => (string)($data['user_description'] ?? ''),
-            ], $receiptPath);
+            // تولید کلید قطعی در صورت عدم ارسال
+            $effectiveIdempotencyKey = $idempotencyKey ?: hash('sha256', implode('|', [$userId, $data['tracking_code'], $data['amount'], $data['bank_card_id']]));
+
+            // استفاده از Core\IdempotencyKey برای بسته‌بندی امن و تضمین Idempotency
+            $result = \Core\IdempotencyKey::wrap(
+                $effectiveIdempotencyKey,
+                $userId,
+                'manual_deposit_create',
+                function() use ($userId, $data, $receiptPath) {
+                    return $this->depositService->create($userId, [
+                        'bank_card_id' => (int)$data['bank_card_id'],
+                        'amount' => (float)$data['amount'],
+                        'tracking_code' => (string)$data['tracking_code'],
+                        'user_description' => (string)($data['user_description'] ?? ''),
+                    ], $receiptPath);
+                },
+                $data
+            );
 
             if (!($result['success'] ?? false)) {
                 throw new \RuntimeException($result['message'] ?? 'خطا در ثبت درخواست');
