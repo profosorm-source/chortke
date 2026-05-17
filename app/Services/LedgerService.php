@@ -29,12 +29,12 @@ class LedgerService extends \App\Services\BaseService
         string $transactionId,
         string $debitAccount,
         string $creditAccount,
-        float $amount,
+        string $amount,
         string $currency = 'irt',
         string $description = null,
         array $metadata = []
     ): bool {
-        if ($amount <= 0) {
+        if (bccomp($amount, '0', 8) <= 0) {
             return false;
         }
 
