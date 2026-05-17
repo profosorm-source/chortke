@@ -11,7 +11,7 @@ class ScheduledPayment extends Model
     public function createSchedule(array $data): ?object
     {
         $data['user_id'] = (int)($data['user_id'] ?? 0);
-        $data['amount'] = (float)($data['amount'] ?? 0);
+        $data['amount'] = (string)($data['amount'] ?? '0');
         $data['currency'] = strtolower($data['currency'] ?? 'irt');
         $data['frequency'] = $data['frequency'] ?? 'one_time';
         $data['next_run_at'] = $data['next_run_at'] ?? date('Y-m-d H:i:s');

@@ -79,6 +79,14 @@ class Transaction extends Model
             return $this->find($idOrBool);
 
         } catch (\Exception $e) {
+            if (isset($data['idempotency_key']) && $data['idempotency_key'] !== '') {
+                if ($e->getCode() === '23000' || \strpos($e->getMessage(), '23000') !== false || \strpos($e->getMessage(), '1062') !== false) {
+                    $existing = $this->findByIdempotencyKey($data['idempotency_key']);
+                    if ($existing) {
+                        return $existing;
+                    }
+                }
+            }
             $this->logger->error('transaction.create.failed', [
                 'channel' => 'transaction',
                 'error' => $e->getMessage(),
