@@ -5,9 +5,9 @@ namespace Core;
 
 class Validator
 {
-    private array $data = [];
-    private array $rules = [];
-    private array $errors = [];
+    protected array $data = [];
+    protected array $rules = [];
+    protected array $errors = [];
 
     private ?Database $db = null;
 
@@ -72,9 +72,18 @@ class Validator
 
             case 'min':
                 if ($value !== null && $value !== '') {
-                    $min = (int)$param;
-                    if (\mb_strlen((string)$value) < $min) {
-                        $this->addError($field, "حداقل {$min} کاراکتر مجاز است");
+                    $rules = \explode('|', (string)($this->rules[$field] ?? ''));
+                    $isNumeric = \in_array('numeric', $rules, true) || \is_numeric($value);
+                    if ($isNumeric) {
+                        $minVal = (string)$param;
+                        if (bccomp((string)$value, $minVal, 8) < 0) {
+                            $this->addError($field, "حداقل مقدار مجاز {$minVal} است");
+                        }
+                    } else {
+                        $min = (int)$param;
+                        if (\mb_strlen((string)$value) < $min) {
+                            $this->addError($field, "حداقل {$min} کاراکتر مجاز است");
+                        }
                     }
                 }
                 break;
@@ -319,7 +328,7 @@ class Validator
         }
     }
 
-    private function addError(string $field, string $message): void
+    protected function addError(string $field, string $message): void
     {
         if (!isset($this->errors[$field])) {
             $this->errors[$field] = [];
