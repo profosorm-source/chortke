@@ -37,9 +37,9 @@ class PaymentLog extends Model
         );
     }
 
-    public function sumPayments(int $userId, string $status = 'completed'): float
+    public function sumPayments(int $userId, string $status = 'completed'): string
     {
-        return (float)$this->db->fetchColumn(
+        return (string)$this->db->fetchColumn(
             "SELECT COALESCE(SUM(amount),0) FROM " . static::$table . "
              WHERE user_id = ? AND status = ?",
             [$userId, $status]

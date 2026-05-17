@@ -538,7 +538,9 @@ class Transaction extends Model
             (string)($data['type'] ?? ''),
             (string)($data['amount'] ?? ''),
             (string)($data['currency'] ?? ''),
-            \bin2hex(\random_bytes(8)),
+            (string)($data['ref_id'] ?? ''),
+            (string)($data['ref_type'] ?? ''),
+            (string)($data['request_id'] ?? ''),
         ]);
         return \hash('sha256', $seed);
     }
@@ -655,31 +657,32 @@ class Transaction extends Model
             WHERE currency = ?
         ", [$currency]);
 
-        $totalDeposits = (float)($row->total_deposits ?? 0);
-        $totalWithdrawals = (float)($row->total_withdrawals ?? 0);
-        $monthlyRevenue = (float)($row->monthly_revenue ?? 0);
+        $totalDeposits = (string)($row->total_deposits ?? '0');
+        $totalWithdrawals = (string)($row->total_withdrawals ?? '0');
+        $monthlyRevenue = (string)($row->monthly_revenue ?? '0');
 
         // Calculate ARPU
         $activeUsers = (int)$this->db->fetchColumn("
             SELECT COUNT(DISTINCT user_id) FROM " . static::$table . "
             WHERE status = 'completed' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
         ");
-        $arpu = $activeUsers > 0 ? round($monthlyRevenue / $activeUsers, 2) : 0;
+        $scale = strtolower($currency) === 'usdt' ? 8 : 4;
+        $arpu = $activeUsers > 0 ? (float)bcdiv($monthlyRevenue, (string)$activeUsers, $scale) : 0.0;
 
         return [
             'currency' => $currency,
-            'total_deposits' => $totalDeposits,
-            'total_withdrawals' => $totalWithdrawals,
+            'total_deposits' => (float)$totalDeposits,
+            'total_withdrawals' => (float)$totalWithdrawals,
             'today_deposits' => (float)($row->today_deposits ?? 0),
             'today_withdrawals' => (float)($row->today_withdrawals ?? 0),
             'pending_transactions' => (int)($row->pending_transactions ?? 0),
             'site_revenue' => (float)($row->site_revenue ?? 0),
             'today_revenue' => (float)($row->today_revenue ?? 0),
             'weekly_revenue' => (float)($row->weekly_revenue ?? 0),
-            'monthly_revenue' => $monthlyRevenue,
+            'monthly_revenue' => (float)$monthlyRevenue,
             'total_transactions' => (int)($row->total_transactions ?? 0),
             'arpu' => $arpu,
-            'net_flow' => $totalDeposits - $totalWithdrawals,
+            'net_flow' => (float)bcsub($totalDeposits, $totalWithdrawals, $scale),
         ];
     }
 

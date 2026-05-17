@@ -121,7 +121,7 @@ class Escrow extends Model
         $stmt = $this->db->prepare(
             "UPDATE escrow_transactions 
              SET status = 'released', released_at = ?, released_by = ?
-             WHERE id = ?"
+             WHERE id = ? AND status IN ('in_escrow', 'partial')"
         );
 
         $result = $stmt->execute([date('Y-m-d H:i:s'), $releasedBy, $escrowId]);
@@ -215,7 +215,7 @@ class Escrow extends Model
                  refunded_at = ?, 
                  refund_reason = ?,
                  refunded_by = ?
-             WHERE id = ?"
+             WHERE id = ? AND status IN ('in_escrow', 'pending', 'disputed')"
         );
 
         $result = $stmt->execute([
