@@ -433,6 +433,7 @@ public function callback(string $gatewayName, array $callbackData): array
                 'gateway' => $gatewayName,
                 'description' => "تطبیق callback پرداخت - Gateway: {$gatewayName}, Authority: {$authority}",
                 'timestamp' => time(),
+                'is_internal' => true,
             ]);
 
             if (!$reconciliation['success']) {

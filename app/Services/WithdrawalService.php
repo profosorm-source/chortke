@@ -963,11 +963,17 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'خطا در نهایی‌سازی تراکنش در کیف پول'];
             }
 
-            $updated = $this->model->updateStatus($withdrawalId, 'completed', $paymentReference, $adminId);
+            $updated = $this->model->updateStatus($withdrawalId, 'completed', null, $adminId);
             if (!$updated) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'خطا در به‌روزرسانی وضعیت درخواست'];
             }
+
+            // ذخیره مرجع پرداخت در ستون مناسب به تفکیک نوع ارز جهت جلوگیری از آلودگی فیلد دلیل رد
+            $refField = strtoupper((string)$withdrawal->currency) === 'USDT' ? 'transaction_hash' : 'bank_tracking_code';
+            $this->model->update($withdrawalId, [
+                $refField => $paymentReference
+            ]);
 
             if (method_exists($this, 'recordTransactionStatusChange')) {
                 $this->recordTransactionStatusChange(
@@ -996,6 +1002,7 @@ class WithdrawalService extends PaymentBaseService
                     'gateway' => 'withdrawal_bank',
                     'description' => "تطبیق اتوماتیک - مرجع: {$paymentReference}",
                     'timestamp' => time(),
+                    'is_internal' => true,
                 ]);
 
                 if (empty($recon['success'])) {

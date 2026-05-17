@@ -58,13 +58,21 @@ class CurrencyService extends \App\Services\BaseService implements CurrencyServi
     /**
      * فرمت کردن مبلغ
      */
-    public function formatAmount(float $amount, ?string $currency = null): string
+    public function formatAmount(float|string $amount, ?string $currency = null): string
     {
         $cur = $currency ? \strtolower(\trim($currency)) : $this->getCurrentMode();
+        $num = (float)$amount;
         if ($cur === 'irt') {
-            return number_format($amount, 0, '.', ',') . ' تومان';
+            return number_format($num, 0, '.', ',') . ' تومان';
         } else {
-            return number_format($amount, 2, '.', ',') . ' USDT';
+            $strAmount = (string)$amount;
+            if (strpos($strAmount, '.') !== false) {
+                $decimals = strlen(substr($strAmount, strpos($strAmount, '.') + 1));
+                $decimals = max(2, min(8, $decimals));
+            } else {
+                $decimals = 2;
+            }
+            return number_format($num, $decimals, '.', ',') . ' USDT';
         }
     }
     

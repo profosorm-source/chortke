@@ -1278,22 +1278,6 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 );
             }
 
-            if ($transaction) {
-                $this->ledger()->recordDoubleEntry(
-                    $transaction->transaction_id,
-                    "wallet:{$fromUserId}",
-                    "wallet:{$toUserId}",
-                    $amount,
-                    $currency,
-                    $description ?: "دریافت از کاربر {$fromUserId}",
-                    [
-                        'counterparty' => $fromUserId,
-                        'balance_before' => $toBalanceBefore,
-                        'balance_after' => bcadd($toBalanceBefore, $amount, $scale),
-                    ]
-                );
-            }
-
             if ($startedTransaction) {
                 $this->db->commit();
             }

@@ -366,6 +366,7 @@ class CryptoDepositService extends \App\Services\BaseService
                         'gateway' => 'crypto_' . strtolower((string)$d->network),
                         'description' => "تطبیق crypto deposit - Network: {$d->network}, Tx: {$d->tx_hash}",
                         'timestamp' => time(),
+                        'is_internal' => true,
                     ]);
 
                     if (!$reconciliation['success']) {

@@ -244,6 +244,7 @@ class DisputeService extends \App\Services\BaseService
                             'user_id' => (int)$dispute->user_id,
                             'description' => "تطبیق خودکار استرداد رأی اختلاف",
                             'timestamp' => time(),
+                            'is_internal' => true,
                         ]);
                     } else {
                         throw new \RuntimeException("Atomic dispute reversal failed at Wallet core.");

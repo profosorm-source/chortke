@@ -327,6 +327,7 @@ class ManualDepositService extends \App\Services\BaseService
                     'currency'       => 'irt',
                     'status'         => 'success',
                     'gateway'        => 'manual_bank',
+                    'is_internal'    => true,
                 ]);
 
                 if (!$reconciliation['success']) {
