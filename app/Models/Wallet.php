@@ -135,8 +135,16 @@ class Wallet extends Model
     /**
      * بررسی وضعیت مسدود بودن کیف پول
      */
-    public function isFrozen(int $userId): bool
+    public function isFrozen(int $userId, bool $forUpdate = false): bool
     {
+        if ($forUpdate && $this->db->inTransaction()) {
+            $sql = "SELECT is_frozen FROM `" . static::$table . "` WHERE user_id = :user_id LIMIT 1 FOR UPDATE";
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute(['user_id' => $userId]);
+            $result = $stmt->fetch(\PDO::FETCH_OBJ);
+            return $result ? (bool)($result->is_frozen ?? 0) : false;
+        }
+
         $wallet = $this->findByUserId($userId);
         if (!$wallet) {
             return false;
@@ -177,21 +185,25 @@ class Wallet extends Model
 
         $field = $this->currencyField($currency);
 
+        // H24 Fix: Enforce atomic database-level protection against negative balance for debit operations
         $sql = "
             UPDATE `" . static::$table . "`
             SET `{$field}` = `{$field}` + :amount, updated_at = NOW()
             WHERE user_id = :user_id
               AND (is_frozen IS NULL OR is_frozen = 0)
+              AND (:amount_check >= 0 OR `{$field}` >= ABS(:amount_abs))
         ";
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             'amount' => $amount,
+            'amount_check' => $amount,
+            'amount_abs' => $amount,
             'user_id' => $userId,
         ]);
 
         if ($stmt->rowCount() === 0) {
-            throw new \Exception("Failed to update balance. Wallet may be frozen or does not exist.");
+            throw new \Exception("Failed to update balance. Wallet may be frozen, insufficient balance for debit, or does not exist.");
         }
 
         return true;
@@ -283,7 +295,7 @@ class Wallet extends Model
         if (bccomp($amount, '0', 8) <= 0) {
             throw new \InvalidArgumentException("Deduction amount must be positive.");
         }
-        if ($this->isFrozen($userId)) {
+        if ($this->isFrozen($userId, true)) {
             throw new \Exception("Wallet is frozen for user {$userId}");
         }
 
