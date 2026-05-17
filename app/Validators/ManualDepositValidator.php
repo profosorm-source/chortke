@@ -8,7 +8,7 @@ class ManualDepositValidator extends Validator
 {
     protected array $rules = [
         'bank_card_id' => 'required|numeric',
-        'amount' => 'required|numeric|min:10000|max:100000000',
+        'amount' => 'required|string',
         'tracking_code' => 'required|string|min:5|max:50',
         'deposit_date' => 'required|date',
         'deposit_time' => 'required|string',
