@@ -71,17 +71,19 @@ class ManualDeposit extends Model
     /**
      * بررسی وجود درخواست در انتظار
      */
-    public function hasPendingDeposit(int $userId): bool
+    public function hasPendingDeposit(int $userId, bool $forUpdate = false): bool
     {
-        $sql = "SELECT COUNT(*) as count
+        $sql = "SELECT id
                 FROM " . static::$table . "
                 WHERE user_id = :user_id AND status IN ('pending', 'under_review')";
+        if ($forUpdate && $this->db->inTransaction()) {
+            $sql .= " FOR UPDATE";
+        }
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute(['user_id' => $userId]);
 
-        $result = $stmt->fetch(\PDO::FETCH_OBJ);
-        return ((int)($result->count ?? 0)) > 0;
+        return (bool)$stmt->fetch();
     }
 
     /**
@@ -93,37 +95,48 @@ class ManualDeposit extends Model
         ?string $rejectionReason = null,
         ?int $reviewedBy = null,
         ?string $transactionId = null,
-        ?string $note = null
+        ?string $note = null,
+        array $allowedFromStatuses = ['pending', 'under_review']
     ): bool {
+        if (!$this->db->inTransaction()) {
+            throw new \RuntimeException('ManualDeposit::updateStatus() requires an active database transaction.');
+        }
         $sql = "UPDATE " . static::$table . " SET status = :status, updated_at = NOW()";
         $params = ['id' => $id, 'status' => $status];
 
-        if ($rejectionReason) {
+        if ($rejectionReason !== null) {
             $sql .= ", rejection_reason = :rejection_reason";
             $params['rejection_reason'] = $rejectionReason;
         }
 
-        if ($reviewedBy) {
+        if ($reviewedBy !== null) {
             $sql .= ", reviewed_by = :reviewed_by, reviewed_at = NOW()";
             $params['reviewed_by'] = $reviewedBy;
         }
 
-        if ($transactionId) {
+        if ($transactionId !== null) {
             $sql .= ", transaction_id = :transaction_id";
             $params['transaction_id'] = $transactionId;
         }
 
-        if ($note) {
+        if ($note !== null) {
             $sql .= ", admin_note = :admin_note";
             $params['admin_note'] = $note;
         }
 
-        $sql .= " WHERE id = :id AND status IN ('pending', 'under_review')";
+        $placeholders = [];
+        foreach ($allowedFromStatuses as $index => $fromStatus) {
+            $key = "from_status_" . $index;
+            $placeholders[] = ":" . $key;
+            $params[$key] = $fromStatus;
+        }
+
+        $sql .= " WHERE id = :id AND status IN (" . implode(", ", $placeholders) . ")";
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
         if ($stmt->rowCount() === 0) {
-            throw new \RuntimeException("Concurrent modification detected: status is not pending/under_review or row does not exist.");
+            throw new \RuntimeException("Concurrent modification detected: status is not in allowed source states or row does not exist.");
         }
         return true;
     }

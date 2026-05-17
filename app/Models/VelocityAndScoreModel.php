@@ -19,9 +19,28 @@ class VelocityAndScoreModel extends Model
 
     public function getTransactionCount(int $userId, string $type, int $seconds): int
     {
+        if ($type === 'login') {
+            $row = $this->db->fetch(
+                "SELECT COUNT(*) as count FROM activity_logs 
+                 WHERE user_id = ? AND action IN ('login', 'login_success', 'login_failed') AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)",
+                [$userId, $seconds]
+            );
+            return (int)($row->count ?? 0);
+        }
+        if ($type === 'password_change') {
+            $row = $this->db->fetch(
+                "SELECT COUNT(*) as count FROM activity_logs 
+                 WHERE user_id = ? AND action = 'password_changed' AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)",
+                [$userId, $seconds]
+            );
+            return (int)($row->count ?? 0);
+        }
+
         $row = $this->db->fetch(
             "SELECT COUNT(*) as count FROM transactions 
-             WHERE user_id = ? AND type = ? AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)",
+             WHERE user_id = ? AND type = ? 
+             AND status NOT IN ('failed', 'rejected', 'cancelled')
+             AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)",
             [$userId, $type, $seconds]
         );
         return (int)($row->count ?? 0);
@@ -32,7 +51,9 @@ class VelocityAndScoreModel extends Model
     {
         $row = $this->db->fetch(
             "SELECT COALESCE(SUM(amount), 0) as total FROM transactions 
-             WHERE user_id = ? AND type = ? AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)",
+             WHERE user_id = ? AND type = ? 
+             AND status NOT IN ('failed', 'rejected', 'cancelled')
+             AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)",
             [$userId, $type, $seconds]
         );
         return (float)($row->total ?? 0);
@@ -43,7 +64,9 @@ class VelocityAndScoreModel extends Model
     {
         $row = $this->db->fetch(
             "SELECT COUNT(*) as count FROM transactions 
-             WHERE user_id = ? AND type = ? AND amount = ? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
+             WHERE user_id = ? AND type = ? AND amount = ? 
+             AND status NOT IN ('failed', 'rejected', 'cancelled')
+             AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
             [$userId, $type, $amount]
         );
         return (int)($row->count ?? 0);

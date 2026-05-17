@@ -69,6 +69,19 @@ class InfluencerModel extends Model
         return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
     }
 
+    public function findProfileForUpdate(int $id): ?object
+    {
+        $stmt = $this->db->prepare("
+            SELECT ip.*, u.full_name, u.email
+            FROM influencer_profiles ip
+            LEFT JOIN users u ON u.id = ip.user_id
+            WHERE ip.id = ? AND ip.deleted_at IS NULL
+            FOR UPDATE
+        ");
+        $stmt->execute([$id]);
+        return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
+    }
+
     public function findProfileByUserId(int $userId): ?object
     {
         $stmt = $this->db->prepare("
