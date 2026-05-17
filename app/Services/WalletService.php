@@ -1238,28 +1238,35 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             $this->walletModel->updateBalance($fromUserId, $negativeAmount, $currency);
             $this->walletModel->updateBalance($toUserId, $amount, $currency);
 
+            $ipAddress = function_exists('get_client_ip') ? get_client_ip() : '127.0.0.1';
+            $deviceFingerprint = function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : 'system_internal';
+
             $fromTransaction = $this->transactionModel->create([
-                'user_id'        => $fromUserId,
-                'type'           => 'transfer',
-                'currency'       => $currency,
-                'amount'         => $negativeAmount,
-                'balance_before' => $fromBalance,
-                'balance_after'  => bcsub($fromBalance, $amount, $scale),
-                'status'         => 'completed',
-                'description'    => $description ?: "انتقال به کاربر {$toUserId}",
-                'metadata'       => json_encode(['to_user_id' => $toUserId]),
+                'user_id'            => $fromUserId,
+                'type'               => 'transfer',
+                'currency'           => $currency,
+                'amount'             => $negativeAmount,
+                'balance_before'     => $fromBalance,
+                'balance_after'      => bcsub($fromBalance, $amount, $scale),
+                'status'             => 'completed',
+                'description'        => $description ?: "انتقال به کاربر {$toUserId}",
+                'ip_address'         => $ipAddress,
+                'device_fingerprint' => $deviceFingerprint,
+                'metadata'           => json_encode(['to_user_id' => $toUserId]),
             ]);
 
             $transaction = $this->transactionModel->create([
-                'user_id'        => $toUserId,
-                'type'           => 'transfer',
-                'currency'       => $currency,
-                'amount'         => $amount,
-                'balance_before' => $toBalanceBefore,
-                'balance_after'  => bcadd($toBalanceBefore, $amount, $scale),
-                'status'         => 'completed',
-                'description'    => $description ?: "دریافت از کاربر {$fromUserId}",
-                'metadata'       => json_encode(['from_user_id' => $fromUserId]),
+                'user_id'            => $toUserId,
+                'type'               => 'transfer',
+                'currency'           => $currency,
+                'amount'             => $amount,
+                'balance_before'     => $toBalanceBefore,
+                'balance_after'      => bcadd($toBalanceBefore, $amount, $scale),
+                'status'             => 'completed',
+                'description'        => $description ?: "دریافت از کاربر {$fromUserId}",
+                'ip_address'         => $ipAddress,
+                'device_fingerprint' => $deviceFingerprint,
+                'metadata'           => json_encode(['from_user_id' => $fromUserId]),
             ]);
 
             if ($fromTransaction) {

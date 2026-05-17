@@ -323,7 +323,7 @@ class ManualDepositService extends \App\Services\BaseService
                     'transaction_id' => (string)$ok['transaction_id'],
                     'reference_id'   => 'manual_deposit_' . $depositId,
                     'user_id'        => (int)$d->user_id,
-                    'amount'         => (float)$amountStr,
+                    'amount'         => $amountStr,
                     'currency'       => 'irt',
                     'status'         => 'success',
                     'gateway'        => 'manual_bank',

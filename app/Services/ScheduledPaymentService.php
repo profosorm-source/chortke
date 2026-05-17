@@ -82,8 +82,8 @@ class ScheduledPaymentService extends \App\Services\BaseService
                         ]
                     );
 
-                    if (!$txId) {
-                        throw new \RuntimeException('Failed to execute atomic wallet withdrawal');
+                    if (empty($txId) || !is_array($txId) || empty($txId['success']) || empty($txId['transaction_id'])) {
+                        throw new \RuntimeException('Failed to execute atomic wallet withdrawal: ' . ($txId['message'] ?? 'Unknown error'));
                     }
 
                     $nextRun = $this->calculateNextRun((string)$payment->frequency, (string)$payment->next_run_at);

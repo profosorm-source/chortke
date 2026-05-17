@@ -143,7 +143,7 @@ class BankCardService extends \App\Services\BaseService
         }
 
         $ok = $this->model->update($cardId, [
-            'owner_name' => \Core\Encryption::encrypt($holder),
+            'owner_name' => $this->encryption->encrypt($holder),
             'shaba' => $iban ?: null,
             'status' => 'pending',
             'rejection_reason' => null,

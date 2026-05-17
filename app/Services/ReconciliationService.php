@@ -49,7 +49,7 @@ class ReconciliationService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            $internal = $isInternal || !empty($webhookData['is_internal']) || !empty($webhookData['_internal']);
+            $internal = $isInternal;
 
             if (!$internal) {
                 // 🛡️ HIGH-03: Enforce Webhook signature validation (HMAC) prior to reconciling

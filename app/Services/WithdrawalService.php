@@ -108,7 +108,7 @@ class WithdrawalService extends PaymentBaseService
             $scale = strtolower($currency) === 'usdt' ? 8 : 4;
             $minAmount = (string)($this->settings->get('withdrawal_min_amount', '10000'));
             if (bccomp($amount, $minAmount, $scale) < 0) {
-                return ['success' => false, 'message' => "حداقل مبلغ برداشت " . $this->currencyService->formatAmount((float)$minAmount, $currency) . " است"];
+                return ['success' => false, 'message' => "حداقل مبلغ برداشت " . $this->currencyService->formatAmount($minAmount, $currency) . " است"];
             }
 
             if (!$this->kycService->isApproved($userId)) {
@@ -117,7 +117,7 @@ class WithdrawalService extends PaymentBaseService
 
             // 🛡️ Risk Check
             $risk = $this->fraudGuard->checkAction($userId, 'withdrawal.create', [
-                'amount'      => (float)$amount,
+                'amount'      => $amount,
                 'currency'    => $currency,
                 'ip'          => $ip,
                 'fingerprint' => $fingerprint,
@@ -269,7 +269,7 @@ class WithdrawalService extends PaymentBaseService
         }
 
         $risk = $this->fraudGuard->checkAction($userId, 'withdrawal.create', [
-            'amount'      => (float)$amount,
+            'amount'      => $amount,
             'currency'    => $currency,
             'ip'          => get_client_ip(),
             'user_agent'  => get_user_agent()
@@ -333,11 +333,11 @@ class WithdrawalService extends PaymentBaseService
 
             if (bccomp($amount, (string)$min, $scale) < 0) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => 'کمتر از حداقل برداشت (' . $this->currencyService->formatAmount((float)$min, $currency) . ') است'];
+                return ['success' => false, 'message' => 'کمتر از حداقل برداشت (' . $this->currencyService->formatAmount($min, $currency) . ') است'];
             }
             if (bccomp($amount, (string)$max, $scale) > 0) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => 'بیشتر از حداکثر برداشت (' . $this->currencyService->formatAmount((float)$max, $currency) . ') است'];
+                return ['success' => false, 'message' => 'بیشتر از حداکثر برداشت (' . $this->currencyService->formatAmount($max, $currency) . ') است'];
             }
 
             $feePercent = $this->settings->get(
