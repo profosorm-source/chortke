@@ -211,11 +211,33 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             throw new \InvalidArgumentException('مبلغ باید بیشتر از صفر باشد');
         }
 
-        $minAmount = ($currency === 'usdt') 
-            ? (string)$this->settingService->get('min_deposit_usdt', '1.0') 
-            : (string)$this->settingService->get('min_deposit_irt', '1000.0');
-        if (bccomp($amount, $minAmount, $this->getScale($currency)) < 0) {
-            throw new \InvalidArgumentException("حداقل مبلغ واریز {$minAmount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " است");
+        // ✅ BUG-06 Fix: Bypass minimum deposit limits for core escrow, task rewards, refunds, and dispute distributions
+        $type = $metadata['type'] ?? 'deposit';
+        $bypassMinDepositTypes = [
+            'social_task_reward',
+            'social_task_refund',
+            'dispute_refund',
+            'dispute_release',
+            'dispute_partial_release',
+            'vitrine_refund',
+            'vitrine_sale',
+            'influencer_order_payment',
+            'influencer_escrow',
+            'social_task_escrow',
+            'vitrine_escrow',
+            'withdrawal_refund',
+            'refund',
+            'deposit_refund',
+            'scheduled_payment_refund'
+        ];
+
+        if (!in_array($type, $bypassMinDepositTypes, true)) {
+            $minAmount = ($currency === 'usdt') 
+                ? (string)$this->settingService->get('min_deposit_usdt', '1.0') 
+                : (string)$this->settingService->get('min_deposit_irt', '1000.0');
+            if (bccomp($amount, $minAmount, $this->getScale($currency)) < 0) {
+                throw new \InvalidArgumentException("حداقل مبلغ واریز {$minAmount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " است");
+            }
         }
     }
 

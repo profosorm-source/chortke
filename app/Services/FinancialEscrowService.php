@@ -52,6 +52,9 @@ class FinancialEscrowService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
+            // 🔒 Pessimistically lock the wallet row to prevent TOCTOU race conditions (BUG-02)
+            $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$advertiserId])->fetch();
+
             // ✅ Verify advertiser has sufficient balance
             $balances = $this->wallet->getWalletBalances($advertiserId);
             $advertiserBalance = $balances['irt_available'] ?? '0';
@@ -108,7 +111,21 @@ class FinancialEscrowService extends \App\Services\BaseService
      */
     public function confirmSocialTaskEscrow(int $executionId, int $adviserId): array
     {
-        return $this->escrow->confirmHold($executionId, 'social_task_execution', $adviserId);
+        try {
+            $this->db->beginTransaction();
+            $result = $this->escrow->confirmHold($executionId, 'social_task_execution', $adviserId);
+            if ($result['ok']) {
+                $this->db->commit();
+            } else {
+                $this->db->rollBack();
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return ['ok' => false, 'error' => $e->getMessage()];
+        }
     }
 
     /**
@@ -237,6 +254,9 @@ class FinancialEscrowService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
+            // 🔒 Pessimistically lock the wallet row to prevent TOCTOU race conditions (BUG-02)
+            $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$buyerId])->fetch();
+
             // ✅ Verify buyer balance
             $balances = $this->wallet->getWalletBalances($buyerId);
             $buyerBalance = $balances['irt_available'] ?? '0';
@@ -332,6 +352,9 @@ class FinancialEscrowService extends \App\Services\BaseService
     ): array {
         try {
             $this->db->beginTransaction();
+
+            // 🔒 Pessimistically lock the wallet row to prevent TOCTOU race conditions (BUG-02)
+            $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$buyerId])->fetch();
 
             // ✅ Verify buyer
             $balances = $this->wallet->getWalletBalances($buyerId);
@@ -463,12 +486,27 @@ class FinancialEscrowService extends \App\Services\BaseService
      */
     public function markEscrowDisputed(int $orderId, string $orderType, string $reason): array
     {
-        $escrow = $this->escrow->getByOrder($orderId, $orderType);
-        if (!$escrow) {
-            return ['ok' => false, 'error' => 'Escrow not found'];
-        }
+        try {
+            $this->db->beginTransaction();
+            $escrow = $this->escrow->getByOrder($orderId, $orderType);
+            if (!$escrow) {
+                $this->db->rollBack();
+                return ['ok' => false, 'error' => 'Escrow not found'];
+            }
 
-        return $this->escrow->markAsDisputed($escrow->id, $reason);
+            $result = $this->escrow->markAsDisputed((int)$escrow->id, $reason);
+            if ($result['ok']) {
+                $this->db->commit();
+            } else {
+                $this->db->rollBack();
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            return ['ok' => false, 'error' => $e->getMessage()];
+        }
     }
 
     /**
@@ -494,57 +532,43 @@ class FinancialEscrowService extends \App\Services\BaseService
             $refundAmount = bcmul((string)$escrow->amount, $percent, $scale);
             $releaseAmount = bcsub((string)$escrow->amount, $refundAmount, $scale);
 
-            if ($verdict === 'favor_seller') {
-                // Release all to seller
-                $result = $this->escrow->releaseFunds(
-                    $escrow->id,
-                    $escrow->seller_id,
-                    'dispute_resolved_favor_seller'
-                );
-                if ($result['ok']) {
-                    $this->wallet->depositInTransaction(
-                        $escrow->seller_id,
-                        $releaseAmount,
-                        $escrow->currency === 'USDT' ? 'usdt' : 'irt',
-                        [
-                            'type' => 'dispute_release',
-                            'order_id' => $orderId
-                        ]
-                    );
-                }
-            } else {
-                // Partial release + refund
-                $result = $this->escrow->refundFunds(
-                    $escrow->id,
-                    $escrow->buyer_id,
-                    "dispute_resolved_partial_favor_buyer ($refundPercent%)",
-                    'dispute_resolution'
-                );
-                if ($result['ok']) {
-                    $currency = $escrow->currency === 'USDT' ? 'usdt' : 'irt';
-                    $this->wallet->depositInTransaction($escrow->buyer_id, $refundAmount, $currency, [
-                        'type' => 'dispute_refund',
-                        'order_id' => $orderId
-                    ]);
-                    if (bccomp($releaseAmount, '0', $scale) > 0) {
-                        $this->wallet->depositInTransaction(
-                            $escrow->seller_id,
-                            $releaseAmount,
-                            $currency,
-                            [
-                                'type' => 'dispute_partial_release',
-                                'order_id' => $orderId
-                            ]
-                        );
-                    }
-                }
+            $result = $this->escrow->resolveDisputePartial(
+                (int)$escrow->id,
+                (int)$escrow->buyer_id,
+                (int)$escrow->seller_id,
+                $refundAmount,
+                $releaseAmount,
+                'admin_dispute_resolution',
+                $verdict
+            );
+
+            if (!$result['ok']) {
+                $this->db->rollBack();
+                return $result;
+            }
+
+            $currency = $escrow->currency === 'USDT' ? 'usdt' : 'irt';
+            if (bccomp($refundAmount, '0', $scale) > 0) {
+                $this->wallet->depositInTransaction($escrow->buyer_id, $refundAmount, $currency, [
+                    'type' => 'dispute_refund',
+                    'order_id' => $orderId
+                ]);
+            }
+
+            if (bccomp($releaseAmount, '0', $scale) > 0) {
+                $this->wallet->depositInTransaction($escrow->seller_id, $releaseAmount, $currency, [
+                    'type' => 'dispute_release',
+                    'order_id' => $orderId
+                ]);
             }
 
             $this->db->commit();
             return ['ok' => true, 'released' => $releaseAmount, 'refunded' => $refundAmount];
 
         } catch (\Exception $e) {
-            $this->db->rollBack();
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             return ['ok' => false, 'error' => $e->getMessage()];
         }
     }
