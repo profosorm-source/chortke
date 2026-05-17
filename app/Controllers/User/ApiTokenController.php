@@ -44,6 +44,7 @@ class ApiTokenController extends BaseUserController
     public function create(): void
     {
         $this->requireAuth();
+        $this->validateCsrf();
 
         $userId    = $this->userId();
         $name      = trim($this->request->post('name') ?? '');
@@ -75,6 +76,7 @@ class ApiTokenController extends BaseUserController
     public function revoke(): void
     {
         $this->requireAuth();
+        $this->validateCsrf();
 
         $userId = $this->userId();
         $id = (int)$this->request->param('id');
