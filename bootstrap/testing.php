@@ -1,18 +1,10 @@
 <?php
 
-if (!isset($_SERVER['REQUEST_TIME_FLOAT'])) {
-    $_SERVER['REQUEST_TIME_FLOAT'] = microtime(true);
-}
+declare(strict_types=1);
 
-/**
- * Ensure test environment values for config and OAuth bootstrap.
- */
-global $env;
-$env = array_merge($env ?? [], [
-    'APP_ENV' => 'local',
-    'APP_URL' => 'http://localhost',
-    'APP_DEBUG' => 'true',
-    'TRUSTED_PROXIES' => '127.0.0.1',
-]);
+// Disable session sending in CLI
+ini_set('session.use_cookies', '0');
+ini_set('session.use_only_cookies', '0');
 
-require_once __DIR__ . '/../vendor/autoload.php';
+// Bootstrap app.php
+require_once dirname(__DIR__) . '/bootstrap/app.php';

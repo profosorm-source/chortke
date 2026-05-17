@@ -106,6 +106,15 @@ if (empty($env)) {
     }
 }
 
+// Define SECURITY_API_TOKEN_SECRET constant from .env if available
+if (!defined('SECURITY_API_TOKEN_SECRET')) {
+    $secret = $env['SECURITY_API_TOKEN_SECRET'] ?? getenv('SECURITY_API_TOKEN_SECRET') ?? $_ENV['SECURITY_API_TOKEN_SECRET'] ?? null;
+    if ($secret) {
+        define('SECURITY_API_TOKEN_SECRET', (string)$secret);
+    }
+}
+
+
 // 🛡️ CRITICAL Infrastructure Integrity Checks
 // These must run before any service starts to prevent insecure deployments
 
@@ -336,7 +345,8 @@ $container->singleton(\App\Services\FinancialEscrowService::class, function($c) 
 
 $container->singleton(\App\Services\StateMachineService::class, function($c) {
     return new \App\Services\StateMachineService(
-        $c->make(\Core\Logger::class)
+        $c->make(\Core\Logger::class),
+        $c->make(\Core\Database::class)
     );
 });
 
