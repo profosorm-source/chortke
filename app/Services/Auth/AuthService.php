@@ -507,7 +507,11 @@ class AuthService extends \App\Services\BaseService
                 if ($packed === false) return $ip;
                 return inet_ntop(substr($packed, 0, 8) . str_repeat("\x00", 8));
             }
-            return substr($ip, 0, strrpos($ip, '.') ?: 0);
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $pos = strrpos($ip, '.');
+                return $pos !== false ? substr($ip, 0, $pos) : $ip;
+            }
+            return $ip;
         };
 
         $pendingSubnet = $normalize($pendingIp ?? '');

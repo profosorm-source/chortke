@@ -55,11 +55,25 @@ class ManualDepositService extends \App\Services\BaseService
     public function create(int $userId, array $data, ?string $receiptPath): array
     {
         $amount = isset($data['amount']) ? (string)$data['amount'] : '0';
-        if (bccomp($amount, '0', 4) <= 0) {
+        if (!is_numeric($amount)) {
             if (!empty($receiptPath)) {
                 try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
             }
-            return ['success' => false, 'message' => 'مبلغ واریز دستی باید بزرگتر از صفر باشد'];
+            return ['success' => false, 'message' => 'مبلغ نامعتبر است'];
+        }
+
+        if (bccomp($amount, '10000', 4) < 0) {
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
+            return ['success' => false, 'message' => 'حداقل مبلغ ۱۰,۰۰۰ تومان است'];
+        }
+
+        if (bccomp($amount, '100000000', 4) > 0) {
+            if (!empty($receiptPath)) {
+                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
+            }
+            return ['success' => false, 'message' => 'حداکثر مبلغ ۱۰۰,۰۰۰,۰۰۰ تومان است'];
         }
 
         $tracking = trim((string)($data['tracking_code'] ?? ''));

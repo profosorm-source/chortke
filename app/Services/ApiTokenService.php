@@ -83,19 +83,14 @@ class ApiTokenService extends \App\Services\BaseService
 
     public function revokeTokenByHashForUser(string $token, int $userId): array
     {
-        // CRIT-01 Fix: Pass plain token to the model which handles HMAC-SHA256
-        // The model will hash the token before looking it up
-        $record = $this->apiTokenModel->findByHash($token);
+        $ok = $this->apiTokenModel->revokeByHashForUser($token, $userId);
 
-        if (!$record || (int)$record['user_id'] !== $userId || (int)$record['revoked'] === 1) {
+        if (!$ok) {
             return ['success' => false, 'message' => 'توکن یافت نشد یا قبلاً باطل شده', 'status' => 404, 'code' => 'TOKEN_NOT_FOUND'];
         }
 
-        $this->apiTokenModel->revokeByHash($token);
-
         $this->logger->info('api_token.revoked_by_hash', [
-            'token_id' => $record['id'] ?? null,
-            'user_id' => $record['user_id'] ?? null
+            'user_id' => $userId
         ]);
 
         return ['success' => true];
@@ -228,13 +223,11 @@ class ApiTokenService extends \App\Services\BaseService
 
     public function revokeTokenById(int $userId, int $tokenId): array
     {
-        $token = $this->apiTokenModel->findById($tokenId);
+        $ok = $this->apiTokenModel->revokeForUser($tokenId, $userId);
 
-        if (!$token || (int)$token['user_id'] !== $userId || (int)$token['revoked'] === 1) {
-            return ['success' => false, 'message' => 'توکن یافت نشد', 'status' => 404, 'code' => 'TOKEN_NOT_FOUND'];
+        if (!$ok) {
+            return ['success' => false, 'message' => 'توکن یافت نشد یا قبلاً باطل شده است', 'status' => 404, 'code' => 'TOKEN_NOT_FOUND'];
         }
-
-        $this->apiTokenModel->revokeById($tokenId);
 
         $this->logger->info('api_token.revoked_by_user', [
             'user_id' => $userId,

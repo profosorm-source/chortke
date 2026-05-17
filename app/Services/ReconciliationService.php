@@ -46,41 +46,53 @@ class ReconciliationService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'کد پیگیری معتبر نیست'];
         }
 
-        // 🛡️ HIGH-03: Enforce Webhook signature validation (HMAC) prior to reconciling
-        $secret = $this->db->fetchColumn("SELECT value FROM settings WHERE key_name = 'webhook_secret' LIMIT 1");
-        if ($secret) {
-            $signature = $webhookData['signature'] ?? $_SERVER['HTTP_X_SIGNATURE'] ?? null;
-            if (!$signature) {
-                return ['success' => false, 'message' => 'امضای امنیتی وب‌هوک یافت نشد'];
-            }
-            $payloadData = $webhookData;
-            unset($payloadData['signature']);
-            ksort($payloadData);
-            $computed = hash_hmac('sha256', json_encode($payloadData, JSON_UNESCAPED_SLASHES), (string)$secret);
-            if (!hash_equals((string)$signature, $computed)) {
-                $this->logger->error('reconciliation.invalid_signature', [
-                    'received' => $signature,
-                    'computed' => $computed,
-                ]);
-                return ['success' => false, 'message' => 'امضای وب‌هوک معتبر نیست'];
-            }
-        }
-
-        // 1. Find matching transaction
-        $transaction = $this->db->query(
-            "SELECT * FROM transactions WHERE external_id = :ext_id OR gateway_transaction_id = :ext_id OR transaction_id = :ext_id LIMIT 1",
-            ['ext_id' => (string)$externalId]
-        )->fetch(\PDO::FETCH_OBJ);
-
-        // 2. Register orphan transaction if missing
-        if (!$transaction) {
-            $transaction = $this->createOrphanTransaction($webhookData);
-        }
-
         try {
             $this->db->beginTransaction();
 
-            // 3. Lock transaction row FOR UPDATE
+            // 🛡️ HIGH-03: Enforce Webhook signature validation (HMAC) prior to reconciling
+            $secret = $this->db->fetchColumn("SELECT value FROM settings WHERE key_name = 'webhook_secret' LIMIT 1");
+            if ($secret) {
+                $signature = $webhookData['signature'] ?? $_SERVER['HTTP_X_SIGNATURE'] ?? null;
+                if (!$signature) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'امضای امنیتی وب‌هوک یافت نشد'];
+                }
+                $payloadData = $webhookData;
+                unset($payloadData['signature']);
+                ksort($payloadData);
+                $computed = hash_hmac('sha256', json_encode($payloadData, JSON_UNESCAPED_SLASHES), (string)$secret);
+                if (!hash_equals((string)$signature, $computed)) {
+                    $this->logger->error('reconciliation.invalid_signature', [
+                        'received' => $signature,
+                        'computed' => $computed,
+                    ]);
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'امضای وب‌هوک معتبر نیست'];
+                }
+            } else {
+                // MED-03: Throw on empty secret to enforce absolute HMAC validation!
+                $this->db->rollBack();
+                throw new \RuntimeException('Webhook reconciliation secret is not configured.');
+            }
+
+            // Find and lock the matching transaction immediately inside the transaction block
+            $transaction = $this->db->query(
+                "SELECT * FROM transactions WHERE (external_id = :ext_id OR gateway_transaction_id = :ext_id OR transaction_id = :ext_id) FOR UPDATE LIMIT 1",
+                ['ext_id' => (string)$externalId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            // Register orphan transaction inside the transaction block with lock if not exists
+            if (!$transaction) {
+                $transaction = $this->createOrphanTransaction($webhookData);
+            }
+
+            // MED-05: Lock Wallet first to establish consistent lock order hierarchy (Wallet -> Transaction)
+            $userId = $transaction->user_id ?? $webhookData['user_id'] ?? null;
+            if ($userId) {
+                $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$userId])->fetch();
+            }
+
+            // Re-fetch transaction row FOR UPDATE under the wallet lock to strictly enforce locking order hierarchy
             $transaction = $this->db->query(
                 "SELECT * FROM transactions WHERE id = :id FOR UPDATE",
                 ['id' => $transaction->id]
@@ -292,48 +304,29 @@ class ReconciliationService extends \App\Services\BaseService
     {
         $externalId = (string)($webhookData['transaction_id'] ?? $webhookData['reference_id'] ?? 'orphan_' . time());
         
-        $startedTransaction = !$this->db->inTransaction();
-        try {
-            if ($startedTransaction) {
-                $this->db->beginTransaction();
-            }
+        $existing = $this->db->query(
+            "SELECT * FROM transactions WHERE external_id = ? LIMIT 1 FOR UPDATE",
+            [$externalId]
+        )->fetch(\PDO::FETCH_OBJ);
 
-            $existing = $this->db->query(
-                "SELECT * FROM transactions WHERE external_id = ? LIMIT 1 FOR UPDATE",
-                [$externalId]
-            )->fetch(\PDO::FETCH_OBJ);
-
-            if ($existing) {
-                if ($startedTransaction) {
-                    $this->db->commit();
-                }
-                return $existing;
-            }
-
-            $id = $this->transactionModel->create([
-                'user_id' => $webhookData['user_id'] ?? null,
-                'type' => 'orphan_payment',
-                'amount' => (string)($webhookData['amount'] ?? '0'),
-                'currency' => strtolower((string)($webhookData['currency'] ?? 'irt')),
-                'status' => 'pending',
-                'external_id' => $externalId,
-                'gateway' => $webhookData['gateway'] ?? 'unknown',
-                'metadata' => json_encode($webhookData),
-                'created_at' => date('Y-m-d H:i:s')
-            ]);
-
-            if ($startedTransaction) {
-                $this->db->commit();
-            }
-
-            return $this->db->query("SELECT * FROM transactions WHERE id = ?", [$id])->fetch(\PDO::FETCH_OBJ)
-                   ?? $this->transactionModel->find((int)$id);
-        } catch (\Throwable $e) {
-            if ($startedTransaction && $this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            throw $e;
+        if ($existing) {
+            return $existing;
         }
+
+        $id = $this->transactionModel->create([
+            'user_id' => $webhookData['user_id'] ?? null,
+            'type' => 'orphan_payment',
+            'amount' => (string)($webhookData['amount'] ?? '0'),
+            'currency' => strtolower((string)($webhookData['currency'] ?? 'irt')),
+            'status' => 'pending',
+            'external_id' => $externalId,
+            'gateway' => $webhookData['gateway'] ?? 'unknown',
+            'metadata' => json_encode($webhookData),
+            'created_at' => date('Y-m-d H:i:s')
+        ]);
+
+        return $this->db->query("SELECT * FROM transactions WHERE id = ?", [$id])->fetch(\PDO::FETCH_OBJ)
+               ?? $this->transactionModel->find((int)$id);
     }
 
     /**

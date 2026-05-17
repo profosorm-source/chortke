@@ -205,15 +205,26 @@ class BankCardService extends \App\Services\BaseService
             }
 
             if ($approve) {
-                $user = $this->userModel->find((int)$card->user_id);
+                // Fetch user with FOR SHARE lock to strictly comply with the KYC / DB Integrity Rule
+                $user = $this->db->query(
+                    "SELECT id, full_name, kyc_status FROM users WHERE id = ? FOR SHARE",
+                    [(int)$card->user_id]
+                )->fetch(\PDO::FETCH_OBJ);
+
                 if (!$user) {
                     $this->db->rollBack();
                     return ['success' => false, 'message' => 'کاربر یافت نشد'];
                 }
+
+                if (($user->kyc_status ?? '') !== 'verified') {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'کاربر احراز هویت نشده است'];
+                }
+
                 $decryptedOwnerName = $this->encryption->decrypt((string)$card->owner_name);
                 if (!$this->matchName($decryptedOwnerName, (string)$user->full_name)) {
                     $this->db->rollBack();
-                    return ['success' => false, 'message' => 'نام دارنده کارت با نام کاربری شما مطابقت ندارد'];
+                    return ['success' => false, 'message' => 'نام دارنده کارت با نام احراز هویت شده کاربر مطابقت ندارد'];
                 }
             }
 
