@@ -50,29 +50,32 @@ class ReconciliationService extends \App\Services\BaseService
             $this->db->beginTransaction();
 
             // 🛡️ HIGH-03: Enforce Webhook signature validation (HMAC) prior to reconciling
-            $secret = $this->db->fetchColumn("SELECT value FROM settings WHERE key_name = 'webhook_secret' LIMIT 1");
-            if ($secret) {
-                $signature = $webhookData['signature'] ?? $_SERVER['HTTP_X_SIGNATURE'] ?? null;
-                if (!$signature) {
-                    $this->db->rollBack();
-                    return ['success' => false, 'message' => 'امضای امنیتی وب‌هوک یافت نشد'];
-                }
-                $payloadData = $webhookData;
-                unset($payloadData['signature']);
-                ksort($payloadData);
-                $computed = hash_hmac('sha256', json_encode($payloadData, JSON_UNESCAPED_SLASHES), (string)$secret);
-                if (!hash_equals((string)$signature, $computed)) {
-                    $this->logger->error('reconciliation.invalid_signature', [
-                        'received' => $signature,
-                        'computed' => $computed,
-                    ]);
-                    $this->db->rollBack();
-                    return ['success' => false, 'message' => 'امضای وب‌هوک معتبر نیست'];
-                }
-            } else {
-                // MED-03: Throw on empty secret to enforce absolute HMAC validation!
+            $secret = config('webhook.secret') 
+                ?? $this->db->fetchColumn("SELECT value FROM settings WHERE key_name = 'webhook_secret' LIMIT 1");
+
+            if (empty($secret)) {
+                $this->logger->critical('reconciliation.missing_webhook_secret', []);
                 $this->db->rollBack();
-                throw new \RuntimeException('Webhook reconciliation secret is not configured.');
+                return ['success' => false, 'message' => 'پیکربندی امنیتی وبهوک ناقص است'];
+            }
+
+            $signature = $webhookData['signature'] ?? $_SERVER['HTTP_X_SIGNATURE'] ?? null;
+            if (!$signature) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'امضای امنیتی وب‌هوک یافت نشد'];
+            }
+
+            $payloadData = $webhookData;
+            unset($payloadData['signature']);
+            ksort($payloadData);
+            $computed = hash_hmac('sha256', json_encode($payloadData, JSON_UNESCAPED_SLASHES), (string)$secret);
+            if (!hash_equals((string)$signature, $computed)) {
+                $this->logger->error('reconciliation.invalid_signature', [
+                    'received' => $signature,
+                    'computed' => $computed,
+                ]);
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'امضای وب‌هوک معتبر نیست'];
             }
 
             // Find and lock the matching transaction immediately inside the transaction block

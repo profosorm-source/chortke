@@ -88,6 +88,12 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $irtLocked = (string)($wallet->locked_irt ?? '0');
         $irtAvailable = bcsub($irtBalance, $irtLocked, 4);
         if (bccomp($irtAvailable, '0', 4) < 0) {
+            $this->logger->critical('wallet.balance_locked_inconsistency', [
+                'user_id' => $userId,
+                'balance' => $irtBalance,
+                'locked' => $irtLocked,
+                'currency' => 'IRT',
+            ]);
             $irtAvailable = '0';
         }
 
@@ -95,6 +101,12 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $usdtLocked = (string)($wallet->locked_usdt ?? '0');
         $usdtAvailable = bcsub($usdtBalance, $usdtLocked, 8);
         if (bccomp($usdtAvailable, '0', 8) < 0) {
+            $this->logger->critical('wallet.balance_locked_inconsistency', [
+                'user_id' => $userId,
+                'balance' => $usdtBalance,
+                'locked' => $usdtLocked,
+                'currency' => 'USDT',
+            ]);
             $usdtAvailable = '0';
         }
 
@@ -243,6 +255,12 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             if (!$wallet) {
                 throw new \RuntimeException('خطا در دریافت wallet');
             }
+            $refundTypes = ['withdrawal_refund', 'refund', 'deposit_refund', 'scheduled_payment_refund'];
+            if (!in_array($metadata['type'] ?? 'deposit', $refundTypes, true)) {
+                if ((bool)($wallet->is_frozen ?? 0)) {
+                    throw new \RuntimeException('کیف پول شما مسدود شده و امکان انجام عملیات وجود ندارد');
+                }
+            }
 
             $balanceField  = $this->balanceField($currency);
             $balanceBefore = (string)($wallet->$balanceField ?? '0');
@@ -305,6 +323,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'amount'         => $amount,
                 'currency'       => $currency,
                 'status'         => 'completed',
+                'balance_before' => $balanceBefore,
+                'balance_after'  => $balanceAfter,
             ]);
 
             if ($startedTransaction) {
@@ -454,6 +474,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             if (!$wallet) {
                 throw new \RuntimeException('خطا در دریافت wallet');
             }
+            if ((bool)($wallet->is_frozen ?? 0)) {
+                throw new \RuntimeException('کیف پول شما مسدود شده و امکان انجام عملیات وجود ندارد');
+            }
 
             $balanceField = $this->balanceField($currency);
             $currentBalance = (string)($wallet->$balanceField ?? '0');
@@ -579,6 +602,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             if (!$wallet) {
                 throw new \RuntimeException('خطا در دریافت wallet');
             }
+            if ((bool)($wallet->is_frozen ?? 0)) {
+                throw new \RuntimeException('کیف پول شما مسدود شده و امکان انجام عملیات وجود ندارد');
+            }
 
             $balanceField   = $this->balanceField($currency);
             $currentBalance = (string)($wallet->$balanceField ?? '0');
@@ -634,6 +660,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'amount'         => $amount,
                 'currency'       => $currency,
                 'status'         => 'pending',
+                'balance_before' => $balanceBefore,
+                'balance_after'  => $balanceAfter,
             ]);
 
             if ($startedTransaction) {
@@ -754,6 +782,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 if (!$wallet) {
                     throw new \RuntimeException('خطا در دریافت wallet');
                 }
+                if ((bool)($wallet->is_frozen ?? 0)) {
+                    throw new \RuntimeException('کیف پول شما مسدود شده و امکان انجام عملیات وجود ندارد');
+                }
 
                 $balanceField   = $this->balanceField($currency);
                 $currentBalance = (string)($wallet->$balanceField ?? '0');
@@ -820,6 +851,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     'amount'         => $amount,
                     'currency'       => $currency,
                     'status'         => 'completed',
+                    'balance_before' => $balanceBefore,
+                    'balance_after'  => $balanceAfter,
                 ]);
 
                 if ($startedTransaction) {
@@ -1147,6 +1180,10 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
             if (!$firstWallet || !$secondWallet) {
                 throw new \RuntimeException('کیف پول یافت نشد');
+            }
+
+            if ((bool)($firstWallet->is_frozen ?? 0) || (bool)($secondWallet->is_frozen ?? 0)) {
+                throw new \RuntimeException('کیف پول یکی از کاربران مسدود شده است');
             }
 
             $fromWallet = ($firstId === $fromUserId) ? $firstWallet : $secondWallet;
@@ -1497,6 +1534,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             'currency'       => $response['currency'] ?? null,
             'status'         => $response['status'] ?? null,
             'error'          => $response['error'] ?? null,
+            'balance_before' => isset($response['balance_before']) ? (string)$response['balance_before'] : null,
+            'balance_after'  => isset($response['balance_after']) ? (string)$response['balance_after'] : null,
         ];
     }
 

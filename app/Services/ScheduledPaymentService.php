@@ -48,14 +48,18 @@ class ScheduledPaymentService extends \App\Services\BaseService
                     continue;
                 }
 
+                $this->db->beginTransaction();
+
+                // 🔒 Lock the wallet row to serialize concurrent balance checks and withdrawals (prevent TOCTOU)
+                $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$payment->user_id])->fetch();
+
                 if (!$this->walletService->hasBalance((int)$payment->user_id, (float)$payment->amount, $payment->currency)) {
+                    $this->db->rollBack();
                     $this->scheduledPaymentModel->updateStatus((int)$payment->id, 'failed');
                     $details[] = ['id' => $payment->id, 'status' => 'failed', 'reason' => 'insufficient_funds'];
                     $failed++;
                     continue;
                 }
-
-                $this->db->beginTransaction();
 
                 // 🔒 FIXED SECURITY VULNERABILITY: Replaced manual unsafe balance decrement
                 // with robust, auditable atomic withdraw mechanism via unified WalletService.
