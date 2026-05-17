@@ -88,24 +88,20 @@ class ScheduledPaymentService extends \App\Services\BaseService
                 // تأیید: آیا scheduled payment واقعاً از wallet کاهش پیدا کرد؟
                 // انتقال به بعد از commit برای جلوگیری از commit تو در تو در MySQL
                 try {
-                    $reconciliation = $this->reconciliationService->reconcilePayment([
-                        'transaction_id' => 'scheduled_' . $txId,
-                        'reference_id' => 'scheduled_payment_' . $payment->id,
-                        'user_id' => (int)$payment->user_id,
-                        'amount' => (float)$payment->amount,
-                        'currency' => $payment->currency,
-                        'status' => 'success',
-                        'gateway' => 'scheduled_charge',
-                        'description' => "تطبیق scheduled payment - Frequency: {$payment->frequency}, Next: {$nextRun}",
-                        'timestamp' => time(),
-                    ]);
+                    // ✅ FIXED: Instead of running the full webhook reconciliation flow (which is designed for external gateways
+                    // and can lead to orphan transactions or double-spend/double-credit risks), we call verifyConsistency
+                    // directly to check balance consistency between the ledger history and the user's wallet.
+                    $reconciliation = $this->reconciliationService->verifyConsistency(
+                        (int)$payment->user_id,
+                        (string)$payment->currency
+                    );
 
-                    if (!$reconciliation['success']) {
+                    if (!$reconciliation['valid']) {
                         $this->logger->warning('scheduled_payment.reconciliation_failed', [
                             'payment_id' => $payment->id,
                             'user_id' => $payment->user_id,
                             'amount' => $payment->amount,
-                            'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
+                            'message' => $reconciliation['message'] ?? 'Unknown consistency error',
                         ]);
                     }
                 } catch (\Throwable $reconcileEx) {

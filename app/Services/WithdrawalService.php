@@ -137,13 +137,13 @@ class WithdrawalService extends PaymentBaseService
                 return ['success' => false, 'message' => 'شما یک درخواست در حال بررسی دارید'];
             }
 
-            $dayWindow = date('Y-m-d');
-            $idempotencyKey = $payload['idempotency_key'] ?? $payload['request_id'] ?? hash('sha256', implode('|', [
+            $idempotencyKey = $payload['idempotency_key'] ?? hash('sha256', implode('|', [
                 $userId,
                 'withdrawal_user_request',
                 $amount,
                 $currency,
-                $dayWindow
+                $payload['request_id'] ?? $requestId,
+                microtime(true)
             ]));
 
             // Lock Wallet first, then check pending status to avoid deadlocks
@@ -157,8 +157,12 @@ class WithdrawalService extends PaymentBaseService
 
             $existing = $this->db->query("SELECT * FROM withdrawals WHERE idempotency_key = ? LIMIT 1 FOR UPDATE", [$idempotencyKey])->fetch(\PDO::FETCH_OBJ);
             if ($existing) {
-                $this->db->rollBack();
-                return ['success' => true, 'message' => 'درخواست برداشت با موفقیت ثبت شد'];
+                // Idempotency cache is only valid for pending/processing transactions.
+                // If the previous attempt was rejected, failed, or cancelled, allow retry.
+                if (!in_array($existing->status, ['rejected', 'failed', 'cancelled'], true)) {
+                    $this->db->rollBack();
+                    return ['success' => true, 'message' => 'درخواست برداشت با موفقیت ثبت شد'];
+                }
             }
 
             // Bank Card validation for IRT
