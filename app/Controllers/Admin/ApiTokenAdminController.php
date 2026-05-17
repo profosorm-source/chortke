@@ -77,6 +77,7 @@ class ApiTokenAdminController extends BaseAdminController
 
     public function revokeExpired(): void
     {
+        $this->validateCsrf();
         $count = $this->apiTokenService->revokeAllExpiredTokens();
         $this->response->json(['success' => true, 'count' => $count]);
     }
