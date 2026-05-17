@@ -71,15 +71,15 @@ $r->get('/admin/dashboard/recent-activity',   [AdminDashboardController::class, 
 $r->get('/admin/dashboard/system-status',     [AdminDashboardController::class, 'systemStatus'],   $admin);
 
 // ── کاربران ────────────────────────────────────────────────────────────────
-$r->get('/admin/users',                [AdminUserController::class, 'index'],      $admin);
-$r->get('/admin/users/create',         [AdminUserController::class, 'create'],     $admin);
-$r->post('/admin/users/store',         [AdminUserController::class, 'store'],      $admin);
-$r->get('/admin/users/{id}/edit',      [AdminUserController::class, 'edit'],       $admin);
-$r->post('/admin/users/{id}/update',   [AdminUserController::class, 'update'],     $admin);
-$r->post('/admin/users/{id}/ban',      [AdminUserController::class, 'ban'],        $admin);
-$r->post('/admin/users/{id}/unban',    [AdminUserController::class, 'unban'],      $admin);
-$r->post('/admin/users/{id}/suspend',  [AdminUserController::class, 'suspend'],    $admin);
-$r->post('/admin/users/{id}/unsuspend',[AdminUserController::class, 'unsuspend'],  $admin);
+$r->get('/admin/users',                [AdminUserController::class, 'index'],      array_merge($admin, [PermissionMiddleware::class . ':user.manage.view']));
+$r->get('/admin/users/create',         [AdminUserController::class, 'create'],     array_merge($admin, [PermissionMiddleware::class . ':user.manage.edit']));
+$r->post('/admin/users/store',         [AdminUserController::class, 'store'],      array_merge($admin, [PermissionMiddleware::class . ':user.manage.edit']));
+$r->get('/admin/users/{id}/edit',      [AdminUserController::class, 'edit'],       array_merge($admin, [PermissionMiddleware::class . ':user.manage.edit']));
+$r->post('/admin/users/{id}/update',   [AdminUserController::class, 'update'],     array_merge($admin, [PermissionMiddleware::class . ':user.manage.edit']));
+$r->post('/admin/users/{id}/ban',      [AdminUserController::class, 'ban'],        array_merge($admin, [PermissionMiddleware::class . ':user.manage.ban']));
+$r->post('/admin/users/{id}/unban',    [AdminUserController::class, 'unban'],      array_merge($admin, [PermissionMiddleware::class . ':user.manage.ban']));
+$r->post('/admin/users/{id}/suspend',  [AdminUserController::class, 'suspend'],    array_merge($admin, [PermissionMiddleware::class . ':user.manage.ban']));
+$r->post('/admin/users/{id}/unsuspend',[AdminUserController::class, 'unsuspend'],  array_merge($admin, [PermissionMiddleware::class . ':user.manage.ban']));
 
 // ── KYC ────────────────────────────────────────────────────────────────────
 $r->get('/admin/kyc',                       [AdminKYCController::class, 'index'],          $admin);
@@ -119,10 +119,10 @@ $r->post('/admin/notifications/mark-read/{id}',  [AdminNotificationController::c
 $r->post('/admin/notifications/mark-all-read',   [AdminNotificationController::class, 'markAllAsRead'],     $admin);
 
 // ── کارت‌های بانکی ──────────────────────────────────────────────────────────
-$r->get('/admin/bank-cards',         [AdminBankCardController::class, 'index'],  $admin);
-$r->get('/admin/bank-cards/review',  [AdminBankCardController::class, 'review'], $admin);
-$r->post('/admin/bank-cards/verify', [AdminBankCardController::class, 'verify'], $admin);
-$r->post('/admin/bank-cards/reject', [AdminBankCardController::class, 'reject'], $admin);
+$r->get('/admin/bank-cards',         [AdminBankCardController::class, 'index'],  array_merge($admin, [PermissionMiddleware::class . ':finance.card.view']));
+$r->get('/admin/bank-cards/review',  [AdminBankCardController::class, 'review'], array_merge($admin, [PermissionMiddleware::class . ':finance.card.view']));
+$r->post('/admin/bank-cards/verify', [AdminBankCardController::class, 'verify'], array_merge($admin, [PermissionMiddleware::class . ':finance.card.approve']));
+$r->post('/admin/bank-cards/reject', [AdminBankCardController::class, 'reject'], array_merge($admin, [PermissionMiddleware::class . ':finance.card.approve']));
 
 // ── واریز دستی ─────────────────────────────────────────────────────────────
 $r->get('/admin/manual-deposits',         [AdminManualDepositController::class, 'index'],  array_merge($admin, [PermissionMiddleware::class . ':finance.deposit.view']));
@@ -143,8 +143,8 @@ $r->post('/admin/withdrawals/process',[AdminWithdrawalController::class, 'proces
 $r->post('/admin/withdrawals/reject', [AdminWithdrawalController::class, 'reject'],  array_merge($admin, [PermissionMiddleware::class . ':finance.withdrawal.approve']));
 
 // ── تراکنش‌ها ────────────────────────────────────────────────────────────────
-$r->get('/admin/transactions',       [AdminTransactionController::class, 'index'], $admin);
-$r->get('/admin/transactions/show',  [AdminTransactionController::class, 'show'],  $admin);
+$r->get('/admin/transactions',       [AdminTransactionController::class, 'index'], array_merge($admin, [PermissionMiddleware::class . ':finance.transaction.view']));
+$r->get('/admin/transactions/show',  [AdminTransactionController::class, 'show'],  array_merge($admin, [PermissionMiddleware::class . ':finance.transaction.view']));
 
 // ── حساب‌های اجتماعی ────────────────────────────────────────────────────────
 $r->get('/admin/social-accounts',               [AdminSocialAccountController::class, 'index'],  $admin);
