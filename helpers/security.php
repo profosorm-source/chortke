@@ -4,6 +4,34 @@
  * توابع کمکی امنیتی
  */
 
+if (!function_exists('escape_html')) {
+    function escape_html(string $str): string
+    {
+        return htmlspecialchars($str, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
+}
+
+if (!function_exists('escape_js')) {
+    function escape_js(string $str): string
+    {
+        return json_encode($str, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE);
+    }
+}
+
+if (!function_exists('escape_url')) {
+    function escape_url(string $str): string
+    {
+        return rawurlencode($str);
+    }
+}
+
+if (!function_exists('escape_css')) {
+    function escape_css(string $str): string
+    {
+        return preg_replace('/[^a-zA-Z0-9\-_]/', '', $str);
+    }
+}
+
 if (!function_exists('sanitize')) {
     function sanitize(mixed $input): mixed
     {
@@ -11,7 +39,10 @@ if (!function_exists('sanitize')) {
             return array_map('sanitize', $input);
         }
         if (is_string($input)) {
-            return htmlspecialchars(strip_tags(trim($input)), ENT_QUOTES, 'UTF-8');
+            if (function_exists('config') && config('app.env') !== 'production') {
+                @trigger_error('sanitize() is deprecated. Use context-specific escape_*() functions instead.', E_USER_DEPRECATED);
+            }
+            return escape_html(strip_tags(trim($input)));
         }
         return $input;
     }

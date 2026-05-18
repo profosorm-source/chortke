@@ -92,43 +92,90 @@ if (!function_exists('env')) {
 if (!function_exists('config')) {
     function config(?string $key = null, mixed $default = null): mixed
     {
-        static $config = null;
+        static $config = [];
+        static $loaded = [];
 
-        if ($config === null) {
-            $configFile = __DIR__ . '/../config/config.php';
-            $config = file_exists($configFile) ? require $configFile : [];
-            $config = is_array($config) ? $config : [];
+        $loadConfig = function(string $name) use (&$config, &$loaded) {
+            if (isset($loaded[$name])) {
+                return;
+            }
+            $loaded[$name] = true;
 
-            // لود هوشمند و داینامیک تمامی فایل‌های پیکربندی در فولدر config
+            $file = __DIR__ . "/../config/{$name}.php";
+            if (file_exists($file)) {
+                $content = require $file;
+                if (is_array($content)) {
+                    $config[$name] = $content;
+                }
+            }
+        };
+
+        if ($key === null) {
+            // Load everything
             $configDir = __DIR__ . '/../config/';
             if (is_dir($configDir)) {
                 foreach (glob($configDir . '*.php') as $file) {
                     $name = basename($file, '.php');
-                    if ($name !== 'config') {
-                        $content = require $file;
-                        if (is_array($content)) {
-                            $config[$name] = $content;
-                        }
-                    }
+                    $loadConfig($name);
+                }
+            }
+            
+            // Re-map main config file to top-level keys for backward-compatibility
+            $merged = [];
+            foreach ($config as $name => $content) {
+                if ($name === 'config') {
+                    $merged = array_merge($merged, $content);
+                } else {
+                    $merged[$name] = $content;
+                }
+            }
+            return $merged;
+        }
+
+        $keys = explode('.', $key);
+        $file = $keys[0];
+
+        // Lazy load the requested file
+        $loadConfig($file);
+        
+        // Also lazy load the main config file as it houses general nested configurations
+        $loadConfig('config');
+
+        // Look for the value
+        $value = $config;
+        $found = true;
+
+        // Try to traverse via separate file space first: $config[$file][$key1][$key2]
+        if (isset($config[$file])) {
+            $value = $config[$file];
+            $slicedKeys = array_slice($keys, 1);
+            foreach ($slicedKeys as $k) {
+                if (is_array($value) && isset($value[$k])) {
+                    $value = $value[$k];
+                } else {
+                    $found = false;
+                    break;
+                }
+            }
+        } else {
+            $found = false;
+        }
+
+        // If not found, try to traverse main flat configuration space: $config['config'][$file][$key1][$key2]
+        if (!$found && isset($config['config'])) {
+            $value = $config['config'];
+            $found = true;
+            foreach ($keys as $k) {
+                if (is_array($value) && isset($value[$k])) {
+                    $value = $value[$k];
+                } else {
+                    $found = false;
+                    break;
                 }
             }
         }
 
-        if ($key === null) {
-            return $config;
-        }
-
-        $keys = explode('.', $key);
-        $value = $config;
-
-        foreach ($keys as $k) {
-            if (!isset($value[$k])) {
-                return $default;
-            }
-            $value = $value[$k];
-        }
-
-        return $value;
+        return $found ? $value : $default;
     }
 }
 
