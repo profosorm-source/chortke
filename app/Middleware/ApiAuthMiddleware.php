@@ -68,10 +68,10 @@ class ApiAuthMiddleware extends BaseMiddleware
             return $this->errorResponse('توکن نامعتبر است: دسترسی مدیر لغو شده است.', 403, 'PRIVILEGE_ESCALATION_PREVENTED');
         }
 
-        // ✅ بررسی اسکوپ‌های مورد نیاز (Scope Enforcement)
+        // ✅ بررسی اسکوپ‌های مورد نیاز (Scope Enforcement with hierarchy/inheritance)
         if (!empty($requiredScopes)) {
             foreach ($requiredScopes as $scope) {
-                if (!in_array($scope, $tokenScopes, true) && !in_array('*', $tokenScopes, true)) {
+                if (!$this->hasScope($tokenScopes, $scope)) {
                     return $this->errorResponse('توکن شما اجازه دسترسی به این بخش را ندارد (اسکوپ مورد نیاز: ' . $scope . ')', 403, 'INSUFFICIENT_SCOPE');
                 }
             }
@@ -217,6 +217,26 @@ class ApiAuthMiddleware extends BaseMiddleware
             // Validate against DB with this hash and matching version
             $user = $this->validateTokenByHashAndVersion($hashedToken, $version, $requestingUserId);
             if ($user) {
+                // Rotate/migrate token if it was hashed with an older secret version
+                if ($version !== $currentVersion && isset($orderedSecrets[$currentVersion])) {
+                    $newHashedToken = hash_hmac('sha256', $rawToken, $orderedSecrets[$currentVersion]);
+                    try {
+                        $this->db->query(
+                            "UPDATE api_tokens SET token = ?, secret_version = ? WHERE id = ?",
+                            [$newHashedToken, $currentVersion, (int)$user->token_id]
+                        );
+                        $this->logger->info('api_auth.token_secret_rotated', [
+                            'token_id' => $user->token_id,
+                            'old_version' => $version,
+                            'new_version' => $currentVersion
+                        ]);
+                    } catch (\Throwable $e) {
+                        $this->logger->error('api_auth.token_rotation_failed', [
+                            'token_id' => $user->token_id,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
+                }
                 // Found a valid match! Clean up raw token immediately
                 unset($rawToken);
                 return $user;
@@ -225,6 +245,30 @@ class ApiAuthMiddleware extends BaseMiddleware
 
         unset($rawToken);
         return null;
+    }
+
+    /**
+     * Check if token scopes satisfy a required scope, taking into account hierarchy/inheritance.
+     */
+    private function hasScope(array $tokenScopes, string $requiredScope): bool
+    {
+        if (in_array('*', $tokenScopes, true)) {
+            return true;
+        }
+
+        if (in_array($requiredScope, $tokenScopes, true)) {
+            return true;
+        }
+
+        // Entity hierarchy (e.g. user.write inherits user.read)
+        if (str_ends_with($requiredScope, '.read')) {
+            $base = substr($requiredScope, 0, -5);
+            if (in_array($base . '.write', $tokenScopes, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

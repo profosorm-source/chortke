@@ -130,18 +130,23 @@ class AuthMiddleware extends BaseMiddleware
             }
         }
         
-        // تمدید فعالیت در Redis (در صورت در دسترس بودن)
-        if ($redisAvailable) {
-            try {
-                $this->redis->set($redisKey, (string)$now, $timeout + 60);
-            } catch (\Throwable) {
-                // If Redis write fails, continue with session-side tracking
-                $redisAvailable = false;
+        // تمدید فعالیت در Redis و Session فقط در صورتی که حداقل 30 ثانیه از آخرین تمدید گذشته باشد
+        // جهت کاهش سربار و بهینه‌سازی Write Amplification
+        $lastActivityTime = isset($lastActivity) ? (int)$lastActivity : 0;
+        if ($lastActivityTime === 0 || ($now - $lastActivityTime) >= 30) {
+            // تمدید فعالیت در Redis (در صورت در دسترس بودن)
+            if ($redisAvailable) {
+                try {
+                    $this->redis->set($redisKey, (string)$now, $timeout + 60);
+                } catch (\Throwable) {
+                    // If Redis write fails, continue with session-side tracking
+                    $redisAvailable = false;
+                }
             }
-        }
 
-        // HIGH-02 Fix: Always update session as backup to prevent fail-open if Redis goes down
-        $session->set('last_activity', (string)$now);
+            // HIGH-02 Fix: Always update session as backup to prevent fail-open if Redis goes down
+            $session->set('last_activity', (string)$now);
+        }
 
         // CRITICAL-05 Fix: Check for pending 2FA state BEFORE normal auth check
         // This prevents users with pending 2FA from bypassing it if LOGGED_IN is true
