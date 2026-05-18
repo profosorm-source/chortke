@@ -82,6 +82,20 @@ class RateLimiter
         $maxAttempts = $maxAttempts ?? (int) config('rate_limits.default.max_attempts', 60);
         $decayMinutes = $decayMinutes ?? (int) config('rate_limits.default.decay_minutes', 1);
 
+        // Auto-enforce fail-closed for security/auth endpoints if not explicitly overridden
+        $securityKeywords = ['login', 'auth', 'password', 'register', 'mfa', 'admin', 'token', 'otp'];
+        $isSecurityRoute = false;
+        foreach ($securityKeywords as $keyword) {
+            if (stripos($key, $keyword) !== false) {
+                $isSecurityRoute = true;
+                break;
+            }
+        }
+
+        if ($isSecurityRoute) {
+            $failClosed = true;
+        }
+
         try {
             // 🚀 BUG-13 Fix: Graceful degradation if Cache/Redis is down
             $allowed = $this->strategy->attempt($key, $maxAttempts, $decayMinutes);

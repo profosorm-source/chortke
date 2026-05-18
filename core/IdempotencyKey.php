@@ -19,6 +19,7 @@ namespace Core;
 class IdempotencyKey
 {
     private $db;
+    private $cache;
     private $table = 'idempotency_keys';
     
     // تنظیمات
@@ -26,10 +27,32 @@ class IdempotencyKey
     private const CLEANUP_DAYS = 7;
     private const MAX_RETRIES = 3;
 
-    public function __construct(?Database $db = null)
+    public function __construct(?Database $db = null, ?Cache $cache = null)
     {
         // H19 Fix: استفاده از Dependency Injection
         $this->db = $db ?? Container::getInstance()->make(Database::class);
+        $this->cache = $cache ?? Container::getInstance()->make(Cache::class);
+    }
+
+    private function redactSensitiveData(array $data): array
+    {
+        $sensitiveKeys = [
+            'password', 'password_confirmation', 'pin', 'cvv2', 'card_number', 'card_num',
+            'token', 'secret', 'authorization', 'api_key', 'key', 'pass', 'ssn', 'national_code',
+            'cvv', 'card', 'pan', 'otp', 'code', 'email', 'mobile'
+        ];
+
+        $redacted = [];
+        foreach ($data as $k => $v) {
+            if (is_array($v)) {
+                $redacted[$k] = $this->redactSensitiveData($v);
+            } elseif (is_string($k) && in_array(strtolower($k), $sensitiveKeys, true)) {
+                $redacted[$k] = '[REDACTED]';
+            } else {
+                $redacted[$k] = $v;
+            }
+        }
+        return $redacted;
     }
 
     public static function generate(?string $seed = null): string
@@ -94,7 +117,7 @@ class IdempotencyKey
 
         $logId = uniqid('IDEM_', true);
         $lockKey = "idempotency_lock:{$userId}:" . hash('sha256', $key);
-        $cache = Cache::getInstance();
+        $cache = $this->cache;
         $isLocked = false;
 
         if ($retryCount === 0) {
@@ -108,11 +131,14 @@ class IdempotencyKey
             // CORE-048: Start a dedicated DB transaction so SELECT FOR UPDATE holds a real row lock
             $this->db->beginTransaction();
 
+            // Redact sensitive parameters to prevent plain-text PII storage in the database
+            $safeRequestData = is_array($requestData) ? $this->redactSensitiveData($requestData) : [];
+
             // CORE-049: Enrich payload tracking with structural request signatures to block cross-endpoint key reuse
             $payloadSignature = [
                 'uri'    => $_SERVER['REQUEST_URI'] ?? '',
                 'method' => $_SERVER['REQUEST_METHOD'] ?? '',
-                'data'   => $requestData ?? [],
+                'data'   => $safeRequestData,
             ];
             $encodedSignature = json_encode($payloadSignature, JSON_UNESCAPED_UNICODE);
 

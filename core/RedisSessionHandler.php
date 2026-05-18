@@ -28,10 +28,8 @@ class RedisSessionHandler implements \SessionHandlerInterface
     {
         // H13 Fix: اگر قبلاً فیل شده، مستقیماً برو روی فایل
         if (self::$hasFailed) {
-            if (config('app.env') === 'production') {
-                throw new \RuntimeException('سرویس ردیز سشن قبلاً با خطا مواجه شده است و امکان ادامه وجود ندارد.');
-            }
             $this->useRedis = false;
+            $this->savePath = __DIR__ . '/../storage/sessions';
             return;
         }
 
@@ -55,15 +53,13 @@ class RedisSessionHandler implements \SessionHandlerInterface
                 }
             } catch (\Throwable $e) {
                 self::$hasFailed = true;
-                if (config('app.env') === 'production') {
-                    throw new \RuntimeException('Redis session store is unavailable on production.', 500, $e);
-                }
                 $this->useRedis = false;
                 if (function_exists('logger')) {
                     try {
-                        logger()->error('Session handler: Redis connection failed, falling back to file in development.', ['error' => $e->getMessage()]);
+                        logger()->critical('Session handler: Redis connection failed on production. Falling back to file-based sessions to prevent complete system outage.', ['error' => $e->getMessage()]);
                     } catch (\Throwable $ignore) {}
                 }
+                $this->savePath = __DIR__ . '/../storage/sessions';
             }
         } else {
             $this->redis = null;
@@ -212,28 +208,23 @@ class RedisSessionHandler implements \SessionHandlerInterface
     {
         self::$hasFailed = true; // ثبت وضعیت خرابی سیستمی برای بقیه درخواست یا لوپ
         
-        // CORE-032: جلوگیری از Session Split-Brain در محیط Production
-        if (config('app.env') === 'production') {
-            throw new \RuntimeException('Redis session store connection was lost. Terminating request to prevent split-brain.', 500, $e);
-        }
-
         if ($this->useRedis) {
             $this->useRedis = false;
             $this->redis = null;
 
             if (function_exists('logger')) {
                 try {
-                    logger()->warning('Redis session error, fallback to file', [
+                    logger()->critical('Redis session store connection was lost. Downgrading to file session handler in production to maintain availability.', [
                         'channel' => 'session',
                         'error' => $e->getMessage()
                     ]);
                 } catch (\Throwable $ignore) {}
             }
 
-            // Initialize file path
+            // Initialize file path securely with strict permissions in production
             $this->savePath = __DIR__ . '/../storage/sessions';
             if (!is_dir($this->savePath)) {
-                mkdir($this->savePath, 0755, true);
+                mkdir($this->savePath, 0700, true);
             }
         }
     }

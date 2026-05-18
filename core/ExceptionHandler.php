@@ -763,7 +763,10 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 $statusCode = 404;
                 $message = $exception->getMessage() ?: 'آدرس یا منبع یافت نشد';
             } else {
-                $message = $exception->getMessage() ?: 'خطای سیستمی در حین پردازش رخ داد';
+                $debug = (bool) config('app.debug', false);
+                $message = $debug 
+                    ? ($exception->getMessage() ?: 'خطای سیستمی در حین پردازش رخ داد') 
+                    : 'خطای سیستمی در حین پردازش رخ داد';
             }
 
             http_response_code($statusCode);
