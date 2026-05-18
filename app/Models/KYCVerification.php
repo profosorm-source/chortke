@@ -17,8 +17,9 @@ class KYCVerification extends Model {
         $sql = "INSERT INTO kyc_verifications (
                     user_id, verification_image, national_code, birth_date, status,
                     ip_address, user_agent, device_fingerprint,
+                    encryption_version, encryption_algorithm,
                     submitted_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         $stmt = $this->db->query($sql, [
             (int)$data['user_id'],
@@ -29,6 +30,8 @@ class KYCVerification extends Model {
             $data['ip_address'] ?? null,
             $data['user_agent'] ?? null,
             $data['device_fingerprint'] ?? null,
+            $data['encryption_version'] ?? 2,
+            $data['encryption_algorithm'] ?? 'AES-256-GCM',
             $now,
             $now,
             $now,
