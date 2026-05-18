@@ -123,20 +123,28 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
         return hash_equals(hash_hmac('sha256', $data, $secret), $signature);
     }
 
-    /**
-     * Default callback validation: use callback secret when configured.
-     */
     public function verifyCallback(array $callbackData): bool
     {
         $secret = $this->getCallbackSecret();
-        if ($secret === null || $secret === '') {
-            $this->logger->warning("payment.{$this->getGatewayName()}.callback_secret_missing", [
+        
+        // ✅ در production، secret الزامیه
+        if (env('APP_ENV') === 'production' && ($secret === null || $secret === '')) {
+            $this->logger->critical("payment.{$this->getGatewayName()}.callback_secret_missing", [
                 'gateway' => $this->getGatewayName(),
-                'message' => 'No callback secret is configured. Bypassing callback signature verification.'
+                'message' => 'Callback secret MUST be configured in production'
+            ]);
+            throw new \RuntimeException('Callback secret is required in production');
+        }
+        
+        // در dev mode میتونه bypass بشه
+        if ($secret === null || $secret === '') {
+            $this->logger->warning("payment.{$this->getGatewayName()}.callback_secret_bypass", [
+                'gateway' => $this->getGatewayName(),
+                'env' => env('APP_ENV')
             ]);
             return true;
         }
-
+        
         return $this->verifyCallbackSignature($callbackData, $secret);
     }
 
