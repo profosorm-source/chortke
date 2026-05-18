@@ -113,7 +113,7 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
             // در صورت خطای اتصال به AI، بازگشت به چرخه نرمال دستی (Fallback)
             return [
                 'success' => false,
-                'is_valid' => true,
+                'is_valid' => false,
                 'ai_notes' => 'خطا در تحلیل هوش مصنوعی: ' . $e->getMessage()
             ];
         }
