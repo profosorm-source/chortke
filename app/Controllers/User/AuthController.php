@@ -32,7 +32,10 @@ class AuthController extends BaseController
         private \App\Services\CaptchaService $captchaService,
         private AuthService $authService,
         private LoginRiskService $loginRiskService,
-        private \App\Services\AntiFraud\FraudGuardService $fraudGuard
+        private \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        private \Core\RateLimiter $rateLimiter,
+        private \App\Services\EmailService $emailService,
+        private \App\Models\SecurityModel $securityModel
     ) {
         parent::__construct($session, $request, $response, $policyService, $logger);
     }
@@ -141,6 +144,7 @@ class AuthController extends BaseController
         // to prevent session fixation and ensure 2FA pending state isolation.
         
         $this->loginRiskService->clearFailures('login', null, (string)$data['email']);
+        $this->csrf->regenerate();
         $this->session->setFlash('success', 'خوش آمدید!');
         $this->response->redirect(url('dashboard'));
     }
@@ -317,11 +321,11 @@ class AuthController extends BaseController
         
         // HIGH-02 Fix: Timing Leak in verification path for invalid/non-existing users
         // Use a dummy hash comparison when $user or token is null to guarantee constant time hash_equals execution
-        $dummyHash = hash_hmac('sha256', 'DUMMY_CODE', (string)config('app.key'));
+        $dummyHash = hash_hmac('sha256', 'DUMMY_CODE', secure_key());
         $storedToken = $user && !empty($user->email_verification_token) ? (string)$user->email_verification_token : $dummyHash;
         
         $inputCode = strtoupper($code);
-        $hashedInput = hash_hmac('sha256', $inputCode, (string)config('app.key'));
+        $hashedInput = hash_hmac('sha256', $inputCode, secure_key());
         
         // Always execute hash_equals for constant time execution
         $isValid = hash_equals($storedToken, $hashedInput) && $user !== null && !empty($user->email_verification_token);
@@ -374,11 +378,11 @@ class AuthController extends BaseController
         // HIGH-H-08 Fix: Rotate verification token on resend to prevent use of leaked tokens
         if ($user && empty($user->email_verified_at)) {
             $newToken = bin2hex(random_bytes(32));
-            $hashedToken = hash_hmac('sha256', strtoupper(substr($newToken, 0, 6)), (string)config('app.key'));
+            $hashedToken = hash_hmac('sha256', strtoupper(substr($newToken, 0, 6)), secure_key());
             
             $this->userService->update((int)$user->id, ['email_verification_token' => $hashedToken]);
             
-            app(\App\Services\EmailService::class)->sendVerificationEmail((int)$user->id, $newToken);
+            $this->emailService->sendVerificationEmail((int)$user->id, $newToken);
             $this->session->set('pending_verification_at', time());
         }
 
@@ -408,9 +412,8 @@ class AuthController extends BaseController
         $rateLimitIp = "forgot_pwd_ip:" . hash('sha256', $ip);
         $rateLimitEmail = "forgot_pwd_email:{$emailKey}";
 
-        $rateLimiter = app(\Core\RateLimiter::class);
-        if (!$rateLimiter->attempt($rateLimitIp, 5, 60, true) || 
-            !$rateLimiter->attempt($rateLimitEmail, 3, 3600, true)) {
+        if (!$this->rateLimiter->attempt($rateLimitIp, 5, 60, true) || 
+            !$this->rateLimiter->attempt($rateLimitEmail, 3, 3600, true)) {
             
             $this->session->setFlash('error', 'تعداد درخواست‌های بازیابی بیش از حد مجاز است. لطفاً بعداً تلاش کنید.');
             $this->response->redirect(url('forgot-password'));
@@ -455,17 +458,9 @@ class AuthController extends BaseController
         // HIGH-02 Fix: Validate token existence and expiry before showing the form
         if (!$this->authService->validatePasswordResetToken((string)$token)) {
             $this->session->remove('pw_reset_token');
-            $this->session->remove('pw_reset_email');
             $this->session->setFlash('error', 'لینک بازیابی نامعتبر یا منقضی شده است.');
             $this->response->redirect(url('forgot-password'));
             return;
-        }
-
-        // CRITICAL-01 Fix: Save lookup email in session to bind user identity with pw_reset_token
-        $timeout = (int)config('auth.password_reset_ttl', 3600);
-        $record = app(\App\Models\SecurityModel::class)->findPasswordResetByToken((string)$token, $timeout);
-        if ($record) {
-            $this->session->set('pw_reset_email', $record->email);
         }
 
         // HIGH-06 Fix: Prevent password reset token leakage in Referer header
@@ -498,10 +493,12 @@ class AuthController extends BaseController
             return;
         }
 
-        // CRITICAL-01 Fix: Retrieve bound email from session and pass to resetPassword service
-        $sessionEmail = $this->session->get('pw_reset_email');
+        // CRITICAL-01 Fix: Retrieve bound email directly from the database token record to prevent token confusion
+        $timeout = (int)config('auth.password_reset_ttl', 3600);
+        $record = $this->securityModel->findPasswordResetByToken((string)$data['token'], $timeout);
+        $boundEmail = $record ? $record->email : null;
 
-        $result = $this->authService->resetPassword((string)$data['token'], (string)$data['password'], $sessionEmail);
+        $result = $this->authService->resetPassword((string)$data['token'], (string)$data['password'], $boundEmail);
         if (!$result['success']) {
             $this->session->setFlash('error', $result['message']);
             $this->response->redirect(url('forgot-password'));
@@ -510,9 +507,8 @@ class AuthController extends BaseController
 
         // Cleanup password reset session keys
         $this->session->remove('pw_reset_token');
-        $this->session->remove('pw_reset_email');
+        $this->csrf->regenerate();
 
-        $this->session->remove('pw_reset_token');
         $this->session->setFlash('success', 'رمز عبور با موفقیت تغییر یافت.');
         $this->response->redirect(url('login'));
     }
@@ -529,7 +525,7 @@ class AuthController extends BaseController
         }
         
         try {
-            app(\Core\CSRF::class)->validate();
+            $this->csrf->validate();
         } catch (\Throwable $e) {
             $this->logger->warning('auth.logout.csrf_failed', [
                 'ip' => $this->request->ip(),

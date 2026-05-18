@@ -161,6 +161,20 @@ class TwoFactorController extends BaseUserController
         $sessionUserId = (int)$this->session->get(SessionKeys::USER_ID, 0);
         $pendingUserId = (int)$this->session->get(SessionKeys::PENDING_2FA_USER_ID, 0);
         
+        // If there's a pending 2FA but no session user, reject if it's not a valid pending flow (orphaned pending)
+        if ($pendingUserId > 0 && $sessionUserId === 0) {
+            $createdAt = (int)$this->session->get('pending_2fa_created_at', 0);
+            if ($createdAt === 0 || (time() - $createdAt) > 600) {
+                $this->logger->critical('2fa.verify.orphaned_pending', [
+                    'pending_user_id' => $pendingUserId,
+                    'ip' => $this->request->ip()
+                ]);
+                $this->session->destroy();
+                $this->response->json(['success' => false, 'message' => 'نشست نامعتبر است.'], 401);
+                return;
+            }
+        }
+
         // If there's a logged-in user in the session, ensure pending 2FA matches or is for the same user
         // This prevents session fixation attacks where attacker tries to use another user's pending 2FA
         if ($sessionUserId > 0 && $pendingUserId > 0 && $sessionUserId !== $pendingUserId) {
@@ -176,7 +190,7 @@ class TwoFactorController extends BaseUserController
         
         if (!$pendingUserId) {
             if ($this->request->isAjax()) {
-                $this->jsonError('نشست نامعتبر است.', [], 401);
+                $this->response->json(['success' => false, 'message' => 'نشست نامعتبر است.'], 401);
                 return;
             }
             $this->response->redirect(url('login'));
@@ -315,6 +329,7 @@ class TwoFactorController extends BaseUserController
             
             // HIGH-H-05 Fix: Regenerate session after enabling 2FA to ensure a clean, secure session state
             $this->session->regenerate(true);
+            $this->csrf->regenerate();
 
             $this->logger->activity('2fa.enabled', 'فعال‌سازی احراز هویت دو مرحله‌ای', $userId, [
                 'channel' => 'auth',
@@ -391,6 +406,7 @@ class TwoFactorController extends BaseUserController
         $result = $this->twoFactorService->disable($userId, $password);
 
         if ($result['success']) {
+            $this->csrf->regenerate();
             $this->logger->activity('2fa.disabled', 'غیرفعال‌سازی احراز هویت دو مرحله‌ای', $userId, [
                 'channel' => 'auth',
             ]);
