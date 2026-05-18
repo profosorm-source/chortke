@@ -230,11 +230,7 @@ class CaptchaService extends \App\Services\BaseService
 
     private function signBehavioral(string $data): string
     {
-        $key = config('app.key');
-        if (empty($key)) {
-            throw new \RuntimeException('app.key must be set in .env');
-        }
-        return hash_hmac('sha256', $data, $key);
+        return hash_hmac('sha256', $data, secure_key());
     }
 
     private function parseBehavioralToken(string $token): ?array
@@ -256,6 +252,95 @@ class CaptchaService extends \App\Services\BaseService
     {
         $minSeconds      = (int) $this->settingService->get('behavioral_min_seconds', 4);
         $minInteractions = (int) $this->settingService->get('behavioral_min_interactions', 5);
+
+        // 1. بررسی امتیاز رفتاری کلاینت
+        $behavioralScore = isset($_POST['behavioral_score']) ? (int)$_POST['behavioral_score'] : 0;
+        if ($behavioralScore < 60) {
+            $this->logger->warning('captcha.behavioral.low_score', ['score' => $behavioralScore]);
+            return false;
+        }
+
+        // 2. بررسی رویدادهای خام ارسالی برای تحلیل پیشرفته
+        $eventsRaw = $_POST['events'] ?? '';
+        $events = is_string($eventsRaw) ? json_decode($eventsRaw, true) : null;
+        
+        if (!is_array($events) || count($events) < 5) {
+            $this->logger->warning('captcha.behavioral.insufficient_events', ['events_count' => is_array($events) ? count($events) : 0]);
+            return false;
+        }
+
+        // بررسی زمان‌های بین رویدادها (Timing Validation)
+        $intervals = [];
+        for ($i = 1; $i < count($events); $i++) {
+            $diff = $events[$i]['time'] - $events[$i - 1]['time'];
+            if ($diff >= 0) {
+                $intervals[] = $diff;
+            }
+        }
+        
+        if (count($intervals) > 0) {
+            $avgInterval = array_sum($intervals) / count($intervals);
+            if ($avgInterval < 10) { // سرعت نامتعارف (ربات)
+                $this->logger->warning('captcha.behavioral.bot_detected.avg_interval_too_fast', ['avg_interval' => $avgInterval]);
+                return false;
+            }
+            
+            // بررسی واریانس بازه‌های زمانی (ربات‌ها الگوهای فوق‌العاده منظمی ایجاد می‌کنند)
+            $variance = 0.0;
+            foreach ($intervals as $interval) {
+                $variance += pow($interval - $avgInterval, 2);
+            }
+            $stdDev = sqrt($variance / count($intervals));
+            if ($stdDev < 1.0) { // فواصل بیش از حد یکنواخت و منظم
+                $this->logger->warning('captcha.behavioral.bot_detected.zero_variance', ['std_dev' => $stdDev]);
+                return false;
+            }
+        }
+
+        // بررسی آنتروپی و منحنی سرعت حرکت موس
+        $mouseMoves = array_filter($events, function($e) {
+            return ($e['type'] ?? '') === 'mouse_move';
+        });
+
+        if (count($mouseMoves) > 5) {
+            $mouseMoves = array_values($mouseMoves);
+            
+            // تحلیل آنتروپی مختصات
+            $distinctCoords = [];
+            foreach ($mouseMoves as $move) {
+                $distinctCoords[] = ($move['x'] ?? 0) . ',' . ($move['y'] ?? 0);
+            }
+            $distinctRatio = count(array_unique($distinctCoords)) / count($mouseMoves);
+            if ($distinctRatio < 0.1) { // مختصات بدون تغییر یا بیش از حد یکنواخت
+                $this->logger->warning('captcha.behavioral.bot_detected.low_entropy', ['ratio' => $distinctRatio]);
+                return false;
+            }
+
+            // تحلیل منحنی سرعت و تغییر شتاب
+            $velocities = [];
+            for ($i = 1; $i < count($mouseMoves); $i++) {
+                $dx = ($mouseMoves[$i]['x'] ?? 0) - ($mouseMoves[$i - 1]['x'] ?? 0);
+                $dy = ($mouseMoves[$i]['y'] ?? 0) - ($mouseMoves[$i - 1]['y'] ?? 0);
+                $dist = sqrt($dx * $dx + $dy * $dy);
+                $dt = ($mouseMoves[$i]['time'] ?? 0) - ($mouseMoves[$i - 1]['time'] ?? 0);
+                if ($dt > 0) {
+                    $velocities[] = $dist / $dt;
+                }
+            }
+
+            if (count($velocities) > 2) {
+                $accelerations = [];
+                for ($i = 1; $i < count($velocities); $i++) {
+                    $accelerations[] = $velocities[$i] - $velocities[$i - 1];
+                }
+                
+                $sumAbsAcc = array_sum(array_map('abs', $accelerations));
+                if ($sumAbsAcc < 0.001) { // سرعت خطی کامل و بدون شتاب‌دهی طبیعی
+                    $this->logger->warning('captcha.behavioral.bot_detected.no_acceleration_variance');
+                    return false;
+                }
+            }
+        }
 
         // parse کردن token اصلی
         $tokenData = $this->parseBehavioralToken($token);
