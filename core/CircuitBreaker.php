@@ -40,6 +40,18 @@ class CircuitBreaker
             throw new RuntimeException("Circuit breaker '{$name}' is open");
         }
 
+        $probeLockKey = "cb_half_open_probe_{$name}";
+        $hasProbeLock = false;
+
+        if ($state['status'] === 'half_open') {
+            // Attempt to acquire probe lock for 15 seconds (sufficient time to test downstream service)
+            if (!$this->cache->lock($probeLockKey, 15)) {
+                // If another thread is already probing, fail fast to prevent stampeding
+                throw new RuntimeException("Circuit breaker '{$name}' is in half-open state. A probe request is already in progress.");
+            }
+            $hasProbeLock = true;
+        }
+
         try {
             $result = $operation();
             
@@ -64,6 +76,10 @@ class CircuitBreaker
             }, 5);
             
             throw $exception;
+        } finally {
+            if ($hasProbeLock) {
+                $this->cache->unlock($probeLockKey);
+            }
         }
     }
 

@@ -255,7 +255,13 @@ class Cache
             }
         }
 
-        // Fallback if lock could not be acquired
+        // Fallback if lock could not be acquired: introduce random backoff sleep and secondary read attempt
+        usleep(random_int(50000, 150000)); // 50ms to 150ms sleep
+        $secondaryValue = $this->get($key);
+        if ($secondaryValue !== null) {
+            return $secondaryValue;
+        }
+
         return $callback();
     }
 

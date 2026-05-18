@@ -18,6 +18,8 @@ if ($isProduction && (empty(env('GOOGLE_CLIENT_ID')) || empty(env('GOOGLE_CLIENT
 }
 
 return [
+    'strict_ip_binding' => (bool)env('OAUTH_STRICT_IP_BINDING', true),
+
     'google' => [
         'client_id' => env('GOOGLE_CLIENT_ID', ''),
         'client_secret' => env('GOOGLE_CLIENT_SECRET', ''),

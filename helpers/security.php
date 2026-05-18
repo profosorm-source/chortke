@@ -38,16 +38,24 @@ if (!function_exists('get_user_agent')) {
     }
 }
 
+if (!function_exists('secure_key')) {
+    function secure_key(): string
+    {
+        $key = config('app.key');
+        if (empty($key) || strlen($key) < 32 || $key === 'default_key') {
+            throw new \RuntimeException('Secure application key (APP_KEY) is not properly configured.');
+        }
+        return (string)$key;
+    }
+}
+
 if (!function_exists('secure_hash')) {
     function secure_hash(string $data, string $algo = 'sha256'): string
     {
-        $key = config('app.key');
-        if (!$key) {
-            throw new \RuntimeException('APP_KEY is missing from configuration');
-        }
+        $key = secure_key();
         $allowedAlgos = ['sha256', 'sha384', 'sha512', 'blake2b'];
         if (!in_array($algo, $allowedAlgos, true)) $algo = 'sha256';
-        return hash_hmac($algo, $data, (string)$key);
+        return hash_hmac($algo, $data, $key);
     }
 }
 

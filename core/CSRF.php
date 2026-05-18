@@ -80,6 +80,11 @@ class CSRF
         $origin = $this->request->header('Origin');
         $referer = $this->request->header('Referer');
         
+        // Enforce Origin/Referer presence in production to prevent bypasses
+        if (config('app.env') === 'production' && !$origin && !$referer) {
+            return false;
+        }
+
         // Parse host from app.url
         $appHost = parse_url($appUrl, PHP_URL_HOST);
 

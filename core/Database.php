@@ -20,6 +20,7 @@ class Database
 	private static ?array $lastSqlErrorContext = null;
     private ?\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor $sentryMonitor = null; // M3 Fix: کش کلاینت مانیتورینگ جهت افزایش پرفورمنس کوئری‌ها
     private int $transactionLevel = 0; // H24 Fix: شمارنده پشته تراکنش‌ها جهت جلوگیری از Partial Commit در معماری تودرتو
+    private bool $isRollbackOnly = false; // Prevents silent commit of corrupted nested transactions
 
     private int $lastPingTime = 0;
     private const PING_INTERVAL = 60; // 60 seconds
@@ -350,6 +351,46 @@ public function fetchColumn(string $sql, array $params = [], int $column = 0)
             // ارسال خودکار تمام خطاهای دیتابیسی (از کوئری، فچ و غیره) به سیستم مانیتورینگ
             $this->logQueryErrorToSentry($sql, $params, $e);
 
+            // If unique constraint violation occurs during HTTP request handling, translate it to a user-friendly ValidationException
+            if (PHP_SAPI !== 'cli' && ((string)$e->getCode() === '23000' || str_contains($e->getMessage(), 'Duplicate entry') || str_contains($e->getMessage(), '1062'))) {
+                $fieldName = 'record';
+                $message = $e->getMessage();
+                
+                if (preg_match("/key '.*?_([a-zA-Z0-9_]+)_unique'/i", $message, $matches)) {
+                    $fieldName = $matches[1];
+                } elseif (preg_match("/key '.*?\.(.*?)'/i", $message, $matches)) {
+                    $fieldName = $matches[1];
+                } elseif (preg_match("/for key '([^']+)'/i", $message, $matches)) {
+                    $keyName = $matches[1];
+                    $parts = explode('_', $keyName);
+                    if (count($parts) > 1) {
+                        $fieldName = $parts[count($parts) - 2];
+                    } else {
+                        $fieldName = $keyName;
+                    }
+                }
+                
+                $friendlyFieldNames = [
+                    'email' => 'ایمیل',
+                    'username' => 'نام کاربری',
+                    'mobile' => 'شماره موبایل',
+                    'phone' => 'شماره تلفن',
+                    'card_number' => 'شماره کارت',
+                    'national_code' => 'کد ملی',
+                    'slug' => 'شناسه یکتا',
+                    'name' => 'نام',
+                    'key' => 'کلید همزمانی',
+                ];
+                
+                $friendlyName = $friendlyFieldNames[$fieldName] ?? 'این مقدار';
+                $errorMessage = "{$friendlyName} قبلاً در سیستم ثبت شده است و نمی‌تواند تکراری باشد.";
+                
+                throw new \Core\Exceptions\ValidationException(
+                    [$fieldName => [$errorMessage]],
+                    "ثبت داده‌های تکراری در سیستم امکان‌پذیر نیست."
+                );
+            }
+
             throw $e;
         } finally {
             self::$queryDepth--;
@@ -531,6 +572,7 @@ public function lastInsertId(): int
         if ($this->transactionLevel === 0) {
             try {
                 $this->pdo->beginTransaction();
+                $this->isRollbackOnly = false; // Reset on new root transaction
             } catch (\Throwable $e) {
                 $this->transactionLevel = 0;
                 throw new \RuntimeException("PDO BeginTransaction failed: " . $e->getMessage(), (int)$e->getCode(), $e);
@@ -555,6 +597,16 @@ public function lastInsertId(): int
         if ($this->transactionLevel <= 0) {
             $this->transactionLevel = 0;
             throw new \RuntimeException('No active transaction to commit');
+        }
+
+        if ($this->isRollbackOnly) {
+            // Force a rollback of the entire transaction
+            $this->transactionLevel = 0;
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            $this->isRollbackOnly = false;
+            throw new \RuntimeException('Transaction was rolled back in a nested block and is marked as rollback-only.');
         }
 
         $this->transactionLevel--;
@@ -590,6 +642,7 @@ public function lastInsertId(): int
 
         $this->transactionLevel--;
         if ($this->transactionLevel === 0) {
+            $this->isRollbackOnly = false;
             if ($this->pdo->inTransaction()) {
                 try {
                     if (!$this->pdo->rollBack()) {
@@ -600,7 +653,8 @@ public function lastInsertId(): int
                 }
             }
         } else {
-            // Nested rollback: Rollback to the savepoint
+            // Nested rollback: Rollback to the savepoint and mark transaction as rollback-only
+            $this->isRollbackOnly = true;
             if ($this->pdo->inTransaction()) {
                 try {
                     $this->pdo->exec("ROLLBACK TO SAVEPOINT trans_" . $this->transactionLevel);

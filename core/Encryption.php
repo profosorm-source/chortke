@@ -14,10 +14,7 @@ class Encryption
      */
     public function encrypt(string $value): string
     {
-        $key = (string)config('app.key');
-        if (empty($key)) {
-            throw new \RuntimeException('Encryption key not found in configuration.');
-        }
+        $key = secure_key();
 
         $iv = substr($key, 0, 16);
         $encrypted = openssl_encrypt($value, 'aes-256-cbc', $key, 0, $iv);
@@ -34,10 +31,7 @@ class Encryption
      */
     public function decrypt(string $value): string
     {
-        $key = (string)config('app.key');
-        if (empty($key)) {
-            throw new \RuntimeException('Encryption key not found in configuration.');
-        }
+        $key = secure_key();
 
         $iv = substr($key, 0, 16);
         $decrypted = openssl_decrypt($value, 'aes-256-cbc', $key, 0, $iv);

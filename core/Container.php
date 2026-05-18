@@ -114,14 +114,16 @@ class Container
     // Resolution
     // ─────────────────────────────────────────────────────────────
     
-    private static array $traceStack = [];
+    private array $traceStack = [];
 
     /**
      * H15 Fix: پاکسازی استک دیباگ چرخه‌ای برای جلوگیری از false-positive در فرآیندهای طولانی
      */
     public static function resetTraceStack(): void
     {
-        self::$traceStack = [];
+        if (self::$instance !== null) {
+            self::$instance->traceStack = [];
+        }
     }
 
     /**
@@ -131,10 +133,10 @@ class Container
      */
     public function make(string $abstract): object
     {
-        if (in_array($abstract, self::$traceStack, true)) {
-            throw new \RuntimeException("Circular dependency detected: " . implode(" -> ", self::$traceStack) . " -> " . $abstract);
+        if (in_array($abstract, $this->traceStack, true)) {
+            throw new \RuntimeException("Circular dependency detected: " . implode(" -> ", $this->traceStack) . " -> " . $abstract);
         }
-        self::$traceStack[] = $abstract;
+        $this->traceStack[] = $abstract;
         try {
             // Scoped cache (CORE-030)
             if (isset($this->scopedBindings[$abstract])) {
@@ -157,7 +159,7 @@ class Container
             $instance = $this->resolve($abstract);
             return $this->applyExtenders($abstract, $instance);
         } finally {
-            array_pop(self::$traceStack);
+            array_pop($this->traceStack);
         }
     }
 

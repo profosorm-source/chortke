@@ -119,9 +119,21 @@ if (!defined('SECURITY_API_TOKEN_SECRET')) {
 // These must run before any service starts to prevent insecure deployments
 
 // 1. Check APP_KEY (Mandatory, min 32 chars for AES-256)
-$appKey = (string)config('app.key');
-if (strlen($appKey) < 32) {
-    throw new Exception('APP_KEY must be set and be at least 32 characters long for secure encryption.');
+$appKey = secure_key();
+if (empty($appKey) || strlen($appKey) < 32 || $appKey === 'default_key') {
+    if (config('app.env') === 'production') {
+        http_response_code(500);
+        if (!headers_sent()) {
+            header('Content-Type: text/html; charset=utf-8');
+        }
+        die(
+            '<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>خطای امنیتی سیستم</title>' .
+            '<style>body{font-family:Tahoma,sans-serif;padding:50px;background:#fcfcfc;} .box{background:#fff;border-right:5px solid #e74c3c;padding:30px;box-shadow:0 5px 20px rgba(0,0,0,0.05);border-radius:4px;}</style></head>' .
+            '<body><div class="box"><h2>خطای بحرانی امنیت: کلید رمزنگاری سیستم تنظیم نشده یا ناامن است</h2>' .
+            '<p>سیستم در حالت عملیاتی (Production) اجازه راه‌اندازی با کلید امنیتی پیش‌فرض، ناموجود یا ضعیف را نمی‌دهد. لطفا فایل پیکربندی <code>.env</code> را بررسی و کلید امنیتی معتبری (حداقل ۳۲ کاراکتر) تنظیم نمایید.</p></div></body></html>'
+        );
+    }
+    throw new Exception('APP_KEY must be set, be at least 32 characters long, and must not be "default_key" for secure encryption.');
 }
 
 // 2. Check APP_URL (Mandatory for CSRF/OAuth integrity)

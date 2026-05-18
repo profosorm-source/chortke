@@ -58,10 +58,7 @@ class IdempotencyKey
     public static function generate(?string $seed = null): string
     {
         if ($seed !== null) {
-            $key = config('app.key');
-            if (empty($key) || $key === 'default_key') {
-                throw new \RuntimeException('Secure APP_KEY is not defined in configurations.');
-            }
+            $key = secure_key();
             // تولید deterministic key برای debugging
             return hash('sha256', $seed . $key);
         }
@@ -89,7 +86,7 @@ class IdempotencyKey
         
         ksort($safeContext);
         $payloadStr = serialize($safeContext);
-        $appKey = config('app.key', 'fallback');
+        $appKey = secure_key();
         
         // ترکیب امن: اکشن + مسیر + متد + داده‌ها + اپ‌کی
         $finalSeed = $action . '|' . $uri . '|' . $method . '|' . $payloadStr . '|' . $appKey;

@@ -175,25 +175,41 @@ class Response
      */
     private function validateRedirectUrl(string $url): bool
     {
-        // H9 Fix: جلوگیری از حملات Open Redirect با استفاده از بک‌اسلش‌های گمراه‌کننده
-        if (preg_match('#^(/|\\\\)\\\\#', $url) || preg_match('#^/+\\\\#', $url)) {
-            throw new \InvalidArgumentException('آدرس ریدایرکت نامعتبر است (سوءاستفاده از بک‌اسلش)');
+        // Prevent CRLF injection
+        if (preg_match("/[\r\n]/", $url)) {
+            throw new \InvalidArgumentException('آدرس ریدایرکت شامل کاراکترهای غیرمجاز است');
         }
 
-        // ✅ Allow relative URLs (start with / but NOT //)
-        if (strpos($url, '/') === 0 && strpos($url, '//') !== 0) {
+        // 1. Block protocol-relative or backslash bypasses (e.g. //google.com, ///google.com, /\\google.com)
+        if (preg_match('#^[\\\\/]{2,}#', $url) || preg_match('#^/+\\\\#', $url)) {
+            throw new \InvalidArgumentException('آدرس ریدایرکت نامعتبر است (آدرس‌های نسبی پروتکل مجاز نیستند)');
+        }
+
+        // 2. Allow safe relative paths starting with a single slash (e.g. /dashboard)
+        if (strpos($url, '/') === 0 && strpos($url, '//') !== 0 && strpos($url, '/\\') !== 0) {
             return true;
         }
-        
-        // ✅ Allow URLs from same domain only
+
+        // 3. For absolute URLs, parse and strictly validate host
         $baseUrl = parse_url(config('app.url', 'http://localhost'));
-        $redirectUrl = parse_url($url);
-        
-        // اگر protocol یا host متفاوت باشد، reject کن
-        if (isset($redirectUrl['host']) && $redirectUrl['host'] !== ($baseUrl['host'] ?? '')) {
-            throw new \InvalidArgumentException("Open redirect نیست مجاز");
+        $baseHost = $baseUrl['host'] ?? '';
+
+        // If it starts with a scheme or looks like a full URL
+        if (preg_match('#^(https?:)?//#i', $url) || filter_var($url, FILTER_VALIDATE_URL)) {
+            $redirectUrl = parse_url($url);
+            $redirectHost = $redirectUrl['host'] ?? null;
+            if ($redirectHost !== $baseHost) {
+                throw new \InvalidArgumentException("تغییر مسیر به دامنه‌های خارجی مجاز نیست");
+            }
+            return true;
         }
-        
+
+        // 4. Block path traversal or relative tricks (e.g. absolute-path bypasses in relative clothing)
+        if (preg_match('#^(https?:)?//#i', ltrim($url, '/\\'))) {
+            throw new \InvalidArgumentException('آدرس ریدایرکت نامعتبر است');
+        }
+
+        // Safe relative path without leading slash (e.g. "home")
         return true;
     }
     

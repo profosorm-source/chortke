@@ -43,6 +43,7 @@ class Router
 
     // CORE-027: Middleware Priority Registry
     protected array $middlewarePriority = [
+        \App\Middleware\SessionMiddleware::class,
         \App\Middleware\RequestIdMiddleware::class,
         \App\Middleware\HttpsMiddleware::class,
         \App\Middleware\SecurityHeadersMiddleware::class,
@@ -170,19 +171,12 @@ class Router
         // H15 Fix: اطمینان از تمیز بودن استک وابستگی‌های کانتینر در هر ورودی جدید
         Container::resetTraceStack();
 
-        // Ensure session is started at the beginning of request handling
-        try {
-            $this->container->make(\Core\Session::class)->ensureStarted();
-        } catch (\Throwable $e) {
-            // برای متدهایی که تغییر دهنده حالت هستند، اگر سشن لود نشد عملیات را به سرعت و با امنیت متوقف می‌کنیم (Fail-Closed)
-            if (in_array(strtoupper($this->request->method()), ['POST', 'PUT', 'DELETE', 'PATCH'], true)) {
-                throw new \RuntimeException('Session failed to initialize. Request aborted for security reasons.', 500, $e);
-            }
-        }
+        // Session initialization is now fully decoupled and handled cleanly by SessionMiddleware at the head of the global pipeline
 
         // ── Global Middleware Stack ─────────────────────────────────────
         // این میدل‌ویرها برای تمامی درخواست‌ها (حتی صفحات ۴۰۴) اجرا می‌شوند
         $globalMiddlewares = [
+            \App\Middleware\SessionMiddleware::class,
             \App\Middleware\LoggingMiddleware::class,         // رصد دقیق پرفورمنس و مدیریت آسنکرون لاگ
             \App\Middleware\CorsMiddleware::class,
             \App\Middleware\HttpsMiddleware::class,

@@ -558,6 +558,23 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
         }
     }
     
+    private static function maskPII(string $text): string
+    {
+        // 1. Mask Emails (e.g. john.doe@example.com -> [EMAIL_MASKED])
+        $text = preg_replace('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', '[EMAIL_MASKED]', $text);
+
+        // 2. Mask Phone Numbers (e.g. Iranian mobile numbers starting with +98 or 09)
+        $text = preg_replace('/(?:\+98|0)?9\d{9}/', '[PHONE_MASKED]', $text);
+
+        // 3. Mask IPv4 Addresses
+        $text = preg_replace('/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/', '[IP_MASKED]', $text);
+
+        // 4. Mask sensitive parameter values (e.g. password=foo, pin:1234)
+        $text = preg_replace('/(password|pass|secret|token|card_number|cvv2|cvv|pin)\s*[:=]\s*[^\s,\'\"]+/i', '$1=[MASKED]', $text);
+
+        return $text;
+    }
+
     /**
      * نمایش صفحه خطا در Debug Mode
      */
@@ -568,9 +585,9 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
     $isDebug = (bool) config('app.debug', false);
 
     // [MED-01] Fix: Sanitize exception data to prevent info leakage
-    $message = $exception->getMessage();
+    $message = self::maskPII($exception->getMessage());
     $file = $exception->getFile();
-    $trace = $exception->getTraceAsString();
+    $trace = self::maskPII($exception->getTraceAsString());
 
     if (!$isDebug) {
         // Fallback safety if someone calls this directly
@@ -651,6 +668,11 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 if (is_string($key) && str_contains(strtoupper($key), $sKey)) {
                     $item = '********';
                 }
+            }
+
+            // Mask PII in error message items
+            if (is_string($item)) {
+                $item = self::maskPII($item);
             }
         };
 

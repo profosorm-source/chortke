@@ -36,6 +36,8 @@ class RetryPolicy
         $attempt = 0;
         $delayMs = $this->initialDelayMs;
 
+        $this->recordAttempt(); // Record the primary call in the budget
+
         while (true) {
             try {
                 return $operation();
@@ -46,6 +48,16 @@ class RetryPolicy
                     throw $exception;
                 }
 
+                // Enforce the cascading failure system-wide Retry Budget
+                if (!$this->acquireRetryBudget()) {
+                    // Refuse to execute retry and fail-fast to prevent retry storm
+                    throw new \RuntimeException(
+                        "Cascading failure protection: system-wide retry budget exhausted. " . $exception->getMessage(),
+                        503,
+                        $exception
+                    );
+                }
+
                 // CORE-051: Apply random jitter (0.8x to 1.2x) to avoid synchronized retry storms
                 $sleepMs = min($delayMs, $this->maxDelayMs);
                 $jitterFactor = mt_rand(800, 1200) / 1000.0;
@@ -54,6 +66,54 @@ class RetryPolicy
                 usleep($sleepWithJitter * 1000);
                 $delayMs = min($delayMs * $this->multiplier, $this->maxDelayMs);
             }
+        }
+    }
+
+    /**
+     * Check and update the system-wide retry budget.
+     * Allows retries only if retries are < 10% of total calls,
+     * with a minimum allowance of 5 retries for cold start.
+     */
+    private function acquireRetryBudget(): bool
+    {
+        $cache = Cache::getInstance();
+        $window = 10; // 10 second sliding window/key expiration
+        
+        $totalCallsKey = 'retry_budget:total_calls';
+        $retriesKey = 'retry_budget:retries';
+        
+        try {
+            $totalCalls = (int)$cache->get($totalCallsKey, 0);
+            $retries = (int)$cache->get($retriesKey, 0);
+            
+            // Cold start allowance: if total calls are low, always allow up to 5 retries
+            if ($totalCalls < 50 && $retries < 5) {
+                $cache->increment($retriesKey, 1, $window);
+                return true;
+            }
+            
+            // Enforce strict 10% retry budget
+            if ($retries >= (int)($totalCalls * 0.10)) {
+                return false; // Budget exhausted
+            }
+            
+            // Consume budget
+            $cache->increment($retriesKey, 1, $window);
+            return true;
+        } catch (\Throwable) {
+            return true; // Safe fail-open for budget tracking failures
+        }
+    }
+
+    /**
+     * Record a non-retry attempt in the system-wide budget
+     */
+    private function recordAttempt(): void
+    {
+        try {
+            Cache::getInstance()->increment('retry_budget:total_calls', 1, 10);
+        } catch (\Throwable) {
+            // Safe ignore
         }
     }
 

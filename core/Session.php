@@ -254,41 +254,42 @@ private function invalidateSession(): void
 
     private function generateFingerprint(): string
     {
-        // ✅ Fix M4: بهبود اثرانگشت سشن برای مقاومت در برابر تغییرات شبکه موبایلی
-        // 
-        // مشکلات قبلی:
-        // ۱. کاربران موبایل با تغییر شبکه (WiFi→4G) IP تغییر می‌دهند و سشن باطل می‌شود
-        // ۲. کاربران پشت NAT/Proxy IP یکسان دارند اما دستگاه‌های مختلفی هستند
-        //
-        // راه‌حل:
-        // - از IP subnet /24 استفاده (نه IP کامل)
-        // - Accept-Language برای شناسایی بیشتر (نسبتاً پایدار)
-        // - HTTP_ACCEPT برای نشانه‌های اضافی
-        // - Secondary token: PHPSESSID خود پایدار است
-        
+        // ✅ Fix M4: بهبود اثرانگشت سشن برای مقاومت در برابر تغییرات شبکه موبایلی و وب‌ویوها
         $ip        = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
         $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
         $language  = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? 'unknown';
         $accept    = substr($_SERVER['HTTP_ACCEPT'] ?? 'unknown', 0, 50); // فقط 50 کاراکتر اول
         $sessionId = session_id() ?? 'none';
 
+        // Extract stable browser family to prevent invalidation on minor WebView / browser updates
+        $browserFamily = 'unknown';
+        if (preg_match('/(Chrome|Firefox|Safari|Edge|Opera|MSIE|Trident)/i', $userAgent, $m)) {
+            $browserFamily = $m[1];
+        }
+
+        // Extract stable primary language code (e.g. "fa", "en")
+        $primaryLanguage = 'unknown';
+        if (preg_match('/^[a-z]{2,3}/i', $language, $m)) {
+            $primaryLanguage = strtolower($m[0]);
+        }
+
         // برای IPv4: فقط سه اکتت اول (subnet /24) تا تغییر IP موبایل tolerate شود
-        // برای IPv6: prefix را نگه می‌داریم
+        // برای IPv6: ساب‌نت پایدار /48 (سه بخش اول هگز)
         $ipMasked = $ip;
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             $parts    = explode('.', $ip);
             $ipMasked = $parts[0] . '.' . $parts[1] . '.' . $parts[2] . '.0';
         } elseif (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-            // فقط prefix را نگه می‌داریم
-            $ipMasked = substr($ip, 0, strrpos($ip, ':') ?: strlen($ip));
+            $parts    = explode(':', $ip);
+            $ipMasked = implode(':', array_slice($parts, 0, 3)) . ':0:0:0:0:0';
         }
 
         return hash('sha256', json_encode([
             'ip_subnet'      => $ipMasked,      // واقعاً پایدار برای موبایل (tolerate تغییرات شبکه)
-            'user_agent'     => $userAgent,     // نسبتاً پایدار برای یک دستگاه
-            'language'       => $language,      // پایدار در طول session
+            'browser_family' => $browserFamily, // پایدار در وب‌ویوها و آپدیت‌های جزیی
+            'language'       => $primaryLanguage, // زبان پایدار
             'accept_types'   => $accept,        // سیگنال اضافی
-            'session_anchor'  => $sessionId,    // anchor ثانویه
+            'session_anchor' => $sessionId,    // anchor ثانویه
         ]));
     }
 

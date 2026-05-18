@@ -86,14 +86,23 @@ class QueryBuilder
 
     private function validateRawSql(string $sql): void
     {
+        // Normalize to lowercase for detection
+        $lower = strtolower($sql);
+
         // Block SQL comments to prevent evasion tricks
         if (str_contains($sql, '--') || str_contains($sql, '/*') || str_contains($sql, '#')) {
             throw new \InvalidArgumentException("SQL comments are not allowed in raw queries");
         }
         
-        $dangerous = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'EXEC', 'UNION', 'TRUNCATE', 'RENAME', 'GRANT', 'REVOKE'];
+        // Comprehensive blacklist (case-insensitive)
+        $dangerous = [
+            'drop', 'delete', 'update', 'insert', 'alter', 'exec', 'execute', 'union', 
+            'truncate', 'rename', 'grant', 'revoke', 'load_file', 'into outfile', 
+            'into dumpfile', 'benchmark', 'sleep', 'waitfor', 'pg_sleep', 'dbms_lock'
+        ];
+
         foreach ($dangerous as $keyword) {
-            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $sql)) {
+            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $lower)) {
                 throw new \InvalidArgumentException("Dangerous SQL keyword detected: $keyword");
             }
         }
