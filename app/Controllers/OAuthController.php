@@ -58,7 +58,7 @@ class OAuthController extends BaseController
         if ($result['success']) {
             // 🛡️ Security Hardening: Handling 2FA checkpoints for social logins
             if (!empty($result['requires_2fa'])) {
-                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$result['user_id']);
+                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)($result['user_id'] ?? $result['user']->id));
                 if ($this->request->isAjax()) {
                     $this->jsonSuccess('', ['redirect' => url('verify-2fa')]);
                     return;
@@ -77,6 +77,16 @@ class OAuthController extends BaseController
             }
             $this->session->setFlash('success', $message);
             $this->response->redirect(url('dashboard'));
+            return;
+        }
+
+        if (!empty($result['requires_password_confirmation'])) {
+            if ($this->request->isAjax()) {
+                $this->jsonSuccess($result['message'] ?? '', ['redirect' => url('auth/oauth-confirm')]);
+                return;
+            }
+            $this->session->setFlash('warning', $result['message'] ?? '');
+            $this->response->redirect(url('auth/oauth-confirm'));
             return;
         }
 
@@ -107,7 +117,7 @@ class OAuthController extends BaseController
         if ($result['success']) {
             // 🛡️ Security Hardening: Handling 2FA checkpoints for social logins
             if (!empty($result['requires_2fa'])) {
-                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)$result['user_id']);
+                $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)($result['user_id'] ?? $result['user']->id));
                 if ($this->request->isAjax()) {
                     $this->jsonSuccess('', ['redirect' => url('verify-2fa')]);
                     return;
@@ -126,6 +136,16 @@ class OAuthController extends BaseController
             }
             $this->session->setFlash('success', $message);
             $this->response->redirect(url('dashboard'));
+            return;
+        }
+
+        if (!empty($result['requires_password_confirmation'])) {
+            if ($this->request->isAjax()) {
+                $this->jsonSuccess($result['message'] ?? '', ['redirect' => url('auth/oauth-confirm')]);
+                return;
+            }
+            $this->session->setFlash('warning', $result['message'] ?? '');
+            $this->response->redirect(url('auth/oauth-confirm'));
             return;
         }
 
@@ -201,5 +221,137 @@ class OAuthController extends BaseController
             return;
         }
         $this->jsonError($result['message'] ?? 'خطا در قطع اتصال');
+    }
+
+    /**
+     * نمایش صفحه تأیید رمز عبور برای اتصال OAuth
+     */
+    public function showConfirmPassword(): void
+    {
+        $pending = $this->session->get('oauth_pending_link');
+        if (!$pending || empty($pending['email']) || empty($pending['provider'])) {
+            $this->session->remove('oauth_pending_link');
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        $this->view('auth/oauth-confirm', [
+            'title'    => 'تأیید رمز عبور برای اتصال حساب',
+            'email'    => $pending['email'],
+            'provider' => $pending['provider']
+        ]);
+    }
+
+    /**
+     * پردازش تأیید رمز عبور و اتصال OAuth
+     */
+    public function confirmPassword(): void
+    {
+        $pending = $this->session->get('oauth_pending_link');
+        if (!$pending || empty($pending['email']) || empty($pending['provider']) || empty($pending['data'])) {
+            $this->session->remove('oauth_pending_link');
+            if ($this->request->isAjax()) {
+                $this->jsonError('نشست تأیید منقضی یا نامعتبر است');
+                return;
+            }
+            $this->session->setFlash('error', 'نشست تأیید منقضی یا نامعتبر است');
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        $password = (string)$this->request->post('password');
+        if (empty($password)) {
+            if ($this->request->isAjax()) {
+                $this->jsonError('وارد کردن رمز عبور الزامی است');
+                return;
+            }
+            $this->session->setFlash('error', 'وارد کردن رمز عبور الزامی است');
+            $this->response->redirect(url('auth/oauth-confirm'));
+            return;
+        }
+
+        // Verify password using AuthService
+        $authService = app(\App\Services\Auth\AuthService::class);
+        $userModel = app(\App\Models\User::class);
+        $user = $userModel->findByEmail($pending['email']);
+
+        if (!$user || !$authService->verifyPassword($password, $user->password, (int)$user->id)) {
+            if ($this->request->isAjax()) {
+                $this->jsonError('رمز عبور وارد شده اشتباه است');
+                return;
+            }
+            $this->session->setFlash('error', 'رمز عبور وارد شده اشتباه است');
+            $this->response->redirect(url('auth/oauth-confirm'));
+            return;
+        }
+
+        // Confirm user status before logging in
+        if (in_array($user->status, ['locked', 'banned', 'suspended', 'locked_2fa'], true)) {
+            $this->session->remove('oauth_pending_link');
+            $msg = 'حساب کاربری شما مسدود، قفل یا غیرفعال شده است.';
+            if ($this->request->isAjax()) {
+                $this->jsonError($msg);
+                return;
+            }
+            $this->session->setFlash('error', $msg);
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        // Link the social account
+        $db = app(\Core\Database::class);
+        $db->beginTransaction();
+        try {
+            $linkResult = $this->oauthService->linkSocialAccount((int)$user->id, $pending['provider'], $pending['data']);
+            if (!$linkResult['success']) {
+                $db->rollBack();
+                if ($this->request->isAjax()) {
+                    $this->jsonError($linkResult['message']);
+                    return;
+                }
+                $this->session->setFlash('error', $linkResult['message']);
+                $this->response->redirect(url('auth/oauth-confirm'));
+                return;
+            }
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            $logger = app(\App\Contracts\LoggerInterface::class);
+            $logger->error('oauth.confirm_link_failed', ['error' => $e->getMessage()]);
+            if ($this->request->isAjax()) {
+                $this->jsonError('خطا در اتصال حساب کاربری');
+                return;
+            }
+            $this->session->setFlash('error', 'خطا در اتصال حساب کاربری');
+            $this->response->redirect(url('auth/oauth-confirm'));
+            return;
+        }
+
+        // Clean up pending session variable
+        $this->session->remove('oauth_pending_link');
+
+        // Login the user via direct login method (handles sessions, events and 2FA perfectly)
+        $loginResult = $authService->loginDirectly($user);
+        if (!$loginResult['success']) {
+            $msg = $loginResult['message'] ?? 'خطا در ورود به حساب کاربری';
+            if ($this->request->isAjax()) {
+                $this->jsonError($msg);
+                return;
+            }
+            $this->session->setFlash('error', $msg);
+            $this->response->redirect(url('login'));
+            return;
+        }
+
+        $requires2FA = !empty($loginResult['requires_2fa']);
+        $redirectUrl = $requires2FA ? url('verify-2fa') : url('dashboard');
+        
+        if ($this->request->isAjax()) {
+            $this->jsonSuccess('حساب کاربری متصل و ورود موفقیت‌آمیز بود.', ['redirect' => $redirectUrl]);
+            return;
+        }
+
+        $this->session->setFlash('success', 'حساب کاربری متصل و ورود موفقیت‌آمیز بود.');
+        $this->response->redirect($redirectUrl);
     }
 }
