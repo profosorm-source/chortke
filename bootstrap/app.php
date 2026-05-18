@@ -1235,6 +1235,7 @@ $container->singleton(\App\Services\AntiFraud\AccountTakeoverService::class, fun
         $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
         $c->make(\App\Services\AntiFraud\BrowserFingerprintService::class),
         $c->make(\Core\Session::class), // M34 Fix: تزریق مستقیم سشن منطبق با تغییر سازنده سرویس
+        $c->make(\App\Services\AntiFraud\GeoIPService::class),
         $c->make(\Core\Logger::class)
     );
 });
@@ -1312,6 +1313,9 @@ $container->singleton(\Core\Console\CliDispatcher::class, function($c) {
 
     // CORE-063: Formal CLI Command for Route auditing & integrity validation
     $dispatcher->register('route:audit', \App\Commands\RouteAuditCommand::class, 'Perform standard controller and integrity audit for routing tables');
+
+    // Tor update exit nodes list command registration
+    $dispatcher->register('tor:update-exit-nodes', \App\Commands\UpdateTorExitNodesCommand::class, 'Update the Tor Exit Nodes database list');
 
     return $dispatcher;
 });
