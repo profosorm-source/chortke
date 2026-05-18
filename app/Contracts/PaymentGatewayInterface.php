@@ -21,10 +21,14 @@ interface PaymentGatewayInterface
     public function createPayment(float $amount, string $description, string $callbackUrl, array $options = []): array;
 
     /**
-     * بررسی وضعیت پرداخت
+     * بررسی وضعیت پرداخت (Verify payment with gateway)
      *
-     * @param string $authority شناسه پرداخت
-     * @param float $amount مبلغ تراکنش جهت تطابق
+     * @param string $authority شناسه پرداخت (Transaction ID from gateway)
+     * @param float $amount مبلغ تراکنش به تومان جهت تطابق (Amount in TOMAN - IRT)
+     *                      - ZarinPal: sends Toman as-is
+     *                      - NextPay: sends Toman as-is
+     *                      - IDPay: doesn't send amount (API limitation)
+     *                      - DgPay: converts Toman to Rial (*10)
      * @return array نتیجه شامل success, status, amount, refId
      */
     public function verifyPayment(string $authority, float $amount): array;
