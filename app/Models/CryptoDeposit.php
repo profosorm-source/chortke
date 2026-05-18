@@ -35,6 +35,15 @@ class CryptoDeposit extends Model
         return $row ?: null;
     }
 
+    public function findByHashForUpdate(string $txHash): ?object
+    {
+        $sql = "SELECT * FROM " . static::$table . " WHERE tx_hash = :tx_hash LIMIT 1 FOR UPDATE";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['tx_hash' => $txHash]);
+        $row = $stmt->fetch(\PDO::FETCH_OBJ);
+        return $row ?: null;
+    }
+
     public function findByHashAndNetwork(string $txHash, string $network): ?object
     {
         $sql = "SELECT * FROM " . static::$table . " WHERE tx_hash = :tx_hash AND network = :network LIMIT 1";
@@ -214,6 +223,23 @@ class CryptoDeposit extends Model
                     $this->db->rollBack();
                 }
                 throw new \RuntimeException("Crypto deposit ID {$id} not found.");
+            }
+
+            // Enforce strict state-machine transitions directly within the Model (C-13)
+            $allowedTransitions = [
+                'pending' => ['auto_verified', 'manual_review', 'rejected'],
+                'manual_review' => ['verified', 'rejected'],
+                'auto_verified' => [],
+                'verified' => [],
+                'rejected' => [],
+            ];
+
+            $currentStatus = $deposit->verification_status ?? 'pending';
+            if ($currentStatus !== $status && !in_array($status, $allowedTransitions[$currentStatus] ?? [])) {
+                if (!$inTx) {
+                    $this->db->rollBack();
+                }
+                throw new \RuntimeException("State transition from '{$currentStatus}' to '{$status}' is not allowed.");
             }
 
             // M27+M28: UPDATE status only - FINANCIAL LOGIC MUST MOVE TO CryptoDepositService
