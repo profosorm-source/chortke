@@ -75,7 +75,8 @@ class IpAndDeviceModel extends Model
     public function insertTorNode(string $ip): bool
     {
         return (bool)$this->db->query(
-            "INSERT INTO tor_exit_nodes (ip_address) VALUES (?) ON DUPLICATE KEY UPDATE ip_address = VALUES(ip_address)",
+            "INSERT INTO tor_exit_nodes (ip_address, last_verified) VALUES (?, NOW()) 
+             ON DUPLICATE KEY UPDATE last_verified = NOW()",
             [$ip]
         );
     }
@@ -88,7 +89,7 @@ class IpAndDeviceModel extends Model
 
     public function getLastUpdateTime(): ?string
     {
-        $row = $this->db->fetch("SELECT MAX(created_at) as last_update FROM tor_exit_nodes");
+        $row = $this->db->fetch("SELECT MAX(last_verified) as last_update FROM tor_exit_nodes");
         return $row ? $row->last_update : null;
     }
 
