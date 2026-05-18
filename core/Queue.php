@@ -133,7 +133,18 @@ class Queue
      */
     public function release(int $id, int $delay = 0): bool
     {
-        $availableAt = $delay > 0 ? time() + $delay : time();
+        if ($delay === 0) {
+            // Calculate delay based on attempts
+            $job = $this->db->selectOne("SELECT attempts FROM queues WHERE id = :id", ['id' => $id]);
+            $attempts = $job ? (int)$job->attempts : 1;
+            
+            $baseDelay = 60; // 60 seconds
+            $exponential = $baseDelay * pow(2, $attempts - 1);
+            $jitter = rand(5, 45);
+            $delay = (int) min($exponential + $jitter, 14400); // Max 4 hours
+        }
+
+        $availableAt = time() + $delay;
 
         $result = $this->db->table('queues')
             ->where('id', '=', $id)
@@ -187,6 +198,16 @@ class Queue
             // ۲. درج در جدول failed_jobs
             $exceptionStr = get_class($exception) . ': ' . $exception->getMessage() . "\n" . $exception->getTraceAsString();
             
+            // Critical logger call for poison message / DLQ movement
+            if (function_exists('logger')) {
+                logger()->critical('queue_job_failed_dlq_moved', [
+                    'job_id' => $id,
+                    'queue' => $job->queue,
+                    'payload' => $job->payload,
+                    'error' => $exception->getMessage()
+                ]);
+            }
+
             $this->db->table('failed_jobs')->insert([
                 'queue' => $job->queue,
                 'payload' => $job->payload,
