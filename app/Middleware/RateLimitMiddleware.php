@@ -33,6 +33,7 @@ class RateLimitMiddleware extends BaseMiddleware
         '/reset-password'       => [3,  60],
         '/payment'              => [10, 1],
         '/withdrawal'           => [5,  60],
+        '/wallet/deposit/crypto' => [5,  60],
         '/security/csp-report'  => [5,  1],
         '/api/auth'             => [10, 1],
         '/api/token'            => [5,  1],
