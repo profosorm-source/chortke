@@ -56,6 +56,8 @@ class OAuthController extends BaseController
         $result = $this->oauthService->handleGoogleCallback($code, $state);
 
         if ($result['success']) {
+            $this->session->regenerate(true);
+            app(\Core\CSRF::class)->regenerate();
             // 🛡️ Security Hardening: Handling 2FA checkpoints for social logins
             if (!empty($result['requires_2fa'])) {
                 $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)($result['user_id'] ?? $result['user']->id));
@@ -115,6 +117,8 @@ class OAuthController extends BaseController
         $result = $this->oauthService->handleFacebookCallback($code, $state);
 
         if ($result['success']) {
+            $this->session->regenerate(true);
+            app(\Core\CSRF::class)->regenerate();
             // 🛡️ Security Hardening: Handling 2FA checkpoints for social logins
             if (!empty($result['requires_2fa'])) {
                 $this->session->set(SessionKeys::PENDING_2FA_USER_ID, (int)($result['user_id'] ?? $result['user']->id));
