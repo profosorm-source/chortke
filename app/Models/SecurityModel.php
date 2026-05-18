@@ -55,13 +55,24 @@ class SecurityModel extends Model
         return (bool)$this->db->query("DELETE FROM two_factor_codes WHERE id = ?", [$id]);
     }
 
+    public function deleteTwoFactorCodeAtomic(int $codeId, int $userId): bool
+    {
+        $stmt = $this->db->prepare(
+            "DELETE FROM two_factor_codes 
+             WHERE id = ? AND user_id = ? AND used = 0 
+             LIMIT 1"
+        );
+
+        $stmt->execute([$codeId, $userId]);
+        return $stmt->rowCount() === 1;
+    }
+
     // --- Password Reset Methods ---
 
     public function createPasswordResetToken(string $email, string $token): bool
     {
         // CRITICAL-C-03 Fix: Using HMAC-SHA256 with application key to prevent rainbow table attacks
-        $key = (string)config('app.key');
-        $hashedToken = hash_hmac('sha256', $token, $key);
+        $hashedToken = hash_hmac('sha256', $token, secure_key());
         
         // LOW-L-01 Fix: Using ON DUPLICATE KEY UPDATE to prevent race conditions and handle unique constraints
         return (bool)$this->db->query(
@@ -74,8 +85,7 @@ class SecurityModel extends Model
     public function findPasswordResetByToken(string $token, int $timeout = 3600): ?object
     {
         // CRITICAL-C-03 Fix: Using HMAC-SHA256 with application key
-        $key = (string)config('app.key');
-        $hashedToken = hash_hmac('sha256', $token, $key);
+        $hashedToken = hash_hmac('sha256', $token, secure_key());
         
         // HIGH-H-11 Fix: Enforcing TTL check at database level to prevent clock-drift bypasses
         return $this->db->fetch(

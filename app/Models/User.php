@@ -72,6 +72,14 @@ class User extends Model
         );
     }
 
+    public function findByCredentialsForUpdate(string $identifier): ?object
+    {
+        return $this->db->fetch(
+            "SELECT * FROM users WHERE (email = ? OR mobile = ?) AND deleted_at IS NULL LIMIT 1 FOR UPDATE",
+            [$identifier, $identifier]
+        );
+    }
+
     public function findById(int $userId): ?object
     {
         return $this->db->table('users')
