@@ -267,6 +267,16 @@ class PaymentService extends PaymentBaseService
  */
 public function callback(string $gatewayName, array $callbackData, ?int $sessionUserId = null): array
 {
+    // 1️⃣ IP Whitelist Check (Security Hardening)
+    $allowedIPs = config('payment.' . $gatewayName . '.callback_ips', []);
+    if (!empty($allowedIPs) && !in_array(get_client_ip(), $allowedIPs, true)) {
+        $this->logger->critical('payment.callback.ip_blocked', [
+            'ip' => get_client_ip(),
+            'gateway' => $gatewayName
+        ]);
+        return ['success' => false, 'message' => 'دسترسی غیرمجاز است'];
+    }
+
     // دریافت و اعتبارسنجی authority از callbackData
     $authority = (string)($callbackData['authority'] ?? $callbackData['Authority'] ?? $callbackData['trans_id'] ?? $callbackData['id'] ?? $callbackData['token'] ?? '');
 
@@ -288,6 +298,16 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
             'authority' => $authority
         ]);
         return ['success' => false, 'message' => 'پرداخت یافت نشد'];
+    }
+
+    $loggedGateway = (string)($pay->gateway ?? $gatewayName);
+    if ($loggedGateway !== $gatewayName) {
+        $this->logger->critical('payment.callback.gateway_mismatch', [
+            'expected' => $loggedGateway,
+            'received' => $gatewayName,
+            'authority' => $authority
+        ]);
+        return ['success' => false, 'message' => 'درگاه پرداخت نامعتبر است'];
     }
 
     // 🛡️ بررسی انقضای زمانی تراکنش جهت ممانعت از حملات Replay (Replay Attack / Timeout Window)
@@ -338,7 +358,7 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
         return ['success' => false, 'message' => 'کاربر جلسه فعلی با پرداخت تطابق ندارد'];
     }
 
-    if ($pay->status !== 'pending' && $pay->status !== 'completed') {
+    if ($pay->status !== 'pending' && $pay->status !== 'completed' && $pay->status !== 'failed') {
         $this->logger->warning('payment.callback.invalid_status', [
             'gateway' => $gatewayName,
             'authority' => $authority,
@@ -449,8 +469,8 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
                 return ['success' => false, 'message' => 'خطا در قفل کردن رکورد پرداخت'];
             }
 
-            // CRITICAL-3 & HIGH-1: Verify that status is strictly pending before processing
-            if ($lockedPay->status !== 'pending') {
+            // CRITICAL-3 & HIGH-1: Verify that status is strictly pending or failed before processing
+            if ($lockedPay->status !== 'pending' && $lockedPay->status !== 'failed') {
                 $this->db->commit();
                 if ($lockedPay->status === 'completed') {
                     $this->logger->info('payment.callback.idempotent_completed', [
@@ -660,5 +680,55 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
             'amount' => $pay->amount,
             'verify_message' => $verify['message'] ?? 'unknown'
         ]);
+    }
+
+    /**
+     * Reconcile payments stuck in 'pending' status for more than 15 minutes (Failure Scenario 1 & CRITICAL #5)
+     */
+    public function reconcilePendingPayments(): array
+    {
+        $results = ['total' => 0, 'completed' => 0, 'failed' => 0, 'skipped' => 0];
+
+        try {
+            $stuckPayments = $this->db->query(
+                "SELECT * FROM payment_logs 
+                 WHERE status = 'pending' 
+                 AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+                 ORDER BY created_at ASC LIMIT 50"
+            )->fetchAll(\PDO::FETCH_OBJ) ?: [];
+
+            foreach ($stuckPayments as $pay) {
+                $results['total']++;
+                try {
+                    $storedRequestData = @json_decode($pay->request_data ?? '', true) ?: [];
+                    $storedNonce = (string)($storedRequestData['callback_nonce'] ?? '');
+
+                    // Reuse the fully secured and locked callback logic to ensure complete atomicity and safety
+                    $res = $this->callback((string)$pay->gateway, [
+                        'authority' => (string)$pay->authority,
+                        'nonce' => $storedNonce,
+                        'status' => 'OK'
+                    ], (int)$pay->user_id);
+
+                    if (!empty($res['success'])) {
+                        $results['completed']++;
+                    } else {
+                        $results['failed']++;
+                    }
+                } catch (\Throwable $innerEx) {
+                    $results['failed']++;
+                    $this->logger->error('payment.reconciliation.inner_failed', [
+                        'payment_id' => $pay->id,
+                        'error' => $innerEx->getMessage()
+                    ]);
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('payment.reconciliation.failed', [
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        return $results;
     }
 }
