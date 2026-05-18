@@ -48,11 +48,17 @@ class RateLimitMiddleware extends BaseMiddleware
         $this->decayMinutes = (int)config('rate_limits.default.decay_minutes', $decayMinutes);
     }
 
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, ?string $maxAttemptsParam = null, ?string $decayMinutesParam = null): Response
     {
         $calledNext = false;
         try {
             [$maxAttempts, $decayMinutes] = $this->resolveLimit($request);
+            if ($maxAttemptsParam !== null) {
+                $maxAttempts = (int)$maxAttemptsParam;
+            }
+            if ($decayMinutesParam !== null) {
+                $decayMinutes = (int)$decayMinutesParam;
+            }
             
             // CORE-042: Use high-precision token_bucket for sensitive critical operations
             $isCriticalPath = false;
