@@ -261,27 +261,37 @@ if (!function_exists('get_client_ip')) {
 if (!function_exists('generate_device_fingerprint')) {
     function generate_device_fingerprint(): string
     {
-        // ✅ امنیت: استفاده از مقادیر سرور‌محور، نه کاربر‌محور
-        // HTTP headers می‌تواند توسط کاربر جعل شود
-        $components = [
-            // مقادیر سرور‌محور (قابل اعتماد)
-            get_client_ip(),  // IP کاربر
-            session_id() ?? 'unknown',  // Session ID
-            (int)($_SERVER['REQUEST_TIME'] ?? time()),  // Server request time
-            php_uname(),  // Server info
-            gethostname() ?? 'unknown',  // Hostname
-        ];
-        
-        // یک مقدار کاربر‌محور (برای تنوع)، اما با محدودیت
-        if (!empty($_SERVER['HTTP_USER_AGENT'])) {
-            // تنها بخش کلیدی user agent (نه سیستم عامل دقیق)
-            $ua = $_SERVER['HTTP_USER_AGENT'];
-            // استخراج فقط نام مرورگر، نه نسخه دقیق
-            if (preg_match('/(Chrome|Firefox|Safari|Edge|Opera)/i', $ua, $m)) {
-                $components[] = $m[1];
-            }
+        $ip = get_client_ip();
+        $sessionId = session_id() ?: 'unknown';
+        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+        $acceptLang = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? 'unknown';
+
+        // Extract stable browser family
+        $browserFamily = 'unknown';
+        if (preg_match('/(Chrome|Firefox|Safari|Edge|Opera)/i', $userAgent, $m)) {
+            $browserFamily = $m[1];
         }
-        
+
+        // Mask IP for mobile subnet stability (/24 for IPv4, /48 for IPv6)
+        $ipMasked = $ip;
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $parts = explode('.', $ip);
+            if (count($parts) === 4) {
+                $ipMasked = $parts[0] . '.' . $parts[1] . '.' . $parts[2] . '.0';
+            }
+        } elseif (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $parts = explode(':', $ip);
+            $ipMasked = implode(':', array_slice($parts, 0, 3)) . ':0:0:0:0:0';
+        }
+
+        $components = [
+            $ipMasked,
+            $sessionId,
+            $browserFamily,
+            substr($acceptLang, 0, 5),
+            secure_key(), // Application key salt
+        ];
+
         return hash('sha256', implode('|', $components));
     }
 }
