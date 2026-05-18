@@ -1416,7 +1416,8 @@ $container->singleton(\App\Services\AntiFraud\VelocityCheckService::class, funct
     return new \App\Services\AntiFraud\VelocityCheckService(
         $c->make(\App\Models\VelocityAndScoreModel::class),
         $c->make(\Core\Logger::class),
-        $c->make(\Core\Cache::class)
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Services\DistributedLockService::class)
     );
 });
 $container->singleton(\App\Services\SocialTask\SocialTaskScoringService::class);
