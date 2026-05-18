@@ -38,6 +38,11 @@ class IDPayGateway extends BasePaymentGateway
         $this->config = $paymentGatewayModel->getActiveGateway('idpay');
     }
 
+    protected function getGatewayConfig(): ?object
+    {
+        return $this->config;
+    }
+
     /**
      * نیا پیمنٹ بنائیں
      * 

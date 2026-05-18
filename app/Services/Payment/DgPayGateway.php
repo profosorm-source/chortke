@@ -38,6 +38,11 @@ class DgPayGateway extends BasePaymentGateway
         $this->config = $paymentGatewayModel->getActiveGateway('dgpay');
     }
 
+    protected function getGatewayConfig(): ?object
+    {
+        return $this->config;
+    }
+
     /**
      * نیا پیمنٹ بنائیں
      * 

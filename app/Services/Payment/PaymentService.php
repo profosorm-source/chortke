@@ -127,6 +127,19 @@ class PaymentService extends PaymentBaseService
                 throw new BusinessException('امکان ایجاد پرداخت آنلاین به دلیل محدودیت‌های امنیتی یا تشخیص تراکنش غیرمجاز موقتاً وجود ندارد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از سقف تعداد یا مبلغ تراکنش' : $risk['reason']));
             }
 
+            // محدودیت تعداد پرداخت‌های باز برای پیشگیری از ایجاد تراکنش‌های همزمان با idempotency جدید
+            $pendingCount = $this->log
+                ->where('user_id', '=', $userId)
+                ->where('status', '=', 'pending')
+                ->count();
+            if ($pendingCount > 5) {
+                $this->logError('create', 'too_many_pending_payments', [
+                    'user_id' => $userId,
+                    'pending_count' => $pendingCount
+                ]);
+                throw new BusinessException('شما بیش از حد مجاز درخواست پرداخت باز دارید. لطفاً ابتدا پرداخت‌های قبلی را تکمیل کنید.');
+            }
+
             // اعتبارسنجی مبلغ
             $amountValidation = $this->validateAmount($amount);
             if (!$amountValidation['valid']) {
@@ -172,7 +185,8 @@ class PaymentService extends PaymentBaseService
                 throw new BusinessException('درگاه نامعتبر است');
             }
 
-            $callback = url('/payment/callback/' . $gatewayName);
+            $callbackNonce = bin2hex(random_bytes(16));
+            $callback = url('/payment/callback/' . $gatewayName . '?nonce=' . $callbackNonce);
             $desc = 'شارژ کیف پول چرتکه';
 
             // 🕵️ Enrich gateway payload with optional user metadata for enhanced security compliance (email & phone validation)
@@ -208,7 +222,11 @@ class PaymentService extends PaymentBaseService
                 'amount' => $amount,
                 'authority' => $res['authority'] ?? null,
                 'status' => $res['success'] ? 'pending' : 'failed',
-                'request_data' => \json_encode(['amount'=>$amount,'callback'=>$callback], JSON_UNESCAPED_UNICODE),
+                'request_data' => \json_encode([
+                    'amount' => $amount,
+                    'callback' => $callback,
+                    'callback_nonce' => $callbackNonce,
+                ], JSON_UNESCAPED_UNICODE),
                 'response_data' => \json_encode($res, JSON_UNESCAPED_UNICODE),
                 'ip_address' => get_client_ip(),
                 'user_agent' => get_user_agent(),
@@ -247,7 +265,7 @@ class PaymentService extends PaymentBaseService
  * فایل: app/Services/PaymentService.php
  * خط: ~85
  */
-public function callback(string $gatewayName, array $callbackData): array
+public function callback(string $gatewayName, array $callbackData, ?int $sessionUserId = null): array
 {
     // دریافت و اعتبارسنجی authority از callbackData
     $authority = (string)($callbackData['authority'] ?? $callbackData['Authority'] ?? $callbackData['trans_id'] ?? $callbackData['id'] ?? $callbackData['token'] ?? '');
@@ -272,8 +290,64 @@ public function callback(string $gatewayName, array $callbackData): array
         return ['success' => false, 'message' => 'پرداخت یافت نشد'];
     }
 
+    $storedRequestData = @json_decode($pay->request_data ?? '', true) ?: [];
+    $expectedNonce = (string)($storedRequestData['callback_nonce'] ?? '');
+    $callbackNonce = (string)($callbackData['nonce'] ?? '');
+    if ($expectedNonce !== '' && !hash_equals($expectedNonce, $callbackNonce)) {
+        $this->logger->critical('payment.callback.invalid_nonce', [
+            'gateway' => $gatewayName,
+            'authority' => $authority,
+            'expected_nonce' => $expectedNonce,
+            'received_nonce' => $callbackNonce,
+        ]);
+        return ['success' => false, 'message' => 'نشانه بازگشت پرداخت نامعتبر است'];
+    }
+
+    if ($sessionUserId === null && $expectedNonce === '') {
+        $this->logger->critical('payment.callback.unauthenticated_no_nonce', [
+            'gateway' => $gatewayName,
+            'authority' => $authority,
+            'ip' => get_client_ip()
+        ]);
+        return ['success' => false, 'message' => 'callback نامعتبر است'];
+    }
+
+    if ($sessionUserId === null && $expectedNonce === '') {
+        $this->logger->critical('payment.callback.unauthenticated_no_nonce', [
+            'gateway' => $gatewayName,
+            'authority' => $authority,
+            'ip' => get_client_ip()
+        ]);
+        return ['success' => false, 'message' => 'callback نامعتبر است'];
+    }
+
     $idemKey = "payment_cb:{$gatewayName}:{$authority}";
     $userId = (int)$pay->user_id;
+
+    if ($sessionUserId !== null && $sessionUserId !== $userId) {
+        $this->logger->critical('payment.callback.user_mismatch', [
+            'gateway' => $gatewayName,
+            'authority' => $authority,
+            'expected_user_id' => $userId,
+            'session_user_id' => $sessionUserId,
+            'ip' => get_client_ip(),
+        ]);
+        return ['success' => false, 'message' => 'کاربر جلسه فعلی با پرداخت تطابق ندارد'];
+    }
+
+    if ($pay->status === 'completed') {
+        return ['success' => true, 'message' => 'این پرداخت قبلاً تکمیل شده است', 'ref_id' => $pay->ref_id ?? null];
+    }
+
+    $callbackAmount = $callbackData['amount'] ?? $callbackData['Amount'] ?? null;
+    if ($callbackAmount !== null && is_numeric($callbackAmount) && bccomp((string)$callbackAmount, (string)$pay->amount, 4) !== 0) {
+        $this->logger->warning('payment.callback.amount_mismatch', [
+            'gateway' => $gatewayName,
+            'authority' => $authority,
+            'stored_amount' => $pay->amount,
+            'callback_amount' => $callbackAmount,
+        ]);
+    }
 
     // استفاده از Wrapper امن برای مدیریت خودکار Lock, Complete و Fail
     return IdempotencyKey::wrap($idemKey, $userId, 'payment_callback', function() use ($gatewayName, $callbackData, $authority, $pay) {
@@ -295,6 +369,15 @@ public function callback(string $gatewayName, array $callbackData): array
                 'gateway' => $gatewayName
             ]);
             return ['success' => false, 'message' => 'درگاه نامعتبر است'];
+        }
+
+        if (!$gw->verifyCallback($callbackData)) {
+            $this->logger->warning('payment.callback.invalid_signature', [
+                'gateway' => $gatewayName,
+                'authority' => $authority,
+                'callback_data' => $callbackData
+            ]);
+            return ['success' => false, 'message' => 'امضای بازگشت پرداخت معتبر نیست'];
         }
 
         // H22 Fix (Problem 1): ابتدا عملیات تایید پرداخت از درگاه را خارج از تراکنش دیتابیس انجام می‌دهیم 
@@ -366,8 +449,15 @@ public function callback(string $gatewayName, array $callbackData): array
             }
 
             // به‌روزرسانی وضعیت پرداخت در سیستم (بر اساس نتیجه verify که قبلاً انجام شده)
+            $paymentStatus = $verify['success'] ? 'verified' : 'failed';
+            $pendingVerification = false;
+            if (!$verify['success'] && preg_match('/(timeout|network|connection|اتصال|شبکه)/iu', $verify['message'] ?? '')) {
+                $paymentStatus = 'pending_verification';
+                $pendingVerification = true;
+            }
+
             $this->log->update((int)$pay->id, [
-                'status' => $verify['success'] ? 'verified' : 'failed',
+                'status' => $paymentStatus,
                 'ref_id' => $verify['ref_id'] ?? null,
                 'paid_at' => $verify['success'] ? date('Y-m-d H:i:s') : null,
                 'response_data' => \json_encode($verify, JSON_UNESCAPED_UNICODE),
@@ -375,6 +465,15 @@ public function callback(string $gatewayName, array $callbackData): array
 
             // در صورتی که پرداخت تأیید نشده باشد
             if (!$verify['success']) {
+                if ($pendingVerification) {
+                    $this->createPendingVerificationReview($pay, $verify);
+                    $this->db->commit();
+                    return [
+                        'success' => false,
+                        'message' => 'پرداخت در انتظار بررسی دستی است. نتیجه ظرف 24 ساعت اعلام می‌شود.'
+                    ];
+                }
+
                 $this->db->commit();
                 $this->logger->error('payment.verify.failed', [
                     'gateway' => $gatewayName,
@@ -437,13 +536,15 @@ public function callback(string $gatewayName, array $callbackData): array
             ]);
 
             if (!$reconciliation['success']) {
-                $this->logger->warning('payment.callback_reconciliation_failed', [
+                $this->logger->error('payment.callback_reconciliation_failed', [
                     'gateway' => $gatewayName,
                     'authority' => $authority,
                     'user_id' => $pay->user_id,
                     'amount' => $pay->amount,
                     'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
                 ]);
+
+                throw new \RuntimeException('Internal payment reconciliation failed');
             }
 
             // commit تراکنش
@@ -482,9 +583,7 @@ public function callback(string $gatewayName, array $callbackData): array
                 'message' => 'پرداخت با موفقیت تکمیل شد',
                 'ref_id' => $verify['ref_id'] ?? null
             ];
-
-        } catch (\Exception $e) {
-            // rollback در صورت خطا
+        } catch (\Throwable $e) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
@@ -502,4 +601,29 @@ public function callback(string $gatewayName, array $callbackData): array
         }
     }, $callbackData);
 }
+
+    private function createPendingVerificationReview(object $pay, array $verify): void
+    {
+        $existingResponse = @json_decode($pay->response_data ?? '', true);
+        if (!is_array($existingResponse)) {
+            $existingResponse = [];
+        }
+
+        $existingResponse['pending_verification'] = true;
+        $existingResponse['verification_error'] = $verify['message'] ?? 'Unknown verification failure';
+        $existingResponse['verification_timestamp'] = date('Y-m-d H:i:s');
+        $existingResponse['verification_attempts'] = ($existingResponse['verification_attempts'] ?? 0) + 1;
+
+        $this->log->update((int)$pay->id, [
+            'response_data' => \json_encode($existingResponse, JSON_UNESCAPED_UNICODE),
+        ]);
+
+        $this->logger->warning('payment.callback.pending_verification', [
+            'gateway' => $pay->gateway,
+            'authority' => $pay->authority,
+            'user_id' => $pay->user_id,
+            'amount' => $pay->amount,
+            'verify_message' => $verify['message'] ?? 'unknown'
+        ]);
+    }
 }

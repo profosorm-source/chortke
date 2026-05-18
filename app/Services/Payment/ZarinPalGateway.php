@@ -36,6 +36,11 @@ class ZarinPalGateway extends BasePaymentGateway
         $this->config = $paymentGatewayModel->getActiveGateway('zarinpal');
     }
 
+    protected function getGatewayConfig(): ?object
+    {
+        return $this->config;
+    }
+
     /**
      * نیا پیمنٹ بنائیں
      * 

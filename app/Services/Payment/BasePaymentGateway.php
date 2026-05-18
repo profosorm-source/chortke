@@ -65,6 +65,78 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
     }
 
     /**
+     * Retrieve the gateway configuration object from the concrete gateway implementation.
+     */
+    protected abstract function getGatewayConfig(): ?object;
+
+    /**
+     * Retrieve an optional gateway callback secret for HMAC signature verification.
+     */
+    protected function getCallbackSecret(): ?string
+    {
+        $config = $this->getGatewayConfig();
+        if ($config !== null) {
+            if (isset($config->callback_secret) && $config->callback_secret !== '') {
+                return (string)$config->callback_secret;
+            }
+            if (isset($config->config) && is_string($config->config)) {
+                $parsed = json_decode($config->config, true);
+                if (is_array($parsed) && !empty($parsed['callback_secret'])) {
+                    return (string)$parsed['callback_secret'];
+                }
+            }
+        }
+
+        return config('payment.' . $this->getGatewayName() . '.callback_secret') ?: null;
+    }
+
+    /**
+     * Verify a generic callback signature using HMAC-SHA256.
+     */
+    protected function verifyCallbackSignature(array $callbackData, string $secret): bool
+    {
+        $signature = (string)($callbackData['signature'] ?? $callbackData['sign'] ?? '');
+        if ($signature === '') {
+            return false;
+        }
+
+        $payload = [];
+        if (isset($callbackData['Authority'])) {
+            $payload[] = $callbackData['Authority'];
+        } elseif (isset($callbackData['authority'])) {
+            $payload[] = $callbackData['authority'];
+        }
+
+        if (isset($callbackData['Status'])) {
+            $payload[] = $callbackData['Status'];
+        } elseif (isset($callbackData['status'])) {
+            $payload[] = $callbackData['status'];
+        }
+
+        if (isset($callbackData['amount'])) {
+            $payload[] = (string)$callbackData['amount'];
+        } elseif (isset($callbackData['Amount'])) {
+            $payload[] = (string)$callbackData['Amount'];
+        }
+
+        $data = implode('|', $payload);
+        return hash_equals(hash_hmac('sha256', $data, $secret), $signature);
+    }
+
+    /**
+     * Default callback validation: use callback secret when configured.
+     */
+    public function verifyCallback(array $callbackData): bool
+    {
+        $secret = $this->getCallbackSecret();
+        if ($secret === null || $secret === '') {
+            return true;
+        }
+
+        return $this->verifyCallbackSignature($callbackData, $secret);
+    }
+
+    /**
      * CURL request کو retry کے ساتھ چلائیں
      * 
      * @param string $url درگاہ کا URL

@@ -38,6 +38,11 @@ class NextPayGateway extends BasePaymentGateway
         $this->config = $paymentGatewayModel->getActiveGateway('nextpay');
     }
 
+    protected function getGatewayConfig(): ?object
+    {
+        return $this->config;
+    }
+
     /**
      * نیا پیمنٹ بنائیں
      * 
