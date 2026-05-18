@@ -290,6 +290,18 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
         return ['success' => false, 'message' => 'پرداخت یافت نشد'];
     }
 
+    // 🛡️ بررسی انقضای زمانی تراکنش جهت ممانعت از حملات Replay (Replay Attack / Timeout Window)
+    $createdAt = strtotime($pay->created_at ?? '');
+    if ($createdAt > 0 && (time() - $createdAt) > 7200) { // پنجره زمانی ۲ ساعته
+        $this->logger->warning('payment.callback.expired', [
+            'gateway' => $gatewayName,
+            'authority' => $authority,
+            'created_at' => $pay->created_at,
+            'ip' => get_client_ip(),
+        ]);
+        return ['success' => false, 'message' => 'زمان مجاز برای تکمیل این تراکنش (۲ ساعت) به پایان رسیده است'];
+    }
+
     $storedRequestData = @json_decode($pay->request_data ?? '', true) ?: [];
     $expectedNonce = (string)($storedRequestData['callback_nonce'] ?? '');
     $callbackNonce = (string)($callbackData['nonce'] ?? '');
@@ -301,15 +313,6 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
             'received_nonce' => $callbackNonce,
         ]);
         return ['success' => false, 'message' => 'نشانه بازگشت پرداخت نامعتبر است'];
-    }
-
-    if ($sessionUserId === null && $expectedNonce === '') {
-        $this->logger->critical('payment.callback.unauthenticated_no_nonce', [
-            'gateway' => $gatewayName,
-            'authority' => $authority,
-            'ip' => get_client_ip()
-        ]);
-        return ['success' => false, 'message' => 'callback نامعتبر است'];
     }
 
     if ($sessionUserId === null && $expectedNonce === '') {
@@ -341,12 +344,14 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
 
     $callbackAmount = $callbackData['amount'] ?? $callbackData['Amount'] ?? null;
     if ($callbackAmount !== null && is_numeric($callbackAmount) && bccomp((string)$callbackAmount, (string)$pay->amount, 4) !== 0) {
-        $this->logger->warning('payment.callback.amount_mismatch', [
+        $this->logger->critical('payment.callback.amount_mismatch', [
             'gateway' => $gatewayName,
             'authority' => $authority,
             'stored_amount' => $pay->amount,
             'callback_amount' => $callbackAmount,
+            'ip' => get_client_ip(),
         ]);
+        return ['success' => false, 'message' => 'مبلغ پرداخت شده با مبلغ تراکنش مطابقت ندارد'];
     }
 
     // استفاده از Wrapper امن برای مدیریت خودکار Lock, Complete و Fail
