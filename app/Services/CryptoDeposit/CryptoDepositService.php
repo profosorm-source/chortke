@@ -90,7 +90,7 @@ class CryptoDepositService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'امکان ثبت درخواست شارژ رمزارز به دلایل امنیتی مسدود شد. دلیل: ' . ($risk['reason'] === 'velocity_limit' ? 'تجاوز از سقف مجاز واریز کریپتو' : $risk['reason'])];
         }
 
-        $expireMinutes = (int) $this->settingService->get('crypto_intent_expire_minutes', 30);
+        $expireMinutes = (int) $this->settingService->get('crypto_intent_expire_minutes', \App\Constants\CryptoConstants::DEFAULT_INTENT_EXPIRE_MINUTES);
 
         $open = $this->intentModel->getOpenIntentForUser($userId);
         if ($open && \strtotime($open->expires_at) < \time()) {
@@ -435,6 +435,11 @@ class CryptoDepositService extends \App\Services\BaseService
             return ['auto' => false, 'message' => 'واریز یافت نشد'];
         }
 
+        // Limit the number of auto check attempts to 10 (M-08)
+        if ((int)$d->auto_check_attempts >= 10) {
+            return $this->moveToManualReview($depositId, 'تعداد تلاشهای بررسی بیش از حد مجاز');
+        }
+
         // State Machine validation
         $allowedTransitions = [
             'pending' => ['auto_verified', 'manual_review', 'rejected'],
@@ -608,7 +613,7 @@ class CryptoDepositService extends \App\Services\BaseService
                     ]);
 
                     if (!$reconciliation['success']) {
-                        throw new \RuntimeException('Reconciliation failed: ' . ($reconciliation['message'] ?? 'Unknown error'));
+                        throw new \RuntimeException('خطا در تطبیق مالی تراکنش: ' . ($reconciliation['message'] ?? 'Unknown error'));
                     }
 
                     $this->db->commit();
@@ -758,7 +763,7 @@ class CryptoDepositService extends \App\Services\BaseService
      */
     private function generateUniqueAmount(string $network, float $requestedAmount): float
     {
-        $maxAttempts = 30;
+        $maxAttempts = \App\Constants\CryptoConstants::MAX_UNIQUE_AMOUNT_ATTEMPTS;
         $attempt = 0;
         do {
             // HIGH-07: Formulate higher precision entropy bounds (8 decimals) to dilute collision density
