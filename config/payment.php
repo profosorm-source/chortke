@@ -12,6 +12,7 @@ return [
     'zarinpal' => [
         'merchant_id' => env('ZARINPAL_MERCHANT_ID', ''),   // الزامی — UUID فارسی
         'sandbox'     => env('ZARINPAL_SANDBOX', false),
+        'callback_secret' => env('ZARINPAL_CALLBACK_SECRET', null),
         
         // Endpoints
         'api_url'         => env('ZARINPAL_API_URL', 'https://api.zarinpal.com/pg/v4/payment'),
@@ -23,16 +24,19 @@ return [
     // NextPay
     'nextpay' => [
         'api_key' => env('NEXTPAY_API_KEY', ''),            // الزامی
+        'callback_secret' => env('NEXTPAY_CALLBACK_SECRET', null),
     ],
 
     // IDPay
     'idpay' => [
         'api_key' => env('IDPAY_API_KEY', ''),              // الزامی
         'sandbox' => env('IDPAY_SANDBOX', false),
+        'callback_secret' => env('IDPAY_CALLBACK_SECRET', null),
     ],
 
     // DgPay (اضافه خواهد شد)
     'dgpay' => [
         'api_key' => env('DGPAY_API_KEY', ''),
+        'callback_secret' => env('DGPAY_CALLBACK_SECRET', null),
     ],
-];
+];
