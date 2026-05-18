@@ -114,23 +114,59 @@ class CryptoDepositService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'ولت این شبکه تنظیم نشده است'];
         }
 
+        // H-01: Auto-cleanup expired intents before creating a new one to prevent memory leak / stale claims
         try {
-            $expected = $this->generateUniqueAmount($network, $requestedAmount);
-            $expiresAt = \date('Y-m-d H:i:s', \time() + ($expireMinutes * 60));
+            $this->cleanupExpiredIntents();
+        } catch (\Throwable $cleanupErr) {
+            $this->logger->warning('crypto.intent.cleanup.failed', ['error' => $cleanupErr->getMessage()]);
+        }
 
-            $id = $this->intentModel->create([
-                'user_id' => $userId,
-                'network' => $network,
-                'requested_amount' => $requestedAmount,
-                'expected_amount' => $expected,
-                'to_wallet' => $toWallet,
-                'expires_at' => $expiresAt,
-                'status' => 'open',
-                'ip_address' => $cleanIp,
-                'user_agent' => $userAgent,
-                'created_at' => \date('Y-m-d H:i:s'),
-                'updated_at' => \date('Y-m-d H:i:s'),
-            ]);
+        $maxRetryIntents = 5;
+        $attempt = 0;
+        $id = null;
+        $expected = null;
+        $expiresAt = null;
+
+        try {
+            while ($attempt < $maxRetryIntents) {
+                $this->db->beginTransaction();
+                try {
+                    // Generate a unique expected amount candidate
+                    $expected = $this->generateUniqueAmount($network, $requestedAmount);
+                    $expiresAt = \date('Y-m-d H:i:s', \time() + ($expireMinutes * 60));
+
+                    $id = $this->intentModel->create([
+                        'user_id' => $userId,
+                        'network' => $network,
+                        'requested_amount' => $requestedAmount,
+                        'expected_amount' => $expected,
+                        'to_wallet' => $toWallet,
+                        'expires_at' => $expiresAt,
+                        'status' => 'open',
+                        'ip_address' => $cleanIp,
+                        'user_agent' => $userAgent,
+                        'created_at' => \date('Y-m-d H:i:s'),
+                        'updated_at' => \date('Y-m-d H:i:s'),
+                    ]);
+
+                    $this->db->commit();
+                    break; // Success! Exit retry loop
+                } catch (\Exception $e) {
+                    if ($this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
+
+                    // If it is a duplicate entry exception (23000), let's retry
+                    if ($e instanceof \PDOException && ($e->getCode() === '23000' || \str_contains($e->getMessage(), 'Duplicate entry'))) {
+                        $attempt++;
+                        if ($attempt >= $maxRetryIntents) {
+                            throw new \RuntimeException("امکان تولید درخواست واریز منحصر به فرد به دلیل ترافیک بالا در این لحظه وجود ندارد. لطفا مجددا تلاش کنید.");
+                        }
+                        continue; // Retry with next attempt
+                    }
+                    throw $e; // Rethrow other exceptions
+                }
+            }
         } catch (\Exception $e) {
             $this->logger->error('crypto.intent.create.failed', [
                 'channel' => 'crypto',
@@ -180,14 +216,24 @@ class CryptoDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'واریز یافت نشد'];
             }
 
-            if (($deposit->verification_status ?? null) === 'verified') {
+            // State Machine check for approve
+            $allowedTransitions = [
+                'pending' => ['auto_verified', 'manual_review', 'rejected'],
+                'manual_review' => ['verified', 'rejected'],
+                'auto_verified' => [],
+                'verified' => [],
+                'rejected' => [],
+            ];
+
+            $currentStatus = $deposit->verification_status ?? 'pending';
+            if (!in_array('verified', $allowedTransitions[$currentStatus] ?? [])) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => 'این واریز قبلاً تأیید شده است'];
+                return ['success' => false, 'message' => "تغییر وضعیت از وضعیت فعلی ({$currentStatus}) به verified مجاز نیست"];
             }
 
             $depositResult = $this->wallet->deposit(
                 (int)$deposit->user_id,
-                (float)$deposit->amount,
+                (string)$deposit->amount,
                 'usdt',
                 [
                     'type' => 'crypto_deposit',
@@ -206,11 +252,24 @@ class CryptoDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'خطا در واریز به کیف پول'];
             }
 
-            $this->depositModel->update($depositId, [
-                'verification_status' => 'verified',
-                'reviewed_at' => \date('Y-m-d H:i:s'),
-                'reviewed_by' => $adminId,
-                'wallet_transaction_id' => $depositResult['transaction_id'] ?? null,
+            // Use nesting-safe updateStatus()
+            $this->depositModel->updateStatus(
+                $depositId,
+                'verified',
+                null,
+                null,
+                $adminId,
+                isset($depositResult['transaction_id']) ? (string)$depositResult['transaction_id'] : null
+            );
+
+            // Log secure status transition audit
+            $this->logger->info('crypto.deposit.status_transition', [
+                'deposit_id' => $depositId,
+                'user_id' => $deposit->user_id,
+                'from_status' => $currentStatus,
+                'to_status' => 'verified',
+                'operator_id' => $adminId,
+                'triggered_by' => 'admin_approve',
             ]);
 
             $this->db->commit();
@@ -269,6 +328,25 @@ class CryptoDepositService extends \App\Services\BaseService
             return ['auto' => false, 'message' => 'واریز یافت نشد'];
         }
 
+        // State Machine validation
+        $allowedTransitions = [
+            'pending' => ['auto_verified', 'manual_review', 'rejected'],
+            'manual_review' => ['verified', 'rejected'],
+            'auto_verified' => [],
+            'verified' => [],
+            'rejected' => [],
+        ];
+
+        $currentStatus = $d->verification_status ?? 'pending';
+        // If current state is terminal (cannot transition to anything)
+        if (empty($allowedTransitions[$currentStatus])) {
+            $this->logger->warning('crypto.verify.terminal_state', [
+                'deposit_id' => $depositId,
+                'status' => $currentStatus
+            ]);
+            return ['auto' => false, 'message' => 'این تراکنش قبلاً نهایی شده است'];
+        }
+
         $this->logger->info('crypto.verify.started', [
             'deposit_id' => $depositId,
             'user_id' => $d->user_id,
@@ -277,24 +355,36 @@ class CryptoDepositService extends \App\Services\BaseService
             'tx_hash' => $d->tx_hash
         ]);
 
-        // فقط داخل پنجره 30 دقیقه
-        if ($d->auto_check_deadline && \strtotime((string)$d->auto_check_deadline) < \time()) {
-            // اگر هنوز pending است => reject timeout
-            if ($d->verification_status === 'pending') {
-                $this->depositModel->update($depositId, [
-                    'verification_status' => 'rejected',
-                    'mismatch_reason' => 'مهلت بررسی خودکار (۳۰ دقیقه) تمام شد',
-                    'risk_score' => 20,
-                    'reviewed_at' => \date('Y-m-d H:i:s'),
-                ]);
+        // H-05: Enforce UTC timestamps to avoid server/database timezone discrepancies
+        if ($d->auto_check_deadline) {
+            $deadlineTimestamp = (new \DateTime($d->auto_check_deadline, new \DateTimeZone('UTC')))->getTimestamp();
+            $nowTimestamp = (new \DateTime('now', new \DateTimeZone('UTC')))->getTimestamp();
 
-                $this->logger->warning('crypto.verify.timeout', [
-                    'deposit_id' => $depositId,
-                    'user_id' => $d->user_id,
-                    'deadline' => $d->auto_check_deadline
-                ]);
+            if ($deadlineTimestamp < $nowTimestamp) {
+                // اگر هنوز pending است => reject timeout
+                if ($d->verification_status === 'pending') {
+                    if (in_array('rejected', $allowedTransitions[$currentStatus] ?? [])) {
+                        $this->depositModel->updateStatus($depositId, 'rejected', null, 'مهلت بررسی خودکار (۳۰ دقیقه) تمام شد');
 
-                return ['auto' => false, 'message' => 'رد شد (پایان مهلت ۳۰ دقیقه)'];
+                        // Audit Log
+                        $this->logger->info('crypto.deposit.status_transition', [
+                            'deposit_id' => $depositId,
+                            'user_id' => $d->user_id,
+                            'from_status' => $currentStatus,
+                            'to_status' => 'rejected',
+                            'operator_id' => null,
+                            'triggered_by' => 'auto_verify_timeout',
+                        ]);
+
+                        $this->logger->warning('crypto.verify.timeout', [
+                            'deposit_id' => $depositId,
+                            'user_id' => $d->user_id,
+                            'deadline' => $d->auto_check_deadline
+                        ]);
+                    }
+
+                    return ['auto' => false, 'message' => 'رد شد (پایان مهلت ۳۰ دقیقه)'];
+                }
             }
         }
 
@@ -312,13 +402,18 @@ class CryptoDepositService extends \App\Services\BaseService
                 (float)$d->amount
             );
         } catch (\Exception $e) {
-            $this->logger->error('legacy.log_error_advanced', [
-                'args' => [
-                    'خطا در تأیید خودکار تراکنش کریپتو',
-                    'ERROR',
-                    $e,
-                    ['deposit_id' => $depositId, 'user_id' => $d->user_id, 'tx_hash' => $d->tx_hash]
-                ]
+            // M-03: Structured error logging with complete details and trace
+            $this->logger->error('crypto.verify.api_failed', [
+                'channel' => 'crypto',
+                'deposit_id' => $depositId,
+                'user_id' => $d->user_id,
+                'network' => $d->network,
+                'tx_hash' => $d->tx_hash,
+                'error' => $e->getMessage(),
+                'exception' => \get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
             ]);
             return $this->moveToManualReview($depositId, 'خطا در اتصال به Explorer');
         }
@@ -326,31 +421,50 @@ class CryptoDepositService extends \App\Services\BaseService
         if (($result['status'] ?? '') === 'verified') {
             $this->db->beginTransaction();
             try {
-                // Issue 4: Lock the record to prevent race conditions during auto-verify
+                // Issue 4: Lock the record to prevent race conditions during auto-verify (C-02)
                 $stmt = $this->db->prepare("SELECT verification_status FROM crypto_deposits WHERE id = ? FOR UPDATE");
                 $stmt->execute([$depositId]);
                 $lockedStatus = $stmt->fetchColumn();
 
-                if ($lockedStatus === 'verified') {
+                if (in_array($lockedStatus, ['verified', 'auto_verified'])) {
                     $this->db->rollBack();
                     $this->logger->warning('crypto.verify.already_verified', ['deposit_id' => $depositId]);
                     return ['auto' => true, 'message' => 'این تراکنش قبلاً تأیید شده است'];
                 }
 
+                // C-02: Lock both the deposit AND the wallet records inside the transaction before update
+                $stmtWallet = $this->db->prepare("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE");
+                $stmtWallet->execute([(int)$d->user_id]);
+
                 // Use depositInTransaction to ensure atomic updates with the lock
-                $okResult = $this->wallet->depositInTransaction((int)$d->user_id, (float)$d->amount, 'usdt', [
+                // H-04: Inject a strict, unique idempotency key to prevent double crediting on API or retry crashes
+                $okResult = $this->wallet->depositInTransaction((int)$d->user_id, (string)$d->amount, 'usdt', [
                     'type' => 'crypto_deposit',
                     'deposit_id' => $depositId,
                     'network' => (string)$d->network,
                     'tx_hash' => (string)$d->tx_hash,
+                    'idempotency_key' => 'crypto_deposit_' . $depositId,
                 ]);
 
                 if ($okResult['success'] ?? false) {
-                    $this->depositModel->update($depositId, [
-                        'verification_status' => 'verified',
-                        'reviewed_at' => \date('Y-m-d H:i:s'),
-                        'auto_verified' => 1,
-                        'wallet_transaction_id' => $okResult['transaction_id'] ?? null,
+                    // Update status using updateStatus()
+                    $this->depositModel->updateStatus(
+                        $depositId,
+                        'auto_verified',
+                        $result['details'] ?? null,
+                        null,
+                        null,
+                        $okResult['transaction_id'] ?? null
+                    );
+
+                    // Audit Log
+                    $this->logger->info('crypto.deposit.status_transition', [
+                        'deposit_id' => $depositId,
+                        'user_id' => $d->user_id,
+                        'from_status' => $currentStatus,
+                        'to_status' => 'auto_verified',
+                        'operator_id' => null,
+                        'triggered_by' => 'auto_verify_success',
                     ]);
 
                     $this->db->commit();
@@ -370,7 +484,27 @@ class CryptoDepositService extends \App\Services\BaseService
                     ]);
 
                     if (!$reconciliation['success']) {
-                        $this->logger->warning('crypto.verify.reconciliation_failed', [
+                        // L-05: Proactively alert administrators of a critical reconciliation failure
+                        try {
+                            $this->notifier->sendToAdmins(
+                                'crypto_reconciliation_failure',
+                                'خطای تطبیق واریز کریپتو',
+                                "سیستم قادر به تطبیق تراکنش کریپتو با شناسه واریز {$depositId} و کاربر {$d->user_id} به مبلغ {$d->amount} نشد.",
+                                [
+                                    'deposit_id' => $depositId,
+                                    'user_id' => $d->user_id,
+                                    'network' => $d->network,
+                                    'tx_hash' => $d->tx_hash,
+                                    'message' => $reconciliation['message'] ?? 'Unknown error'
+                                ]
+                            );
+                        } catch (\Throwable $notifErr) {
+                            $this->logger->error('crypto.verify.reconciliation_notification_failed', [
+                                'error' => $notifErr->getMessage()
+                            ]);
+                        }
+
+                        $this->logger->critical('crypto.verify.reconciliation_failed', [
                             'deposit_id' => $depositId,
                             'user_id' => $d->user_id,
                             'amount' => $d->amount,
@@ -421,11 +555,34 @@ class CryptoDepositService extends \App\Services\BaseService
      */
     private function moveToManualReview(int $depositId, string $reason): array
     {
-        $this->depositModel->update($depositId, [
-            'verification_status' => 'manual_review',
-            'mismatch_reason' => $reason,
-            'risk_score' => 50, // Higher risk for manual review
-        ]);
+        $d = $this->depositModel->find($depositId);
+        if (!$d) {
+            return ['auto' => false, 'message' => 'واریز یافت نشد'];
+        }
+
+        $currentStatus = $d->verification_status ?? 'pending';
+
+        $allowedTransitions = [
+            'pending' => ['auto_verified', 'manual_review', 'rejected'],
+            'manual_review' => ['verified', 'rejected'],
+            'auto_verified' => [],
+            'verified' => [],
+            'rejected' => [],
+        ];
+
+        if (in_array('manual_review', $allowedTransitions[$currentStatus] ?? [])) {
+            $this->depositModel->updateStatus($depositId, 'manual_review', null, $reason);
+
+            // Audit Log
+            $this->logger->info('crypto.deposit.status_transition', [
+                'deposit_id' => $depositId,
+                'user_id' => $d->user_id,
+                'from_status' => $currentStatus,
+                'to_status' => 'manual_review',
+                'operator_id' => null,
+                'triggered_by' => 'auto_verify_fallback',
+            ]);
+        }
 
         return ['auto' => false, 'message' => 'ارسال به بررسی دستی: ' . $reason];
     }
