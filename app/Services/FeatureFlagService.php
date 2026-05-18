@@ -370,7 +370,21 @@ class FeatureFlagService extends \App\Services\BaseService
      */
     public function getAll(): array
     {
-        return $this->featureModel->getAll();
+        $features = $this->featureModel->getAll();
+        $featureMap = [];
+
+        foreach ($features as $feature) {
+            $featureMap[$feature->name] = $feature;
+        }
+
+        $configFlags = config('feature_flags', []);
+        foreach ($configFlags as $name => $definition) {
+            if (!isset($featureMap[$name]) && is_array($definition) && !empty($definition['description'])) {
+                $featureMap[$name] = $this->makeFeatureObjectFromConfig($name, $this->getConfigFlagDefinition($name));
+            }
+        }
+
+        return array_values($featureMap);
     }
 
     /**
@@ -378,6 +392,93 @@ class FeatureFlagService extends \App\Services\BaseService
      */
     public function findByName(string $name): ?object
     {
+        $feature = $this->featureModel->findByName($name);
+        if ($feature) {
+            return $feature;
+        }
+
+        $definition = $this->getConfigFlagDefinition($name);
+        if ($definition) {
+            return $this->makeFeatureObjectFromConfig($name, $definition);
+        }
+
+        return null;
+    }
+
+    private function getConfigFlagDefinition(string $name): ?array
+    {
+        $definition = config("feature_flags.{$name}");
+        if (!is_array($definition) || empty($definition['description'])) {
+            return null;
+        }
+
+        return array_merge(
+            [
+                'enabled' => false,
+                'enabled_percentage' => 100,
+                'enabled_for_roles' => null,
+                'enabled_for_users' => null,
+                'metadata' => null,
+                'enabled_from' => null,
+                'enabled_until' => null,
+                'depends_on' => null,
+                'environments' => null,
+                'priority' => 0,
+                'tags' => null,
+            ],
+            $definition
+        );
+    }
+
+    private function makeFeatureObjectFromConfig(string $name, array $definition): object
+    {
+        $feature = new \stdClass();
+        $feature->name = $name;
+        $feature->description = $definition['description'] ?? '';
+        $feature->enabled = (bool)($definition['enabled'] ?? false);
+        $feature->enabled_percentage = (int)($definition['enabled_percentage'] ?? 100);
+        $feature->enabled_for_roles = isset($definition['enabled_for_roles']) ? json_encode($definition['enabled_for_roles']) : null;
+        $feature->enabled_for_users = isset($definition['enabled_for_users']) ? json_encode($definition['enabled_for_users']) : null;
+        $feature->enabled_for_countries = isset($definition['enabled_for_countries']) ? json_encode($definition['enabled_for_countries']) : null;
+        $feature->enabled_for_devices = isset($definition['enabled_for_devices']) ? json_encode($definition['enabled_for_devices']) : null;
+        $feature->enabled_for_routes = isset($definition['enabled_for_routes']) ? json_encode($definition['enabled_for_routes']) : null;
+        $feature->metadata = $definition['metadata'] ?? null;
+        $feature->enabled_from = $definition['enabled_from'] ?? null;
+        $feature->enabled_until = $definition['enabled_until'] ?? null;
+        $feature->depends_on = isset($definition['depends_on']) ? json_encode($definition['depends_on']) : null;
+        $feature->environments = isset($definition['environments']) ? json_encode($definition['environments']) : null;
+        $feature->priority = (int)($definition['priority'] ?? 0);
+        $feature->tags = isset($definition['tags']) ? json_encode($definition['tags']) : null;
+        $feature->min_age = $definition['min_age'] ?? null;
+        $feature->max_age = $definition['max_age'] ?? null;
+        $feature->created_at = $definition['created_at'] ?? null;
+        $feature->updated_at = $definition['updated_at'] ?? null;
+        return $feature;
+    }
+
+    private function createFeatureFromConfig(string $name): ?object
+    {
+        $definition = $this->getConfigFlagDefinition($name);
+        if (!$definition) {
+            return null;
+        }
+
+        $this->featureModel->create([
+            'name' => $name,
+            'description' => $definition['description'],
+            'enabled' => $definition['enabled'] ? 1 : 0,
+            'enabled_percentage' => $definition['enabled_percentage'],
+            'enabled_for_roles' => $definition['enabled_for_roles'],
+            'enabled_for_users' => $definition['enabled_for_users'],
+            'metadata' => $definition['metadata'],
+            'enabled_from' => $definition['enabled_from'],
+            'enabled_until' => $definition['enabled_until'],
+            'depends_on' => $definition['depends_on'],
+            'environments' => $definition['environments'],
+            'priority' => $definition['priority'],
+            'tags' => $definition['tags'],
+        ]);
+
         return $this->featureModel->findByName($name);
     }
 
@@ -387,7 +488,10 @@ class FeatureFlagService extends \App\Services\BaseService
         $this->featureModel->clearCache();
         $feature = $this->featureModel->findByName($name);
         if (!$feature) {
-            return false;
+            $feature = $this->createFeatureFromConfig($name);
+            if (!$feature) {
+                return false;
+            }
         }
         
         $oldValues = ['enabled' => (bool)$feature->enabled];
@@ -414,7 +518,10 @@ class FeatureFlagService extends \App\Services\BaseService
         $this->featureModel->clearCache();
         $feature = $this->featureModel->findByName($name);
         if (!$feature) {
-            throw new \InvalidArgumentException("Feature '{$name}' not found");
+            $feature = $this->createFeatureFromConfig($name);
+            if (!$feature) {
+                throw new \InvalidArgumentException("Feature '{$name}' not found");
+            }
         }
         
         // 1. Business Validation & Sanitization
