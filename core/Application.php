@@ -77,18 +77,7 @@ class Application
 
         // ── Core fallback logger — available during early bootstrap
         $c->singleton(\App\Contracts\LoggerInterface::class, function($c) {
-            $db = $c->make(Database::class);
-
-            return new \Core\Logger(
-                new \App\Services\LogService(
-                    $db,
-                    new \App\Models\ActivityLog($db),
-                    new \App\Models\SystemLog($db),
-                    new \App\Models\SecurityLog($db),
-                    new \App\Models\PerformanceLog($db),
-                    $this->session
-                )
-            );
+            return $c->make(\Core\Logger::class);
         });
 
         // ── App-level singletons — یک بار در طول request ────────
