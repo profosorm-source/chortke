@@ -257,7 +257,8 @@ class PasswordPolicy
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
-                CURLOPT_TIMEOUT => 5,
+                CURLOPT_TIMEOUT => 3,        // Strict 3-second total timeout
+                CURLOPT_CONNECTTIMEOUT => 2, // 2-second connection timeout
                 CURLOPT_HTTPHEADER => [
                     'User-Agent: ChortkeApp',
                     'Add-Padding: true'  // HIBP recommends this for privacy
@@ -266,10 +267,17 @@ class PasswordPolicy
             
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
             curl_close($ch);
             
             if ($httpCode !== 200 || $response === false) {
-                // Don't fail validation if HIBP is unavailable
+                // Secure fail-open strategy: Do not block users if HIBP API is down or times out
+                if (function_exists('logger')) {
+                    logger()->warning('password_policy.hibp_api_failed_fail_open', [
+                        'http_code' => $httpCode,
+                        'curl_error' => $curlError
+                    ]);
+                }
                 return ['found' => false, 'count' => 0];
             }
             
