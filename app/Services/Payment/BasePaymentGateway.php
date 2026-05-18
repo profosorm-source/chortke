@@ -130,6 +130,10 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
     {
         $secret = $this->getCallbackSecret();
         if ($secret === null || $secret === '') {
+            $this->logger->warning("payment.{$this->getGatewayName()}.callback_secret_missing", [
+                'gateway' => $this->getGatewayName(),
+                'message' => 'No callback secret is configured. Bypassing callback signature verification.'
+            ]);
             return true;
         }
 

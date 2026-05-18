@@ -194,6 +194,7 @@ class ZarinPalGateway extends BasePaymentGateway
                 return [
                     'success' => true,
                     'ref_id' => (string)$result['data']['ref_id'],
+                    'amount' => isset($result['data']['amount']) ? (float)$result['data']['amount'] : $amount,
                     'message' => 'پرداخت با موفقیت انجام شد'
                 ];
             }

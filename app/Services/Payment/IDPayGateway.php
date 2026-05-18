@@ -220,6 +220,7 @@ class IDPayGateway extends BasePaymentGateway
                 return [
                     'success' => true,
                     'ref_id' => $result['track_id'] ?? $authority,
+                    'amount' => isset($result['amount']) ? ((float)$result['amount'] / 10) : $amount,
                     'message' => 'پرداخت با موفقیت انجام شد'
                 ];
             }

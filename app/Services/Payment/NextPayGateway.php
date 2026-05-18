@@ -187,6 +187,7 @@ class NextPayGateway extends BasePaymentGateway
                 return [
                     'success' => true,
                     'ref_id' => $result['Shaparak_Ref_Id'] ?? $authority,
+                    'amount' => isset($result['amount']) ? (float)$result['amount'] : $amount,
                     'message' => 'پرداخت با موفقیت انجام شد'
                 ];
             }

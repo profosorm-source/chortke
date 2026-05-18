@@ -194,6 +194,7 @@ class DgPayGateway extends BasePaymentGateway
                 return [
                     'success' => true,
                     'ref_id' => $result['ref_id'] ?? $authority,
+                    'amount' => isset($result['amount']) ? ((float)$result['amount'] / 10) : $amount,
                     'message' => 'پرداخت با موفقیت انجام شد'
                 ];
             }

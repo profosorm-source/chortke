@@ -338,6 +338,16 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
         return ['success' => false, 'message' => 'کاربر جلسه فعلی با پرداخت تطابق ندارد'];
     }
 
+    if ($pay->status !== 'pending' && $pay->status !== 'completed') {
+        $this->logger->warning('payment.callback.invalid_status', [
+            'gateway' => $gatewayName,
+            'authority' => $authority,
+            'status' => $pay->status,
+            'ip' => get_client_ip()
+        ]);
+        return ['success' => false, 'message' => 'وضعیت پرداخت نامعتبر است'];
+    }
+
     if ($pay->status === 'completed') {
         return ['success' => true, 'message' => 'این پرداخت قبلاً تکمیل شده است', 'ref_id' => $pay->ref_id ?? null];
     }
@@ -393,6 +403,23 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
         if (!in_array($status, ['nok', 'cancel', '0', 'failed'], true)) {
             try {
                 $verify = $gw->verifyPayment($authority, (float)$pay->amount);
+                
+                // CRITICAL-2: Verify amount from gateway matches stored amount
+                if ($verify !== null && isset($verify['amount'])) {
+                    if (abs((float)$verify['amount'] - (float)$pay->amount) > 0.01) {
+                        $this->logger->critical('payment.callback.gateway_amount_mismatch', [
+                            'gateway' => $gatewayName,
+                            'authority' => $authority,
+                            'expected' => (float)$pay->amount,
+                            'received' => (float)$verify['amount'],
+                            'ip' => get_client_ip()
+                        ]);
+                        $verify = [
+                            'success' => false,
+                            'message' => 'مبلغ پرداخت شده با مبلغ درگاه مطابقت ندارد'
+                        ];
+                    }
+                }
             } catch (\Throwable $e) {
                 $this->logger->error('payment.verify.exception_outside_tx', [
                     'gateway' => $gatewayName,
@@ -422,16 +449,19 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
                 return ['success' => false, 'message' => 'خطا در قفل کردن رکورد پرداخت'];
             }
 
-            // اگر پرداخت قبلاً تکمیل شده، idempotent return
-            if ($lockedPay->status === 'completed') {
+            // CRITICAL-3 & HIGH-1: Verify that status is strictly pending before processing
+            if ($lockedPay->status !== 'pending') {
                 $this->db->commit();
-                $this->logger->info('payment.callback.idempotent_completed', [
-                    'gateway' => $gatewayName,
-                    'authority' => $authority,
-                    'user_id' => $pay->user_id,
-                    'ref_id' => $lockedPay->ref_id
-                ]);
-                return ['success' => true, 'message' => 'این پرداخت قبلاً تکمیل شده است', 'ref_id' => $lockedPay->ref_id];
+                if ($lockedPay->status === 'completed') {
+                    $this->logger->info('payment.callback.idempotent_completed', [
+                        'gateway' => $gatewayName,
+                        'authority' => $authority,
+                        'user_id' => $pay->user_id,
+                        'ref_id' => $lockedPay->ref_id
+                    ]);
+                    return ['success' => true, 'message' => 'این پرداخت قبلاً تکمیل شده است', 'ref_id' => $lockedPay->ref_id];
+                }
+                return ['success' => false, 'message' => 'این پرداخت قبلاً پردازش شده یا لغو شده است'];
             }
 
             // بررسی وضعیت پرداخت (لغو یا عدم تایید)
