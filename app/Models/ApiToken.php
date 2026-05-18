@@ -148,18 +148,17 @@ class ApiToken extends Model
         }
         $this->validateId($userId, 'user_id');
 
-        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
-        if (!$secret || strlen($secret) < 32) {
-            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak');
+        $details = $this->getHashedTokenDetails($plainToken);
+        if (!$details) {
+            return false;
         }
-        $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $stmt = $this->db->prepare(
             "UPDATE api_tokens 
              SET revoked = 1, revoked_at = NOW() 
-             WHERE token = ? AND user_id = ? AND revoked = 0"
+             WHERE token = ? AND secret_version = ? AND user_id = ? AND revoked = 0"
         );
-        $stmt->execute([$hashedToken, $userId]);
+        $stmt->execute([$details['hashed'], $details['version'], $userId]);
         return $stmt->rowCount() > 0;
     }
 
@@ -189,18 +188,22 @@ class ApiToken extends Model
 
         $this->validateDate($expiresAt, 'expires_at');
 
-        // M15: Use HMAC-SHA256 instead of plain SHA-256 for better security
-        // HMAC provides authentication and is resistant to length extension attacks
-        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
-        if (!$secret || strlen($secret) < 32) {
-            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak (minimum 32 characters required)');
+        $currentVersion = config('security.api.current_secret_version', 'v2');
+        $secret = config("security.api.secrets.{$currentVersion}");
+        if (empty($secret)) {
+            $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
         }
+        
+        if (!$secret || strlen($secret) < 32) {
+            throw new \RuntimeException('API secret key is not configured or too weak (minimum 32 characters required)');
+        }
+        
         $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $this->db->query(
-            "INSERT INTO api_tokens (user_id, token, name, scopes, expires_at, created_at)
-             VALUES (?, ?, ?, ?, ?, NOW())",
-            [$userId, $hashedToken, $name, $scopes, $expiresAt]
+            "INSERT INTO api_tokens (user_id, token, secret_version, name, scopes, expires_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW())",
+            [$userId, $hashedToken, $currentVersion, $name, $scopes, $expiresAt]
         );
 
         return (int)$this->db->lastInsertId();
@@ -243,16 +246,14 @@ class ApiToken extends Model
             throw new \InvalidArgumentException('Token cannot be empty');
         }
 
-        // M15: Hash the plain token using the same HMAC method
-        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
-        if (!$secret || strlen($secret) < 32) {
-            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak');
+        $details = $this->getHashedTokenDetails($plainToken);
+        if (!$details) {
+            return false;
         }
-        $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
         $this->db->query(
-            "UPDATE api_tokens SET revoked = 1, revoked_at = NOW() WHERE token = ?",
-            [$hashedToken]
+            "UPDATE api_tokens SET revoked = 1, revoked_at = NOW() WHERE token = ? AND secret_version = ?",
+            [$details['hashed'], $details['version']]
         );
 
         return true;
@@ -264,19 +265,58 @@ class ApiToken extends Model
             throw new \InvalidArgumentException('Token cannot be empty');
         }
 
-        // M15: Hash the plain token using the same HMAC method before lookup
-        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
-        if (!$secret || strlen($secret) < 32) {
-            throw new \RuntimeException('SECURITY_API_TOKEN_SECRET is not configured or too weak');
+        $details = $this->getHashedTokenDetails($plainToken);
+        return $details ? $details['row'] : null;
+    }
+
+    /**
+     * Helper to lookup hashed token details iteratively over active secret versions
+     */
+    private function getHashedTokenDetails(string $plainToken): ?array
+    {
+        $secrets = config('security.api.secrets', []);
+        if (empty($secrets)) {
+            $legacySecret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
+            if ($legacySecret) {
+                $secrets = ['v2' => $legacySecret];
+            }
         }
-        $hashedToken = hash_hmac('sha256', $plainToken, $secret);
 
-        $token = $this->db->fetch(
-            "SELECT * FROM api_tokens WHERE token = ? LIMIT 1",
-            [$hashedToken]
-        );
+        $currentVersion = config('security.api.current_secret_version', 'v2');
+        
+        $orderedSecrets = [];
+        if (isset($secrets[$currentVersion])) {
+            $orderedSecrets[$currentVersion] = $secrets[$currentVersion];
+        }
+        foreach ($secrets as $version => $secret) {
+            if ($version !== $currentVersion) {
+                $orderedSecrets[$version] = $secret;
+            }
+        }
 
-        return $token ? (array)$token : null;
+        foreach ($orderedSecrets as $version => $secret) {
+            if (empty($secret) || strlen($secret) < 32) {
+                continue;
+            }
+
+            $hashedToken = hash_hmac('sha256', $plainToken, $secret);
+            
+            // Check if this hash and version exists in database
+            $tokenRow = $this->db->fetch(
+                "SELECT * FROM api_tokens WHERE token = ? AND secret_version = ? LIMIT 1",
+                [$hashedToken, $version]
+            );
+
+            if ($tokenRow) {
+                return [
+                    'row' => (array)$tokenRow,
+                    'hashed' => $hashedToken,
+                    'version' => $version
+                ];
+            }
+        }
+
+        return null;
     }
 
     public function getStats(): array
