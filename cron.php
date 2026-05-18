@@ -276,6 +276,45 @@ $scheduler->everyMinute(function () {
     return ['pending_checked' => count($pending), 'verified' => $verified];
 }, 'crypto_verify');
 
+// تایید خودکار پرداخت‌های معلق درگاه‌های آنلاین
+$scheduler->everyMinutes(10, function () {
+    $paymentService = \Core\Container::getInstance()->make(\App\Services\Payment\PaymentService::class);
+    $pending = $paymentService->getPendingVerificationPayments();
+    
+    $completed = 0;
+    $failed = 0;
+    
+    foreach ($pending as $payment) {
+        $createdAt = strtotime($payment->created_at);
+        $age = time() - $createdAt;
+        
+        // فقط برای تراکنش‌های کمتر از ۲۴ ساعت و بیشتر از ۵ دقیقه (جهت فرصت دادن به پردازش‌های آنی و عادی درگاه)
+        if ($age > 300 && $age < 86400) {
+            try {
+                // تایید خودکار با شناسه سیستم (0)
+                $result = $paymentService->manuallyVerifyPayment((int)$payment->id, 0);
+                if (!empty($result['success'])) {
+                    $completed++;
+                } else {
+                    $failed++;
+                }
+            } catch (\Throwable $e) {
+                logger()->error('payment.auto_retry_verification_failed', [
+                    'payment_id' => $payment->id,
+                    'error' => $e->getMessage()
+                ]);
+                $failed++;
+            }
+        }
+    }
+    
+    return [
+        'total_pending' => count($pending),
+        'auto_completed' => $completed,
+        'auto_failed' => $failed
+    ];
+}, 'payment_pending_verification_retry');
+
 // پردازش خودکار قوانین هشدار (Alert Engine)
 $scheduler->everyMinute(function () {
     $dispatcher = \Core\Container::getInstance()->make(\App\Services\Sentry\Alerting\AlertDispatcher::class);

@@ -19,6 +19,7 @@ use App\Controllers\Admin\ManualDepositController as AdminManualDepositControlle
 use App\Controllers\Admin\CryptoDepositController as AdminCryptoDepositController;
 use App\Controllers\Admin\WithdrawalController    as AdminWithdrawalController;
 use App\Controllers\Admin\TransactionController   as AdminTransactionController;
+use App\Controllers\Admin\OnlinePaymentController as AdminOnlinePaymentController;
 use App\Controllers\Admin\SocialAccountController as AdminSocialAccountController;
 use App\Controllers\Admin\AdTaskController        as AdminAdTaskController;
 use App\Controllers\Admin\ExecutorTaskController  as AdminExecutorTaskController;
@@ -145,6 +146,10 @@ $r->post('/admin/withdrawals/reject', [AdminWithdrawalController::class, 'reject
 // ── تراکنش‌ها ────────────────────────────────────────────────────────────────
 $r->get('/admin/transactions',       [AdminTransactionController::class, 'index'], array_merge($admin, [PermissionMiddleware::class . ':finance.transaction.view']));
 $r->get('/admin/transactions/show',  [AdminTransactionController::class, 'show'],  array_merge($admin, [PermissionMiddleware::class . ':finance.transaction.view']));
+
+// ── بررسی پرداخت‌های آنلاین معلق ─────────────────────────────────────────────
+$r->get('/admin/gateway-payments',         [AdminOnlinePaymentController::class, 'index'],  array_merge($admin, [PermissionMiddleware::class . ':finance.transaction.view']));
+$r->post('/admin/gateway-payments/verify', [AdminOnlinePaymentController::class, 'verify'], array_merge($admin, [PermissionMiddleware::class . ':finance.transaction.approve']));
 
 // ── حساب‌های اجتماعی ────────────────────────────────────────────────────────
 $r->get('/admin/social-accounts',               [AdminSocialAccountController::class, 'index'],  $admin);
