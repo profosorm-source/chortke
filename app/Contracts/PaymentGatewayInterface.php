@@ -30,6 +30,14 @@ interface PaymentGatewayInterface
     public function verifyPayment(string $authority, float $amount): array;
 
     /**
+     * تایید اعتبار callback دریافتی از gateway
+     *
+     * @param array $callbackData داده‌های callback
+     * @return bool true اگر callback معتبر باشد
+     */
+    public function verifyCallback(array $callbackData): bool;
+
+    /**
      * برگرداندن پرداخت (در صورت امکان)
      *
      * @param string $authority شناسه پرداخت
