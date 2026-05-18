@@ -718,8 +718,9 @@ LUA;
         try {
             $basePath = defined('BASE_PATH') ? BASE_PATH : dirname(dirname(__DIR__));
             $dir = $basePath . '/storage/logs/email_fallback_queue';
-            if (!is_dir($dir)) {
-                @mkdir($dir, 0775, true);
+            if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
+                $this->logger->error('email.file.mkdir_failed', ['dir' => $dir]);
+                return false;
             }
             $filePath = $dir . '/' . $payload['id'] . '.json';
             $success = file_put_contents($filePath, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));

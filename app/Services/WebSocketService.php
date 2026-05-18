@@ -110,9 +110,14 @@ extends \App\Services\BaseService
      */
     public function getRoomMembers(string $room): array
     {
-        $key = self::ROOM_PREFIX . $room . ':members';
-        $members = $this->redis->sMembers($key) ?? [];
-        return array_map('intval', $members);
+        try {
+            $key = self::ROOM_PREFIX . $room . ':members';
+            $members = $this->redis->sMembers($key) ?? [];
+            return array_map('intval', $members);
+        } catch (\Throwable $e) {
+            $this->logger->error('websocket.get_members.failed', ['error' => $e->getMessage()]);
+            return [];
+        }
     }
 
     /**
@@ -120,9 +125,14 @@ extends \App\Services\BaseService
      */
     public function getUserRooms(int $userId): array
     {
-        // 🚀 BUG-07 Fix: Use Reverse Index instead of SCAN (O(1) vs O(N))
-        $userRoomsKey = "user:{$userId}:rooms";
-        return $this->redis->sMembers($userRoomsKey) ?? [];
+        try {
+            // 🚀 BUG-07 Fix: Use Reverse Index instead of SCAN (O(1) vs O(N))
+            $userRoomsKey = "user:{$userId}:rooms";
+            return $this->redis->sMembers($userRoomsKey) ?? [];
+        } catch (\Throwable $e) {
+            $this->logger->error('websocket.get_user_rooms.failed', ['error' => $e->getMessage()]);
+            return [];
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -240,6 +250,19 @@ extends \App\Services\BaseService
      */
     public function longPoll(int $userId, ?string $lastMessageId = null, int $timeout = self::POLL_TIMEOUT): array
     {
+        // 🚀 Health Check: If Redis is down, fallback to DB-based polling directly
+        $redisDown = false;
+        try {
+            $this->redis->ping();
+        } catch (\Throwable $e) {
+            $redisDown = true;
+            $this->logger->warning('websocket.redis_down_polling_db_fallback', ['error' => $e->getMessage()]);
+        }
+
+        if ($redisDown) {
+            return $this->pollFromDatabase($userId, $lastMessageId, $timeout);
+        }
+
         $messages = [];
         $startTime = time();
         $endTime = $startTime + $timeout;
@@ -282,6 +305,57 @@ extends \App\Services\BaseService
             'messages' => [],
             'count' => 0,
             'timeout' => true
+        ];
+    }
+
+    /**
+     * DB-based Polling Fallback (when Redis is down)
+     */
+    private function pollFromDatabase(int $userId, ?string $lastMessageId = null, int $timeout = self::POLL_TIMEOUT): array
+    {
+        $startTime = time();
+        $endTime = $startTime + $timeout;
+
+        while (time() < $endTime) {
+            $query = "SELECT payload FROM realtime_messages WHERE (room = ? OR room LIKE 'order:%' OR room LIKE 'task:%' OR room = 'admin') AND expires_at > NOW()";
+            $params = ["user:{$userId}"];
+
+            try {
+                $rows = $this->db->query($query, $params)->fetchAll() ?? [];
+                $messages = [];
+                foreach ($rows as $row) {
+                    $msg = json_decode($row->payload, true);
+                    if ($msg && isset($msg['id'])) {
+                        if ($lastMessageId && $msg['id'] === $lastMessageId) {
+                            $messages = [];
+                            continue;
+                        }
+                        $messages[] = $msg;
+                    }
+                }
+
+                if (!empty($messages)) {
+                    return [
+                        'ok' => true,
+                        'messages' => array_slice($messages, 0, self::MAX_MESSAGES_PER_POLL),
+                        'count' => count($messages),
+                        'fallback' => true
+                    ];
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('websocket.poll_db_failed', ['error' => $e->getMessage()]);
+                break;
+            }
+
+            usleep(self::POLL_INTERVAL);
+        }
+
+        return [
+            'ok' => true,
+            'messages' => [],
+            'count' => 0,
+            'timeout' => true,
+            'fallback' => true
         ];
     }
 
@@ -334,7 +408,11 @@ extends \App\Services\BaseService
      */
     public function isOnline(int $userId): bool
     {
-        return $this->redis->exists(self::PRESENCE_PREFIX . $userId) === 1;
+        try {
+            return $this->redis->exists(self::PRESENCE_PREFIX . $userId) === 1;
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**
@@ -359,10 +437,14 @@ extends \App\Services\BaseService
      */
     public function getOnlineCount(): int
     {
-        $pattern = self::PRESENCE_PREFIX . '*';
-        // ✅ Using scanKeys() instead of keys() for performance
-        $keys = $this->redis->scanKeys($pattern);
-        return count($keys);
+        try {
+            $pattern = self::PRESENCE_PREFIX . '*';
+            // ✅ Using scanKeys() instead of keys() for performance
+            $keys = $this->redis->scanKeys($pattern);
+            return count($keys);
+        } catch (\Throwable $e) {
+            return 0;
+        }
     }
 
     /**
@@ -370,7 +452,10 @@ extends \App\Services\BaseService
      */
     public function markOffline(int $userId): void
     {
-        $this->redis->del(self::PRESENCE_PREFIX . $userId);
+        try {
+            $this->redis->del(self::PRESENCE_PREFIX . $userId);
+        } catch (\Throwable $e) {
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────
