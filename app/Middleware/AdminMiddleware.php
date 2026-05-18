@@ -30,6 +30,20 @@ class AdminMiddleware extends BaseMiddleware
     {
         $session = $this->session;
 
+        // CRITICAL-NEW-02 Fix: Add explicit 2FA pending check to prevent session confusion bypasses
+        if ($session->has(SessionKeys::PENDING_2FA_USER_ID)) {
+            if ($session->get('admin_pending_2fa')) {
+                $response = new Response();
+                $response->redirect(url('/admin/verify-2fa'));
+                return $response;
+            }
+            // Non-admin pending 2FA should not access admin area
+            $session->destroy();
+            $response = new Response();
+            $response->redirect(url('login'));
+            return $response;
+        }
+
         if (!$session->has(SessionKeys::USER_ID) || !$session->get(SessionKeys::LOGGED_IN)) {
             $response = new Response();
             if ($request->isAjax()) {

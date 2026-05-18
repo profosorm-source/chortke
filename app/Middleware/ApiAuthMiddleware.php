@@ -29,16 +29,16 @@ class ApiAuthMiddleware extends BaseMiddleware
 
     public function handle(Request $request, Closure $next, string ...$requiredScopes): Response
     {
-        // CRIT-02 Fix: Extract token with HMAC hash BEFORE any other operations
+        // CRIT-02 Fix: Extract token BEFORE any other operations
         // This ensures the raw token is never exposed in logs, error messages, or memory dumps
-        $tokenHash = $this->extractTokenHash($request);
+        $rawToken = $this->extractRawToken($request);
 
-        if (!$tokenHash) {
+        if (!$rawToken) {
             return $this->errorResponse('توکن API ارائه نشده', 401, 'MISSING_TOKEN');
         }
 
-        // Validate token using the pre-hashed value (no re-hashing in validateToken)
-        $user = $this->validateToken($tokenHash, 0);
+        // Validate token using all active secrets in config
+        $user = $this->validateTokenWithRotation($rawToken, 0);
         if (!$user) {
             return $this->errorResponse('توکن نامعتبر یا منقضی شده', 401, 'INVALID_TOKEN');
         }
@@ -59,9 +59,17 @@ class ApiAuthMiddleware extends BaseMiddleware
             return $this->errorResponse('حساب کاربری غیرفعال است', 403, 'ACCOUNT_DISABLED');
         }
 
+        // CRITICAL-NEW-03 Fix: Prevent API Token Scope Privilege Escalation
+        $tokenScopes = array_filter(explode(',', (string)($user->scopes ?? '')));
+        $hasAdminOrWildcardScope = in_array('admin', $tokenScopes, true) || in_array('*', $tokenScopes, true);
+        $isUserAdmin = isset($user->role) && $user->role === 'admin';
+
+        if ($hasAdminOrWildcardScope && !$isUserAdmin) {
+            return $this->errorResponse('توکن نامعتبر است: دسترسی مدیر لغو شده است.', 403, 'PRIVILEGE_ESCALATION_PREVENTED');
+        }
+
         // ✅ بررسی اسکوپ‌های مورد نیاز (Scope Enforcement)
         if (!empty($requiredScopes)) {
-            $tokenScopes = array_filter(explode(',', (string)($user->scopes ?? '')));
             foreach ($requiredScopes as $scope) {
                 if (!in_array($scope, $tokenScopes, true) && !in_array('*', $tokenScopes, true)) {
                     return $this->errorResponse('توکن شما اجازه دسترسی به این بخش را ندارد (اسکوپ مورد نیاز: ' . $scope . ')', 403, 'INSUFFICIENT_SCOPE');
@@ -137,18 +145,12 @@ class ApiAuthMiddleware extends BaseMiddleware
     }
 
     /**
-     * CRIT-02 Fix: Extract and hash token atomically to prevent raw token exposure
-     * 
-     * The raw token is hashed immediately using HMAC-SHA256 before being returned.
-     * This ensures:
-     * 1. Raw token is never stored in variables that could be logged
-     * 2. Raw token is never exposed in error messages or stack traces
-     * 3. Token validation uses consistent hashed values
+     * CRIT-02 Fix: Extract raw token securely
      * 
      * @param Request $request
-     * @return string|null HMAC-SHA256 hash of the token, or null if invalid
+     * @return string|null Raw token, or null if invalid
      */
-    private function extractTokenHash(Request $request): ?string
+    private function extractRawToken(Request $request): ?string
     {
         $authHeader = $request->header('Authorization') 
             ?? $request->header('authorization');
@@ -162,7 +164,6 @@ class ApiAuthMiddleware extends BaseMiddleware
         // Validate format first (fast rejection for malformed tokens)
         // Token must be exactly 64 hex characters (32 bytes = 256 bits)
         if (!preg_match('/^[a-f0-9]{64}$/', $token)) {
-            // Don't log the token itself to prevent information disclosure
             $this->logger->warning('api_auth.invalid_token_format', [
                 'header_length' => strlen($authHeader ?? ''),
                 'token_length' => strlen($token)
@@ -170,35 +171,66 @@ class ApiAuthMiddleware extends BaseMiddleware
             return null;
         }
 
-        // CRIT-02 Fix: Hash token IMMEDIATELY with HMAC-SHA256
-        // The secret ensures that even if this codebase is leaked, 
-        // attackers cannot generate valid tokens without the secret
-        $secret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
-        if (!$secret || strlen($secret) < 32) {
-            // Fail closed: don't process tokens if secret is not properly configured
-            $this->logger->critical('api_auth.secret_not_configured');
-            return null;
-        }
-        
-        // HIGH-H-02 Fix: Use hash_hmac for additional security (keyed hash)
-        // This prevents rainbow table attacks even if the token format is predictable
-        $hashedToken = hash_hmac('sha256', $token, $secret);
-        
-        // Immediately discard the raw token variable to prevent accidental exposure
-        unset($token);
-        
-        return $hashedToken;
+        return $token;
     }
 
     /**
-     * Validate token using pre-hashed value
-     * The hashed token must be provided (already hashed in extractTokenHash)
+     * Validate token using multi-version secret rotation
      * 
-     * @param string $hashedToken Pre-hashed token from extractTokenHash
+     * @param string $rawToken Raw token extracted from Request
      * @param int $requestingUserId Optional user ID for ownership verification
      * @return object|null User object if valid, null otherwise
      */
-    private function validateToken(string $hashedToken, int $requestingUserId = 0): ?object
+    private function validateTokenWithRotation(string $rawToken, int $requestingUserId = 0): ?object
+    {
+        $secrets = config('security.api.secrets', []);
+        if (empty($secrets)) {
+            // Fallback to legacy constant
+            $legacySecret = \defined('SECURITY_API_TOKEN_SECRET') ? SECURITY_API_TOKEN_SECRET : null;
+            if ($legacySecret) {
+                $secrets = ['v2' => $legacySecret];
+            }
+        }
+
+        // Sort secrets so the current/newest version is tried first
+        $currentVersion = config('security.api.current_secret_version', 'v2');
+        
+        // Build ordered secrets list
+        $orderedSecrets = [];
+        if (isset($secrets[$currentVersion])) {
+            $orderedSecrets[$currentVersion] = $secrets[$currentVersion];
+        }
+        foreach ($secrets as $version => $secret) {
+            if ($version !== $currentVersion) {
+                $orderedSecrets[$version] = $secret;
+            }
+        }
+
+        foreach ($orderedSecrets as $version => $secret) {
+            if (empty($secret) || strlen($secret) < 32) {
+                continue;
+            }
+
+            // Hash the token using this secret version
+            $hashedToken = hash_hmac('sha256', $rawToken, $secret);
+
+            // Validate against DB with this hash and matching version
+            $user = $this->validateTokenByHashAndVersion($hashedToken, $version, $requestingUserId);
+            if ($user) {
+                // Found a valid match! Clean up raw token immediately
+                unset($rawToken);
+                return $user;
+            }
+        }
+
+        unset($rawToken);
+        return null;
+    }
+
+    /**
+     * Validate token with specific hash and secret version
+     */
+    private function validateTokenByHashAndVersion(string $hashedToken, string $version, int $requestingUserId = 0): ?object
     {
         // Verify token hash is properly formatted (additional safety check)
         if (!preg_match('/^[a-f0-9]{64}$/', $hashedToken)) {
@@ -217,16 +249,16 @@ class ApiAuthMiddleware extends BaseMiddleware
             } catch (\Throwable $e) {}
         }
 
-        // ✅ Use the pre-hashed token directly in the query
-        // No additional hashing needed - token is already HMAC-SHA256 hashed
+        // ✅ Use the pre-hashed token and secret version directly in the query
         $query = "SELECT u.*, at.id AS token_id, at.scopes
                   FROM api_tokens at
                   JOIN users u ON u.id = at.user_id
                   WHERE at.token = ? 
+                    AND at.secret_version = ?
                     AND (at.expires_at IS NULL OR at.expires_at > NOW()) 
                     AND at.revoked = 0";
         
-        $params = [$hashedToken];
+        $params = [$hashedToken, $version];
         
         if ($requestingUserId > 0) {
             $query .= " AND at.user_id = ?";
@@ -236,7 +268,6 @@ class ApiAuthMiddleware extends BaseMiddleware
         $query .= " LIMIT 1";
         
         // Use prepared statements to prevent SQL injection
-        // The hashed token is safe to use in SQL as it's guaranteed to be hex characters
         $result = $this->db->fetch($query, $params) ?: null;
 
         // Populate negative cache if token is invalid or revoked to save DB resources
