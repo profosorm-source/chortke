@@ -267,12 +267,6 @@ private function invalidateSession(): void
             $browserFamily = $m[1];
         }
 
-        // Extract stable primary language code (e.g. "fa", "en")
-        $primaryLanguage = 'unknown';
-        if (preg_match('/^[a-z]{2,3}/i', $language, $m)) {
-            $primaryLanguage = strtolower($m[0]);
-        }
-
         // برای IPv4: فقط سه اکتت اول (subnet /24) تا تغییر IP موبایل tolerate شود
         // برای IPv6: ساب‌نت پایدار /48 (سه بخش اول هگز)
         $ipMasked = $ip;
@@ -284,12 +278,12 @@ private function invalidateSession(): void
             $ipMasked = implode(':', array_slice($parts, 0, 3)) . ':0:0:0:0:0';
         }
 
-        return hash('sha256', json_encode([
-            'ip_subnet'      => $ipMasked,      // واقعاً پایدار برای موبایل (tolerate تغییرات شبکه)
-            'browser_family' => $browserFamily, // پایدار در وب‌ویوها و آپدیت‌های جزیی
-            'language'       => $primaryLanguage, // زبان پایدار
-            'accept_types'   => $accept,        // سیگنال اضافی
-            'session_anchor' => $sessionId,    // anchor ثانویه
+        return hash('sha256', implode('|', [
+            $ipMasked,
+            $browserFamily,
+            substr($language, 0, 5),
+            $accept,
+            $sessionId,
         ]));
     }
 
@@ -306,6 +300,10 @@ private function invalidateSession(): void
         } else {
             $_SESSION['_session_id'] = bin2hex(random_bytes(16));
         }
+
+        // Regenerate CSRF token
+        $this->remove('_csrf_token');
+
         $_SESSION['_fingerprint'] = $this->generateFingerprint();
     }
 

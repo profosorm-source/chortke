@@ -624,7 +624,7 @@ public function lastInsertId(): int
                 $this->pdo->rollBack();
             }
             $this->isRollbackOnly = false;
-            throw new \RuntimeException('Transaction was rolled back in a nested block and is marked as rollback-only.');
+            throw new \RuntimeException('Cannot commit transaction: nested rollback occurred');
         }
 
         $this->transactionLevel--;
