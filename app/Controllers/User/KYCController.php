@@ -6,7 +6,7 @@ use App\Models\KYCVerification;
 use App\Services\KYCService;
 use App\Services\UploadService;
 use Core\Validator;
-use App\Services\ApiRateLimiter;
+use App\Policies\RateLimitPolicy;
 use App\Controllers\User\BaseUserController;
 
 class KYCController extends BaseUserController
@@ -14,16 +14,19 @@ class KYCController extends BaseUserController
     private KYCService      $kycService;
     private KYCVerification $kycModel;
     private UploadService   $uploadService;
+    private RateLimitPolicy $rateLimitPolicy;
 
     public function __construct(
         KYCVerification $kycModel,
         KYCService      $kycService,
-        UploadService   $uploadService
+        UploadService   $uploadService,
+        RateLimitPolicy $rateLimitPolicy
     ) {
         parent::__construct();
         $this->kycModel   = $kycModel;
         $this->kycService = $kycService;
         $this->uploadService = $uploadService;
+        $this->rateLimitPolicy = $rateLimitPolicy;
     }
 
     /**
@@ -66,8 +69,17 @@ class KYCController extends BaseUserController
     public function submit()
     {
         $userId = $this->userId();
+        $deviceFingerprint = generate_device_fingerprint();
 
-        ApiRateLimiter::enforce('kyc_submit', $userId, is_ajax());
+        if (!$this->rateLimitPolicy->check('kyc_submit', $userId)) {
+            $this->rateLimitPolicy->tooManyResponse('kyc_submit', $userId, is_ajax());
+        }
+        if (!$this->rateLimitPolicy->check('kyc_submit', get_client_ip())) {
+            $this->rateLimitPolicy->tooManyResponse('kyc_submit', get_client_ip(), is_ajax());
+        }
+        if (!$this->rateLimitPolicy->check('kyc_submit', $deviceFingerprint)) {
+            $this->rateLimitPolicy->tooManyResponse('kyc_submit', $deviceFingerprint, is_ajax());
+        }
 
         $data = $this->request->all();
 
