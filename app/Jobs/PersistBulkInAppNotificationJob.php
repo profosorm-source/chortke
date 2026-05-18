@@ -37,6 +37,9 @@ class PersistBulkInAppNotificationJob
             return;
         }
 
+        // 🚀 Bulk pre-fetch preferences to avoid N+1 database queries
+        $this->service->prefetchPreferences($userIds);
+
         foreach ($userIds as $uid) {
             $this->service->processSinglePersist(
                 (int)$uid,
