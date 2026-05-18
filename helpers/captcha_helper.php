@@ -136,12 +136,14 @@ if (!function_exists('verify_captcha')) {
         $token = $_POST['captcha_token'] ?? '';
         $response = $_POST['captcha_response'] ?? '';
         $recaptchaResponse = $_POST['g-recaptcha-response'] ?? $_POST['recaptcha_response'] ?? null;
+        $behavioralState = $_POST['behavioral_state'] ?? '';
 
         $token = is_string($token) ? trim($token) : '';
         $response = is_string($response) ? trim($response) : '';
         $recaptchaResponse = is_string($recaptchaResponse) ? trim($recaptchaResponse) : null;
+        $behavioralState = is_string($behavioralState) ? trim($behavioralState) : '';
 
-        return $service->verify($token, $response, $recaptchaResponse);
+        return $service->verify($token, $response, $recaptchaResponse, $behavioralState);
     }
 }
 
