@@ -219,16 +219,37 @@ class LogService extends BaseService
         try {
             $this->db->query($sql, $params);
         } catch (\Throwable $e) {
-            // Fallback to file logging if DB insert fails
-            $this->fallbackLog('bulk_insert_failed', ['table' => $table, 'error' => $e->getMessage()]);
+            // HIGH-09 Fix: Fallback to Redis or local file system if DB insert fails to prevent audit log evasion
+            $this->robustFallbackLog($table, $rows, $e->getMessage());
         }
     }
 
-    private function fallbackLog(string $event, array $data): void
+    private function robustFallbackLog(string $table, array $rows, string $errorMessage): void
     {
-        $file = $this->logDir . 'log_fallback_' . date('Y-m-d') . '.log';
-        $entry = sprintf("[%s] %s: %s\n", date('Y-m-d H:i:s'), $event, json_encode($data));
-        @file_put_contents($file, $entry, FILE_APPEND);
+        $payload = json_encode([
+            'table' => $table,
+            'error' => $errorMessage,
+            'timestamp' => time(),
+            'rows' => $rows
+        ], JSON_UNESCAPED_UNICODE);
+
+        $saved = false;
+        
+        // 1. Try Redis first for fast, persistent, and centralized fallback
+        try {
+            $redis = app(\Core\Redis::class);
+            if ($redis && $redis->isAvailable()) {
+                $redis->lpush("audit_fallback_{$table}", $payload);
+                $saved = true;
+            }
+        } catch (\Throwable $e) {}
+
+        // 2. Try File System if Redis is unavailable
+        if (!$saved) {
+            $file = $this->logDir . 'audit_fallback_' . date('Y-m-d') . '.log';
+            $entry = sprintf("[%s] DB_FAILURE: %s\n", date('Y-m-d H:i:s'), $payload);
+            @file_put_contents($file, $entry, FILE_APPEND);
+        }
     }
 
     public function cleanup(int $days = 90): array
