@@ -256,7 +256,7 @@ class IdempotencyKey
             $this->db->commit();
             return ['is_duplicate' => false];
 
-        } catch (\PDOException $e) {
+        } catch (\Throwable $e) {
             // Rollback active transaction safely
             if ($this->db->inTransaction()) {
                 $this->db->rollback();
@@ -265,7 +265,7 @@ class IdempotencyKey
             // FIX C-3: Fail-Closed — فقط duplicate key خطا را retry می‌کنیم.
             // سایر خطاهای DB را به بالا پرتاب می‌کنیم تا عملیات مالی
             // بدون چک idempotency اجرا نشود (fail-open خطرناک است).
-            if ($e->getCode() == 23000 || str_contains($e->getMessage(), 'Duplicate entry')) {
+            if (($e instanceof \PDOException) && ($e->getCode() == 23000 || str_contains($e->getMessage(), 'Duplicate entry'))) {
                 $this->logEvent('idempotency.key.race_retry', [
                     'log_id' => $logId,
                     'key'    => $key,
@@ -275,15 +275,19 @@ class IdempotencyKey
                 return $this->check($key, $userId, $action, $requestData, $retryCount + 1);
             }
 
-            // FIX C-3: خطای واقعی DB — throw می‌کنیم، fail-open نیستیم
+            // FIX C-3: خطای واقعی — throw می‌کنیم، fail-open نیستیم
             $this->logEvent('idempotency.check.database_error', [
                 'log_id' => $logId,
                 'key'    => $key,
                 'error'  => $e->getMessage(),
             ], 'error');
             
+            if ($e instanceof \RuntimeException) {
+                throw $e;
+            }
+            
             throw new \RuntimeException(
-                "Idempotency check failed due to database error: " . $e->getMessage(),
+                "Idempotency check failed: " . $e->getMessage(),
                 (int)$e->getCode(),
                 $e
             );

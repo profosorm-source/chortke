@@ -5,6 +5,7 @@ namespace Core;
 class Application
 {
     private static ?Application $instance = null;
+    private static bool $exceptionHandlerRegistered = false;
 
     public Container $container;
     private ?Database $dbInstance = null;
@@ -30,7 +31,10 @@ class Application
 
         // ── ۳. ExceptionHandler — فقط یک‌بار در کل lifecycle ────
         //    index.php دیگر ExceptionHandler::register() صدا نمی‌زند
-        ExceptionHandler::register();
+        if (!self::$exceptionHandlerRegistered) {
+            ExceptionHandler::register();
+            self::$exceptionHandlerRegistered = true;
+        }
 
         // ── ۴. Core Objects ──────────────────────────────────────
         $this->request  = new Request();
@@ -128,8 +132,7 @@ class Application
         if ($name === 'db') {
             return $this->db();
         }
-        trigger_error("Undefined property: " . static::class . "::$$name", E_USER_NOTICE);
-        return null;
+        throw new \RuntimeException("Property $name does not exist");
     }
     /**
      * دریافت کاربر لاگین‌شده (کش‌شده در هر request)

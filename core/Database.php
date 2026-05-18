@@ -94,8 +94,6 @@ class Database
 
 private function normalizeSql(string $sql): string
 {
-    $sql = str_replace(["\\n", "\\r", "\\t"], ' ', $sql); // literal escapes
-    $sql = str_replace(["\n", "\r", "\t"], ' ', $sql);    // real whitespace
     $sql = preg_replace('/\s+/', ' ', $sql);
     return trim($sql);
 }
@@ -174,11 +172,13 @@ private function buildSqlErrorContext(string $sql, array $params, \Throwable $e)
 
 private static function fallbackLog(string $event, array $context = []): void
 {
-    if (self::$fallbackLogging) {
+    static $inProgress = [];
+    $key = md5($event . ':' . json_encode($context));
+    if (isset($inProgress[$key])) {
         return;
     }
 
-    self::$fallbackLogging = true;
+    $inProgress[$key] = true;
     try {
         $payload = [
             'timestamp' => date('c'),
@@ -205,7 +205,7 @@ private static function fallbackLog(string $event, array $context = []): void
             // no-op
         }
     } finally {
-        self::$fallbackLogging = false;
+        unset($inProgress[$key]);
     }
 }
 public static function getLastSqlErrorContext(): ?array
@@ -627,23 +627,21 @@ public function lastInsertId(): int
             throw new \RuntimeException('Cannot commit transaction: nested rollback occurred');
         }
 
-        $this->transactionLevel--;
-        if ($this->transactionLevel === 0) {
-            try {
+        try {
+            if ($this->transactionLevel === 1) {
                 if (!$this->pdo->commit()) {
                     throw new \RuntimeException('PDO Commit returned false');
                 }
-            } catch (\Throwable $e) {
-                $this->transactionLevel = 0;
-                throw new \RuntimeException("PDO Commit failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+            } else {
+                // Nested commit: Release the savepoint
+                try {
+                    $this->pdo->exec("RELEASE SAVEPOINT trans_" . ($this->transactionLevel - 1));
+                } catch (\Throwable $e) {
+                    // Fallback for database engines that do not support RELEASE SAVEPOINT (e.g. sqlite/mssql, though MySQL supports it)
+                }
             }
-        } else {
-            // Nested commit: Release the savepoint
-            try {
-                $this->pdo->exec("RELEASE SAVEPOINT trans_" . $this->transactionLevel);
-            } catch (\Throwable $e) {
-                // Fallback for database engines that do not support RELEASE SAVEPOINT (e.g. sqlite/mssql, though MySQL supports it)
-            }
+        } finally {
+            $this->transactionLevel = max(0, $this->transactionLevel - 1);
         }
     }
 
@@ -658,33 +656,29 @@ public function lastInsertId(): int
             return;
         }
 
-        $this->transactionLevel--;
-        if ($this->transactionLevel === 0) {
-            $this->isRollbackOnly = false;
-            if ($this->pdo->inTransaction()) {
-                try {
+        try {
+            if ($this->transactionLevel === 1) {
+                $this->isRollbackOnly = false;
+                if ($this->pdo->inTransaction()) {
                     if (!$this->pdo->rollBack()) {
                          throw new \RuntimeException('PDO Rollback returned false');
                     }
-                } catch (\Throwable $e) {
-                    throw new \RuntimeException("PDO Rollback failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+                }
+            } else {
+                // Nested rollback: Rollback to the savepoint and mark transaction as rollback-only
+                $this->isRollbackOnly = true;
+                if ($this->pdo->inTransaction()) {
+                    $this->pdo->exec("ROLLBACK TO SAVEPOINT trans_" . ($this->transactionLevel - 1));
                 }
             }
-        } else {
-            // Nested rollback: Rollback to the savepoint and mark transaction as rollback-only
-            $this->isRollbackOnly = true;
+        } catch (\Throwable $e) {
+            $this->transactionLevel = 0;
             if ($this->pdo->inTransaction()) {
-                try {
-                    $this->pdo->exec("ROLLBACK TO SAVEPOINT trans_" . $this->transactionLevel);
-                } catch (\Throwable $e) {
-                    // Reset everything if savepoint rollback fails
-                    $this->transactionLevel = 0;
-                    if ($this->pdo->inTransaction()) {
-                        $this->pdo->rollBack();
-                    }
-                    throw new \RuntimeException("PDO Nested Rollback failed: " . $e->getMessage(), (int)$e->getCode(), $e);
-                }
+                $this->pdo->rollBack();
             }
+            throw new \RuntimeException("PDO Rollback failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+        } finally {
+            $this->transactionLevel = max(0, $this->transactionLevel - 1);
         }
     }
 

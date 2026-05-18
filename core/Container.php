@@ -402,18 +402,20 @@ class Container
         $parameters = $reflectionFunc->getParameters();
         
         $resolvedArgs = [];
-        $paramIndex = 0;
+        $remainingParams = $params;
 
         foreach ($parameters as $param) {
             $type = $param->getType();
+            $paramName = $param->getName();
 
-            // اگر مطابقت دارد با route params
-            if (isset($params[$param->getName()])) {
-                $resolvedArgs[] = $params[$param->getName()];
+            // ۱. اگر مطابقت دقیق با نام روت پارام دارد
+            if (array_key_exists($paramName, $remainingParams)) {
+                $resolvedArgs[] = $remainingParams[$paramName];
+                unset($remainingParams[$paramName]);
                 continue;
             }
 
-            // اگر type-hint دارد، سعی کن DI بکن
+            // ۲. اگر type-hint کلاس غیرBuiltin دارد، از کانتینر بساز
             if ($type instanceof \ReflectionNamedType && !$type->isBuiltin()) {
                 try {
                     $resolvedArgs[] = $this->make($type->getName());
@@ -428,16 +430,18 @@ class Container
                 }
             }
 
-            // اگر route param است
-            if ($paramIndex < count($params)) {
-                $resolvedArgs[] = array_values($params)[$paramIndex++];
+            // ۳. اگر نام مطابقت نداشت، اولین پارامتر باقی‌مانده و مصرف‌نشده روت را بردار (پوزیشنال)
+            if (!empty($remainingParams)) {
+                $firstKey = array_key_first($remainingParams);
+                $resolvedArgs[] = $remainingParams[$firstKey];
+                unset($remainingParams[$firstKey]);
             } elseif ($param->isDefaultValueAvailable()) {
                 $resolvedArgs[] = $param->getDefaultValue();
             } elseif ($param->allowsNull()) {
                 $resolvedArgs[] = null;
             } else {
                 throw new \RuntimeException(
-                    "[Container] Cannot resolve parameter '\${$param->getName()}' in closure"
+                    "[Container] Cannot resolve parameter '\${$paramName}' in closure"
                 );
             }
         }

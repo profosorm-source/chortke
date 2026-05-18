@@ -31,6 +31,9 @@ abstract class Model
 
     public function __construct(Database $db)
     {
+        if (empty(static::$table)) {
+            throw new \RuntimeException("Model " . static::class . " must define \$table");
+        }
         $this->db = $db;
     }
 
@@ -175,7 +178,10 @@ abstract class Model
 
     public function exists(int $id): bool
     {
-        return $this->find($id) !== null;
+        return (bool) $this->db->table(static::$table)
+            ->where('id', '=', $id)
+            ->selectRaw('1')
+            ->first();
     }
 
     public function beginTransaction(): void

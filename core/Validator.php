@@ -25,17 +25,16 @@ class Validator
     }
 
     public function validate(?array $rules = null): void
-{
-    // اگر rules پاس داده شد، ست کن
-    if ($rules !== null) {
-        $this->rules = $rules;
-    }
+    {
+        // اگر rules پاس داده شد، ست کن
+        if ($rules !== null) {
+            $this->rules = $rules;
+        }
 
-    // اگر هنوز rules نداریم، به جای Fatal Error، خطای validator ثبت کن
-    if (empty($this->rules)) {
-        $this->addError('__validator', 'قوانین اعتبارسنجی ارسال نشده است.');
-        return;
-    }
+        // اگر هنوز rules نداریم، خطای پیکربندی پرتاب کن (Fail-Closed)
+        if (empty($this->rules)) {
+            throw new \InvalidArgumentException('Validation rules cannot be empty.');
+        }
 
     foreach ($this->rules as $field => $ruleString) {
         $fieldRules = \explode('|', (string)$ruleString);

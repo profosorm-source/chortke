@@ -275,3 +275,42 @@ if (!function_exists('format_amount')) {
         return number_format((float)$amount, 0, '.', ',');
     }
 }
+
+/* -------------------------------------------------------------
+ | Lazy Loading Helpers Hub
+ | فایل‌های راهنما به صورت هوشمند و تنها در صورت نیاز لود می‌شوند.
+ * ------------------------------------------------------------- */
+
+if (!function_exists('csrf_token')) {
+    require_once __DIR__ . '/csrf_helper.php';
+}
+if (!function_exists('secure_key')) {
+    require_once __DIR__ . '/security.php';
+}
+if (!function_exists('view')) {
+    require_once __DIR__ . '/view_helper.php';
+}
+if (!function_exists('url')) {
+    require_once __DIR__ . '/url_helper.php';
+}
+if (!function_exists('auth')) {
+    require_once __DIR__ . '/auth_helper.php';
+}
+if (!function_exists('today')) {
+    require_once __DIR__ . '/date_helper.php';
+}
+if (!function_exists('json_response')) {
+    require_once __DIR__ . '/response_helper.php';
+}
+if (!function_exists('rate_limit')) {
+    require_once __DIR__ . '/rate_limit_helper.php';
+}
+if (!function_exists('captcha')) {
+    require_once __DIR__ . '/captcha_helper.php';
+}
+if (!function_exists('feature_enabled')) {
+    require_once __DIR__ . '/feature_flag_helpers.php';
+}
+if (!function_exists('site_logo')) {
+    require_once __DIR__ . '/site_helper.php';
+}

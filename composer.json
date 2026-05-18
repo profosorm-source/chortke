@@ -14,19 +14,7 @@
         },
         "files": [
             "core/Exceptions.php",
-            "helpers/functions.php",
-            "helpers/csrf_helper.php",
-            "helpers/security.php",
-            "helpers/view_helper.php",
-            "helpers/url_helper.php",
-            "helpers/auth_helper.php",
-            "helpers/date_helper.php",
-            "helpers/response_helper.php",
-            "helpers/rate_limit_helper.php",
-            "helpers/captcha_helper.php",
-            "helpers/feature_flag_helpers.php",
-            "helpers/site_helper.php",
-            "helpers/JalaliDate.php"
+            "helpers/functions.php"
         ]
     },
     "autoload-dev": {

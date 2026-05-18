@@ -96,6 +96,12 @@ class Session
             if (!isset($_SESSION['_initiated'])) {
                 session_regenerate_id(true);
                 $_SESSION['_initiated'] = true;
+                $_SESSION['_last_regenerate'] = time();
+            } elseif (time() - ($_SESSION['_last_regenerate'] ?? 0) > 900) {
+                if (session_status() === PHP_SESSION_ACTIVE) {
+                    session_regenerate_id(true);
+                }
+                $_SESSION['_last_regenerate'] = time();
             }
 
             $this->validateFingerprint();

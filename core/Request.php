@@ -129,7 +129,7 @@ public function isJson(): bool
      */
     public function userAgent(): string
     {
-        return get_user_agent();
+        return mb_substr(get_user_agent(), 0, 500);
     }
     /**
      * بررسی Method

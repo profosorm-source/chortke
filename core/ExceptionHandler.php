@@ -458,10 +458,7 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
         http_response_code(500);
 
         $debug = (bool) config('app.debug', false);
-        $ip = $_SERVER['REMOTE_ADDR'] ?? '';
-        $isLocal = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE) === false;
-
-        $isJson = (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') || (isset($_SERVER['HTTP_ACCEPT']) && $_SERVER['HTTP_ACCEPT'] === 'application/json');
+        $isJson = self::isJsonRequest();
 
         if ($debug) {
             $sanitizedError = self::sanitizeErrorData($error);
@@ -482,6 +479,7 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
             }
         }
 
+        self::logPerformance();
         exit;
     }
 

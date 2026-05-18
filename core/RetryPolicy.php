@@ -77,28 +77,34 @@ class RetryPolicy
     private function acquireRetryBudget(): bool
     {
         $cache = Cache::getInstance();
-        $window = 10; // 10 second sliding window/key expiration
-        
-        $totalCallsKey = 'retry_budget:total_calls';
-        $retriesKey = 'retry_budget:retries';
         
         try {
-            $totalCalls = (int)$cache->get($totalCallsKey, 0);
-            $retries = (int)$cache->get($retriesKey, 0);
+            $currentTime = time();
+            $totalCalls = 0;
+            $retries = 0;
             
-            // Cold start allowance: if total calls are low, always allow up to 5 retries
+            // جمع کل مقادیر تمامی ۱۰ سطل مربوط به ۱۰ ثانیه گذشته (پنجره لغزان)
+            for ($i = 0; $i < 10; $i++) {
+                $bucket = ($currentTime - $i) % 10;
+                $totalCalls += (int)$cache->get("retry_budget:total_calls:{$bucket}", 0);
+                $retries += (int)$cache->get("retry_budget:retries:{$bucket}", 0);
+            }
+            
+            // Cold start allowance: اگر درخواست‌ها کم است، تا ۵ تلاش مجدد را مجاز کن
             if ($totalCalls < 50 && $retries < 5) {
-                $cache->increment($retriesKey, 1, $window);
+                $currentBucket = $currentTime % 10;
+                $cache->increment("retry_budget:retries:{$currentBucket}", 1, 10);
                 return true;
             }
             
-            // Enforce strict 10% retry budget
+            // اعمال محدودیت سخت‌گیرانه ۱۰٪ بودجه تلاش مجدد
             if ($retries >= (int)($totalCalls * 0.10)) {
-                return false; // Budget exhausted
+                return false; // بودجه به اتمام رسیده است
             }
             
-            // Consume budget
-            $cache->increment($retriesKey, 1, $window);
+            // مصرف بودجه در سطل ثانیه جاری
+            $currentBucket = $currentTime % 10;
+            $cache->increment("retry_budget:retries:{$currentBucket}", 1, 10);
             return true;
         } catch (\Throwable) {
             return true; // Safe fail-open for budget tracking failures
@@ -111,7 +117,8 @@ class RetryPolicy
     private function recordAttempt(): void
     {
         try {
-            Cache::getInstance()->increment('retry_budget:total_calls', 1, 10);
+            $currentBucket = time() % 10;
+            Cache::getInstance()->increment("retry_budget:total_calls:{$currentBucket}", 1, 10);
         } catch (\Throwable) {
             // Safe ignore
         }
