@@ -85,7 +85,8 @@ class Cache
         }
 
         // Legacy serialized payloads: allow specified classes (e.g. stdClass)
-        $value = @unserialize($raw, ['allowed_classes' => !empty($allowedClasses) ? $allowedClasses : false]);
+        $allowed = empty($allowedClasses) ? [\stdClass::class] : $allowedClasses;
+        $value = @unserialize($raw, ['allowed_classes' => $allowed]);
 
         // distinguish unserialize failure from valid serialized false ("b:0;")
         if ($value === false && $raw !== 'b:0;') {

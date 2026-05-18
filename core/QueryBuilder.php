@@ -17,6 +17,7 @@ class QueryBuilder
     private $where = [];
     private $orderBy = [];
     private $groupBy = [];
+    private $groupByRaw = [];
     private $limit;
     private $offset;
     private $join = [];
@@ -83,12 +84,68 @@ class QueryBuilder
         return $this;
     }
 
+    private function validateRawSql(string $sql): void
+    {
+        // Block SQL comments to prevent evasion tricks
+        if (str_contains($sql, '--') || str_contains($sql, '/*') || str_contains($sql, '#')) {
+            throw new \InvalidArgumentException("SQL comments are not allowed in raw queries");
+        }
+        
+        $dangerous = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'EXEC', 'UNION', 'TRUNCATE', 'RENAME', 'GRANT', 'REVOKE'];
+        foreach ($dangerous as $keyword) {
+            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $sql)) {
+                throw new \InvalidArgumentException("Dangerous SQL keyword detected: $keyword");
+            }
+        }
+    }
+
     /**
      * افزودن عبارت SQL خام در بخش SELECT
      */
     public function selectRaw(string $expression)
     {
+        $this->validateRawSql($expression);
         $this->selectRaw[] = $expression;
+        return $this;
+    }
+
+    /**
+     * افزودن عبارت SQL خام در بخش WHERE
+     */
+    public function whereRaw(string $sql, array $bindings = []): self
+    {
+        $this->validateRawSql($sql);
+        $this->where[] = [
+            'type' => 'RAW',
+            'sql' => $sql,
+            'bindings' => $bindings,
+            'boolean' => 'AND'
+        ];
+        return $this;
+    }
+
+    /**
+     * افزودن عبارت SQL خام در بخش OR WHERE
+     */
+    public function orWhereRaw(string $sql, array $bindings = []): self
+    {
+        $this->validateRawSql($sql);
+        $this->where[] = [
+            'type' => 'RAW',
+            'sql' => $sql,
+            'bindings' => $bindings,
+            'boolean' => 'OR'
+        ];
+        return $this;
+    }
+
+    /**
+     * افزودن عبارت SQL خام در بخش GROUP BY
+     */
+    public function groupByRaw(string $expression): self
+    {
+        $this->validateRawSql($expression);
+        $this->groupByRaw[] = $expression;
         return $this;
     }
 
@@ -751,12 +808,21 @@ class QueryBuilder
         }
 
         // GROUP BY
-        if (!empty($this->groupBy)) {
-            $sql .= " GROUP BY " . implode(', ', array_map(function($col) {
+        if (!empty($this->groupBy) || !empty($this->groupByRaw)) {
+            $groups = array_map(function($col) {
+                if (strpos($col, '(') !== false || strpos($col, ' ') !== false) {
+                    return $col; // Expression (e.g. HOUR(created_at))
+                }
                 return strpos($col, '.') !== false 
                     ? str_replace('.', '`.`', '`' . $col . '`')
                     : '`' . $col . '`';
-            }, $this->groupBy));
+            }, $this->groupBy);
+            
+            if (!empty($this->groupByRaw)) {
+                $groups = array_merge($groups, $this->groupByRaw);
+            }
+            
+            $sql .= " GROUP BY " . implode(', ', $groups);
         }
         
         // ORDER BY
@@ -806,6 +872,13 @@ class QueryBuilder
         $conditions = [];
         
         foreach ($this->where as $index => $condition) {
+            if ($condition['type'] === 'RAW') {
+                $type = $index === 0 ? '' : " {$condition['boolean']} ";
+                $conditions[] = $type . "({$condition['sql']})";
+                $bindings = array_merge($bindings, $condition['bindings']);
+                continue;
+            }
+
             $type = $index === 0 ? '' : " {$condition['type']} ";
             
             if ($condition['operator'] === 'NESTED') {
@@ -889,6 +962,7 @@ class QueryBuilder
         $this->where = [];
         $this->orderBy = [];
         $this->groupBy = [];
+        $this->groupByRaw = [];
         $this->limit = null;
         $this->offset = null;
         $this->join = [];

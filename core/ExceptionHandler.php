@@ -14,7 +14,8 @@ use Core\Exceptions\SecurityException;
 class ExceptionHandler
 {
 	
-	private static bool $handlingException = false;
+    private static int $exceptionDepth = 0;
+    private const MAX_RECURSION = 3;
     public static function register(): void
     {
         // Do not register exception handler under PHPUnit/testing environment
@@ -120,23 +121,22 @@ private static function latestDbFailureContext(): ?array
      */
     public static function handle(\Throwable $exception): void
 {
-    if (self::$handlingException) {
+    self::$exceptionDepth++;
+    if (self::$exceptionDepth > self::MAX_RECURSION) {
         self::fallbackLog('exception.recursive.detected', [
             'message' => $exception->getMessage(),
         ]);
         
         // M27 Fix: ثبت بلادرنگ خطای تودرتو و بازگشتی درون صف اضطراری جهت جلوگیری از هدر رفت دیباگ
         self::logToEmergencySentry(
-            'Recursive Exception Detected: ' . $exception->getMessage(),
+            'Recursive Exception Limit Exceeded: ' . $exception->getMessage(),
             $exception->getTraceAsString(),
-            'CRITICAL_RECURSIVE'
+            'CRITICAL_RECURSIVE_LIMIT'
         );
         
         http_response_code(500);
-        die('critical system error');
+        die('critical system error: recursion loop');
     }
-
-    self::$handlingException = true;
 
     try {
         // ✅ استفاده صحیح از Logger - بدون $this
@@ -199,7 +199,7 @@ private static function latestDbFailureContext(): ?array
         http_response_code(500);
         die('system error');
     } finally {
-        self::$handlingException = false;
+        self::$exceptionDepth--;
     }
 }
 

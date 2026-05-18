@@ -94,10 +94,11 @@ class Session
             $this->started = true;
 
             if (!isset($_SESSION['_initiated'])) {
+                session_regenerate_id(true);
                 $_SESSION['_initiated'] = true;
             }
 
-        $this->validateFingerprint();
+            $this->validateFingerprint();
         } finally {
             $this->isStarting = false;
         }

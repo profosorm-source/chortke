@@ -93,6 +93,16 @@ class IdempotencyKey
         }
 
         $logId = uniqid('IDEM_', true);
+        $lockKey = "idempotency_lock:{$userId}:" . hash('sha256', $key);
+        $cache = Cache::getInstance();
+        $isLocked = false;
+
+        if ($retryCount === 0) {
+            if (!$cache->lock($lockKey, 30, 5)) {
+                throw new \RuntimeException("Concurrency lock failed. Another request is being processed.", 409);
+            }
+            $isLocked = true;
+        }
 
         try {
             // CORE-048: Start a dedicated DB transaction so SELECT FOR UPDATE holds a real row lock
@@ -106,12 +116,13 @@ class IdempotencyKey
             ];
             $encodedSignature = json_encode($payloadSignature, JSON_UNESCAPED_UNICODE);
 
-            // FIX C-1: ابتدا INSERT IGNORE می‌کنیم تا ردیف وجود داشته باشد
-            // سپس با SELECT FOR UPDATE قفل می‌گیریم — این race condition را حذف می‌کند.
-            $insertSql = "INSERT IGNORE INTO {$this->table}
+            // FIX C-1: ابتدا INSERT با ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id) می‌کنیم
+            // تا شناسه دقیق سطر را بگیریم و با FOR UPDATE قفل کنیم
+            $insertSql = "INSERT INTO {$this->table}
                           (`key`, `user_id`, `action`, `status`, `request_data`, `created_at`, `expires_at`)
                           VALUES (:key, :user_id, :action, 'processing', :request_data, NOW(),
-                                  DATE_ADD(NOW(), INTERVAL " . self::CLEANUP_DAYS . " DAY))";
+                                  DATE_ADD(NOW(), INTERVAL " . self::CLEANUP_DAYS . " DAY))
+                          ON DUPLICATE KEY UPDATE `id` = LAST_INSERT_ID(`id`)";
 
             $stmt = $this->db->prepare($insertSql);
             $stmt->execute([
@@ -121,15 +132,16 @@ class IdempotencyKey
                 'request_data' => $encodedSignature,
             ]);
 
-            $wasInserted = $stmt->rowCount() > 0;
+            $lastId = (int)$this->db->lastInsertId();
+            $wasInserted = ($stmt->rowCount() === 1);
 
             // حالا با FOR UPDATE وضعیت واقعی را می‌خوانیم
             $selectSql = "SELECT * FROM {$this->table}
-                          WHERE `key` = :key AND `user_id` = :user_id
+                          WHERE `id` = :id
                           FOR UPDATE";
 
             $stmt = $this->db->prepare($selectSql);
-            $stmt->execute(['key' => $key, 'user_id' => $userId]);
+            $stmt->execute(['id' => $lastId]);
             $existing = $stmt->fetch(\PDO::FETCH_ASSOC);
 
             if (!$existing) {
@@ -252,37 +264,42 @@ class IdempotencyKey
                 (int)$e->getCode(),
                 $e
             );
+        } finally {
+            if ($isLocked) {
+                $cache->unlock($lockKey);
+            }
         }
     }
 
     protected function logEvent(string $event, array $context = [], string $level = 'info'): void
-{
-    if (function_exists('logger')) {
-        $payload = array_merge(['channel' => 'idempotency'], $context);
+    {
+        if (function_exists('logger')) {
+            $payload = array_merge(['channel' => 'idempotency'], $context);
 
-        if ($level === 'error') {
-            logger()->error($event, $payload);
+            if ($level === 'error') {
+                logger()->error($event, $payload);
+                return;
+            }
+
+            if ($level === 'warning') {
+                logger()->warning($event, $payload);
+                return;
+            }
+            logger()->info($event, $payload);
             return;
         }
 
-        if ($level === 'warning') {
-    logger()->warning($event, $payload);
-    return;
-}
-logger()->info($event, $payload);
-        return;
+        $line = '[' . date('Y-m-d H:i:s') . '] ' . strtoupper($level) . ' ' . $event . ' ' . json_encode($context, JSON_UNESCAPED_UNICODE) . PHP_EOL;
+        @file_put_contents(__DIR__ . '/../storage/logs/_idempotency_fallback.log', $line, FILE_APPEND | LOCK_EX);
     }
 
-    $line = '[' . date('Y-m-d H:i:s') . '] ' . strtoupper($level) . ' ' . $event . ' ' . json_encode($context, JSON_UNESCAPED_UNICODE) . PHP_EOL;
-    @file_put_contents(__DIR__ . '/../storage/logs/_idempotency_fallback.log', $line, FILE_APPEND | LOCK_EX);
-}
     /**
      * به‌روزرسانی وضعیت کلید
      */
     private function updateStatus(string $key, int $userId, string $status, ?array $metadata = null): bool
     {
         $sql = "UPDATE {$this->table} 
-                SET `status` = :status";
+                SET `status` = :status, `created_at` = NOW()";
         
         $params = [
             'key' => $key,

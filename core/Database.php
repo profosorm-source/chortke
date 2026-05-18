@@ -21,28 +21,57 @@ class Database
     private ?\App\Services\Sentry\ErrorMonitoring\SentryErrorMonitor $sentryMonitor = null; // M3 Fix: کش کلاینت مانیتورینگ جهت افزایش پرفورمنس کوئری‌ها
     private int $transactionLevel = 0; // H24 Fix: شمارنده پشته تراکنش‌ها جهت جلوگیری از Partial Commit در معماری تودرتو
 
+    private int $lastPingTime = 0;
+    private const PING_INTERVAL = 60; // 60 seconds
+    private array $config;
+
     /**
      * Constructor (Private)
      * M4 Fix: رفع منقضی شدن PHP 8.1+ با تبدیل به تایپ نال‌پذیر
      */
     private function __construct(?array $dbConfig = null)
     {
-        $config = $dbConfig ?? config('database');
-        
-        $dsn = "mysql:host={$config['host']};port={$config['port']};dbname={$config['name']};charset={$config['charset']}";
+        $this->config = $dbConfig ?? config('database');
+        try {
+            $this->reconnect();
+        } catch (\PDOException $e) {
+            // M5 Fix: استفاده از RuntimeException به جای کلاس والد اکسپشن جهت رعایت تمیزی در سلسله مراتب خطاها
+            throw new \RuntimeException("Database connection failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+        }
+    }
+
+    private function reconnect(): void
+    {
+        $dsn = "mysql:host={$this->config['host']};port={$this->config['port']};dbname={$this->config['name']};charset={$this->config['charset']}";
         
         $options = [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_OBJ, // ✅ Object به جای Array
             \PDO::ATTR_EMULATE_PREPARES => false,
-            \PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES {$config['charset']} COLLATE utf8mb4_unicode_ci"
+            \PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES {$this->config['charset']} COLLATE utf8mb4_unicode_ci"
         ];
         
-        try {
-            $this->pdo = new \PDO($dsn, $config['user'], $config['pass'], $options);
-        } catch (\PDOException $e) {
-            // M5 Fix: استفاده از RuntimeException به جای کلاس والد اکسپشن جهت رعایت تمیزی در سلسله مراتب خطاها
-            throw new \RuntimeException("Database connection failed: " . $e->getMessage(), (int)$e->getCode(), $e);
+        $this->pdo = new \PDO($dsn, $this->config['user'], $this->config['pass'], $options);
+    }
+
+    public function ensureConnected(): void
+    {
+        if (time() - $this->lastPingTime > self::PING_INTERVAL) {
+            try {
+                if ($this->pdo) {
+                    $this->pdo->query('SELECT 1');
+                } else {
+                    $this->reconnect();
+                }
+                $this->lastPingTime = time();
+            } catch (\PDOException $e) {
+                try {
+                    $this->reconnect();
+                    $this->lastPingTime = time();
+                } catch (\Throwable $ex) {
+                    throw new \RuntimeException("Database reconnection failed: " . $ex->getMessage(), (int)$ex->getCode(), $ex);
+                }
+            }
         }
     }
 
@@ -178,6 +207,8 @@ private static function recordSqlFailure(string $event, array $context): void
     {
         if (self::$instance === null) {
             self::$instance = new self($dbConfig);
+        } elseif ($dbConfig !== null && self::$instance->config !== $dbConfig) {
+            self::$instance = new self($dbConfig);
         }
         
         return self::$instance;
@@ -244,6 +275,8 @@ public function fetchColumn(string $sql, array $params = [], int $column = 0)
      */
     private function executeStatement(string $sql, array $params, string $failureEvent): \PDOStatement
     {
+        $this->ensureConnected();
+
         self::$queryDepth++;
         if (self::$queryDepth > 100) {
             self::$queryDepth--;
@@ -277,6 +310,39 @@ public function fetchColumn(string $sql, array $params = [], int $column = 0)
 
             return $stmt;
         } catch (\PDOException $e) {
+            // Check if connection was lost and queryDepth is low to retry safely
+            $message = $e->getMessage();
+            $lostConnection = false;
+            $lostKeywords = ['gone away', 'lost connection', 'refused', 'timeout', 'deadlock', 'packets out of order'];
+            foreach ($lostKeywords as $kw) {
+                if (stripos($message, $kw) !== false) {
+                    $lostConnection = true;
+                    break;
+                }
+            }
+
+            if ($lostConnection && self::$queryDepth <= 1) {
+                try {
+                    $this->reconnect();
+                    $this->lastPingTime = time();
+                    
+                    // Retry once
+                    $stmt = $this->pdo->prepare($sql);
+                    foreach ($params as $key => $value) {
+                        $param = is_int($key) ? $key + 1 : ':' . ltrim((string)$key, ':');
+                        $type = \PDO::PARAM_STR;
+                        if (is_int($value))        $type = \PDO::PARAM_INT;
+                        elseif (is_bool($value))   $type = \PDO::PARAM_BOOL;
+                        elseif ($value === null)   $type = \PDO::PARAM_NULL;
+                        $stmt->bindValue($param, $value, $type);
+                    }
+                    $stmt->execute();
+                    return $stmt;
+                } catch (\Throwable $retryEx) {
+                    // Fall through to regular logging & exception
+                }
+            }
+
             $ctx = $this->buildSqlErrorContext($sql, $params, $e);
             self::$lastSqlErrorContext = $ctx;
             self::fallbackLog($failureEvent, $ctx);
