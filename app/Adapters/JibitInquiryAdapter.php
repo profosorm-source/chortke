@@ -17,11 +17,13 @@ class JibitInquiryAdapter implements BankInquiryAdapter
     private string $baseUrl = 'https://api.jibit.ir/v1/';
     private LoggerInterface $logger;
     private \Core\Cache $cache;
+    private \Core\CircuitBreaker $circuitBreaker;
 
     public function __construct(LoggerInterface $logger, \Core\Cache $cache)
     {
         $this->logger = $logger;
         $this->cache  = $cache;
+        $this->circuitBreaker = new \Core\CircuitBreaker($cache);
         // دریافت متغیرهای اتصال از .env
         $this->apiKey = config('services.jibit.api_key');
         $this->apiSecret = config('services.jibit.api_secret');
@@ -48,40 +50,71 @@ class JibitInquiryAdapter implements BankInquiryAdapter
         }
 
         $iban = strtoupper(trim($iban));
+        $cacheKey = 'iban_inquiry:' . hash('sha256', $iban);
+
+        // 1. Check cache first
+        try {
+            $cached = $this->cache->get($cacheKey);
+            if ($cached !== null) {
+                $decoded = is_string($cached) ? json_decode($cached, true) : $cached;
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+        } catch (\Throwable $ignore) {}
         
         try {
-            // ۱. دریافت Token
-            $token = $this->getAccessToken();
-            if (!$token) {
-                return ['success' => false, 'message' => 'خطا در احراز هویت با سرویس بانکی.'];
+            // 2. Execute within Circuit Breaker and retry with backoff
+            $result = $this->circuitBreaker->call('jibit', function() use ($iban) {
+                return $this->retryWithBackoff(function() use ($iban) {
+                    // ۱. دریافت Token
+                    $token = $this->getAccessToken();
+                    if (!$token) {
+                        throw new \RuntimeException('خطا در احراز هویت با سرویس بانکی.');
+                    }
+
+                    // ۲. درخواست استعلام شبا
+                    $response = $this->makeRequest('GET', 'services/iban?value=' . $iban, [], $token);
+
+                    if (isset($response['name'])) {
+                        return [
+                            'success' => true,
+                            'owner_name' => $response['name'] . ' ' . ($response['familyName'] ?? ''),
+                            'bank' => $response['bank'] ?? null,
+                            'message' => 'استعلام با موفقیت انجام شد.'
+                        ];
+                    }
+
+                    $errorMessage = $response['error']['message'] ?? 'پاسخ نامعتبر از سمت سرویس بانکی.';
+                    throw new \RuntimeException($errorMessage);
+                }, 3, 500);
+            });
+
+            // 3. Cache successful results for 24 hours (1440 minutes)
+            if (!empty($result['success'])) {
+                try {
+                    $this->cache->put($cacheKey, $result, 1440);
+                } catch (\Throwable $ignore) {}
             }
 
-            // ۲. درخواست استعلام شبا
-            // بر اساس داکیومنت جی‌بیت: GET /v1/services/iban?value=IR...
-            $response = $this->makeRequest('GET', 'services/iban?value=' . $iban, [], $token);
-
-            if (isset($response['name'])) {
-                return [
-                    'success' => true,
-                    'owner_name' => $response['name'] . ' ' . ($response['familyName'] ?? ''),
-                    'bank' => $response['bank'] ?? null,
-                    'message' => 'استعلام با موفقیت انجام شد.'
-                ];
-            }
-
-            return [
-                'success' => false,
-                'message' => $response['error']['message'] ?? 'پاسخ نامعتبر از سمت سرویس بانکی.'
-            ];
+            return $result;
 
         } catch (\Throwable $e) {
             $this->logger->error('jibit.inquiry.failed', [
                 'iban' => $iban,
                 'error' => $e->getMessage()
             ]);
+
+            if (strpos($e->getMessage(), 'Circuit breaker') !== false) {
+                return [
+                    'success' => false,
+                    'message' => 'سرویس استعلام موقتاً در دسترس نیست. لطفا بعدا تلاش کنید.'
+                ];
+            }
+
             return [
                 'success' => false,
-                'message' => 'عدم برقراری ارتباط با سرویس استعلام شبا.'
+                'message' => 'عدم برقراری ارتباط با سرویس استعلام شبا: ' . $e->getMessage()
             ];
         }
     }
@@ -137,6 +170,26 @@ class JibitInquiryAdapter implements BankInquiryAdapter
         }
 
         return json_decode($response, true) ?: null;
+    }
+
+    /**
+     * Retry a callable with exponential backoff
+     */
+    private function retryWithBackoff(callable $operation, int $maxAttempts = 3, int $initialDelayMs = 500)
+    {
+        $attempts = 0;
+        while (true) {
+            try {
+                $attempts++;
+                return $operation();
+            } catch (\Throwable $e) {
+                if ($attempts >= $maxAttempts) {
+                    throw $e;
+                }
+                $delay = $initialDelayMs * pow(2, $attempts - 1);
+                usleep($delay * 1000);
+            }
+        }
     }
 }
 
