@@ -189,13 +189,15 @@ class LoginRiskService extends \App\Services\BaseService
             if ($redisAvailable) {
                 try {
                     $raw = $redis->get($key);
-                    $data = $raw ? json_decode($raw, true) : null;
+                    $data = $this->decodeSignedPayload($raw);
                     if (!$data || !is_array($data) || (time() - ($data['first_at'] ?? 0)) > $windowSeconds) {
                         $data = ['count' => 0, 'first_at' => time()];
                     }
                     $data['count']++;
                     $data['last_at'] = time();
-                    $redis->set($key, json_encode($data), $windowSeconds);
+                    $jsonData = json_encode($data);
+                    $mac = hash_hmac('sha256', $jsonData, secure_key());
+                    $redis->set($key, $mac . '|' . $jsonData, $windowSeconds);
                     continue;
                 } catch (\Throwable $e) {
                     $this->logger->warning('login_risk.redis_write_failed', ['error' => $e->getMessage()]);
@@ -295,7 +297,7 @@ class LoginRiskService extends \App\Services\BaseService
         if ($redisAvailable) {
             try {
                 $raw = $redis->get($ipKey);
-                $ipData = $raw ? json_decode($raw, true) : null;
+                $ipData = $this->decodeSignedPayload($raw);
                 $ipCount = $this->extractValidCount($ipData, $windowSeconds);
             } catch (\Throwable $e) {
                 $redisAvailable = false;
@@ -316,7 +318,7 @@ class LoginRiskService extends \App\Services\BaseService
             if ($redisAvailable) {
                 try {
                     $raw = $redis->get($idKey);
-                    $idData = $raw ? json_decode($raw, true) : null;
+                    $idData = $this->decodeSignedPayload($raw);
                     $idCount = $this->extractValidCount($idData, $windowSeconds);
                 } catch (\Throwable $e) {
                     $redisAvailable = false;
@@ -341,6 +343,25 @@ class LoginRiskService extends \App\Services\BaseService
         if (!$data || !is_array($data)) return 0;
         if ((time() - ($data['first_at'] ?? 0)) > $windowSeconds) return 0;
         return (int)($data['count'] ?? 0);
+    }
+
+    private function decodeSignedPayload(?string $raw): ?array
+    {
+        if (!$raw || !is_string($raw)) {
+            return null;
+        }
+
+        if (strpos($raw, '|') === false) {
+            return json_decode($raw, true) ?: null;
+        }
+
+        [$mac, $jsonData] = explode('|', $raw, 2);
+        if (!hash_equals(hash_hmac('sha256', $jsonData, secure_key()), $mac)) {
+            $this->logger->critical('login_risk.cache_tampered', ['raw' => substr($raw, 0, 128)]);
+            return null;
+        }
+
+        return json_decode($jsonData, true) ?: null;
     }
 
     private function buildKey(string $context, string $ip, ?string $identifier = null): string

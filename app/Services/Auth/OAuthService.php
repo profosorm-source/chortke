@@ -103,15 +103,8 @@ class OAuthService extends \App\Services\BaseService
         }
 
         $stored = $this->session->get(SessionKeys::OAUTH_STATE);
-        
-        // Atomic check-and-invalidate pattern
-        if ($this->session->has(SessionKeys::OAUTH_STATE . '_used')) {
-            $usedAt = (int)$this->session->get(SessionKeys::OAUTH_STATE . '_used');
-            if (time() - $usedAt < 2) { // If used within last 2 seconds
-                return ['success' => false, 'message' => 'State already used (replay detected)'];
-            }
-        }
-        $this->session->set(SessionKeys::OAUTH_STATE . '_used', time()); // Mark as used
+        $this->session->remove(SessionKeys::OAUTH_STATE);
+        $this->session->remove(SessionKeys::OAUTH_STATE . '_used');
 
         try {
             if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
@@ -464,15 +457,8 @@ class OAuthService extends \App\Services\BaseService
         }
 
         $stored = $this->session->get(SessionKeys::OAUTH_STATE);
-        
-        // Atomic check-and-invalidate pattern
-        if ($this->session->has(SessionKeys::OAUTH_STATE . '_used')) {
-            $usedAt = (int)$this->session->get(SessionKeys::OAUTH_STATE . '_used');
-            if (time() - $usedAt < 2) { // If used within last 2 seconds
-                return ['success' => false, 'message' => 'State already used (replay detected)'];
-            }
-        }
-        $this->session->set(SessionKeys::OAUTH_STATE . '_used', time()); // Mark as used
+        $this->session->remove(SessionKeys::OAUTH_STATE);
+        $this->session->remove(SessionKeys::OAUTH_STATE . '_used');
 
         try {
             if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {

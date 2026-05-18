@@ -84,8 +84,8 @@ class SessionService extends \App\Services\BaseService
             }
         }
 
-        // 🔒 DISTRIBUTED LOCK: Prevent race conditions across multiple servers
-        $lockResource = "session:{$userId}:" . md5($sessionId);
+        // 🔒 DISTRIBUTED LOCK: Prevent race conditions across multiple concurrent login attempts for the same user
+        $lockResource = "session_limit:{$userId}";
         $lock = $this->lockService->acquire($lockResource, ttl: 30, waitTimeout: 5);
 
         if (!$lock['acquired']) {
