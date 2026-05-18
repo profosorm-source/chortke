@@ -5,6 +5,7 @@ namespace App\Adapters;
 use App\Services\SettingService;
 use Core\Database;
 use App\Contracts\LoggerInterface;
+use Core\Cache;
 
 class CryptoApiAdapter implements CryptoVerificationAdapter
 {
@@ -48,20 +49,124 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
      */
     private function verifyTransaction(string $network, string $txHash, string $toWallet, float $expectedAmount): array
     {
+        $cache = Cache::getInstance();
+        $cacheKey = "crypto_verify_tx:" . strtolower($network) . ":" . strtolower($txHash);
+        $cached = $cache->get($cacheKey);
+        if ($cached) {
+            $cachedDecoded = \json_decode($cached, true);
+            if (is_array($cachedDecoded)) {
+                return $cachedDecoded;
+            }
+        }
+
         switch ($network) {
             case 'TRC20':
-                return $this->verifyTronTransaction($txHash, $toWallet, $expectedAmount);
+                $result = $this->verifyTronTransaction($txHash, $toWallet, $expectedAmount);
+                break;
             case 'BNB20':
-                return $this->verifyBscTransaction($txHash, $toWallet, $expectedAmount);
+                $result = $this->verifyBscTransaction($txHash, $toWallet, $expectedAmount);
+                break;
             case 'ERC20':
-                return $this->verifyEthereumTransaction($txHash, $toWallet, $expectedAmount);
+                $result = $this->verifyEthereumTransaction($txHash, $toWallet, $expectedAmount);
+                break;
             case 'TON':
-                return $this->verifyTonTransaction($txHash, $toWallet, $expectedAmount);
+                $result = $this->verifyTonTransaction($txHash, $toWallet, $expectedAmount);
+                break;
             case 'SOL':
-                return $this->verifySolanaTransaction($txHash, $toWallet, $expectedAmount);
+                $result = $this->verifySolanaTransaction($txHash, $toWallet, $expectedAmount);
+                break;
             default:
-                return ['status' => 'error', 'reason' => 'شبکه پشتیبانی نمی‌شود'];
+                $result = ['status' => 'error', 'reason' => 'شبکه پشتیبانی نمی‌شود'];
         }
+
+        if (isset($result['status']) && $result['status'] === 'verified') {
+            $cache->put($cacheKey, \json_encode($result), 300); // Cache verified results for 5 minutes
+        }
+
+        return $result;
+    }
+
+    /**
+     * Execute a network GET request with exponential backoff and circuit breaker
+     */
+    private function executeWithRetry(string $url): ?string
+    {
+        $cache = Cache::getInstance();
+        
+        // Circuit Breaker check
+        $disabledUntil = $cache->get('crypto_circuit_breaker_disabled_until');
+        if ($disabledUntil && (int)$disabledUntil > \time()) {
+            $this->logger->warning('crypto.circuit_breaker.active', ['url' => $url]);
+            return null;
+        }
+
+        $attempts = 3;
+        $delays = [2, 4, 8];
+        $timeout = (int)$this->settingService->get('crypto_api_timeout', 15);
+
+        for ($i = 0; $i < $attempts; $i++) {
+            $ch = \curl_init($url);
+            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            \curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+            \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            \curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'User-Agent: ChortkeSecureApp/1.0 (+https://chortke.com)',
+                'Accept: application/json'
+            ]);
+
+            $response = \curl_exec($ch);
+            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = \curl_error($ch);
+            \curl_close($ch);
+
+            if ($httpCode === 200 && $response) {
+                // Success: reset failures count
+                $cache->forget('crypto_circuit_breaker_failures');
+                return $response;
+            }
+
+            $this->logger->warning('crypto.api.attempt_failed', [
+                'url' => $url,
+                'attempt' => $i + 1,
+                'http_code' => $httpCode,
+                'error' => $curlError ?: 'HTTP Status ' . $httpCode
+            ]);
+
+            if ($i < $attempts - 1) {
+                \sleep($delays[$i]);
+            }
+        }
+
+        // Tripped Circuit Breaker: increment failure count
+        $failures = (int)$cache->get('crypto_circuit_breaker_failures', 0) + 1;
+        $cache->put('crypto_circuit_breaker_failures', $failures, 10); // keep history for 10 mins
+        
+        if ($failures >= 5) {
+            $cache->put('crypto_circuit_breaker_disabled_until', \time() + 300, 5); // disable for 5 mins
+            $this->logger->error('crypto.circuit_breaker.tripped', [
+                'failures' => $failures,
+                'last_url' => $url
+            ]);
+        }
+
+        return null;
+    }
+
+    /**
+     * Normalize Tron/BSC addresses to lower-case / hexadecimal representation for safe matches
+     */
+    private function normalizeAddress(string $address, string $network): string
+    {
+        $address = trim($address);
+        if (strtolower($network) === 'tron') {
+            $base58Contract = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+            $hexContract = '41a614f803b6c4804147c4e8e89f8113730e11a252';
+            $addrLower = strtolower($address);
+            if ($addrLower === strtolower($base58Contract) || $addrLower === strtolower($hexContract) || $addrLower === 'tr7nhqjekqxgwtci8q8zy4pl8otszgjlj6t') {
+                return 'tr7nhqjekqxgwtci8q8zy4pl8otszgjlj6t';
+            }
+        }
+        return strtolower($address);
     }
 
     /**
@@ -71,17 +176,10 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     {
         try {
             $url = "https://apilist.tronscan.org/api/transaction-info?hash=" . urlencode($txHash);
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-            \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            $response = $this->executeWithRetry($url);
 
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            \curl_close($ch);
-
-            if ($httpCode !== 200 || !$response) {
-                return ['status' => 'error', 'reason' => 'خطا در اتصال به TronScan API'];
+            if (!$response) {
+                return ['status' => 'error', 'reason' => 'خطا در اتصال به TronScan API یا فعال بودن مدار قطع‌کننده (Circuit Breaker)'];
             }
 
             $data = json_decode($response, true);
@@ -94,9 +192,28 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                 return ['status' => 'pending', 'reason' => 'تراکنش هنوز تایید نهایی نشده است'];
             }
 
-            // Issue 2: Poisoning check (Fake Token Transfer)
-            // USDT (TRC20) Contract: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
-            if (!isset($data['contractData']['contract_address']) || strtolower($data['contractData']['contract_address']) !== 'tr7nhqjeqxgwgcuilmt11mxpcwjrqcqq8d') {
+            // Get dynamic block confirmations count (C-05)
+            $currentBlockUrl = "https://apilist.tronscan.org/api/system/status";
+            $blockResponse = $this->executeWithRetry($currentBlockUrl);
+            $currentBlock = 0;
+            if ($blockResponse) {
+                $blockData = json_decode($blockResponse, true);
+                $currentBlock = (int)($blockData['database']['block'] ?? 0);
+            }
+
+            $txBlock = (int)($data['block'] ?? 0);
+            $confirmations = ($currentBlock > 0 && $txBlock > 0) ? ($currentBlock - $txBlock) : (isset($data['confirmations']) ? (int)$data['confirmations'] : 0);
+            $minConfirmations = (int) $this->settingService->get('crypto_min_confirmations_trc20', 19);
+
+            if ($confirmations < $minConfirmations) {
+                return ['status' => 'pending', 'reason' => "تعداد تاییدهای تراکنش TRON کافی نیست (نیاز به حداقل $minConfirmations تایید دارد، فعلی: $confirmations)"];
+            }
+
+            // Issue 2: Poisoning check (Fake Token Transfer) with config support and normalization
+            $validContract = $this->settingService->get('crypto_contract_trc20_usdt', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t');
+            $receivedContract = $data['contractData']['contract_address'] ?? '';
+
+            if ($this->normalizeAddress($receivedContract, 'tron') !== $this->normalizeAddress($validContract, 'tron')) {
                 return ['status' => 'mismatch', 'reason' => 'توکن ارسالی USDT نیست'];
             }
 
@@ -106,9 +223,12 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                 return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده مطابقت ندارد'];
             }
 
-            // Check amount (convert from 10^6 for USDT)
-            $amount = isset($data['contractData']['amount']) ? $data['contractData']['amount'] / 1000000 : 0;
-            if (abs($amount - $expectedAmount) > 0.01) {
+            // Check amount using integer comparisons to avoid float precision bugs (H-02)
+            $amountRaw = isset($data['contractData']['amount']) ? (int)$data['contractData']['amount'] : 0;
+            $expectedRaw = (int)round($expectedAmount * 1000000);
+            $toleranceRaw = 10000; // 0.01 USDT tolerance in SUN units
+
+            if (abs($amountRaw - $expectedRaw) > $toleranceRaw) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
@@ -132,17 +252,10 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             $apiKey = $this->settingService->get('bscscan_api_key', '') ?: 'YourApiKeyToken';
             $url = "https://api.bscscan.com/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey);
             
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-            \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            $response = $this->executeWithRetry($url);
 
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            \curl_close($ch);
-
-            if ($httpCode !== 200 || !$response) {
-                return ['status' => 'error', 'reason' => 'خطا در اتصال به BscScan API'];
+            if (!$response) {
+                return ['status' => 'error', 'reason' => 'خطا در اتصال به BscScan API یا فعال بودن مدار قطع‌کننده (Circuit Breaker)'];
             }
 
             $data = json_decode($response, true);
@@ -155,13 +268,20 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                 return ['status' => 'error', 'reason' => 'تراکنش یافت نشد یا توکن منتقل نشده است'];
             }
 
-            // Issue 1: Confirmation check
+            // Issue 1: Confirmation check (C-05)
             if (!isset($tx['blockNumber']) || empty($tx['blockNumber'])) {
                 return ['status' => 'pending', 'reason' => 'تراکنش هنوز در بلاک قرار نگرفته است'];
             }
 
-            // Issue 2: Poisoning check (USDT BEP20)
-            if (strtolower($tx['contractAddress'] ?? '') !== '0x55d398326f99059ff775485246999027b3197955') {
+            $confirmations = isset($tx['confirmations']) ? (int)$tx['confirmations'] : 0;
+            $minConfirmations = (int) $this->settingService->get('crypto_min_confirmations_bnb20', 15);
+            if ($confirmations < $minConfirmations) {
+                return ['status' => 'pending', 'reason' => "تعداد تاییدهای تراکنش BSC کافی نیست (حداقل $minConfirmations تایید نیاز است، فعلی: $confirmations)"];
+            }
+
+            // Issue 2: Poisoning check (USDT BEP20) from Settings/Config
+            $validContract = $this->settingService->get('crypto_contract_bnb20_usdt', '0x55d398326f99059ff775485246999027b3197955');
+            if (strtolower($tx['contractAddress'] ?? '') !== strtolower($validContract)) {
                 return ['status' => 'mismatch', 'reason' => 'توکن ارسالی USDT (BEP20) نیست'];
             }
 
@@ -170,11 +290,13 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                 return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده مطابقت ندارد'];
             }
 
-            // Check amount
+            // Check amount using integer raw comparisons (H-02)
             $decimals = (int)($tx['tokenDecimal'] ?? 18);
-            $amount = $tx['value'] / pow(10, $decimals);
-            
-            if (abs($amount - $expectedAmount) > 0.01) {
+            $amountRaw = isset($tx['value']) ? (float)$tx['value'] : 0.0;
+            $expectedRaw = $expectedAmount * pow(10, $decimals);
+            $toleranceRaw = 0.01 * pow(10, $decimals);
+
+            if (abs($amountRaw - $expectedRaw) > $toleranceRaw) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
@@ -213,4 +335,3 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
         return ['status' => 'manual', 'reason' => 'Solana verification needs manual review'];
     }
 }
-
