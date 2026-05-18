@@ -43,14 +43,24 @@ class Database
 
     private function reconnect(): void
     {
-        $dsn = "mysql:host={$this->config['host']};port={$this->config['port']};dbname={$this->config['name']};charset={$this->config['charset']}";
+        $dsn = "mysql:host={$this->config['host']};port={$this->config['port']};dbname={$this->config['name']};charset={$this->config['charset']};connect_timeout=5";
         
         $options = [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_OBJ, // ✅ Object به جای Array
             \PDO::ATTR_EMULATE_PREPARES => false,
-            \PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES {$this->config['charset']} COLLATE utf8mb4_unicode_ci"
+            \PDO::ATTR_TIMEOUT => 5, // ✅ Query timeout
         ];
+
+        if (defined('\PDO::MYSQL_ATTR_INIT_COMMAND')) {
+            $options[\PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES {$this->config['charset']} COLLATE utf8mb4_unicode_ci";
+        }
+        if (defined('\PDO::MYSQL_ATTR_READ_TIMEOUT')) {
+            $options[\PDO::MYSQL_ATTR_READ_TIMEOUT] = 10;
+        }
+        if (defined('\PDO::MYSQL_ATTR_WRITE_TIMEOUT')) {
+            $options[\PDO::MYSQL_ATTR_WRITE_TIMEOUT] = 10;
+        }
         
         $this->pdo = new \PDO($dsn, $this->config['user'], $this->config['pass'], $options);
     }
@@ -136,22 +146,30 @@ private function buildSqlErrorContext(string $sql, array $params, \Throwable $e)
         }
     }
 
-    return [
+    $context = [
         'error' => $e->getMessage(),
         'error_type' => get_class($e),
-        'sql' => mb_substr($sql, 0, 1500),
-        'params_count' => count($params),
-        'file' => $originFile,
-        'line' => $originLine,
-        'stack' => array_slice($stack, 0, 10),
-        'tables' => array_values(array_unique($tables)),
-        'unknown_column' => $unknownColumn,
         'request_id' => $_SERVER['HTTP_X_REQUEST_ID'] ?? null,
         'uri' => $_SERVER['REQUEST_URI'] ?? null,
-        'method' => $_SERVER['REQUEST_METHOD'] ?? null,
-        'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
-        'user_id' => function_exists('user_id') ? (user_id() ?: null) : null,
     ];
+
+    if (config('app.env') !== 'production') {
+        $context['sql'] = mb_substr($sql, 0, 1500);
+        $context['params_count'] = count($params);
+        $context['file'] = $originFile;
+        $context['line'] = $originLine;
+        $context['stack'] = array_slice($stack, 0, 10);
+        $context['tables'] = array_values(array_unique($tables));
+        $context['unknown_column'] = $unknownColumn;
+        $context['method'] = $_SERVER['REQUEST_METHOD'] ?? null;
+        $context['ip'] = $_SERVER['REMOTE_ADDR'] ?? null;
+        $context['user_id'] = function_exists('user_id') ? (user_id() ?: null) : null;
+    } else {
+        $context['sql_hash'] = hash('sha256', $sql);
+        $context['error_code'] = $e->getCode();
+    }
+
+    return $context;
 }
 
 private static function fallbackLog(string $event, array $context = []): void

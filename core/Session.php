@@ -297,12 +297,12 @@ private function invalidateSession(): void
      | Lifecycle
      * -------------------------*/
 
-    public function regenerate(): void
+    public function regenerate(bool $deleteOldSession = true): void
     {
         // M15 Fix: تضمین فعالیت سشن و بازنویسی اثرانگشت امنیتی به صورت همزمان با تغییر شناسه کاربری
         $this->ensureStarted();
         if (session_status() === PHP_SESSION_ACTIVE) {
-            session_regenerate_id(true);
+            session_regenerate_id($deleteOldSession);
         } else {
             $_SESSION['_session_id'] = bin2hex(random_bytes(16));
         }

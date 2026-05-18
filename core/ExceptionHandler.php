@@ -598,7 +598,23 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
     // Mask absolute paths for security
     $baseDir = realpath(__DIR__ . '/../');
     $maskPath = function($path) use ($baseDir) {
-        return str_replace($baseDir, '{ROOT}', $path);
+        if (empty($path)) {
+            return $path;
+        }
+        $path = str_replace($baseDir, '{ROOT}', $path);
+        return preg_replace([
+            '/\/home\/[^\/\s]+/',
+            '/\/var\/www\/[^\/\s]+/',
+            '/C:\\\\Users\\\\[^\/\s\\\\]+/i',
+            '/C:\\\\xampp\\\\[^\/\s\\\\]+/i',
+            '/\/usr\/share\/[^\/\s]+/',
+        ], [
+            '/home/{USER}',
+            '/var/www/{APP}',
+            'C:\\\\Users\\\\{USER}',
+            'C:\\\\{APP}',
+            '/usr/share/{PKG}',
+        ], $path);
     };
 
     $displayFile = $maskPath($file);

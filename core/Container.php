@@ -29,7 +29,9 @@ class Container
     /** @var array<string, object|null>  null = ثبت‌شده ولی هنوز build نشده */
     private array $singletons = [];
 
-    private $reflectionCache = [];
+    private array $reflectionCache = [];
+    private array $reflectionCacheUsage = [];
+    private const MAX_REFLECTION_CACHE = 500;
     private bool $isLoggingMissing = false;
 
     /** @var array<string, array<string>> */
@@ -213,13 +215,21 @@ class Container
     }
 
     if (!isset($this->reflectionCache[$concrete])) {
-        // M6 Fix: جلوگیری از رشد نامحدود حافظه با تعیین سقف ۵۰۰ آیتم برای کش رفلکشن
-        if (count($this->reflectionCache) >= 500) {
-            array_shift($this->reflectionCache);
+        if (count($this->reflectionCache) >= self::MAX_REFLECTION_CACHE) {
+            // Remove least recently used reflection class
+            asort($this->reflectionCacheUsage);
+            $leastUsed = array_key_first($this->reflectionCacheUsage);
+            if ($leastUsed !== null) {
+                unset(
+                    $this->reflectionCache[$leastUsed],
+                    $this->reflectionCacheUsage[$leastUsed]
+                );
+            }
         }
         $this->reflectionCache[$concrete] = new \ReflectionClass($concrete);
     }
 
+    $this->reflectionCacheUsage[$concrete] = microtime(true);
     $reflector = $this->reflectionCache[$concrete];
 
     if (!$reflector->isInstantiable()) {
@@ -438,6 +448,22 @@ class Container
     public function forget(string $abstract): void
     {
         unset($this->bindings[$abstract], $this->singletons[$abstract]);
+    }
+
+    /**
+     * Periodic cleanup for reflection cache to prevent memory leaks in long-running processes
+     */
+    public function cleanupReflectionCache(): void
+    {
+        $cutoff = microtime(true) - 3600; // 1 hour
+        foreach ($this->reflectionCacheUsage as $key => $time) {
+            if ($time < $cutoff) {
+                unset(
+                    $this->reflectionCache[$key],
+                    $this->reflectionCacheUsage[$key]
+                );
+            }
+        }
     }
 
     /** فهرست binding‌های ثبت‌شده — فقط برای Debug */
