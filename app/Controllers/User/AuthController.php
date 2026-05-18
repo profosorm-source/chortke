@@ -336,6 +336,10 @@ class AuthController extends BaseController
                 'ip' => $ip,
                 'reason' => $user ? 'invalid_code' : 'user_not_found'
             ]);
+
+            // HIGH FIX: Add random delay to prevent timing-based enumeration
+            usleep(random_int(50000, 150000));
+
             // HIGH-H-08 Fix: Standardized error message for all failure cases
             $this->session->setFlash('error', 'کد نامعتبر است یا منقضی شده.');
             $this->response->redirect(url('email/verify-code'));
