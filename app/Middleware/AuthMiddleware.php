@@ -137,7 +137,11 @@ class AuthMiddleware extends BaseMiddleware
             // تمدید فعالیت در Redis (در صورت در دسترس بودن)
             if ($redisAvailable) {
                 try {
-                    $this->redis->set($redisKey, (string)$now, $timeout + 60);
+                    $oldValue = $this->redis->getSet($redisKey, (string)$now);
+                    $this->redis->expire($redisKey, $timeout + 60);
+                    if ($oldValue !== null) {
+                        $lastActivityTime = (int)$oldValue;
+                    }
                 } catch (\Throwable) {
                     // If Redis write fails, continue with session-side tracking
                     $redisAvailable = false;

@@ -20,6 +20,7 @@ class ApiAuthMiddleware extends BaseMiddleware
 {
     private Database $db;
     private RateLimiter $rateLimiter;
+    private ?bool $secretVersionExpirySupported = null;
 
     public function __construct(Database $db, RateLimiter $rateLimiter)
     {
@@ -62,10 +63,22 @@ class ApiAuthMiddleware extends BaseMiddleware
         // CRITICAL-NEW-03 Fix: Prevent API Token Scope Privilege Escalation
         $tokenScopes = array_filter(explode(',', (string)($user->scopes ?? '')));
         $hasAdminOrWildcardScope = in_array('admin', $tokenScopes, true) || in_array('*', $tokenScopes, true);
-        $isUserAdmin = isset($user->role) && $user->role === 'admin';
 
-        if ($hasAdminOrWildcardScope && !$isUserAdmin) {
-            return $this->errorResponse('توکن نامعتبر است: دسترسی مدیر لغو شده است.', 403, 'PRIVILEGE_ESCALATION_PREVENTED');
+        if ($hasAdminOrWildcardScope) {
+            $currentUser = $this->db->fetch('SELECT role FROM users WHERE id = ? LIMIT 1', [(int)$user->id]);
+            $isUserAdmin = $currentUser && in_array($currentUser->role, ['admin', 'super_admin'], true);
+
+            if (!$isUserAdmin) {
+                try {
+                    $this->db->query('UPDATE api_tokens SET revoked = 1, revoked_at = NOW() WHERE id = ?', [(int)$user->token_id]);
+                } catch (\Throwable $e) {
+                    if (function_exists('logger')) {
+                        logger()->error('api_auth.revoke_failed_on_role_change', ['token_id' => $user->token_id, 'error' => $e->getMessage()]);
+                    }
+                }
+
+                return $this->errorResponse('توکن نامعتبر است: دسترسی مدیر لغو شده است.', 403, 'PRIVILEGE_ESCALATION_PREVENTED');
+            }
         }
 
         // ✅ بررسی اسکوپ‌های مورد نیاز (Scope Enforcement with hierarchy/inheritance)
@@ -309,6 +322,10 @@ class ApiAuthMiddleware extends BaseMiddleware
             $params[] = $requestingUserId;
         }
         
+        if ($this->isSecretVersionExpirySupported()) {
+            $query .= " AND (at.secret_version_expires_at IS NULL OR at.secret_version_expires_at > NOW())";
+        }
+
         $query .= " LIMIT 1";
         
         // Use prepared statements to prevent SQL injection
@@ -322,6 +339,22 @@ class ApiAuthMiddleware extends BaseMiddleware
         }
 
         return $result;
+    }
+
+    private function isSecretVersionExpirySupported(): bool
+    {
+        if ($this->secretVersionExpirySupported !== null) {
+            return $this->secretVersionExpirySupported;
+        }
+
+        try {
+            $row = $this->db->fetch("SHOW COLUMNS FROM api_tokens LIKE 'secret_version_expires_at'");
+            $this->secretVersionExpirySupported = (bool)$row;
+        } catch (\Throwable $e) {
+            $this->secretVersionExpirySupported = false;
+        }
+
+        return $this->secretVersionExpirySupported;
     }
 
     /**

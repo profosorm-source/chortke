@@ -81,6 +81,11 @@ class CorsMiddleware
 
             // HIGH-04 Fix: Instead of crashing on wildcard in credential origins, filter it out for security
             if (in_array('*', $credentialOrigins, true)) {
+                if (function_exists('logger')) {
+                    logger()->warning('cors.wildcard_in_credential_origins_removed', [
+                        'config' => $credentialOriginsRaw
+                    ]);
+                }
                 $credentialOrigins = array_filter($credentialOrigins, fn($o) => $o !== '*');
             }
             if (in_array($requestOrigin, $credentialOrigins, true)) {
