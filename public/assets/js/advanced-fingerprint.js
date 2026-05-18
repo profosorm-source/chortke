@@ -139,6 +139,9 @@ class AdvancedFingerprint {
      * فونت‌های نصب‌شده
      */
     async getInstalledFonts() {
+        if (document.fonts && document.fonts.ready) {
+            await document.fonts.ready;
+        }
         const baseFonts = ['monospace', 'sans-serif', 'serif'];
         const testFonts = [
             'Arial', 'Verdana', 'Courier New', 'Georgia', 'Times New Roman',
@@ -202,9 +205,23 @@ class AdvancedFingerprint {
      */
     async getHash() {
         const data = await this.collect();
-        const str = JSON.stringify(data);
+        const components = {
+            user_agent: data.user_agent || '',
+            language: data.language || '',
+            timezone: data.timezone || '',
+            screen: data.screen || '',
+            canvas: data.canvas || '',
+            webgl: data.webgl || '',
+            audio: data.audio || '',
+            fonts: Array.isArray(data.fonts) ? data.fonts.join(',') : (data.fonts || ''),
+            plugins: Array.isArray(data.plugins) ? data.plugins.join(',') : (data.plugins || ''),
+            touch_support: data.touch_support ? 'true' : 'false',
+            hardware_concurrency: String(data.hardware_concurrency || 'unknown'),
+            device_memory: String(data.device_memory || 'unknown')
+        };
+        const str = JSON.stringify(components);
         
-        // SHA-256 Hash (ساده)
+        // SHA-256 Hash
         const encoder = new TextEncoder();
         const dataBuffer = encoder.encode(str);
         const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);

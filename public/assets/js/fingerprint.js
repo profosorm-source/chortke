@@ -20,7 +20,7 @@
                 canvas: await this.getCanvasFingerprint(),
                 webgl: this.getWebGLFingerprint(),
                 audio: await this.getAudioFingerprint(),
-                fonts: this.getFonts(),
+                fonts: await this.getFonts(),
                 plugins: this.getPlugins(),
                 touch_support: this.getTouchSupport(),
                 hardware_concurrency: this.getHardwareConcurrency(),
@@ -161,7 +161,10 @@
         /**
          * فونت‌های نصب شده
          */
-        getFonts() {
+        async getFonts() {
+            if (document.fonts && document.fonts.ready) {
+                await document.fonts.ready;
+            }
             const baseFonts = ['monospace', 'sans-serif', 'serif'];
             const fontList = [
                 'Arial', 'Verdana', 'Times New Roman', 'Courier New',
@@ -297,6 +300,28 @@
         async send(endpoint = '/api/fingerprint') {
             try {
                 const data = await this.collect();
+                const components = {
+                    user_agent: data.user_agent || '',
+                    language: data.language || '',
+                    timezone: data.timezone || '',
+                    screen: data.screen || '',
+                    canvas: data.canvas || '',
+                    webgl: data.webgl || '',
+                    audio: data.audio || '',
+                    fonts: data.fonts || '',
+                    plugins: data.plugins || '',
+                    touch_support: data.touch_support || '',
+                    hardware_concurrency: String(data.hardware_concurrency || ''),
+                    device_memory: String(data.device_memory || '')
+                };
+                
+                // SHA-256 Hash
+                const str = JSON.stringify(components);
+                const encoder = new TextEncoder();
+                const dataBuffer = encoder.encode(str);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
                 
                 const response = await fetch(endpoint, {
                     method: 'POST',
@@ -304,7 +329,10 @@
                         'Content-Type': 'application/json',
                         'X-Requested-With': 'XMLHttpRequest'
                     },
-                    body: JSON.stringify(data)
+                    body: JSON.stringify({
+                        components: components,
+                        hash: hashHex
+                    })
                 });
                 
                 if (!response.ok) {

@@ -189,6 +189,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 scoreInput.name = 'behavioral_score';
                 scoreInput.value = result.score;
                 form.appendChild(scoreInput);
+                
+                // اضافه کردن رویدادهای خام برای بررسی سرور
+                const eventsInput = document.createElement('input');
+                eventsInput.type = 'hidden';
+                eventsInput.name = 'events';
+                eventsInput.value = JSON.stringify(window.behavioralCaptcha.events);
+                form.appendChild(eventsInput);
             });
         }
     }
