@@ -64,11 +64,11 @@ class CryptoDeposit extends Model
 
     public function getManualReviewDeposits(int $limit = 50, int $offset = 0): array
     {
-        $limit  = \max(1, (int)$limit);
+        $limit  = \min(\max(1, (int)$limit), 100);
         $offset = \max(0, (int)$offset);
 
         $sql = "SELECT d.*, u.full_name, u.email
-                FROM " . static::$table . " d
+                FROM " . static::$table . " d FORCE INDEX (idx_status_created)
                 LEFT JOIN users u ON d.user_id = u.id
                 WHERE d.verification_status = 'manual_review'
                 ORDER BY d.created_at ASC
@@ -84,7 +84,7 @@ class CryptoDeposit extends Model
 
     public function getAll(?string $status = null, ?string $network = null, int $limit = 50, int $offset = 0): array
     {
-        $limit  = \max(1, (int)$limit);
+        $limit  = \min(\max(1, (int)$limit), 100);
         $offset = \max(0, (int)$offset);
 
         $sql = "SELECT d.*, u.full_name, u.email
