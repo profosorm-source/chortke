@@ -63,11 +63,22 @@ class VelocityCheckService extends \App\Services\BaseService
         ],
     ];
     
-    public function __construct(VelocityAndScoreModel $model, LoggerInterface $logger, Cache $cache)
-    {
+    private \App\Services\DistributedLockService $lockService;
+    private array $activeLocks = [];
+
+    public function __construct(
+        VelocityAndScoreModel $model, 
+        LoggerInterface $logger, 
+        Cache $cache,
+        \App\Services\DistributedLockService $lockService
+    ) {
         parent::__construct($logger);
         $this->model = $model;
         $this->cache = $cache;
+        $this->lockService = $lockService;
+
+        // Register shutdown function to release any unreleased locks gracefully
+        register_shutdown_function([$this, 'releaseAllLocks']);
     }
     
     /**
@@ -79,9 +90,24 @@ class VelocityCheckService extends \App\Services\BaseService
             'user_id' => $userId,
             'action_type' => $actionType
         ]);
+
+        // 🔒 Enforce distributed locking when updating/counting velocity to prevent transaction race conditions
+        $lockKey = "velocity_check:{$userId}:{$actionType}";
+        $lock = $this->lockService->acquire($lockKey, 10, 5); // 10s TTL, 5s max wait
+        if (!$lock['acquired']) {
+            $this->logger->warning('velocity.lock_failed', ['user_id' => $userId, 'action_type' => $actionType]);
+            return [
+                'allowed' => false,
+                'reason' => 'سیستم در حال حاضر مشغول است. لطفاً چند لحظه دیگر تلاش کنید.'
+            ];
+        }
+
+        // Store the lock token
+        $this->activeLocks[$lockKey] = $lock['token'];
         
         $countCheck = $this->checkCountVelocity($userId, $actionType);
         if (!$countCheck['allowed']) {
+            $this->releaseLock($lockKey);
             return $countCheck;
         }
         
@@ -93,12 +119,14 @@ class VelocityCheckService extends \App\Services\BaseService
             );
             
             if (!$amountCheck['allowed']) {
+                $this->releaseLock($lockKey);
                 return $amountCheck;
             }
         }
         
         $patternCheck = $this->checkPatternVelocity($userId, $actionType, $context);
         if (!$patternCheck['allowed']) {
+            $this->releaseLock($lockKey);
             return $patternCheck;
         }
         
@@ -286,6 +314,27 @@ class VelocityCheckService extends \App\Services\BaseService
             'action_type' => $actionType,
             'context' => $context
         ]);
+
+        // Release the lock immediately since record is complete
+        $lockKey = "velocity_check:{$userId}:{$actionType}";
+        $this->releaseLock($lockKey);
+    }
+
+    private function releaseLock(string $lockKey): void
+    {
+        if (isset($this->activeLocks[$lockKey])) {
+            $token = $this->activeLocks[$lockKey];
+            $this->lockService->release($lockKey, $token);
+            unset($this->activeLocks[$lockKey]);
+        }
+    }
+
+    public function releaseAllLocks(): void
+    {
+        foreach ($this->activeLocks as $lockKey => $token) {
+            $this->lockService->release($lockKey, $token);
+        }
+        $this->activeLocks = [];
     }
     
     public function setCustomRules(string $actionType, array $rules): void

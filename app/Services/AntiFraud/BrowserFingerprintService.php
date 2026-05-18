@@ -5,16 +5,19 @@ declare(strict_types=1);
 namespace App\Services\AntiFraud;
 
 use App\Models\IpAndDeviceModel;
-
+use App\Services\AntiFraud\RiskPolicyService;
 use App\Contracts\LoggerInterface;
+
 class BrowserFingerprintService extends \App\Services\BaseService
 {
     private IpAndDeviceModel $model;
+    private RiskPolicyService $policy;
     
-    public function __construct(IpAndDeviceModel $model, LoggerInterface $logger)
+    public function __construct(IpAndDeviceModel $model, RiskPolicyService $policy, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->model = $model;
+        $this->policy = $policy;
     }
     
     /**
@@ -64,9 +67,11 @@ class BrowserFingerprintService extends \App\Services\BaseService
         // 1. بررسی تعداد کاربران با همین Fingerprint
         $userCount = $this->model->getFingerprintUserCount($fingerprint);
         
-        if ($userCount > 3) {
-            // MED-01: Introduce corporate and whitelist exceptions to bypass shared device alerts
-            if ($this->isExemptFromSharedChecks($userId, $fingerprint)) {
+        $threshold = $this->policy->getInt('fingerprint', 'shared_threshold', 5);
+        $isCorporate = $this->isExemptFromSharedChecks($userId, $fingerprint);
+        
+        if ($userCount > $threshold) {
+            if ($isCorporate) {
                 $this->logger->info('fingerprint.analyze.exempted', ['user_id' => $userId, 'fingerprint' => $fingerprint]);
             } else {
                 $suspicionScore += 40;
@@ -80,9 +85,15 @@ class BrowserFingerprintService extends \App\Services\BaseService
         if (count($fingerprints) > 1) {
             $timeDiff = strtotime((string)$fingerprints[0]->created_at) - strtotime((string)$fingerprints[1]->created_at);
             
-            if ($timeDiff < 3600 && $fingerprints[0]->fingerprint !== $fingerprints[1]->fingerprint) {
-                $suspicionScore += 25;
-                $reasons[] = "تغییر ناگهانی Fingerprint در کمتر از 1 ساعت";
+            $changeWindowHours = $this->policy->getInt('fingerprint', 'change_suspicious_hours', 24);
+            $changeWindowSeconds = $changeWindowHours * 3600;
+            
+            if ($timeDiff < $changeWindowSeconds) {
+                $similarity = $this->calculateFingerprintSimilarity($fingerprints[0], $fingerprints[1]);
+                if ($similarity < 0.7) {
+                    $suspicionScore += 25;
+                    $reasons[] = "تغییر ناگهانی Fingerprint (شباهت: " . round($similarity * 100) . "%) در کمتر از {$changeWindowHours} ساعت";
+                }
             }
         }
         
@@ -91,6 +102,33 @@ class BrowserFingerprintService extends \App\Services\BaseService
             'score' => $suspicionScore,
             'reasons' => $reasons
         ];
+    }
+
+    /**
+     * محاسبه شباهت دو فینگرپرینت
+     */
+    private function calculateFingerprintSimilarity($fp1, $fp2): float
+    {
+        $components1 = is_array($fp1) ? $fp1 : json_decode((string)($fp1->metadata ?? '{}'), true);
+        $components2 = is_array($fp2) ? $fp2 : json_decode((string)($fp2->metadata ?? '{}'), true);
+        
+        if (!is_array($components1) || !is_array($components2)) {
+            return 0.0;
+        }
+
+        $matches = 0;
+        $total = 0;
+        
+        foreach ($components1 as $key => $val1) {
+            if (isset($components2[$key])) {
+                $total++;
+                if ($val1 === $components2[$key]) {
+                    $matches++;
+                }
+            }
+        }
+        
+        return $total > 0 ? (float)($matches / $total) : 0.0;
     }
 
     /**
