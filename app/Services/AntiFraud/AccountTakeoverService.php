@@ -16,6 +16,7 @@ class AccountTakeoverService extends \App\Services\BaseService
     private RiskPolicyService $policy;
     private BrowserFingerprintService $fingerprintService;
     private Session $session;
+    private GeoIPService $geoIPService;
     public function __construct(
         VelocityAndScoreModel $model,
         SessionAnomalyService $sessionAnomaly,
@@ -23,6 +24,7 @@ class AccountTakeoverService extends \App\Services\BaseService
         RiskPolicyService $policy,
         BrowserFingerprintService $fingerprintService,
         Session $session,
+        GeoIPService $geoIPService,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -32,6 +34,7 @@ class AccountTakeoverService extends \App\Services\BaseService
         $this->policy = $policy;
         $this->fingerprintService = $fingerprintService;
         $this->session = $session;
+        $this->geoIPService = $geoIPService;
     }
 
     public function detect(int $userId, string $ip, string $userAgent, ?string $fingerprint = null): array
@@ -123,6 +126,17 @@ class AccountTakeoverService extends \App\Services\BaseService
             } catch (\Throwable $e) {
                 $this->logger->warning('takeover.session_correlator_failed', ['error' => $e->getMessage()]);
             }
+        }
+
+        // 🚀 Add Impossible Travel Detection
+        try {
+            $travelCheck = $this->checkImpossibleTravel($userId, $ip);
+            if ($travelCheck['suspicious']) {
+                $riskScore += $this->policy->getInt('fraud', 'takeover.impossible_travel_points', 90);
+                $signals[] = $travelCheck['signal'];
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('takeover.impossible_travel_check_failed', ['error' => $e->getMessage()]);
         }
 
         $failedAttempts = $this->model->getRecentFailedAttempts($userId);
@@ -240,5 +254,55 @@ class AccountTakeoverService extends \App\Services\BaseService
         }
 
         $this->model->logTakeoverDetection($userId, $ip, $userAgent, $detection);
+    }
+
+    private function checkImpossibleTravel(int $userId, string $ip): array
+    {
+        $current = $this->geoIPService->lookup($ip);
+        $last = $this->model->getLastLoginLocation($userId);
+        
+        if (!$last || !isset($last->latitude, $last->longitude)) {
+            return ['suspicious' => false];
+        }
+        
+        if (!isset($current['latitude'], $current['longitude'])) {
+            return ['suspicious' => false];
+        }
+        
+        $distance = $this->geoIPService->calculateDistance(
+            [
+                'latitude' => (float)$last->latitude,
+                'longitude' => (float)$last->longitude
+            ],
+            [
+                'latitude' => (float)$current['latitude'],
+                'longitude' => (float)$current['longitude']
+            ]
+        );
+        
+        $timeDiff = time() - strtotime($last->login_at);
+        
+        if ($timeDiff < 60) {
+            return ['suspicious' => false]; // کمتر از 1 دقیقه
+        }
+        
+        $speedKmH = $distance / ($timeDiff / 3600);
+        
+        // غیرممکن بودن سرعت حرکت (مثلا بیش از ۱۰۰۰ کیلومتر بر ساعت)
+        if ($speedKmH > 1000) {
+            return [
+                'suspicious' => true,
+                'signal' => sprintf(
+                    'Impossible travel: %d km in %d minutes (%.0f km/h) from %s to %s',
+                    (int)$distance,
+                    (int)($timeDiff / 60),
+                    $speedKmH,
+                    $last->city ?? 'Unknown',
+                    $current['city'] ?? 'Unknown'
+                )
+            ];
+        }
+        
+        return ['suspicious' => false];
     }
 }
