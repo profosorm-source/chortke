@@ -55,10 +55,26 @@ class FcmNotificationAdapter
             return false;
         }
 
+        if ($this->isFcmCircuitOpen()) {
+            $this->logger->warning('fcm.circuit_open_skipped', ['token' => substr($fcmToken, 0, 8) . '...']);
+            return false;
+        }
+
         $payload = $this->buildPayload($title, $body, $data, $imageUrl, $clickUrl);
         $payload['message']['token'] = $fcmToken;
 
-        return $this->dispatch($payload);
+        try {
+            $success = $this->dispatch($payload);
+            if ($success) {
+                $this->recordFcmSuccess();
+            } else {
+                $this->recordFcmFailure();
+            }
+            return $success;
+        } catch (\Throwable $e) {
+            $this->recordFcmFailure();
+            throw $e;
+        }
     }
 
     /**
@@ -362,6 +378,54 @@ class FcmNotificationAdapter
     private function base64UrlEncode(string $data): string
     {
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+    }
+
+    private function isFcmCircuitOpen(): bool
+    {
+        $state = $this->cache->get('fcm:circuit_state') ?: 'closed';
+        if ($state === 'open') {
+            $lastChange = (int)$this->cache->get('fcm:last_state_change');
+            if (time() - $lastChange > 60) {
+                // Cool down duration passed, move to half-open state
+                $this->cache->put('fcm:circuit_state', 'half-open', 3600);
+                $this->cache->put('fcm:last_state_change', time(), 3600);
+                $this->logger->info('fcm.circuit_breaker.half_open');
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private function recordFcmSuccess(): void
+    {
+        $state = $this->cache->get('fcm:circuit_state') ?: 'closed';
+        if ($state === 'half-open') {
+            $this->cache->put('fcm:circuit_state', 'closed', 3600);
+            $this->cache->put('fcm:failures', 0, 3600);
+            $this->cache->put('fcm:last_state_change', time(), 3600);
+            $this->logger->info('fcm.circuit_breaker.closed');
+        } else {
+            $this->cache->put('fcm:failures', 0, 3600);
+        }
+    }
+
+    private function recordFcmFailure(): void
+    {
+        $state = $this->cache->get('fcm:circuit_state') ?: 'closed';
+        if ($state === 'half-open') {
+            $this->cache->put('fcm:circuit_state', 'open', 3600);
+            $this->cache->put('fcm:last_state_change', time(), 3600);
+            $this->logger->warning('fcm.circuit_breaker.opened_from_half_open');
+        } else {
+            $failures = (int)$this->cache->get('fcm:failures') + 1;
+            $this->cache->put('fcm:failures', $failures, 3600);
+            if ($failures >= 5) {
+                $this->cache->put('fcm:circuit_state', 'open', 3600);
+                $this->cache->put('fcm:last_state_change', time(), 3600);
+                $this->logger->error('fcm.circuit_breaker.opened', ['consecutive_failures' => $failures]);
+            }
+        }
     }
 }
 

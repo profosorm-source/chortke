@@ -39,6 +39,17 @@ class SendBulkNotificationJob
             return;
         }
 
+        // 🚀 Bulk pre-fetch preferences to avoid N+1 database queries
+        if (count($userIds) > 1) {
+            try {
+                $prefService = \Core\Container::getInstance()->make(
+                    \App\Services\Notification\NotificationPreferenceService::class
+                );
+                $prefService->prefetchPreferences($userIds);
+            } catch (\Throwable $e) {
+            }
+        }
+
         // پردازش تک‌تک کاربران در پس‌زمینه بدون مسدودسازی ریکوئست اصلی
         foreach ($userIds as $userId) {
             $dedupKey = null;
