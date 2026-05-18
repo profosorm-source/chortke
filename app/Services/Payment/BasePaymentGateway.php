@@ -126,21 +126,33 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
     public function verifyCallback(array $callbackData): bool
     {
         $secret = $this->getCallbackSecret();
+        $isProduction = (env('APP_ENV') === 'production');
         
-        // ✅ در production، secret الزامیه
-        if (env('APP_ENV') === 'production' && ($secret === null || $secret === '')) {
-            $this->logger->critical("payment.{$this->getGatewayName()}.callback_secret_missing", [
-                'gateway' => $this->getGatewayName(),
-                'message' => 'Callback secret MUST be configured in production'
-            ]);
-            throw new \RuntimeException('Callback secret is required in production');
+        // 🛡️ در محیط تولید، وجود و قدرت کلید الزامی و حیاتی است
+        if ($isProduction) {
+            if ($secret === null || $secret === '') {
+                $this->logger->critical("payment.{$this->getGatewayName()}.callback_secret_missing_production", [
+                    'gateway' => $this->getGatewayName(),
+                    'message' => 'Callback secret MUST be configured in production!'
+                ]);
+                throw new \RuntimeException("Callback secret is REQUIRED in production for gateway: {$this->getGatewayName()}");
+            }
+            
+            // 🔒 بررسی طول کلید برای جلوگیری از حملات Brute-force امضا (حداقل ۳۲ کاراکتر)
+            if (strlen($secret) < 32) {
+                $this->logger->critical("payment.{$this->getGatewayName()}.callback_secret_weak", [
+                    'gateway' => $this->getGatewayName(),
+                    'length' => strlen($secret)
+                ]);
+                throw new \RuntimeException("Callback secret is too weak (must be at least 32 characters) for gateway: {$this->getGatewayName()}");
+            }
         }
         
-        // در dev mode میتونه bypass بشه
+        // 🚧 در محیط توسعه (Local/Dev) مجاز به بای‌پس با لاگ هشدار هستیم
         if ($secret === null || $secret === '') {
-            $this->logger->warning("payment.{$this->getGatewayName()}.callback_secret_bypass", [
+            $this->logger->warning("payment.{$this->getGatewayName()}.callback_secret_bypass_dev", [
                 'gateway' => $this->getGatewayName(),
-                'env' => env('APP_ENV')
+                'env' => env('APP_ENV', 'local')
             ]);
             return true;
         }

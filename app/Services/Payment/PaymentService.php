@@ -268,7 +268,28 @@ class PaymentService extends PaymentBaseService
 public function callback(string $gatewayName, array $callbackData, ?int $sessionUserId = null): array
 {
     // 1️⃣ IP Whitelist Check (Security Hardening)
-    $allowedIPs = config('payment.' . $gatewayName . '.callback_ips', []);
+    $allowedIPs = [];
+    try {
+        $gatewayRow = $this->db->selectOne(
+            "SELECT callback_ips FROM payment_gateways WHERE name = :name LIMIT 1",
+            ['name' => $gatewayName]
+        );
+        if ($gatewayRow !== null && !empty($gatewayRow->callback_ips)) {
+            $decoded = json_decode($gatewayRow->callback_ips, true);
+            if (is_array($decoded)) {
+                $allowedIPs = $decoded;
+            }
+        }
+    } catch (\Throwable $e) {
+        $this->logger->warning('payment.callback.db_ip_lookup_failed', [
+            'gateway' => $gatewayName,
+            'error' => $e->getMessage()
+        ]);
+    }
+
+    if (empty($allowedIPs)) {
+        $allowedIPs = config('payment.' . $gatewayName . '.callback_ips', []);
+    }
 
     $isTesting = (defined('PHPUNIT_COMPOSER_INSTALL') || defined('__PHPUNIT_PHAR__') || env('APP_ENV') === 'testing')
         && empty($_SERVER['FORCE_IP_WHITELIST']);
@@ -400,7 +421,7 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
         return ['success' => false, 'message' => 'کاربر جلسه فعلی با پرداخت تطابق ندارد'];
     }
 
-    if ($pay->status !== 'pending' && $pay->status !== 'completed' && $pay->status !== 'failed') {
+    if ($pay->status !== 'pending' && $pay->status !== 'completed' && $pay->status !== 'failed' && $pay->status !== 'pending_verification') {
         $this->logger->warning('payment.callback.invalid_status', [
             'gateway' => $gatewayName,
             'authority' => $authority,
@@ -519,8 +540,8 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
                 return ['success' => false, 'message' => 'خطا در قفل کردن رکورد پرداخت'];
             }
 
-            // CRITICAL-3 & HIGH-1: Verify that status is strictly pending or failed before processing
-            if ($lockedPay->status !== 'pending' && $lockedPay->status !== 'failed') {
+            // CRITICAL-3 & HIGH-1: Verify that status is strictly pending, failed, or pending_verification before processing
+            if ($lockedPay->status !== 'pending' && $lockedPay->status !== 'failed' && $lockedPay->status !== 'pending_verification') {
                 $this->db->commit();
                 if ($lockedPay->status === 'completed') {
                     $this->logger->info('payment.callback.idempotent_completed', [
@@ -599,13 +620,14 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
             try {
                 $ok = $this->wallet->deposit(
                     (int) $pay->user_id,
-                    (float) $pay->amount,
+                    (string) $pay->amount,
                     'irt',
                     [
                         'type'                   => 'gateway_deposit',
                         'gateway'                => $gatewayName,
                         'gateway_transaction_id' => $authority, // کلید حیاتی برای Reconciliation
                         'ref_id'                 => $verify['ref_id'] ?? null,
+                        'idempotency_key'        => 'wallet_deposit:' . $gatewayName . ':' . $authority,
                         'description'            => 'واریز آنلاین (درگاه)'
                     ]
                 );
