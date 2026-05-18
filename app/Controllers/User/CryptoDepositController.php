@@ -115,8 +115,13 @@ class CryptoDepositController extends BaseUserController
         }
 
         // اعتبارسنجی هش تراکنش بر اساس شبکه (جلوگیری از Poisoning و Bypass)
-        $txHash = $data['tx_hash'];
+        // Normalize transaction hash (C-10, C-14). Ethereum/BSC/Tron hashes are case-insensitive, Solana is case-sensitive (Base58).
+        $txHash = trim((string)$data['tx_hash']);
         $network = $data['network'];
+        if ($network !== 'sol') {
+            $txHash = strtolower($txHash);
+        }
+        $data['tx_hash'] = $txHash;
         $hashError = null;
 
         if ($network === 'bnb20' || $network === 'erc20') {
@@ -149,8 +154,8 @@ class CryptoDepositController extends BaseUserController
                 $db->beginTransaction();
 
                 try {
-                    // Pessimistic lock check on network + tx_hash to prevent race condition (C-01 & C-06)
-                    $existingDeposit = $this->depositModel->findByHashAndNetworkForUpdate($data['tx_hash'], $data['network']);
+                    // Pessimistic lock check on tx_hash (global) to prevent race condition and cross-network bypass (C-01 & C-06)
+                    $existingDeposit = $this->depositModel->findByHashForUpdate($data['tx_hash']);
                     if ($existingDeposit) {
                         throw new \RuntimeException('این هش تراکنش قبلاً ثبت شده است');
                     }
@@ -167,6 +172,15 @@ class CryptoDepositController extends BaseUserController
                     $data['user_id'] = $userId;
                     $data['wallet_address'] = $walletAddress;
                     $data['verification_status'] = 'pending';
+                    
+                    // Set auto_check_deadline (30 mins from now in default timezone) (C-12)
+                    $minutes = (int) (setting('crypto_intent_expire_minutes') ?: 30);
+                    $data['auto_check_deadline'] = (new \DateTime())
+                        ->modify("+{$minutes} minutes")
+                        ->format('Y-m-d H:i:s');
+                    $data['auto_check_attempts'] = 0;
+                    $data['created_at'] = \date('Y-m-d H:i:s');
+                    $data['updated_at'] = \date('Y-m-d H:i:s');
 
                     $deposit = $this->depositModel->create($data);
                     
