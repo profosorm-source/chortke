@@ -23,6 +23,7 @@ class LogService extends BaseService
     private SecurityLog $securityLog;
     private PerformanceLog $performanceLog;
     private \Core\Session $session;
+    private \Core\Redis $redis;
     private string $requestId;
     private array $logBuffer = [];
     private const MAX_BUFFER_SIZE = 100;
@@ -48,7 +49,8 @@ class LogService extends BaseService
         SystemLog $systemLog,
         SecurityLog $securityLog,
         PerformanceLog $performanceLog,
-        \Core\Session $session
+        \Core\Session $session,
+        \Core\Redis $redis
     ) {
         // LogService dummy logger to prevent recursion
         parent::__construct(new class implements LoggerInterface {
@@ -69,6 +71,7 @@ class LogService extends BaseService
         $this->securityLog = $securityLog;
         $this->performanceLog = $performanceLog;
         $this->session = $session;
+        $this->redis = $redis;
         
         $this->logDir = dirname(__DIR__, 2) . '/storage/logs/';
         $this->requestId = $_SERVER['REQUEST_ID'] ?? bin2hex(random_bytes(16));
@@ -237,7 +240,7 @@ class LogService extends BaseService
         
         // 1. Try Redis first for fast, persistent, and centralized fallback
         try {
-            $redis = app(\Core\Redis::class);
+            $redis = $this->redis;
             if ($redis && $redis->isAvailable()) {
                 $redis->lpush("audit_fallback_{$table}", $payload);
                 $saved = true;

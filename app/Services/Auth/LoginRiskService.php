@@ -30,12 +30,14 @@ class LoginRiskService extends \App\Services\BaseService
 
     private Cache $cache;
     private SettingService $settingService;
+    private \Core\Redis $redis;
 
-    public function __construct(Cache $cache, SettingService $settingService, LoggerInterface $logger)
+    public function __construct(Cache $cache, SettingService $settingService, LoggerInterface $logger, \Core\Redis $redis)
     {
         parent::__construct($logger);
         $this->cache = $cache;
         $this->settingService = $settingService;
+        $this->redis = $redis;
     }
 
     /**
@@ -63,7 +65,7 @@ class LoginRiskService extends \App\Services\BaseService
         $resolvedIp = $this->resolveIp($ip);
 
         // Check if both Redis and Cache are down
-        $redis = app(\Core\Redis::class);
+        $redis = $this->redis;
         $redisAvailable = false;
         try {
             $redisAvailable = $redis && $redis->isAvailable();
@@ -177,7 +179,7 @@ class LoginRiskService extends \App\Services\BaseService
             $keys[] = $this->buildKey($context, 'all_ips', $identifier);
         }
 
-        $redis = app(\Core\Redis::class);
+        $redis = $this->redis;
         $redisAvailable = false;
         try {
             $redisAvailable = $redis && $redis->isAvailable();
@@ -254,7 +256,7 @@ class LoginRiskService extends \App\Services\BaseService
         $ipKey = $this->buildKey($context, $resolvedIp, null);
         $idKey = $identifier ? $this->buildKey($context, 'all_ips', $identifier) : null;
 
-        $redis = app(\Core\Redis::class);
+        $redis = $this->redis;
         if ($redis && $redis->isAvailable()) {
             try {
                 $redis->delete($ipKey);
@@ -280,7 +282,7 @@ class LoginRiskService extends \App\Services\BaseService
         $resolvedIp = $this->resolveIp($ip);
         $windowSeconds = $this->getWindowSeconds();
 
-        $redis = app(\Core\Redis::class);
+        $redis = $this->redis;
         $redisAvailable = false;
         try {
             $redisAvailable = $redis && $redis->isAvailable();

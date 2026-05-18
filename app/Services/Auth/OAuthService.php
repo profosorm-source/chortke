@@ -104,80 +104,86 @@ class OAuthService extends \App\Services\BaseService
 
         $stored = $this->session->get(SessionKeys::OAUTH_STATE);
         
-        // Atomic Cleanup: Clear state instantly to block replay attacks
-        $this->session->remove(SessionKeys::OAUTH_STATE);
-
-        if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
-            return ['success' => false, 'message' => 'Invalid state structure.'];
-        }
-
-        if ($stored['token'] !== $state) {
-            return ['success' => false, 'message' => 'Invalid state token match failed.'];
-        }
-
-        // HIGH-H-15 Fix: Verify state signature (bound to original IP and Session ID)
-        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), secure_key());
-        if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
-            $this->logger->critical('oauth.google.state_signature_mismatch', [
-                'state' => $state,
-                'ip' => $this->clientIp()
-            ]);
-            return ['success' => false, 'message' => 'State signature verification failed.'];
-        }
-
-        // HIGH-06 Fix: Verify session binding (CRIT-01 Fix: Session ID must match exactly)
-        if (($stored['session_id'] ?? '') !== $this->session->getId()) {
-            $this->logger->critical('oauth.google.session_mismatch', [
-                'expected' => $stored['session_id'] ?? 'none',
-                'current' => $this->session->getId(),
-                'ip' => $this->clientIp()
-            ]);
-            return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
-        }
-
-        // CRIT-01 Fix: HIGH-H-10 - Strict IP binding for OAuth flow to prevent replay attacks
-        // OAuth flows are particularly vulnerable to man-in-the-middle attacks where attacker
-        // starts the flow from different IP than the one completing it
-        $expectedIp = $stored['ip'] ?? '';
-        $currentIp = $this->clientIp();
-        
-        if (!$this->matchIpSubnet($expectedIp, $currentIp)) {
-            $this->logger->critical('oauth.google.ip_mismatch_replay_attack_detected', [
-                'expected_ip' => $expectedIp,
-                'current_ip' => $currentIp,
-                'state' => $state
-            ]);
-            
-            // HIGH-03 Fix: Audit suspicious IP change during OAuth flow
-            $this->auditTrail->record('oauth.google.ip_mismatch_blocked', 0, [
-                'expected_ip' => $expectedIp,
-                'current_ip' => $currentIp,
-                'state' => $state,
-                'session_id' => $this->session->getId()
-            ]);
-
-            // CRIT-01 Fix: Block OAuth completion on IP change by default (configurable strictness)
-            // This is critical because OAuth callback URLs can be shared/predicted
-            $strictIpBinding = config('oauth.strict_ip_binding', false); // Default false to prevent breaking NAT/VPN/Mobile users
-            if ($strictIpBinding) {
-                $this->session->destroy(); // CRIT-01: Destroy session to prevent any partial state exploitation
-                return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
+        // Atomic check-and-invalidate pattern
+        if ($this->session->has(SessionKeys::OAUTH_STATE . '_used')) {
+            $usedAt = (int)$this->session->get(SessionKeys::OAUTH_STATE . '_used');
+            if (time() - $usedAt < 2) { // If used within last 2 seconds
+                return ['success' => false, 'message' => 'State already used (replay detected)'];
             }
-            
-            // If not strict, at minimum log and audit
-            $this->logger->warning('oauth.google.ip_changed', [
-                'expected' => $expectedIp,
-                'received' => $currentIp
-            ]);
         }
-
-
-        // 🛡️ Hardened Expiration: Bound security state validity to maximum 5 minutes
-        if ((time() - (int)$stored['created_at']) > 300) {
-            return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
-        }
+        $this->session->set(SessionKeys::OAUTH_STATE . '_used', time()); // Mark as used
 
         try {
+            if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
+                return ['success' => false, 'message' => 'Invalid state structure.'];
+            }
+
+            if ($stored['token'] !== $state) {
+                return ['success' => false, 'message' => 'Invalid state token match failed.'];
+            }
+
+            // HIGH-H-15 Fix: Verify state signature (bound to original IP and Session ID)
+            $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), secure_key());
+            if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
+                $this->logger->critical('oauth.google.state_signature_mismatch', [
+                    'state' => $state,
+                    'ip' => $this->clientIp()
+                ]);
+                return ['success' => false, 'message' => 'State signature verification failed.'];
+            }
+
+            // HIGH-06 Fix: Verify session binding (CRIT-01 Fix: Session ID must match exactly)
+            if (($stored['session_id'] ?? '') !== $this->session->getId()) {
+                $this->logger->critical('oauth.google.session_mismatch', [
+                    'expected' => $stored['session_id'] ?? 'none',
+                    'current' => $this->session->getId(),
+                    'ip' => $this->clientIp()
+                ]);
+                return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
+            }
+
+            // CRIT-01 Fix: HIGH-H-10 - Strict IP binding for OAuth flow to prevent replay attacks
+            // OAuth flows are particularly vulnerable to man-in-the-middle attacks where attacker
+            // starts the flow from different IP than the one completing it
+            $expectedIp = $stored['ip'] ?? '';
+            $currentIp = $this->clientIp();
+            
+            if (!$this->matchIpSubnet($expectedIp, $currentIp)) {
+                $this->logger->critical('oauth.google.ip_mismatch_replay_attack_detected', [
+                    'expected_ip' => $expectedIp,
+                    'current_ip' => $currentIp,
+                    'state' => $state
+                ]);
+                
+                // HIGH-03 Fix: Audit suspicious IP change during OAuth flow
+                $this->auditTrail->record('oauth.google.ip_mismatch_blocked', 0, [
+                    'expected_ip' => $expectedIp,
+                    'current_ip' => $currentIp,
+                    'state' => $state,
+                    'session_id' => $this->session->getId()
+                ]);
+
+                // CRIT-01 Fix: Block OAuth completion on IP change by default (configurable strictness)
+                // This is critical because OAuth callback URLs can be shared/predicted
+                $strictIpBinding = config('oauth.strict_ip_binding', false); // Default false to prevent breaking NAT/VPN/Mobile users
+                if ($strictIpBinding) {
+                    $this->session->destroy(); // CRIT-01: Destroy session to prevent any partial state exploitation
+                    return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
+                }
+                
+                // If not strict, at minimum log and audit
+                $this->logger->warning('oauth.google.ip_changed', [
+                    'expected' => $expectedIp,
+                    'received' => $currentIp
+                ]);
+            }
+
+
+            // 🛡️ Hardened Expiration: Bound security state validity to maximum 5 minutes
+            if ((time() - (int)$stored['created_at']) > 300) {
+                return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
+            }
+
             $token = $this->getGoogleToken($code);
             if (!$token['success']) return $token;
 
@@ -204,6 +210,9 @@ class OAuthService extends \App\Services\BaseService
         } catch (\Exception $e) {
             $this->logger->error('oauth.google.callback_failed', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در ورود با گوگل'];
+        } finally {
+            $this->session->remove(SessionKeys::OAUTH_STATE);
+            $this->session->remove(SessionKeys::OAUTH_STATE . '_used');
         }
     }
 
@@ -455,58 +464,66 @@ class OAuthService extends \App\Services\BaseService
         }
 
         $stored = $this->session->get(SessionKeys::OAUTH_STATE);
-        $this->session->remove(SessionKeys::OAUTH_STATE);
-
-        if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
-            return ['success' => false, 'message' => 'Invalid state structure.'];
-        }
-
-        if ($stored['token'] !== $state) {
-            return ['success' => false, 'message' => 'Invalid state token match failed.'];
-        }
-
-        // HIGH-H-15 Fix: Verify state signature
-        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), secure_key());
-        if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
-            $this->logger->critical('oauth.facebook.state_signature_mismatch', ['state' => $state, 'ip' => $this->clientIp()]);
-            return ['success' => false, 'message' => 'State signature verification failed.'];
-        }
-
-        // HIGH-06 Fix: Verify session binding
-        if (($stored['session_id'] ?? '') !== $this->session->getId()) {
-            return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
-        }
-
-        // CRIT-01 Fix: Strict IP binding for Facebook OAuth to prevent replay attacks
-        $expectedIp = $stored['ip'] ?? '';
-        $currentIp = $this->clientIp();
         
-        if (!$this->matchIpSubnet($expectedIp, $currentIp)) {
-            $this->logger->critical('oauth.facebook.ip_mismatch_replay_attack_detected', [
-                'expected_ip' => $expectedIp,
-                'current_ip' => $currentIp,
-                'state' => $state
-            ]);
-            
-            $this->auditTrail->record('oauth.facebook.ip_mismatch_blocked', 0, [
-                'expected_ip' => $expectedIp,
-                'current_ip' => $currentIp,
-                'state' => $state
-            ]);
-
-            // Block by default for security
-            $strictIpBinding = config('oauth.strict_ip_binding', false); // Default false to prevent breaking NAT/VPN/Mobile users
-            if ($strictIpBinding) {
-                $this->session->destroy();
-                return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
+        // Atomic check-and-invalidate pattern
+        if ($this->session->has(SessionKeys::OAUTH_STATE . '_used')) {
+            $usedAt = (int)$this->session->get(SessionKeys::OAUTH_STATE . '_used');
+            if (time() - $usedAt < 2) { // If used within last 2 seconds
+                return ['success' => false, 'message' => 'State already used (replay detected)'];
             }
         }
-
-        if ((time() - (int)$stored['created_at']) > 300) {
-            return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
-        }
+        $this->session->set(SessionKeys::OAUTH_STATE . '_used', time()); // Mark as used
 
         try {
+            if (!is_array($stored) || !isset($stored['token']) || !isset($stored['created_at'])) {
+                return ['success' => false, 'message' => 'Invalid state structure.'];
+            }
+
+            if ($stored['token'] !== $state) {
+                return ['success' => false, 'message' => 'Invalid state token match failed.'];
+            }
+
+            // HIGH-H-15 Fix: Verify state signature
+            $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), secure_key());
+            if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
+                $this->logger->critical('oauth.facebook.state_signature_mismatch', ['state' => $state, 'ip' => $this->clientIp()]);
+                return ['success' => false, 'message' => 'State signature verification failed.'];
+            }
+
+            // HIGH-06 Fix: Verify session binding
+            if (($stored['session_id'] ?? '') !== $this->session->getId()) {
+                return ['success' => false, 'message' => 'Session mismatch during OAuth flow.'];
+            }
+
+            // CRIT-01 Fix: Strict IP binding for Facebook OAuth to prevent replay attacks
+            $expectedIp = $stored['ip'] ?? '';
+            $currentIp = $this->clientIp();
+            
+            if (!$this->matchIpSubnet($expectedIp, $currentIp)) {
+                $this->logger->critical('oauth.facebook.ip_mismatch_replay_attack_detected', [
+                    'expected_ip' => $expectedIp,
+                    'current_ip' => $currentIp,
+                    'state' => $state
+                ]);
+                
+                $this->auditTrail->record('oauth.facebook.ip_mismatch_blocked', 0, [
+                    'expected_ip' => $expectedIp,
+                    'current_ip' => $currentIp,
+                    'state' => $state
+                ]);
+
+                // Block by default for security
+                $strictIpBinding = config('oauth.strict_ip_binding', false); // Default false to prevent breaking NAT/VPN/Mobile users
+                if ($strictIpBinding) {
+                    $this->session->destroy();
+                    return ['success' => false, 'message' => 'IP مبدأ تغییر کرده است. به دلایل امنیتی، لطفاً دوباره تلاش کنید.'];
+                }
+            }
+
+            if ((time() - (int)$stored['created_at']) > 300) {
+                return ['success' => false, 'message' => 'The sign-in state has expired. Please try again.'];
+            }
+
             $tokenResp = $this->getFacebookToken($code);
             if (!$tokenResp['success']) return $tokenResp;
             
@@ -523,6 +540,9 @@ class OAuthService extends \App\Services\BaseService
         } catch (\Exception $e) {
             $this->logger->error('oauth.facebook.callback_failed', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در ورود با فیس‌بوک'];
+        } finally {
+            $this->session->remove(SessionKeys::OAUTH_STATE);
+            $this->session->remove(SessionKeys::OAUTH_STATE . '_used');
         }
     }
 
