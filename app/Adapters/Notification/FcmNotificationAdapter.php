@@ -17,11 +17,14 @@ use Core\Database;
  *  $fcm->sendToToken($fcmToken, 'عنوان', 'متن', ['key' => 'val']);
  *  $fcm->sendToTokens([$token1, $token2], 'عنوان', 'متن');
  */
+use App\Contracts\MetricsCollectorInterface;
+
 class FcmNotificationAdapter
 {
     private Logger    $logger;
     private Cache     $cache;
     private Database  $db;
+    private MetricsCollectorInterface $metrics;
     private ?string   $projectId;
     private ?string   $serviceAccountPath;
 
@@ -30,11 +33,12 @@ class FcmNotificationAdapter
     private const TOKEN_TTL        = 55;   // دقیقه (access token هر ساعت expire می‌شود)
     private const BATCH_SIZE       = 500;  // حداکثر FCM multicast batch
 
-    public function __construct(Logger $logger, Cache $cache, Database $db)
+    public function __construct(Logger $logger, Cache $cache, Database $db, MetricsCollectorInterface $metrics)
     {
         $this->logger             = $logger;
         $this->cache              = $cache;
         $this->db                 = $db;
+        $this->metrics            = $metrics;
         $this->projectId          = config('services.fcm.project_id');
         $this->serviceAccountPath = config('services.fcm.service_account_json');
     }
@@ -57,22 +61,32 @@ class FcmNotificationAdapter
 
         if ($this->isFcmCircuitOpen()) {
             $this->logger->warning('fcm.circuit_open_skipped', ['token' => substr($fcmToken, 0, 8) . '...']);
+            $this->metrics->increment('fcm.circuit.open_skipped');
             return false;
         }
 
         $payload = $this->buildPayload($title, $body, $data, $imageUrl, $clickUrl);
         $payload['message']['token'] = $fcmToken;
 
+        $startTime = microtime(true);
         try {
             $success = $this->dispatch($payload);
+            $duration = microtime(true) - $startTime;
+            $this->metrics->timing('fcm.dispatch.latency', $duration);
+
             if ($success) {
                 $this->recordFcmSuccess();
+                $this->metrics->increment('fcm.send.success');
             } else {
                 $this->recordFcmFailure();
+                $this->metrics->increment('fcm.send.failure');
             }
             return $success;
         } catch (\Throwable $e) {
+            $duration = microtime(true) - $startTime;
+            $this->metrics->timing('fcm.dispatch.latency', $duration);
             $this->recordFcmFailure();
+            $this->metrics->increment('fcm.send.error');
             throw $e;
         }
     }
