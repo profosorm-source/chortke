@@ -41,7 +41,7 @@ return [
                  || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https'
                      && in_array($_SERVER['REMOTE_ADDR'] ?? '', array_filter(array_map('trim', explode(',', env('TRUSTED_PROXIES', '127.0.0.1')))), true)),
         'httponly' => true,
-        'samesite' => 'Strict',
+        'samesite' => 'Lax',
     ],
     
     'csrf' => [
