@@ -35,6 +35,24 @@ class CryptoDeposit extends Model
         return $row ?: null;
     }
 
+    public function findByHashAndNetwork(string $txHash, string $network): ?object
+    {
+        $sql = "SELECT * FROM " . static::$table . " WHERE tx_hash = :tx_hash AND network = :network LIMIT 1";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['tx_hash' => $txHash, 'network' => $network]);
+        $row = $stmt->fetch(\PDO::FETCH_OBJ);
+        return $row ?: null;
+    }
+
+    public function findByHashAndNetworkForUpdate(string $txHash, string $network): ?object
+    {
+        $sql = "SELECT * FROM " . static::$table . " WHERE tx_hash = :tx_hash AND network = :network LIMIT 1 FOR UPDATE";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['tx_hash' => $txHash, 'network' => $network]);
+        $row = $stmt->fetch(\PDO::FETCH_OBJ);
+        return $row ?: null;
+    }
+
     public function getManualReviewDeposits(int $limit = 50, int $offset = 0): array
     {
         $limit  = \max(1, (int)$limit);
@@ -181,7 +199,10 @@ class CryptoDeposit extends Model
         ?string $transactionId = null
     ): bool {
         try {
-            $this->db->beginTransaction();
+            $inTx = $this->db->inTransaction();
+            if (!$inTx) {
+                $this->db->beginTransaction();
+            }
 
             // 1. Get deposit details with FOR UPDATE lock
             $stmt = $this->db->prepare("SELECT * FROM " . static::$table . " WHERE id = ? FOR UPDATE");
@@ -189,8 +210,10 @@ class CryptoDeposit extends Model
             $deposit = $stmt->fetch(\PDO::FETCH_OBJ);
 
             if (!$deposit) {
-                $this->db->rollBack();
-                return false;
+                if (!$inTx) {
+                    $this->db->rollBack();
+                }
+                throw new \RuntimeException("Crypto deposit ID {$id} not found.");
             }
 
             // M27+M28: UPDATE status only - FINANCIAL LOGIC MUST MOVE TO CryptoDepositService
@@ -229,14 +252,15 @@ class CryptoDeposit extends Model
             $stmt = $this->db->prepare($sql);
             $stmt->execute($params);
 
-            $this->db->commit();
+            if (!$inTx) {
+                $this->db->commit();
+            }
             return true;
 
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
+            if (!$inTx && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
-            // M-04: Log critical errors before silently returning false
             if ($this->logger) {
                 $this->logger->error('crypto_deposit.update_status_failed', [
                     'deposit_id' => $id,
@@ -245,7 +269,7 @@ class CryptoDeposit extends Model
                     'trace' => $e->getTraceAsString(),
                 ]);
             }
-            return false;
+            throw new \RuntimeException("Failed to update status for crypto deposit ID {$id}: " . $e->getMessage(), (int)$e->getCode(), $e);
         }
     }
 
