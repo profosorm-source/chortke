@@ -26,8 +26,17 @@ class NotificationPreferenceService extends \App\Services\BaseService
         if (empty($userIds)) return;
         
         $prefs = $this->prefModel->getByUsers($userIds);
+        try {
+            $cache = \Core\Container::getInstance()->make(\Core\Cache::class);
+        } catch (\Throwable $e) {
+            $cache = null;
+        }
+
         foreach ($prefs as $pref) {
             $this->cache[$pref->user_id] = $pref;
+            if ($cache) {
+                $cache->put("user_prefs:{$pref->user_id}", json_encode($pref), 300);
+            }
         }
     }
 
@@ -36,7 +45,30 @@ class NotificationPreferenceService extends \App\Services\BaseService
         if (isset($this->cache[$userId])) {
             return $this->cache[$userId];
         }
-        return $this->prefModel->getOrCreate($userId);
+
+        try {
+            $cache = \Core\Container::getInstance()->make(\Core\Cache::class);
+            $cached = $cache->get("user_prefs:{$userId}");
+            if ($cached) {
+                $decoded = json_decode($cached);
+                if ($decoded) {
+                    $this->cache[$userId] = $decoded;
+                    return $decoded;
+                }
+            }
+        } catch (\Throwable $e) {
+        }
+
+        $pref = $this->prefModel->getOrCreate($userId);
+        $this->cache[$userId] = $pref;
+
+        try {
+            $cache = \Core\Container::getInstance()->make(\Core\Cache::class);
+            $cache->put("user_prefs:{$userId}", json_encode($pref), 300);
+        } catch (\Throwable $e) {
+        }
+
+        return $pref;
     }
 
     public function updatePreferences(int $userId, array $data): bool
@@ -51,43 +83,40 @@ class NotificationPreferenceService extends \App\Services\BaseService
         }
 
         unset($this->cache[$userId]);
+        try {
+            $cache = \Core\Container::getInstance()->make(\Core\Cache::class);
+            $cache->forget("user_prefs:{$userId}");
+        } catch (\Throwable $e) {
+        }
+
         return $this->prefModel->updateForUser($userId, $updateData);
     }
 
     public function isInAppEnabled(int $userId, string $type): bool
     {
-        if (isset($this->cache[$userId])) {
-            $pref = $this->cache[$userId];
-            $field = "{$type}_enabled";
-            return (bool) ($pref->$field ?? $pref->in_app_notifications ?? true);
-        }
-        return $this->prefModel->isInAppEnabled($userId, $type);
+        $pref = $this->getPreferences($userId);
+        $field = "{$type}_enabled";
+        return (bool) ($pref->$field ?? $pref->in_app_notifications ?? true);
     }
 
     public function isPushEnabled(int $userId, string $type): bool
     {
-        if (isset($this->cache[$userId])) {
-            $pref = $this->cache[$userId];
-            return (bool) ($pref->push_notifications ?? true);
-        }
-        return $this->prefModel->isPushEnabled($userId, $type);
+        $pref = $this->getPreferences($userId);
+        return (bool) ($pref->push_notifications ?? true);
     }
 
     public function isInDndMode(int $userId): bool
     {
-        if (isset($this->cache[$userId])) {
-            $pref = $this->cache[$userId];
-            // منطق DND ساده شده با فرض وجود فیلدها در آبجکت کش شده
-            if (!empty($pref->dnd_start) && !empty($pref->dnd_end)) {
-                $now = date('H:i:s');
-                if ($pref->dnd_start < $pref->dnd_end) {
-                    return $now >= $pref->dnd_start && $now <= $pref->dnd_end;
-                }
-                return $now >= $pref->dnd_start || $now <= $pref->dnd_end;
+        $pref = $this->getPreferences($userId);
+        // منطق DND ساده شده با فرض وجود فیلدها در آبجکت کش شده
+        if (!empty($pref->dnd_start) && !empty($pref->dnd_end)) {
+            $now = date('H:i:s');
+            if ($pref->dnd_start < $pref->dnd_end) {
+                return $now >= $pref->dnd_start && $now <= $pref->dnd_end;
             }
-            return false;
+            return $now >= $pref->dnd_start || $now <= $pref->dnd_end;
         }
-        return $this->prefModel->isInDndMode($userId);
+        return false;
     }
 
     public function getNextDndEndTime(int $userId): ?string

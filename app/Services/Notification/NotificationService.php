@@ -154,6 +154,9 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             return;
         }
 
+        $idempotencyKey = $notifId ? 'push_' . $notifId : uniqid('push_', true);
+        $messageId = $notifId ? (string)$notifId : uniqid('msg_', true);
+
         try {
             // 🚀 UPG: استفاده از صف سیستم جهت پردازش کاملاً ناهمگام و جلوگیری از مسدودسازی پاسخ HTTP
             $this->queue->push(\App\Jobs\SendBulkNotificationJob::class, [
@@ -161,9 +164,14 @@ class NotificationService extends \App\Services\BaseService implements Notificat
                 'user_ids' => [$userId],
                 'title' => $title,
                 'message' => $message,
-                'data' => array_merge($data ?? [], ['type' => $type, 'notif_id' => (string)($notifId ?? '')]),
+                'data' => array_merge($data ?? [], [
+                    'type' => $type,
+                    'notif_id' => (string)($notifId ?? ''),
+                    'idempotency_key' => $idempotencyKey
+                ]),
                 'image_url' => $imageUrl,
                 'action_url' => $actionUrl,
+                'message_id' => $messageId,
             ]);
         } catch (\Throwable $e) {
             $this->logger->warning('notif.push_queue_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
@@ -175,12 +183,45 @@ class NotificationService extends \App\Services\BaseService implements Notificat
                     $userId,
                     $title,
                     $message,
-                    array_merge($data ?? [], ['type' => $type, 'notif_id' => (string)($notifId ?? '')]),
+                    array_merge($data ?? [], [
+                        'type' => $type,
+                        'notif_id' => (string)($notifId ?? ''),
+                        'idempotency_key' => $idempotencyKey
+                    ]),
                     $imageUrl,
                     $actionUrl
                 );
             } catch (\Throwable $syncError) {
                 $this->logger->error('notif.push_fallback_sync_failed', ['user_id' => $userId, 'error' => $syncError->getMessage()]);
+                
+                // 🚀 DLQ Fallback: Save failed payload to failed_jobs table
+                try {
+                    $db = $this->model->getDb();
+                    $payload = [
+                        'job' => \App\Jobs\SendBulkNotificationJob::class,
+                        'data' => [
+                            'channel' => 'fcm',
+                            'user_ids' => [$userId],
+                            'title' => $title,
+                            'message' => $message,
+                            'data' => array_merge($data ?? [], [
+                                'type' => $type, 
+                                'notif_id' => (string)($notifId ?? ''),
+                                'idempotency_key' => $idempotencyKey
+                            ]),
+                            'image_url' => $imageUrl,
+                            'action_url' => $actionUrl,
+                        ]
+                    ];
+                    $db->table('failed_jobs')->insert([
+                        'queue' => 'failed_notifications',
+                        'payload' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+                        'exception' => 'Queue push failed: ' . $e->getMessage() . ' | Sync dispatch failed: ' . $syncError->getMessage(),
+                        'failed_at' => date('Y-m-d H:i:s')
+                    ]);
+                } catch (\Throwable $dlqError) {
+                    $this->logger->error('notif.dlq_save_failed', ['error' => $dlqError->getMessage()]);
+                }
             }
         }
     }
@@ -739,5 +780,10 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         } catch (\Throwable $e) {
             $this->logger->warning('notif.sms_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }
+    }
+
+    public function prefetchPreferences(array $userIds): void
+    {
+        $this->preferenceService->prefetchPreferences($userIds);
     }
 }

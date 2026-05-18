@@ -78,7 +78,6 @@ class RedisEmailQueueService extends \App\Services\BaseService
                 $this->redis->zAdd($this->queueKey, $score, $emailId);
 
                 $this->logger->info('email.redis.queued', [
-                    'channel' => 'email',
                     'email_id' => $emailId,
                     'priority' => $priority,
                     'scheduled_at' => $scheduledAt,
@@ -87,18 +86,25 @@ class RedisEmailQueueService extends \App\Services\BaseService
                 return $emailId;
             } catch (\Throwable $e) {
                 $this->logger->error('email.redis.queue.failed', [
-                    'channel' => 'email',
                     'error' => $e->getMessage(),
                     'exception' => get_class($e),
                     'file' => $e->getFile(),
                     'line' => $e->getLine(),
                 ]);
 
-                return $this->fallbackToDatabase($payload);
+                $dbResult = $this->fallbackToDatabase($payload);
+                if ($dbResult) {
+                    return $dbResult;
+                }
+                return $this->fallbackToFile($payload);
             }
         }
 
-        return $this->fallbackToDatabase($payload);
+        $dbResult = $this->fallbackToDatabase($payload);
+        if ($dbResult) {
+            return $dbResult;
+        }
+        return $this->fallbackToFile($payload);
     }
 
     /**
@@ -106,6 +112,9 @@ class RedisEmailQueueService extends \App\Services\BaseService
      */
     public function pop(int $limit = 10): array
     {
+        // 🚀 Self-healing recovery: recover any file-based fallbacks first
+        $this->recoverFileFallbacks();
+
         if ($this->useRedis) {
             try {
                 $now = time();
@@ -133,8 +142,8 @@ LUA;
                     if ($data) {
                         $email = json_decode($data, true);
                         
-                        // بررسی تعداد تلاش (اگه از ۳ رد شده باشه نباید تو صف باشه، اما جهت امنیت چک میکنیم)
-                        if ($email['attempts'] < 3) {
+                        // بررسی تعداد تلاش (حداکثر ۵ بار تلاش مجدد مجاز است)
+                        if ($email['attempts'] < 5) {
                             $emails[] = $email;
                         } else {
                             $this->redis->sRem($this->processingKey, $emailId);
@@ -163,9 +172,37 @@ LUA;
      */
     public function claim(string $emailId): bool
     {
+        if (str_starts_with($emailId, 'file_')) {
+            return true;
+        }
+
         if (!$this->useRedis) {
-            // در مد دیتابیس، چون Job و Cron هر دو با DB کار میکنند، تداخل را در سطح DB حل میکنیم
-            return true; 
+            try {
+                $this->db->beginTransaction();
+                $id = str_replace('db_', '', $emailId);
+                
+                // SELECT FOR UPDATE to lock the row atomically
+                $row = $this->db->selectOne(
+                    "SELECT status FROM email_queue WHERE id = ? FOR UPDATE",
+                    [$id]
+                );
+                
+                if ($row && $row->status === 'pending') {
+                    $this->db->execute(
+                        "UPDATE email_queue SET status = 'sending', updated_at = NOW() WHERE id = ?",
+                        [$id]
+                    );
+                    $this->db->commit();
+                    return true;
+                }
+                
+                $this->db->commit();
+                return false;
+            } catch (\Throwable $e) {
+                $this->db->rollback();
+                $this->logger->error('email.database.claim.failed', ['email_id' => $emailId, 'error' => $e->getMessage()]);
+                return false;
+            }
         }
 
         try {
@@ -189,6 +226,16 @@ LUA;
      */
     public function markAsSent(string $emailId): bool
     {
+        if (str_starts_with($emailId, 'file_')) {
+            $realId = str_replace('file_', '', $emailId);
+            $basePath = defined('BASE_PATH') ? BASE_PATH : dirname(dirname(__DIR__));
+            $file = $basePath . '/storage/logs/email_fallback_queue/' . $realId . '.json';
+            if (file_exists($file)) {
+                @unlink($file);
+            }
+            return true;
+        }
+
         if ($this->useRedis) {
             try {
                 // حذف از processing
@@ -209,21 +256,19 @@ LUA;
                 }
 
                 $this->logger->info('email.redis.sent_archived', [
-    'channel' => 'email',
-    'email_id' => $emailId,
-]);
-return true;
-} catch (\Throwable $e) {
-    $this->logger->error('email.redis.mark_sent.failed', [
-        'channel' => 'email',
-        'email_id' => $emailId ?? null,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-    return false;
-}
+                    'email_id' => $emailId,
+                ]);
+                return true;
+            } catch (\Throwable $e) {
+                $this->logger->error('email.redis.mark_sent.failed', [
+                    'email_id' => $emailId ?? null,
+                    'error' => $e->getMessage(),
+                    'exception' => get_class($e),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ]);
+                return false;
+            }
         }
 
         return $this->fallbackMarkAsSentInDatabase($emailId);
@@ -235,6 +280,38 @@ return true;
      */
     public function markAsFailed(string $emailId, string $error): bool
     {
+        if (str_starts_with($emailId, 'file_')) {
+            $realId = str_replace('file_', '', $emailId);
+            $basePath = defined('BASE_PATH') ? BASE_PATH : dirname(dirname(__DIR__));
+            $file = $basePath . '/storage/logs/email_fallback_queue/' . $realId . '.json';
+            if (file_exists($file)) {
+                $content = @file_get_contents($file);
+                if ($content) {
+                    $email = json_decode($content, true);
+                    $email['attempts']++;
+                    $email['error_message'] = $error;
+                    
+                    if ($email['attempts'] >= 5) {
+                        @unlink($file);
+                        try {
+                            $this->db->execute(
+                                "INSERT INTO email_dlq (email_id, payload, reason, created_at) VALUES (?, ?, ?, NOW())",
+                                [$emailId, json_encode($email), $error]
+                            );
+                        } catch (\Throwable $dlqError) {
+                            $this->logger->error('email.dlq.db_failed', ['error' => $dlqError->getMessage()]);
+                        }
+                    } else {
+                        $delay = 60 * pow(2, $email['attempts'] - 1) + rand(0, 30);
+                        $delay = min($delay, 3600);
+                        $email['scheduled_at'] = time() + $delay;
+                        @file_put_contents($file, json_encode($email, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+                    }
+                }
+            }
+            return true;
+        }
+
         if ($this->useRedis) {
             try {
                 // حذف از processing
@@ -246,8 +323,8 @@ return true;
                     $email['attempts']++;
                     $email['error_message'] = $error;
 
-                    if ($email['attempts'] >= 3) {
-                        // 🚀 BUG-06 Fix: Dead Letter Queue (DLQ)
+                    if ($email['attempts'] >= 5) {
+                        // 🚀 Dead Letter Queue (DLQ)
                         $email['status'] = 'failed';
                         $email['failed_at'] = time();
                         
@@ -267,7 +344,7 @@ return true;
                         // 3. Push to Redis LIST for fast monitoring
                         try {
                             $this->redis->rPush('email:dlq', json_encode($email));
-                            $this->redis->lTrim('email:dlq', -1000, -1); // Keep last 1000
+                            $this->redis->lTrim('email:dlq', -10000, -1);
                         } catch (\Throwable $redisError) {
                             $this->logger->error('email.dlq.redis_failed', ['error' => $redisError->getMessage()]);
                         }
@@ -276,9 +353,9 @@ return true;
                         
                         $this->logger->warning("Email moved to DLQ after max attempts: {$emailId}", ['error' => $error]);
                     } else {
-                        // 🚀 Exponential Backoff: 1m, 5m, 15m
-                        $backoff = [60, 300, 900];
-                        $delay = $backoff[$email['attempts'] - 1] ?? 900;
+                        // 🚀 Exponential Backoff with jitter
+                        $delay = 60 * pow(2, $email['attempts'] - 1) + rand(0, 30);
+                        $delay = min($delay, 3600);
                         
                         $email['status'] = 'pending';
                         $this->redis->setEx(
@@ -484,13 +561,15 @@ return true;
     private function fallbackGetFromDatabase(int $limit): array
     {
         try {
-            $db = $this->db;
+            $this->db->beginTransaction();
             $now = date('Y-m-d H:i:s');
+            $maxAttempts = 5;
 
-            return $db->fetchAll(
+            // Select and lock the rows
+            $emails = $this->db->fetchAll(
                 "SELECT * FROM email_queue
-                 WHERE status IN ('pending', 'sending')
-                   AND attempts < 3
+                 WHERE status = 'pending'
+                   AND attempts < :max_attempts
                    AND (scheduled_at IS NULL OR scheduled_at <= :now)
                  ORDER BY
                    CASE priority
@@ -500,10 +579,51 @@ return true;
                      ELSE 4
                    END ASC,
                    created_at ASC
-                 LIMIT :limit",
-                ['now' => $now, 'limit' => $limit]
+                 LIMIT :limit FOR UPDATE",
+                ['now' => $now, 'max_attempts' => $maxAttempts, 'limit' => $limit]
             );
+
+            if (empty($emails)) {
+                $this->db->commit();
+                return [];
+            }
+
+            // Atomic reserve: set status to 'sending'
+            $ids = [];
+            foreach ($emails as $email) {
+                $ids[] = $email->id;
+            }
+
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $this->db->execute(
+                "UPDATE email_queue SET status = 'sending', updated_at = NOW() WHERE id IN ($placeholders)",
+                $ids
+            );
+
+            $this->db->commit();
+
+            // Convert DB objects to standard email arrays to match Redis pop output structure
+            $result = [];
+            foreach ($emails as $email) {
+                $result[] = [
+                    'id' => 'db_' . $email->id,
+                    'to' => $email->to_email,
+                    'subject' => $email->subject,
+                    'body' => $email->body,
+                    'priority' => $email->priority,
+                    'user_id' => $email->user_id,
+                    'template' => $email->template,
+                    'variables' => json_decode($email->variables, true) ?? [],
+                    'attempts' => (int)$email->attempts,
+                    'status' => 'sending',
+                    'created_at' => strtotime($email->created_at),
+                    'scheduled_at' => strtotime($email->scheduled_at),
+                ];
+            }
+
+            return $result;
         } catch (\Throwable $e) {
+            $this->db->rollback();
             $this->logger->error('email.database.get.failed', ['error' => $e->getMessage()]);
             return [];
         }
@@ -531,18 +651,145 @@ return true;
             $db = $this->db;
             $id = str_replace('db_', '', $emailId);
             
-            return $db->execute(
-                "UPDATE email_queue
-                 SET attempts = attempts + 1,
-                     status = IF(attempts + 1 >= 3, 'failed', 'pending'),
-                     error_message = ?,
-                     updated_at = NOW()
-                 WHERE id = ?",
-                [$error, $id]
-            ) !== false;
+            $row = $db->selectOne("SELECT attempts, user_id, to_email, subject, body, template, variables, priority FROM email_queue WHERE id = ?", [$id]);
+            if (!$row) {
+                return false;
+            }
+            
+            $attempts = (int)$row->attempts + 1;
+            $maxAttempts = 5;
+            
+            if ($attempts >= $maxAttempts) {
+                // Write to DLQ table
+                try {
+                    $payload = [
+                        'user_id' => $row->user_id,
+                        'to' => $row->to_email,
+                        'subject' => $row->subject,
+                        'body' => $row->body,
+                        'template' => $row->template,
+                        'variables' => json_decode($row->variables, true) ?? [],
+                        'priority' => $row->priority,
+                        'attempts' => $attempts,
+                        'status' => 'failed'
+                    ];
+                    $db->execute(
+                        "INSERT INTO email_dlq (email_id, payload, reason, created_at) VALUES (?, ?, ?, NOW())",
+                        [$emailId, json_encode($payload), $error]
+                    );
+                } catch (\Throwable $dlqError) {
+                    $this->logger->error('email.dlq.db_failed', ['error' => $dlqError->getMessage()]);
+                }
+                
+                $db->execute(
+                    "UPDATE email_queue
+                     SET attempts = ?,
+                         status = 'failed',
+                         error_message = ?,
+                         updated_at = NOW()
+                     WHERE id = ?",
+                    [$attempts, $error, $id]
+                );
+            } else {
+                $delay = 60 * pow(2, $attempts - 1) + rand(0, 30);
+                $delay = min($delay, 3600);
+                $scheduledAt = date('Y-m-d H:i:s', time() + $delay);
+                
+                $db->execute(
+                    "UPDATE email_queue
+                     SET attempts = ?,
+                         status = 'pending',
+                         scheduled_at = ?,
+                         error_message = ?,
+                         updated_at = NOW()
+                     WHERE id = ?",
+                    [$attempts, $scheduledAt, $error, $id]
+                );
+            }
+            return true;
         } catch (\Throwable $e) {
             $this->logger->error('email.database.mark_failed.error', ['error' => $e->getMessage()]);
             return false;
+        }
+    }
+
+    private function fallbackToFile(array $payload): string|bool
+    {
+        try {
+            $basePath = defined('BASE_PATH') ? BASE_PATH : dirname(dirname(__DIR__));
+            $dir = $basePath . '/storage/logs/email_fallback_queue';
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0775, true);
+            }
+            $filePath = $dir . '/' . $payload['id'] . '.json';
+            $success = file_put_contents($filePath, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+            if ($success !== false) {
+                $this->logger->warning('email.file.fallback_queued', [
+                    'email_id' => $payload['id'],
+                    'filePath' => $filePath
+                ]);
+                return 'file_' . $payload['id'];
+            }
+            return false;
+        } catch (\Throwable $e) {
+            $this->logger->error('email.file.fallback_failed', ['error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    public function recoverFileFallbacks(): int
+    {
+        try {
+            $basePath = defined('BASE_PATH') ? BASE_PATH : dirname(dirname(__DIR__));
+            $dir = $basePath . '/storage/logs/email_fallback_queue';
+            if (!is_dir($dir)) {
+                return 0;
+            }
+
+            $files = glob($dir . '/*.json');
+            if (empty($files)) {
+                return 0;
+            }
+
+            $recovered = 0;
+            foreach ($files as $file) {
+                $content = @file_get_contents($file);
+                if (!$content) {
+                    continue;
+                }
+
+                $payload = json_decode($content, true);
+                if (!$payload || !isset($payload['to'])) {
+                    @unlink($file); // Invalid file
+                    continue;
+                }
+
+                $emailData = [
+                    'to' => $payload['to'],
+                    'subject' => $payload['subject'],
+                    'body' => $payload['body'],
+                    'priority' => $payload['priority'] ?? 'normal',
+                    'user_id' => $payload['user_id'] ?? null,
+                    'template' => $payload['template'] ?? null,
+                    'variables' => $payload['variables'] ?? [],
+                    'scheduled_at' => $payload['scheduled_at'] ?? time(),
+                ];
+
+                $result = $this->push($emailData);
+                if ($result && !str_starts_with((string)$result, 'file_')) {
+                    @unlink($file);
+                    $recovered++;
+                }
+            }
+
+            if ($recovered > 0) {
+                $this->logger->info('email.file.recovered', ['count' => $recovered]);
+            }
+
+            return $recovered;
+        } catch (\Throwable $e) {
+            $this->logger->error('email.file.recovery_failed', ['error' => $e->getMessage()]);
+            return 0;
         }
     }
 

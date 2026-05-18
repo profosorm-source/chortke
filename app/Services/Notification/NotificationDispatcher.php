@@ -110,6 +110,7 @@ class NotificationDispatcher extends \App\Services\BaseService
         $pushed = 0;
 
         foreach ($chunks as $chunk) {
+            $msgId = $data['notif_id'] ?? uniqid('msg_', true);
             $this->queue->push(
                 SendBulkNotificationJob::class,
                 [
@@ -117,9 +118,12 @@ class NotificationDispatcher extends \App\Services\BaseService
                     'user_ids' => $chunk,
                     'title' => $title,
                     'message' => $message,
-                    'data' => $data,
+                    'data' => array_merge($data ?? [], [
+                        'idempotency_key' => $msgId
+                    ]),
                     'image_url' => $imageUrl,
-                    'action_url' => $actionUrl
+                    'action_url' => $actionUrl,
+                    'message_id' => $msgId
                 ]
             );
             $pushed++;
