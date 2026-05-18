@@ -5,6 +5,8 @@ namespace App\Services;
 use Core\Cache;
 
 use App\Contracts\LoggerInterface;
+use App\Contracts\MetricsCollectorInterface;
+
 /**
  * Redis Email Queue Service
  * 
@@ -22,12 +24,14 @@ class RedisEmailQueueService extends \App\Services\BaseService
     private string $metaPrefix = 'email:meta:';
 
     private \Core\Database $db;
+    private MetricsCollectorInterface $metrics;
 
-    public function __construct(Cache $cache, LoggerInterface $logger, \Core\Database $db)
+    public function __construct(Cache $cache, LoggerInterface $logger, \Core\Database $db, MetricsCollectorInterface $metrics)
     {
         parent::__construct($logger);
         $this->cache = $cache;
         $this->db = $db;
+        $this->metrics = $metrics;
         $this->redis = $this->cache->redis();
         $this->useRedis = $this->cache->driver() === 'redis';
 
@@ -83,6 +87,7 @@ class RedisEmailQueueService extends \App\Services\BaseService
                     'scheduled_at' => $scheduledAt,
                 ]);
 
+                $this->trackQueueDepth();
                 return $emailId;
             } catch (\Throwable $e) {
                 $this->logger->error('email.redis.queue.failed', [
@@ -94,17 +99,23 @@ class RedisEmailQueueService extends \App\Services\BaseService
 
                 $dbResult = $this->fallbackToDatabase($payload);
                 if ($dbResult) {
+                    $this->trackQueueDepth();
                     return $dbResult;
                 }
-                return $this->fallbackToFile($payload);
+                $fileResult = $this->fallbackToFile($payload);
+                $this->trackQueueDepth();
+                return $fileResult;
             }
         }
 
         $dbResult = $this->fallbackToDatabase($payload);
         if ($dbResult) {
+            $this->trackQueueDepth();
             return $dbResult;
         }
-        return $this->fallbackToFile($payload);
+        $fileResult = $this->fallbackToFile($payload);
+        $this->trackQueueDepth();
+        return $fileResult;
     }
 
     /**
@@ -155,14 +166,19 @@ LUA;
                     }
                 }
 
+                $this->trackQueueDepth();
                 return $emails;
             } catch (\Throwable $e) {
                 $this->logger->error('email.redis.pop.failed', ['error' => $e->getMessage()]);
-                return $this->fallbackGetFromDatabase($limit);
+                $dbEmails = $this->fallbackGetFromDatabase($limit);
+                $this->trackQueueDepth();
+                return $dbEmails;
             }
         }
 
-        return $this->fallbackGetFromDatabase($limit);
+        $dbEmails = $this->fallbackGetFromDatabase($limit);
+        $this->trackQueueDepth();
+        return $dbEmails;
     }
 
     /**
@@ -233,6 +249,8 @@ LUA;
             if (file_exists($file)) {
                 @unlink($file);
             }
+            $this->metrics->increment('email.send.success');
+            $this->trackQueueDepth();
             return true;
         }
 
@@ -255,6 +273,8 @@ LUA;
                     $this->redis->del($this->metaPrefix . $emailId);
                 }
 
+                $this->metrics->increment('email.send.success');
+                $this->trackQueueDepth();
                 $this->logger->info('email.redis.sent_archived', [
                     'email_id' => $emailId,
                 ]);
@@ -271,7 +291,12 @@ LUA;
             }
         }
 
-        return $this->fallbackMarkAsSentInDatabase($emailId);
+        $success = $this->fallbackMarkAsSentInDatabase($emailId);
+        if ($success) {
+            $this->metrics->increment('email.send.success');
+        }
+        $this->trackQueueDepth();
+        return $success;
     }
 
     /**
@@ -280,6 +305,7 @@ LUA;
      */
     public function markAsFailed(string $emailId, string $error): bool
     {
+        $this->metrics->increment('email.send.failure');
         if (str_starts_with($emailId, 'file_')) {
             $realId = str_replace('file_', '', $emailId);
             $basePath = defined('BASE_PATH') ? BASE_PATH : dirname(dirname(__DIR__));
@@ -309,6 +335,7 @@ LUA;
                     }
                 }
             }
+            $this->trackQueueDepth();
             return true;
         }
 
@@ -377,14 +404,18 @@ LUA;
                     }
                 }
 
+                $this->trackQueueDepth();
                 return true;
             } catch (\Throwable $e) {
                 $this->logger->error('email.redis.mark_failed.error', ['error' => $e->getMessage()]);
+                $this->trackQueueDepth();
                 return false;
             }
         }
 
-        return $this->fallbackMarkAsFailedInDatabase($emailId, $error);
+        $res = $this->fallbackMarkAsFailedInDatabase($emailId, $error);
+        $this->trackQueueDepth();
+        return $res;
     }
 
     /**
@@ -1016,6 +1047,22 @@ LUA;
             ]);
 
             return false;
+        }
+    }
+
+    /**
+     * Track and record email queue depth as a metric gauge
+     */
+    private function trackQueueDepth(): void
+    {
+        try {
+            if ($this->useRedis) {
+                $depth = $this->redis->zCard($this->queueKey) ?: 0;
+            } else {
+                $depth = (int)$this->db->fetchColumn("SELECT COUNT(*) FROM email_queue WHERE status = 'pending'") ?: 0;
+            }
+            $this->metrics->gauge('email.queue.depth', (float)$depth);
+        } catch (\Throwable $e) {
         }
     }
 }

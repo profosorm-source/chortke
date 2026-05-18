@@ -106,7 +106,8 @@ class NotificationDispatcher extends \App\Services\BaseService
         ?string $imageUrl = null,
         ?string $actionUrl = null
     ): array {
-        $chunks = array_chunk($userIds, 100);
+        $batchSize = (int)config('notification.bulk_batch_size', 500);
+        $chunks = array_chunk($userIds, $batchSize);
         $pushed = 0;
 
         foreach ($chunks as $chunk) {

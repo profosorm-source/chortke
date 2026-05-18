@@ -155,20 +155,28 @@ extends \App\Services\BaseService
             ]);
 
             // ✅ Save to database (persistent queue)
-            $this->db->query(
-                "INSERT INTO realtime_messages (room, type, payload, expires_at, created_at)
-                 VALUES (?, ?, ?, ?, NOW())",
-                [$room, $msg['type'] ?? 'general', json_encode($msg), $msg['expires_at']]
-            );
+            try {
+                $this->db->query(
+                    "INSERT INTO realtime_messages (room, type, payload, expires_at, created_at)
+                     VALUES (?, ?, ?, ?, NOW())",
+                    [$room, $msg['type'] ?? 'general', json_encode($msg), $msg['expires_at']]
+                );
+            } catch (\Throwable $dbEx) {
+                $this->logger->error('websocket.publish.db_failed', ['error' => $dbEx->getMessage()]);
+            }
 
-            // ✅ Add to delayed queue with timestamp for batching
-            $delayedKey = self::DELAYED_QUEUE_PREFIX . $room;
-            $deliverAt = time() + self::DELIVERY_DELAY;
-            $this->redis->zAdd($delayedKey, $deliverAt, json_encode($msg));
-            $this->redis->expire($delayedKey, self::MESSAGE_RETENTION);
+            try {
+                // ✅ Add to delayed queue with timestamp for batching
+                $delayedKey = self::DELAYED_QUEUE_PREFIX . $room;
+                $deliverAt = time() + self::DELIVERY_DELAY;
+                $this->redis->zAdd($delayedKey, $deliverAt, json_encode($msg));
+                $this->redis->expire($delayedKey, self::MESSAGE_RETENTION);
 
-            // ✅ Process any ready messages for immediate delivery (batching)
-            $this->processDelayedMessages($room);
+                // ✅ Process any ready messages for immediate delivery (batching)
+                $this->processDelayedMessages($room);
+            } catch (\Throwable $redisEx) {
+                $this->logger->error('websocket.redis_failed_fallback_to_db', ['error' => $redisEx->getMessage()]);
+            }
 
             $this->logger->debug('websocket.publish_delayed', ['room' => $room, 'type' => $msg['type'] ?? 'general', 'delay' => self::DELIVERY_DELAY]);
 
