@@ -72,7 +72,10 @@ class CryptoDepositController extends BaseUserController
      */
     public function store(): void
     {
-                $userId = $this->userId();
+        // CSRF verification (M-09)
+        $this->validateCsrf();
+
+        $userId = $this->userId();
 
         // بررسی درخواست در انتظار
         if ($this->depositModel->hasPendingDeposit($userId)) {
@@ -154,8 +157,8 @@ class CryptoDepositController extends BaseUserController
                 $db->beginTransaction();
 
                 try {
-                    // Pessimistic lock check on tx_hash (global) to prevent race condition and cross-network bypass (C-01 & C-06)
-                    $existingDeposit = $this->depositModel->findByHashForUpdate($data['tx_hash']);
+                    // Pessimistic lock check on tx_hash and network to prevent race condition and cross-network bypass (C-01 & C-06, M-02)
+                    $existingDeposit = $this->depositModel->findByHashAndNetworkForUpdate($data['tx_hash'], $data['network']);
                     if ($existingDeposit) {
                         throw new \RuntimeException('این هش تراکنش قبلاً ثبت شده است');
                     }
@@ -173,8 +176,8 @@ class CryptoDepositController extends BaseUserController
                     $data['wallet_address'] = $walletAddress;
                     $data['verification_status'] = 'pending';
                     
-                    // Set auto_check_deadline (30 mins from now in default timezone) (C-12)
-                    $minutes = (int) (setting('crypto_intent_expire_minutes') ?: 30);
+                    // Set auto_check_deadline (30 mins from now in default timezone) (C-12, L-02)
+                    $minutes = (int) (setting('crypto_intent_expire_minutes') ?: \App\Constants\CryptoConstants::DEFAULT_INTENT_EXPIRE_MINUTES);
                     $data['auto_check_deadline'] = (new \DateTime())
                         ->modify("+{$minutes} minutes")
                         ->format('Y-m-d H:i:s');
@@ -228,7 +231,11 @@ class CryptoDepositController extends BaseUserController
                 'line' => $e->getLine(),
             ]);
 
-            $this->session->setFlash('error', $e->getMessage());
+            $message = $e instanceof \RuntimeException 
+                ? $e->getMessage() 
+                : 'خطای سیستمی در ثبت درخواست';
+
+            $this->session->setFlash('error', $message);
             $this->session->setFlash('old', $data);
             redirect('/wallet/deposit/crypto');
             return;
