@@ -48,4 +48,4 @@ $r->get('/withdrawal/limits',[WithdrawalController::class, 'limitsInfo'], $auth)
 // ── پرداخت آنلاین ─────────────────────────────────────────────────────────
 $r->post('/payment/request',  [PaymentController::class, 'request'], $secureAuth);
 $r->post('/payment/callback/{gateway}',  [PaymentController::class, 'callback'], [RateLimitMiddleware::class]);
-$r->get('/payment/callback/{gateway}',  [PaymentController::class, 'callbackGet'], [RateLimitMiddleware::class]);
+$r->get('/payment/callback/{gateway}',  [PaymentController::class, 'callbackGet'], [RateLimitMiddleware::class . ':1,1']);
