@@ -205,7 +205,7 @@ class AuthController extends BaseController
         
         // HIGH-09 Fix: Verify admin pending 2FA hasn't expired
         $createdAt = (int)$this->session->get('admin_pending_2fa_created', 0);
-        if (time() - $createdAt > 600) { // 10 minute timeout
+        if (time() - $createdAt > 300) { // 5 minute timeout for admin
             $this->session->destroy();
             $this->session->setFlash('error', 'نشست تأیید ادمین منقضی شده است. لطفاً دوباره لاگین کنید.');
             return redirect('/admin/login');
@@ -222,6 +222,7 @@ class AuthController extends BaseController
             ]);
 
             $this->session->destroy();
+            $this->session->setFlash('error', 'به دلایل امنیتی، نشست شما بسته شد. لطفاً دوباره لاگین کنید.');
             return redirect('/admin/login');
         }
 
