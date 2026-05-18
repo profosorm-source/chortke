@@ -211,6 +211,20 @@ class AuthController extends BaseController
             return redirect('/admin/login');
         }
 
+        // HIGH FIX: Verify IP binding for admin 2FA session
+        $expectedIp = $this->session->get('admin_pending_2fa_ip');
+        $currentIp = get_client_ip();
+        if ($expectedIp && $expectedIp !== $currentIp) {
+            $this->logger->critical('admin.2fa.ip_mismatch', [
+                'user_id' => $userId,
+                'expected_ip' => $expectedIp,
+                'current_ip' => $currentIp
+            ]);
+
+            $this->session->destroy();
+            return redirect('/admin/login');
+        }
+
         return view('admin/verify-2fa', ['title' => 'تایید هویت دو مرحله ای']);
     }
 
@@ -237,17 +251,14 @@ class AuthController extends BaseController
         $storedIp = $this->session->get('admin_pending_2fa_ip');
         $currentIp = get_client_ip();
         if ($storedIp && $storedIp !== $currentIp) {
-            // Normalize to /24 for comparison
-            $storedSubnet = substr($storedIp, 0, strrpos($storedIp, '.'));
-            $currentSubnet = substr($currentIp, 0, strrpos($currentIp, '.'));
-            if ($storedSubnet !== $currentSubnet) {
-                $this->logger->warning('admin.2fa.ip_changed', [
-                    'user_id' => $userId,
-                    'stored_ip' => $storedIp,
-                    'current_ip' => $currentIp
-                ]);
-                // Log but don't block - legitimate network changes
-            }
+            $this->logger->critical('admin.2fa.ip_mismatch', [
+                'user_id' => $userId,
+                'stored_ip' => $storedIp,
+                'current_ip' => $currentIp
+            ]);
+
+            $this->session->destroy();
+            return $this->json(false, 'نشست نامعتبر است.', [], 401);
         }
 
         $code = trim((string)$this->request->post('code'));
