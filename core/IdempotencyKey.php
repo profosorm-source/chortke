@@ -293,7 +293,7 @@ class IdempotencyKey
             );
         } finally {
             if ($isLocked) {
-                $cache->unlock($lockKey);
+                $this->cache->unlock($lockKey);
             }
         }
     }

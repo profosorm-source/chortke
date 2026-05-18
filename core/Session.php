@@ -42,13 +42,14 @@ class Session
         try {
             $config = config('session');
             $headersSent = headers_sent();
+            $isCli = in_array(PHP_SAPI, ['cli', 'phpdbg'], true);
 
-            if ($headersSent && !in_array(PHP_SAPI, ['cli', 'phpdbg'], true)) {
+            if ($headersSent && !$isCli) {
                 throw new \RuntimeException('Session cannot be started after headers have already been sent.');
             }
 
             // CORE-033: Enforce strict mode and safe cookie settings
-            if (!$headersSent) {
+            if (!$headersSent && !$isCli) {
                 ini_set('session.use_strict_mode', '1');
                 ini_set('session.use_only_cookies', '1');
                 ini_set('session.cookie_httponly', '1');
@@ -56,7 +57,7 @@ class Session
 
             // Set Redis session handler if headers are still writable.
             $handler = new \Core\RedisSessionHandler();
-            if (!$headersSent) {
+            if (!$headersSent && !$isCli) {
                 session_set_save_handler($handler, true);
                 session_name($config['name']);
 
@@ -74,7 +75,7 @@ class Session
                 ]);
             }
 
-            if ($headersSent) {
+            if ($isCli || $headersSent) {
                 if (!isset($_SESSION)) {
                     $_SESSION = [];
                 }

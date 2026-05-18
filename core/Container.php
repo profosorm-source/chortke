@@ -33,6 +33,7 @@ class Container
     private array $reflectionCacheUsage = [];
     private const MAX_REFLECTION_CACHE = 500;
     private bool $isLoggingMissing = false;
+    private bool $ejectingReflection = false;
 
     /** @var array<string, array<string>> */
     private array $tags = [];
@@ -216,14 +217,21 @@ class Container
 
     if (!isset($this->reflectionCache[$concrete])) {
         if (count($this->reflectionCache) >= self::MAX_REFLECTION_CACHE) {
-            // Remove least recently used reflection class
-            asort($this->reflectionCacheUsage);
-            $leastUsed = array_key_first($this->reflectionCacheUsage);
-            if ($leastUsed !== null) {
-                unset(
-                    $this->reflectionCache[$leastUsed],
-                    $this->reflectionCacheUsage[$leastUsed]
-                );
+            if (!$this->ejectingReflection) {
+                $this->ejectingReflection = true;
+                try {
+                    // Remove least recently used reflection class
+                    asort($this->reflectionCacheUsage);
+                    $leastUsed = array_key_first($this->reflectionCacheUsage);
+                    if ($leastUsed !== null) {
+                        unset(
+                            $this->reflectionCache[$leastUsed],
+                            $this->reflectionCacheUsage[$leastUsed]
+                        );
+                    }
+                } finally {
+                    $this->ejectingReflection = false;
+                }
             }
         }
         $this->reflectionCache[$concrete] = new \ReflectionClass($concrete);
