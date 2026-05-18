@@ -68,6 +68,7 @@ class AuthController extends BaseController
             $captchaToken = trim((string)($data['captcha_token'] ?? ''));
             $captchaResp = trim((string)($data['captcha_response'] ?? ''));
             $recaptchaResp = trim((string)($data['g-recaptcha-response'] ?? ''));
+            $behavioralState = trim((string)($data['behavioral_state'] ?? ''));
 
             if ($captchaType === 'recaptcha_v2') {
                 if ($recaptchaResp === '' || !$this->captchaService->verify('', '', $recaptchaResp)) {
@@ -77,7 +78,8 @@ class AuthController extends BaseController
                     return;
                 }
             } else {
-                if ($captchaToken === '' || $captchaResp === '' || !$this->captchaService->verify($captchaToken, $captchaResp)) {
+                $isBehavioral = ($captchaType === 'behavioral');
+                if ($captchaToken === '' || (!$isBehavioral && $captchaResp === '') || !$this->captchaService->verify($captchaToken, $captchaResp, null, $behavioralState)) {
                     $this->loginRiskService->recordFailure('login', null, $email);
                     $this->session->setFlash('error', 'کپچا اشتباه است.');
                     $this->response->redirect(url('login'));
@@ -177,6 +179,7 @@ class AuthController extends BaseController
             $captchaToken = trim((string)$this->request->input('captcha_token', ''));
             $captchaResp  = trim((string)$this->request->input('captcha_response', ''));
             $recaptchaResp = trim((string)$this->request->input('g-recaptcha-response', ''));
+            $behavioralState = trim((string)$this->request->input('behavioral_state', ''));
 
             if ($captchaType === 'recaptcha_v2') {
                 if ($recaptchaResp === '' || !$this->captchaService->verify('', '', $recaptchaResp)) {
@@ -186,7 +189,8 @@ class AuthController extends BaseController
                     return;
                 }
             } else {
-                if ($captchaToken === '' || $captchaResp === '' || !$this->captchaService->verify($captchaToken, $captchaResp)) {
+                $isBehavioral = ($captchaType === 'behavioral');
+                if ($captchaToken === '' || (!$isBehavioral && $captchaResp === '') || !$this->captchaService->verify($captchaToken, $captchaResp, null, $behavioralState)) {
                     $this->loginRiskService->recordFailure('register');
                     $this->session->setFlash('error', 'کپچا اشتباه است.');
                     $this->response->redirect(url('register'));
