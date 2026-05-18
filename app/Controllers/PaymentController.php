@@ -16,16 +16,19 @@ class PaymentController extends BaseController
     private WalletService $walletService;
     private PaymentService $paymentService;
     private ReconciliationService $reconciliationService;
+    private \Core\Cache $cache;
 
     public function __construct(
         WalletService $walletService,
         PaymentService $paymentService,
-        ReconciliationService $reconciliationService
+        ReconciliationService $reconciliationService,
+        \Core\Cache $cache
     ) {
         parent::__construct();
         $this->walletService = $walletService;
         $this->paymentService = $paymentService;
         $this->reconciliationService = $reconciliationService;
+        $this->cache = $cache;
     }
 
     /**
@@ -158,20 +161,40 @@ class PaymentController extends BaseController
     public function callbackGet(): void
     {
         $gateway = (string)(
-            $this->request->get('gateway')
-            ?? $this->request->param('gateway')
-            ?? ''
+            $this->request->param('gateway')
+            ?? $this->request->get('gateway')
+            ?? 'unknown'
         );
 
-        $this->logger->warning('payment.callback.get_not_allowed', [
+        // Log suspicious activity
+        $this->logger->warning('payment.callback.get_attempt_blocked', [
             'gateway' => $gateway,
             'ip' => get_client_ip(),
-            'user_agent' => get_user_agent()
+            'user_agent' => get_user_agent(),
+            'referer' => $_SERVER['HTTP_REFERER'] ?? 'none',
         ]);
-
+        
+        // Block IP after 3 attempts in 1 hour (3600 seconds)
+        $ipKey = "callback_get_abuse:" . get_client_ip();
+        $attempts = (int)$this->cache->get($ipKey, 0);
+        $this->cache->set($ipKey, $attempts + 1, 3600);
+        
+        if ($attempts >= 3) {
+            $this->logger->critical('payment.callback.get_abuse_detected', [
+                'ip' => get_client_ip(),
+                'attempts' => $attempts + 1
+            ]);
+            
+            $this->response->status(403)->json([
+                'success' => false,
+                'message' => 'Access forbidden due to suspicious activity'
+            ]);
+            return;
+        }
+        
         $this->response->status(405)->json([
             'success' => false,
-            'message' => 'Callback must be sent using POST, not GET.'
+            'message' => 'Method not allowed. Callbacks must use POST.'
         ]);
     }
 }
