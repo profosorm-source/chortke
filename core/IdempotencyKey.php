@@ -504,62 +504,128 @@ class IdempotencyKey
         $logId = uniqid('WRAP_', true);
         
         $service->logEvent('idempotency.wrap.started', [
-    'log_id' => $logId,
-    'key' => $key,
-    'user_id' => $userId,
-    'action' => $action,
-]);
+            'log_id' => $logId,
+            'key' => $key,
+            'user_id' => $userId,
+            'action' => $action,
+        ]);
         // بررسی کلید
         $check = $service->check($key, $userId, $action, $requestData);
         
         if ($check['is_duplicate']) {
             $service->logEvent('idempotency.wrap.duplicate_returned', [
-    'log_id' => $logId,
-    'key' => $key,
-], 'warning');
+                'log_id' => $logId,
+                'key' => $key,
+            ], 'warning');
             return $check['result'];
         }
         
         try {
             // اجرای عملیات
             $service->logEvent('idempotency.wrap.callback.executing', [
-    'log_id' => $logId,
-    'key' => $key,
-]);
+                'log_id' => $logId,
+                'key' => $key,
+            ]);
             $result = $callback();
             
             // ذخیره نتیجه موفق
             $service->complete($key, $result, $userId);
             
             $service->logEvent('idempotency.wrap.callback.success', [
-    'log_id' => $logId,
-    'key' => $key,
-]);
+                'log_id' => $logId,
+                'key' => $key,
+            ]);
             
             return $result;
             
         } catch (\Exception $e) {
-    $service->fail($key, [
-        'error' => $e->getMessage(),
-        'code' => $e->getCode(),
-        'file' => $e->getFile(),
-        'line' => $e->getLine()
-    ], $userId);
+            $service->fail($key, [
+                'error' => $e->getMessage(),
+                'code' => $e->getCode(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ], $userId);
 
-    logger()->error('callback.failed', [
-        'channel' => 'payment_callback',
-        'log_id' => $logId,
-        'user_id' => $userId ?? null,
-        'key' => $key,
-        'error' => $e->getMessage(),
-        'code' => $e->getCode(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
+            logger()->error('callback.failed', [
+                'channel' => 'payment_callback',
+                'log_id' => $logId,
+                'user_id' => $userId ?? null,
+                'key' => $key,
+                'error' => $e->getMessage(),
+                'code' => $e->getCode(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
 
-    throw $e;
-}
+            throw $e;
+        }
+    }
+
+    /**
+     * Instance version of wrap for dependency injection
+     */
+    public function wrapInstance(string $key, int $userId, string $action, callable $callback, ?array $requestData = null)
+    {
+        $logId = uniqid('WRAP_', true);
+        
+        $this->logEvent('idempotency.wrap.started', [
+            'log_id' => $logId,
+            'key' => $key,
+            'user_id' => $userId,
+            'action' => $action,
+        ]);
+        // بررسی کلید
+        $check = $this->check($key, $userId, $action, $requestData);
+        
+        if ($check['is_duplicate']) {
+            $this->logEvent('idempotency.wrap.duplicate_returned', [
+                'log_id' => $logId,
+                'key' => $key,
+            ], 'warning');
+            return $check['result'];
+        }
+        
+        try {
+            // اجرای عملیات
+            $this->logEvent('idempotency.wrap.callback.executing', [
+                'log_id' => $logId,
+                'key' => $key,
+            ]);
+            $result = $callback();
+            
+            // ذخیره نتیجه موفق
+            $this->complete($key, $result, $userId);
+            
+            $this->logEvent('idempotency.wrap.callback.success', [
+                'log_id' => $logId,
+                'key' => $key,
+            ]);
+            
+            return $result;
+            
+        } catch (\Exception $e) {
+            $this->fail($key, [
+                'error' => $e->getMessage(),
+                'code' => $e->getCode(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ], $userId);
+
+            logger()->error('callback.failed', [
+                'channel' => 'payment_callback',
+                'log_id' => $logId,
+                'user_id' => $userId ?? null,
+                'key' => $key,
+                'error' => $e->getMessage(),
+                'code' => $e->getCode(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
+            throw $e;
+        }
     }
     
     /**
