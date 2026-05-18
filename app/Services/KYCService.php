@@ -123,9 +123,36 @@ class KYCService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'تصویر احراز هویت الزامی است'];
         }
 
+        $canSubmit = $this->canSubmitKYC($userId);
+        if (!$canSubmit['can']) {
+            return ['success' => false, 'message' => $canSubmit['reason']];
+        }
+
         $nationalCode = trim((string)($data['national_code'] ?? ''));
         if ($nationalCode !== '' && !preg_match('/^\d{10}$/', $nationalCode)) {
             return ['success' => false, 'message' => 'کد ملی نامعتبر است'];
+        }
+
+        if ($nationalCode !== '') {
+            $stmt = $this->db->query("SELECT user_id, national_code FROM kyc_verifications WHERE status = 'verified'");
+            while ($row = $stmt->fetch(\PDO::FETCH_OBJ)) {
+                if (!empty($row->national_code)) {
+                    try {
+                        $decrypted = $this->encryption->decrypt((string)$row->national_code);
+                        if ($decrypted === $nationalCode && (int)$row->user_id !== $userId) {
+                            $this->auditTrail->record('kyc.duplicate_national_code_attempt', $userId, [
+                                'attempted_national_code_hash' => hash('sha256', $nationalCode),
+                                'original_user' => (int)$row->user_id
+                            ], $userId);
+
+                            return [
+                                'success' => false,
+                                'message' => 'این کد ملی قبلاً در سیستم ثبت شده است'
+                            ];
+                        }
+                    } catch (\Throwable $ignore) {}
+                }
+            }
         }
 
         // 2) آپلود فایل
@@ -150,6 +177,14 @@ class KYCService extends \App\Services\BaseService
                     $photoshopCheck['suspicious'] = true; // پرچم‌گذاری به عنوان مشکوک جهت بررسی اپراتور
                     $photoshopCheck['reasons'][] = 'رد شدن توسط هوش مصنوعی: ' . ($aiCheck['ai_notes'] ?? 'عدم تأیید تصویر');
                 }
+            } else {
+                // Downstream AI Service Failure -> FAIL-SECURE! Force manual review.
+                $photoshopCheck['suspicious'] = true;
+                $photoshopCheck['reasons'][] = 'عدم امکان تأیید هوکار خودکار (خطای سرویس هوش مصنوعی). جهت بررسی دستی ارجاع شد.';
+                $this->logger->warning('kyc.ai_check.failed_secure', [
+                    'user_id' => $userId,
+                    'error' => $aiAnalysis['message'] ?? 'Unknown AI service error'
+                ]);
             }
         }
 
@@ -244,11 +279,19 @@ class KYCService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'این درخواست قبلا بررسی شده است'];
         }
 
+        // H-2: concurrency lock check
+        if (!empty($kyc->under_review_by) && (int)$kyc->under_review_by !== $adminId) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'این درخواست توسط ادمین دیگری در حال بررسی است'];
+        }
+
         $okKyc = $this->kycModel->update($kycId, [
             'status' => 'verified',
             'reviewed_by' => $adminId,
             'reviewed_at' => date('Y-m-d H:i:s'),
             'rejection_reason' => null,
+            'under_review_by' => null,
+            'review_started_at' => null,
         ]);
 
         if (!$okKyc) {
@@ -326,11 +369,19 @@ class KYCService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'این درخواست قبلا بررسی شده است'];
         }
 
+        // H-2: concurrency lock check
+        if (!empty($kyc->under_review_by) && (int)$kyc->under_review_by !== $adminId) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'این درخواست توسط ادمین دیگری در حال بررسی است'];
+        }
+
         $okKyc = $this->kycModel->update($kycId, [
             'status' => 'rejected',
             'reviewed_by' => $adminId,
             'reviewed_at' => date('Y-m-d H:i:s'),
             'rejection_reason' => $reason,
+            'under_review_by' => null,
+            'review_started_at' => null,
         ]);
 
         if (!$okKyc) {
@@ -347,9 +398,14 @@ class KYCService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'خطا در بروزرسانی کاربر'];
         }
 
+        // H-7: Context and audit trail logging upon rejection
         $this->auditTrail->record('kyc.rejected', (int)$kyc->user_id, [
             'kyc_id' => $kycId,
+            'previous_status' => $kyc->status,
             'reason' => $reason,
+            'ip_address' => get_client_ip(),
+            'user_agent' => get_user_agent(),
+            'admin_session_id' => session_id(),
         ], $adminId);
 
         $this->db->commit();
@@ -390,15 +446,21 @@ class KYCService extends \App\Services\BaseService
     /**
      * دریافت تمامی رکوردهای احراز هویت (برای ادمین)
      */
-    public function getAll(array $filters = [], int $limit = 50, int $offset = 0): array
+    public function getAll(array $filters = [], int $limit = 50, int $offset = 0, bool $maskPII = false): array
     {
         $results = $this->kycModel->getAll($filters, $limit, $offset);
         foreach ($results as $kyc) {
             if (!empty($kyc->national_code)) {
-                $kyc->national_code = $this->encryption->decrypt((string)$kyc->national_code);
+                $decrypted = $this->encryption->decrypt((string)$kyc->national_code);
+                $kyc->national_code = $maskPII
+                    ? (strlen($decrypted) >= 5 ? substr($decrypted, 0, 3) . '****' . substr($decrypted, -2) : '*****')
+                    : $decrypted;
             }
             if (!empty($kyc->birth_date)) {
-                $kyc->birth_date = $this->encryption->decrypt((string)$kyc->birth_date);
+                $decrypted = $this->encryption->decrypt((string)$kyc->birth_date);
+                $kyc->birth_date = $maskPII
+                    ? (strlen($decrypted) >= 4 ? substr($decrypted, 0, 4) . '/**/**' : '**//**')
+                    : $decrypted;
             }
         }
         return $results;
@@ -415,14 +477,20 @@ class KYCService extends \App\Services\BaseService
     /**
      * یافتن رکورد خاص
      */
-    public function find(int $id): ?object
+    public function find(int $id, bool $maskPII = false): ?object
     {
         $kyc = $this->kycModel->find($id);
         if ($kyc && !empty($kyc->national_code)) {
-            $kyc->national_code = $this->encryption->decrypt((string)$kyc->national_code);
+            $decrypted = $this->encryption->decrypt((string)$kyc->national_code);
+            $kyc->national_code = $maskPII
+                ? (strlen($decrypted) >= 5 ? substr($decrypted, 0, 3) . '****' . substr($decrypted, -2) : '*****')
+                : $decrypted;
         }
         if ($kyc && !empty($kyc->birth_date)) {
-            $kyc->birth_date = $this->encryption->decrypt((string)$kyc->birth_date);
+            $decrypted = $this->encryption->decrypt((string)$kyc->birth_date);
+            $kyc->birth_date = $maskPII
+                ? (strlen($decrypted) >= 4 ? substr($decrypted, 0, 4) . '/**/**' : '**//**')
+                : $decrypted;
         }
         return $kyc;
     }

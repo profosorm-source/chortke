@@ -13,6 +13,7 @@ class BankCardService extends \App\Services\BaseService
     private \App\Adapters\BankInquiryAdapter $inquiryAdapter;
     private \Core\Encryption $encryption;
     private \Core\Database $db;
+    private \Core\IdempotencyKey $idempotencyKey;
 
     public function __construct(
         \App\Models\BankCard $model,
@@ -20,7 +21,8 @@ class BankCardService extends \App\Services\BaseService
         \App\Adapters\BankInquiryAdapter $inquiryAdapter,
         \Core\Encryption $encryption,
         \Core\Database $db,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        \Core\IdempotencyKey $idempotencyKey
     ) {
         parent::__construct($logger);
         $this->model          = $model;
@@ -28,11 +30,12 @@ class BankCardService extends \App\Services\BaseService
         $this->inquiryAdapter = $inquiryAdapter;
         $this->encryption     = $encryption;
         $this->db             = $db;
+        $this->idempotencyKey = $idempotencyKey;
     }
 
     public function create(int $userId, array $data): array
     {
-        $cardNumber = preg_replace('/\D/', '', (string)($data['card_number'] ?? ''));
+        $cardNumber = preg_replace('/\D/', '', $this->normalizeDigits((string)($data['card_number'] ?? '')));
         if (!$this->validateLuhn($cardNumber)) {
             return ['success' => false, 'message' => 'شماره کارت وارد شده نامعتبر است'];
         }
@@ -61,7 +64,7 @@ class BankCardService extends \App\Services\BaseService
             'card_number' => $cardNumber,
         ]);
 
-        return \Core\IdempotencyKey::wrap($idempotencyKey, $userId, 'bank_card_creation', function() use ($userId, $cardNumber, $holder, $iban) {
+        return $this->idempotencyKey->wrapInstance($idempotencyKey, $userId, 'bank_card_creation', function() use ($userId, $cardNumber, $holder, $iban) {
             $startedTransaction = !$this->db->inTransaction();
             if ($startedTransaction) {
                 $this->db->beginTransaction();
@@ -76,7 +79,7 @@ class BankCardService extends \App\Services\BaseService
                 }
 
                 $encryptedCardNumber = $this->encryption->encrypt($cardNumber);
-                $cardHash = hash_hmac('sha256', $cardNumber, (string)config('app.key'));
+                $cardHash = hash_hmac('sha256', $cardNumber, secure_key());
                 $stmt = $this->db->prepare("SELECT id FROM bank_cards WHERE card_hash = ? AND deleted_at IS NULL FOR UPDATE");
                 $stmt->execute([$cardHash]);
                 if ($stmt->fetch()) {
@@ -231,9 +234,9 @@ class BankCardService extends \App\Services\BaseService
             }
 
             if ($approve) {
-                // Fetch user with FOR SHARE lock to strictly comply with the KYC / DB Integrity Rule
+                // Fetch user with FOR UPDATE lock to strictly comply with the KYC / DB Integrity Rule
                 $user = $this->db->query(
-                    "SELECT id, full_name, kyc_status FROM users WHERE id = ? FOR SHARE",
+                    "SELECT id, full_name, kyc_status FROM users WHERE id = ? FOR UPDATE",
                     [(int)$card->user_id]
                 )->fetch(\PDO::FETCH_OBJ);
 
@@ -300,19 +303,33 @@ class BankCardService extends \App\Services\BaseService
         return bcmod($check, '97') === '1';
     }
 
+    private function normalizeDigits(string $str): string
+    {
+        $persian = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+        $arabic  = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+        $num     = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+        $str = str_replace($persian, $num, $str);
+        return str_replace($arabic, $num, $str);
+    }
+
     private function validateLuhn(string $cardNumber): bool
     {
-        if (strlen($cardNumber) !== 16 || !ctype_digit($cardNumber)) {
+        $length = strlen($cardNumber);
+        if ($length < 15 || $length > 19 || !ctype_digit($cardNumber)) {
             return false;
         }
         $sum = 0;
-        for ($i = 0; $i < 16; $i++) {
+        $shouldDouble = false;
+        for ($i = $length - 1; $i >= 0; $i--) {
             $digit = (int)$cardNumber[$i];
-            if ($i % 2 === 0) {
+            if ($shouldDouble) {
                 $digit *= 2;
-                if ($digit > 9) $digit -= 9;
+                if ($digit > 9) {
+                    $digit -= 9;
+                }
             }
             $sum += $digit;
+            $shouldDouble = !$shouldDouble;
         }
         return $sum % 10 === 0;
     }
@@ -321,18 +338,23 @@ class BankCardService extends \App\Services\BaseService
     {
         $a = \mb_strtolower(trim(preg_replace('/\s+/', ' ', $a)), 'UTF-8');
         $b = \mb_strtolower(trim(preg_replace('/\s+/', ' ', $b)), 'UTF-8');
-        if ($a === '' || $b === '') return true;
+        if ($a === '' || $b === '') return false;
         if ($a === $b) return true;
 
-        $prefixes = ['سید ', 'سیده ', 'میر ', 'آقا ', 'خانم '];
-        $aClean = str_replace($prefixes, '', $a);
-        $bClean = str_replace($prefixes, '', $b);
+        $titles = ['سید ', 'سیده ', 'میر ', 'آقا ', 'خانم '];
+        $aClean = str_replace($titles, '', $a);
+        $bClean = str_replace($titles, '', $b);
 
         if (str_replace(' ', '', $aClean) === str_replace(' ', '', $bClean)) return true;
 
         $sim = 0;
         similar_text($aClean, $bClean, $sim);
-        return $sim >= 75;
+        
+        $lev = levenshtein($aClean, $bClean);
+        $maxLen = max(strlen($aClean), strlen($bClean));
+        $levSim = $maxLen > 0 ? (1 - $lev / $maxLen) * 100 : 0;
+
+        return $sim >= 90 && $levSim >= 90;
     }
 
     private function detectBankName(string $cardNumber): string
