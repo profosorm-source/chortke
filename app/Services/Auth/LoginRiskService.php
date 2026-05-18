@@ -61,7 +61,38 @@ class LoginRiskService extends \App\Services\BaseService
         }
 
         $resolvedIp = $this->resolveIp($ip);
-        $score = $this->getRiskScore($context, $resolvedIp, $identifier);
+
+        // Check if both Redis and Cache are down
+        $redis = app(\Core\Redis::class);
+        $redisAvailable = false;
+        try {
+            $redisAvailable = $redis && $redis->isAvailable();
+        } catch (\Throwable $e) {}
+
+        $cacheAvailable = true;
+        try {
+            $this->cache->get('connectivity_test');
+        } catch (\Throwable $e) {
+            $cacheAvailable = false;
+        }
+
+        if (!$redisAvailable && !$cacheAvailable) {
+            $this->logger->critical('login_risk.cache_and_redis_down.fail_closed_strict_captcha', [
+                'context' => $context,
+                'ip' => $resolvedIp
+            ]);
+            return 'recaptcha_v2';
+        }
+
+        try {
+            $score = $this->getRiskScore($context, $resolvedIp, $identifier);
+        } catch (\Throwable $e) {
+            // Fail closed on any score retrieval exception
+            $this->logger->error('login_risk.get_score_failed.fail_closed_strict_captcha', [
+                'error' => $e->getMessage()
+            ]);
+            return 'recaptcha_v2';
+        }
 
         if ($context === 'register') {
             $captchaType = $this->determineCaptchaTypeByScore($score);
@@ -147,7 +178,10 @@ class LoginRiskService extends \App\Services\BaseService
         }
 
         $redis = app(\Core\Redis::class);
-        $redisAvailable = $redis && $redis->isAvailable();
+        $redisAvailable = false;
+        try {
+            $redisAvailable = $redis && $redis->isAvailable();
+        } catch (\Throwable $e) {}
 
         foreach ($keys as $key) {
             if ($redisAvailable) {
@@ -166,34 +200,47 @@ class LoginRiskService extends \App\Services\BaseService
                 }
             }
 
-            $data = $this->cache->get($key);
-            if (!$data || !is_array($data) || (time() - ($data['first_at'] ?? 0)) > $windowSeconds) {
-                $data = ['count' => 0, 'first_at' => time()];
-            }
+            try {
+                $data = $this->cache->get($key);
+                if (!$data || !is_array($data) || (time() - ($data['first_at'] ?? 0)) > $windowSeconds) {
+                    $data = ['count' => 0, 'first_at' => time()];
+                }
 
-            $data['count']++;
-            $data['last_at'] = time();
-            $this->cache->put($key, $data, $windowMinutes);
+                $data['count']++;
+                $data['last_at'] = time();
+                $this->cache->put($key, $data, $windowMinutes);
+            } catch (\Throwable $e) {
+                $this->logger->critical('login_risk.cache_write_failed_in_record_failure', [
+                    'key' => $key,
+                    'error' => $e->getMessage()
+                ]);
+            }
         }
 
-        $currentCount = $this->getFailCount($context, $resolvedIp, $identifier);
-        
-        // لاگ تلاش ناموفق
-        $logLevel = $currentCount >= 4 ? 'warning' : 'info';
-        $this->logger->{$logLevel}('login.failure.recorded', [
-            'context' => $context,
-            'ip' => $resolvedIp,
-            'identifier' => $identifier,
-            'max_fail_count' => $currentCount
-        ]);
-        
-        // هشدار برای تلاش‌های مشکوک
-        if ($currentCount >= 5) {
-            $this->logger->critical('login.suspicious.activity', [
+        try {
+            $currentCount = $this->getFailCount($context, $resolvedIp, $identifier);
+            
+            // لاگ تلاش ناموفق
+            $logLevel = $currentCount >= 4 ? 'warning' : 'info';
+            $this->logger->{$logLevel}('login.failure.recorded', [
                 'context' => $context,
                 'ip' => $resolvedIp,
                 'identifier' => $identifier,
-                'fail_count' => $currentCount
+                'max_fail_count' => $currentCount
+            ]);
+            
+            // هشدار برای تلاش‌های مشکوک
+            if ($currentCount >= 5) {
+                $this->logger->critical('login.suspicious.activity', [
+                    'context' => $context,
+                    'ip' => $resolvedIp,
+                    'identifier' => $identifier,
+                    'fail_count' => $currentCount
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->critical('login_risk.get_fail_count_failed_in_record_failure', [
+                'error' => $e->getMessage()
             ]);
         }
     }
@@ -234,7 +281,10 @@ class LoginRiskService extends \App\Services\BaseService
         $windowSeconds = $this->getWindowSeconds();
 
         $redis = app(\Core\Redis::class);
-        $redisAvailable = $redis && $redis->isAvailable();
+        $redisAvailable = false;
+        try {
+            $redisAvailable = $redis && $redis->isAvailable();
+        } catch (\Throwable $e) {}
 
         // 🛡️ MEDIUM-M-07 Fix: Aggregating risk from both IP and Identifier
         $ipKey = $this->buildKey($context, $resolvedIp, null);
@@ -250,8 +300,12 @@ class LoginRiskService extends \App\Services\BaseService
             }
         }
         if (!$redisAvailable) {
-            $ipData = $this->cache->get($ipKey);
-            $ipCount = $this->extractValidCount($ipData, $windowSeconds);
+            try {
+                $ipData = $this->cache->get($ipKey);
+                $ipCount = $this->extractValidCount($ipData, $windowSeconds);
+            } catch (\Throwable $e) {
+                $ipCount = 0;
+            }
         }
 
         $idCount = 0;
@@ -267,8 +321,12 @@ class LoginRiskService extends \App\Services\BaseService
                 }
             }
             if (!$redisAvailable) {
-                $idData = $this->cache->get($idKey);
-                $idCount = $this->extractValidCount($idData, $windowSeconds);
+                try {
+                    $idData = $this->cache->get($idKey);
+                    $idCount = $this->extractValidCount($idData, $windowSeconds);
+                } catch (\Throwable $e) {
+                    $idCount = 0;
+                }
             }
         }
 
@@ -286,8 +344,8 @@ class LoginRiskService extends \App\Services\BaseService
     private function buildKey(string $context, string $ip, ?string $identifier = null): string
     {
         // LOW-05 Fix: Key generation depends on a dedicated risk cache key for better isolation.
-        // Falls back to app.key if not configured.
-        $salt = (string)config('auth.risk_cache_key', config('app.key'));
+        // Falls back to secure_key() if not configured.
+        $salt = (string)config('auth.risk_cache_key', secure_key());
         
         if ($identifier) {
             $idHash = hash_hmac('sha256', strtolower(trim($identifier)), $salt);
