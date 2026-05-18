@@ -66,10 +66,18 @@ class KYCController extends BaseAdminController
         // Photoshop check (اگر فایل موجود باشد)
         $photoshopCheck = ['suspicious' => false, 'reasons' => []];
         if (!empty($kyc->verification_image) && $kyc->verification_image !== '[DELETED]') {
-            // ✅ استفاده از base_path() helper و basename() برای جلوگیری از path traversal
-            $uploadPath = base_path('storage/uploads/kyc/' . basename($kyc->verification_image));
-            if (file_exists($uploadPath) && is_file($uploadPath)) {
-                $photoshopCheck = $this->kycService->detectPhotoshop($uploadPath);
+            // Whitelist approach
+            $filename = preg_replace('/[^a-zA-Z0-9_\-\.]/', '', basename($kyc->verification_image));
+            $uploadPath = base_path('storage/uploads/kyc/' . $filename);
+
+            // Verify it's inside the intended directory
+            $realPath = realpath($uploadPath);
+            $allowedDir = realpath(base_path('storage/uploads/kyc/'));
+
+            if ($realPath !== false && $allowedDir !== false && strpos($realPath, $allowedDir) === 0) {
+                if (file_exists($realPath) && is_file($realPath)) {
+                    $photoshopCheck = $this->kycService->detectPhotoshop($realPath);
+                }
             }
         }
 
