@@ -143,6 +143,7 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
         
         if ($failures >= 5) {
             $cache->put('crypto_circuit_breaker_disabled_until', \time() + 300, 5); // disable for 5 mins
+            $cache->forget('crypto_circuit_breaker_failures'); // RESET failures counter to prevent immediate re-tripping after cooldown!
             $this->logger->error('crypto.circuit_breaker.tripped', [
                 'failures' => $failures,
                 'last_url' => $url
@@ -219,7 +220,7 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
 
             // Check if transaction is to our wallet
             $to = $data['contractData']['to_address'] ?? '';
-            if (strtolower($to) !== strtolower($toWallet)) {
+            if ($this->normalizeAddress($to, 'tron') !== $this->normalizeAddress($toWallet, 'tron')) {
                 return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده مطابقت ندارد'];
             }
 
@@ -281,12 +282,12 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
 
             // Issue 2: Poisoning check (USDT BEP20) from Settings/Config
             $validContract = $this->settingService->get('crypto_contract_bnb20_usdt', '0x55d398326f99059ff775485246999027b3197955');
-            if (strtolower($tx['contractAddress'] ?? '') !== strtolower($validContract)) {
+            if ($this->normalizeAddress($tx['contractAddress'] ?? '', 'bsc') !== $this->normalizeAddress($validContract, 'bsc')) {
                 return ['status' => 'mismatch', 'reason' => 'توکن ارسالی USDT (BEP20) نیست'];
             }
 
             // Check receiver
-            if (strtolower($tx['to'] ?? '') !== strtolower($toWallet)) {
+            if ($this->normalizeAddress($tx['to'] ?? '', 'bsc') !== $this->normalizeAddress($toWallet, 'bsc')) {
                 return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده مطابقت ندارد'];
             }
 
