@@ -178,22 +178,8 @@ $container->singleton(\Core\Database::class, function($c) use ($config) {
 
 // ─── Logger — Singleton مرکزی لاگ ────────────────────────────────────────────
 // PSR-3 Compatible Logging System
-$container->singleton(\App\Services\LogService::class, function($c) {
-    return new \App\Services\LogService(
-        $c->make(\Core\Database::class),
-        $c->make(\App\Models\ActivityLog::class),
-        $c->make(\App\Models\SystemLog::class),
-        $c->make(\App\Models\SecurityLog::class),
-        $c->make(\App\Models\PerformanceLog::class),
-        $c->make(\Core\Session::class)
-    );
-});
-
-$container->singleton(\App\Contracts\LoggerInterface::class, function($c) {
-    return new \Core\Logger(
-        $c->make(\App\Services\LogService::class)
-    );
-});
+$container->singleton(\App\Services\LogService::class);
+$container->singleton(\App\Contracts\LoggerInterface::class, \Core\Logger::class);
 
 // =========================
 // Sentry-like Services
