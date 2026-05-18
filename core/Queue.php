@@ -22,7 +22,7 @@ class Queue
 {
     private Database $db;
     private string $defaultQueue = 'default';
-    private int $maxAttempts = 3;
+    private int $maxAttempts = 5;
 
     public function __construct(Database $db)
     {
