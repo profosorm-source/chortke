@@ -58,7 +58,7 @@ class OAuthService extends \App\Services\BaseService
         // HIGH-H-15 Fix: State signing with IP and Session ID binding to prevent state tampering/forgery
         $ip = $this->clientIp();
         $sessionId = $this->session->getId();
-        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId, (string)config('app.key'));
+        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId, secure_key());
 
         // 🛡️ Security Improvement: Storing cryptographic state with creation timestamp for TTL enforcement.
         $this->session->set(SessionKeys::OAUTH_STATE, [
@@ -116,7 +116,7 @@ class OAuthService extends \App\Services\BaseService
         }
 
         // HIGH-H-15 Fix: Verify state signature (bound to original IP and Session ID)
-        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), (string)config('app.key'));
+        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), secure_key());
         if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
             $this->logger->critical('oauth.google.state_signature_mismatch', [
                 'state' => $state,
@@ -314,18 +314,19 @@ class OAuthService extends \App\Services\BaseService
             $existingUser = $this->userModel->findByEmail($userData['email']);
 
             if ($existingUser) {
-                // Email exists - ask user to link account (must be logged in first)
+                // HIGH-NEW-01 Fix: Require password confirmation for existing users who haven't linked the provider
                 if (!$this->session->get(SessionKeys::LOGGED_IN)) {
-                    // Store in session for after login
                     $this->session->set('oauth_pending_link', [
-                        'provider' => $provider,
-                        'data'     => $userData,
+                        'provider'   => $provider,
+                        'data'       => $userData,
+                        'email'      => $userData['email'],
                         'created_at' => time()
                     ]);
+                    
                     return [
                         'success' => false,
-                        'message' => 'این ایمیل قبلاً در سیستم ثبت شده است. لطفاً ابتدا وارد شوید و سپس حساب ' . ucfirst($provider) . ' خود را متصل کنید.',
-                        'code'    => 'EMAIL_EXISTS_LOGIN_REQUIRED'
+                        'requires_password_confirmation' => true,
+                        'message' => 'برای اتصال حساب اجتماعی، لطفاً ابتدا رمز عبور خود را وارد کنید.'
                     ];
                 }
 
@@ -352,7 +353,7 @@ class OAuthService extends \App\Services\BaseService
             $passwordHash = password_hash(base64_encode(hash('sha384', $plainPassword, true)), PASSWORD_BCRYPT);
             
             $verificationToken = bin2hex(random_bytes(32));
-            $hashedToken = hash_hmac('sha256', strtoupper(substr($verificationToken, 0, 6)), (string)config('app.key'));
+            $hashedToken = hash_hmac('sha256', strtoupper(substr($verificationToken, 0, 6)), secure_key());
 
             $userId = $this->userModel->create([
                 'email'                     => $userData['email'],
@@ -428,7 +429,7 @@ class OAuthService extends \App\Services\BaseService
 
         $ip = $this->clientIp();
         $sessionId = $this->session->getId();
-        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId, (string)config('app.key'));
+        $signature = hash_hmac('sha256', $state . '|' . $ip . '|' . $sessionId, secure_key());
 
         $this->session->set(SessionKeys::OAUTH_STATE, [
             'token'      => $state,
@@ -465,7 +466,7 @@ class OAuthService extends \App\Services\BaseService
         }
 
         // HIGH-H-15 Fix: Verify state signature
-        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), (string)config('app.key'));
+        $expectedSignature = hash_hmac('sha256', $state . '|' . ($stored['ip'] ?? '') . '|' . ($stored['session_id'] ?? ''), secure_key());
         if (!hash_equals($expectedSignature, (string)($stored['signature'] ?? ''))) {
             $this->logger->critical('oauth.facebook.state_signature_mismatch', ['state' => $state, 'ip' => $this->clientIp()]);
             return ['success' => false, 'message' => 'State signature verification failed.'];

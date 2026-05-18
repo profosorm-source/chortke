@@ -242,7 +242,7 @@ class TwoFactorService extends \App\Services\BaseService
     {
         $this->securityModel->deleteTwoFactorCodes($userId);
         $expiresAt = date('Y-m-d H:i:s', strtotime('+1 year'));
-        $key = (string)config('app.key');
+        $key = secure_key();
         foreach ($codes as $code) {
             // CRITICAL-C-04 Fix: Double-layer protection — HMAC-SHA256 of the code then Bcrypt hash.
             // This prevents cracking even if the salt/hashes are leaked, as the attacker needs the app key.
@@ -275,8 +275,21 @@ class TwoFactorService extends \App\Services\BaseService
             if (!$this->rateLimiter->attempt($rateLimitKey, self::RECOVERY_CODE_RATE_LIMIT_MAX, self::RECOVERY_CODE_RATE_LIMIT_DECAY, true)) {
                 $this->logger->warning('2fa.recovery_code.rate_limited', ['user_id' => $userId]);
                 
-                // Clear rate limit on successful verification later
-                // On failure, the rate limit stays in effect
+                // CRITICAL-NEW-01 Fix: Lock account temporarily and send security alert
+                $this->userModel->update($userId, ['status' => 'locked_2fa']);
+                
+                try {
+                    $notifService = app(\App\Services\Notification\NotificationService::class);
+                    $notifService->securityAlert($userId, 'حساب شما به دلیل تلاش‌های مشکوک و بیش از حد مجاز با کدهای بازیابی قفل شد.', $this->clientIp());
+                } catch (\Throwable $e) {
+                    $this->logger->error('2fa.recovery_code.lockout_notif_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+                }
+                
+                $this->logger->critical('2fa.recovery_code.bruteforce_lockout', [
+                    'user_id' => $userId,
+                    'ip' => $this->clientIp()
+                ]);
+                
                 return false;
             }
         }
@@ -299,7 +312,7 @@ class TwoFactorService extends \App\Services\BaseService
                 [$userId]
             ) ?: [];
 
-            $key = (string)config('app.key');
+            $key = secure_key();
             $found = false;
             $matchedRecord = null;
 
@@ -421,7 +434,7 @@ class TwoFactorService extends \App\Services\BaseService
      */
     public function encryptSecret(string $secret): string
     {
-        $rawKey = (string)config('app.key');
+        $rawKey = secure_key();
         if (strlen($rawKey) < 32) {
             throw new \RuntimeException('Application key is too short for AES-256 encryption.');
         }
@@ -447,7 +460,7 @@ class TwoFactorService extends \App\Services\BaseService
             return $encryptedSecret;
         }
 
-        $rawKey = (string)config('app.key');
+        $rawKey = secure_key();
         $key = hash('sha256', $rawKey, true);
         $decoded = base64_decode($encryptedSecret, true);
 

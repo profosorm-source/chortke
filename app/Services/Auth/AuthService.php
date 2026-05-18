@@ -176,7 +176,7 @@ class AuthService extends \App\Services\BaseService
 
         // CRITICAL-02 Fix: Status check MUST come BEFORE password verification to prevent lockout bypass
         if ($user) {
-            if ($user->status === 'locked') {
+            if ($user->status === 'locked' || $user->status === 'locked_2fa') {
                 $this->verifyPassword($password, $this->getDummyHash()); // timing safety
                 return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
             }
@@ -531,8 +531,21 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'کاربر یافت نشد یا 2FA غیرفعال است.'];
         }
 
+        if ($user->status === 'locked' || $user->status === 'locked_2fa') {
+            $this->session->destroy();
+            return ['success' => false, 'message' => 'حساب شما به دلیل تلاش‌های مشکوک قفل شد.'];
+        }
+
         if (!$this->twoFactorService->verifyCode($user->two_factor_secret, $code, (int)$user->id)) {
             $this->logger->activity('auth.2fa_failed', 'کد 2FA نامعتبر', (int)$user->id);
+            
+            // Re-fetch the user to see if they were locked during verification
+            $freshUser = $this->userModel->find((int)$user->id);
+            if ($freshUser && $freshUser->status === 'locked_2fa') {
+                $this->session->destroy();
+                return ['success' => false, 'message' => 'حساب شما به دلیل تلاش‌های مشکوک قفل شد.'];
+            }
+            
             return ['success' => false, 'message' => 'کد 2FA نامعتبر است.'];
         }
 
