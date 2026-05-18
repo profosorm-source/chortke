@@ -67,6 +67,7 @@ return [
     // OAuth security extensions
     'oauth_strict_ip_binding' => [
         'enabled' => false,
+        'description' => 'فعال‌سازی strict IP binding برای ورود اجتماعی (OAuth) در محیط‌های امنیتی خاص. این گزینه برای جلوگیری از تکمیل callback توسط IP متفاوت استفاده می‌شود.',
     ],
     
     // کیف پول رمزارز
