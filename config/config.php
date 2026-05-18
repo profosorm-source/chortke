@@ -107,4 +107,14 @@ return [
     'cors' => [
         'allowed_origins' => env('CORS_ALLOWED_ORIGINS', ''),
     ],
+    
+    'security' => [
+        'api' => [
+            'secrets' => [
+                'v1' => env('SECURITY_API_TOKEN_SECRET_V1', env('SECURITY_API_TOKEN_SECRET', 'default_api_secret_v1_must_be_strong_32_chars')),
+                'v2' => env('SECURITY_API_TOKEN_SECRET_V2', env('SECURITY_API_TOKEN_SECRET', 'default_api_secret_v2_must_be_strong_32_chars')),
+            ],
+            'current_secret_version' => env('SECURITY_API_TOKEN_CURRENT_VERSION', 'v2'),
+        ]
+    ],
 ];
