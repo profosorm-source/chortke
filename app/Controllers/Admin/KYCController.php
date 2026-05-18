@@ -33,7 +33,17 @@ class KYCController extends BaseAdminController
         if ($status !== '') $filters['status'] = $status;
         if ($search !== '') $filters['search'] = $search;
 
-        $kycs = $this->kycService->getAll($filters, $perPage, $offset);
+        try {
+            $kycs = $this->kycService->getAll($filters, $perPage, $offset, true);
+        } catch (\Throwable $e) {
+            $this->logger->error('admin.kyc.get_all.failed', [
+                'status' => $status,
+                'search' => $search,
+                'error' => $e->getMessage()
+            ]);
+            $kycs = [];
+        }
+
         $total = $this->kycService->count($filters);
         $totalPages = (int)\ceil($total / $perPage);
 
@@ -53,10 +63,49 @@ class KYCController extends BaseAdminController
 
     public function review(int $id): void
     {
-        
-        $kyc = $this->kycService->find($id);
+        try {
+            $kyc = $this->kycService->find($id, false);
+        } catch (\Throwable $e) {
+            $this->logger->error('admin.kyc.find.failed', [
+                'id' => $id,
+                'error' => $e->getMessage()
+            ]);
+            $this->session->setFlash('error', 'خطا در بازیابی اطلاعات احراز هویت');
+            redirect('/admin/kyc');
+            return;
+        }
+
         if (!$kyc) {
             $this->session->setFlash('error', 'درخواست KYC یافت نشد');
+            redirect('/admin/kyc');
+            return;
+        }
+
+        // Concurrency Lock for Review (H-2)
+        $adminId = user_id();
+        $db = \Core\Database::getInstance();
+        $locked = $db->query(
+            "UPDATE kyc_verifications 
+             SET under_review_by = ?, review_started_at = NOW(), status = 'under_review' 
+             WHERE id = ? AND (
+                 under_review_by IS NULL 
+                 OR under_review_by = ?
+                 OR review_started_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+             )",
+            [$adminId, $id, $adminId]
+        );
+
+        if ($locked->rowCount() === 0) {
+            $this->session->setFlash('error', 'این درخواست در حال بررسی توسط ادمین دیگری است');
+            redirect('/admin/kyc');
+            return;
+        }
+
+        // Refetch record with updated lock columns
+        try {
+            $kyc = $this->kycService->find($id, false);
+        } catch (\Throwable $e) {
+            $this->session->setFlash('error', 'خطا در بازیابی اطلاعات احراز هویت');
             redirect('/admin/kyc');
             return;
         }
