@@ -83,18 +83,18 @@ class CryptoDepositController extends BaseUserController
 
         // دریافت داده‌ها
         $data = [
-            'network' => $this->request->input('network'),
+            'network' => trim(strtolower((string)$this->request->input('network'))),
             'amount' => $this->request->input('amount'),
-            'tx_hash' => $this->request->input('tx_hash'),
+            'tx_hash' => trim((string)$this->request->input('tx_hash')),
             'deposit_date' => $this->request->input('deposit_date'),
             'deposit_time' => $this->request->input('deposit_time'),
         ];
 
         // اعتبارسنجی
         $validator = new Validator($data, [
-            'network' => 'required|in:bnb20,trc20',
+            'network' => 'required|in:bnb20,trc20,sol,erc20,ton',
             'amount' => 'required|numeric|min:10',
-            'tx_hash' => 'required|min:64|max:66',
+            'tx_hash' => 'required',
             'deposit_date' => 'required',
             'deposit_time' => 'required',
         ], [
@@ -103,7 +103,6 @@ class CryptoDepositController extends BaseUserController
             'amount.required' => 'مبلغ الزامی است',
             'amount.min' => 'حداقل مبلغ واریز 10 USDT است',
             'tx_hash.required' => 'هش تراکنش الزامی است',
-            'tx_hash.min' => 'هش تراکنش نامعتبر است',
             'deposit_date.required' => 'تاریخ واریز الزامی است',
             'deposit_time.required' => 'ساعت واریز الزامی است',
         ]);
@@ -115,55 +114,105 @@ class CryptoDepositController extends BaseUserController
             return;
         }
 
-        try {
-            // بررسی تکراری نبودن Hash
-            $existingDeposit = $this->depositModel->findByHash($data['tx_hash']);
-            if ($existingDeposit) {
-                throw new \RuntimeException('این هش تراکنش قبلاً ثبت شده است');
+        // اعتبارسنجی هش تراکنش بر اساس شبکه (جلوگیری از Poisoning و Bypass)
+        $txHash = $data['tx_hash'];
+        $network = $data['network'];
+        $hashError = null;
+
+        if ($network === 'bnb20' || $network === 'erc20') {
+            if (!preg_match('/^0x[a-f0-9]{64}$/i', $txHash)) {
+                $hashError = 'هش تراکنش نامعتبر است (باید با 0x شروع شده و دارای ۶۴ کاراکتر هگزادسیمال بعد از آن باشد)';
             }
-
-            // دریافت آدرس کیف پول مقصد
-            $walletAddress = $data['network'] === 'bnb20' 
-                ? setting('site_usdt_bnb20_address')
-                : setting('site_usdt_trc20_address');
-
-            if (!$walletAddress) {
-                throw new \RuntimeException('آدرس کیف پول این شبکه تنظیم نشده است');
+        } elseif ($network === 'trc20') {
+            if (!preg_match('/^[a-f0-9]{64}$/i', $txHash)) {
+                $hashError = 'هش تراکنش نامعتبر است (باید دقیقاً ۶۴ کاراکتر هگزادسیمال باشد)';
             }
-
-            $data['user_id'] = $userId;
-            $data['wallet_address'] = $walletAddress;
-            $data['verification_status'] = 'pending';
-
-            try {
-                $deposit = $this->depositModel->create($data);
-            } catch (\Exception $e) {
-                // If it's a PDOException with code 23000 (Integrity constraint violation), it's likely a duplicate hash
-                if ($e instanceof \PDOException && $e->getCode() === '23000') {
-                    throw new \RuntimeException('این هش تراکنش قبلاً در سیستم ثبت شده است و امکان ثبت مجدد وجود ندارد.');
-                }
-                throw $e;
+        } elseif ($network === 'sol') {
+            if (!preg_match('/^[1-9A-HJ-NP-Za-km-z]{88}$/', $txHash)) {
+                $hashError = 'هش تراکنش Solana نامعتبر است (باید ۸۸ کاراکتر Base58 باشد)';
             }
+        }
 
-            if (!$deposit) {
-                throw new \RuntimeException('خطا در ثبت درخواست');
-            }
-
-            // ثبت لاگ
-            $this->logger->activity('crypto_deposit_requested', "درخواست واریز {$data['amount']} USDT ({$data['network']})", $userId, ['deposit_id' => $deposit->id] ?? []);
-
-            $this->session->setFlash('success', 'درخواست واریز شما ثبت شد و در حال بررسی خودکار است');
-            redirect('/wallet');
+        if ($hashError !== null) {
+            $this->session->setFlash('error', $hashError);
+            $this->session->setFlash('old', $data);
+            redirect('/wallet/deposit/crypto');
             return;
+        }
+
+        // Use IdempotencyKey wrapper to prevent duplicate API submissions
+        $idempotencyKey = $this->request->header('Idempotency-Key') ?: \Core\IdempotencyKey::generateFromPayload('crypto_deposit_store', array_merge($data, ['user_id' => $userId]));
+
+        try {
+            $result = \Core\IdempotencyKey::wrap($idempotencyKey, $userId, 'crypto_deposit_store', function() use ($userId, $data) {
+                $db = \app()->db;
+                $db->beginTransaction();
+
+                try {
+                    // Pessimistic lock check on network + tx_hash to prevent race condition (C-01 & C-06)
+                    $existingDeposit = $this->depositModel->findByHashAndNetworkForUpdate($data['tx_hash'], $data['network']);
+                    if ($existingDeposit) {
+                        throw new \RuntimeException('این هش تراکنش قبلاً ثبت شده است');
+                    }
+
+                    // دریافت آدرس کیف پول مقصد
+                    $walletAddress = $data['network'] === 'bnb20' 
+                        ? setting('site_usdt_bnb20_address')
+                        : setting('site_usdt_trc20_address');
+
+                    if (!$walletAddress) {
+                        throw new \RuntimeException('آدرس کیف پول این شبکه تنظیم نشده است');
+                    }
+
+                    $data['user_id'] = $userId;
+                    $data['wallet_address'] = $walletAddress;
+                    $data['verification_status'] = 'pending';
+
+                    $deposit = $this->depositModel->create($data);
+                    
+                    $db->commit();
+                } catch (\Exception $e) {
+                    if ($db->inTransaction()) {
+                        $db->rollBack();
+                    }
+                    // If it's a PDOException with code 23000 (Integrity constraint violation) or duplicate entry
+                    if ($e instanceof \PDOException && ($e->getCode() === '23000' || \str_contains($e->getMessage(), 'Duplicate entry'))) {
+                        throw new \RuntimeException('این هش تراکنش در همین لحظه ثبت شد و امکان ثبت مجدد وجود ندارد.');
+                    }
+                    throw $e;
+                }
+
+                if (!$deposit) {
+                    throw new \RuntimeException('خطا در ثبت درخواست');
+                }
+
+                // ثبت لاگ
+                $this->logger->activity('crypto_deposit_requested', "درخواست واریز {$data['amount']} USDT ({$data['network']})", $userId, ['deposit_id' => $deposit->id] ?? []);
+
+                return [
+                    'success' => true,
+                    'message' => 'درخواست واریز شما ثبت شد و در حال بررسی خودکار است',
+                    'deposit_id' => $deposit->id
+                ];
+            }, $data);
+
+            if ($result['success'] ?? false) {
+                $this->session->setFlash('success', $result['message']);
+                redirect('/wallet');
+                return;
+            } else {
+                throw new \RuntimeException($result['message'] ?? 'خطا در ثبت درخواست');
+            }
+
         } catch (\Exception $e) {
-    $this->logger->error('crypto_deposit.store.failed', [
-        'channel' => 'crypto',
-        'user_id' => $userId,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
+            $this->logger->error('crypto_deposit.store.failed', [
+                'channel' => 'crypto',
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
 
             $this->session->setFlash('error', $e->getMessage());
             $this->session->setFlash('old', $data);
