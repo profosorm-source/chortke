@@ -30,8 +30,12 @@ class FingerprintController extends BaseApiController
         $userId = $this->userId();
         
         $payload = $this->request->body();
-        $components = $payload['components'] ?? $payload;
+        $components = $payload['components'] ?? null;
         $clientHash = $payload['hash'] ?? '';
+
+        if (empty($clientHash)) {
+            $this->error('Hash fingerprint الزامی است', 400);
+        }
 
         if (empty($components)) {
             $this->error('داده‌های فینگرپرینت خالی است', 400);
@@ -40,7 +44,7 @@ class FingerprintController extends BaseApiController
         // تولید مجدد در سرور برای جلوگیری از جعل (Issue 2)
         $fingerprint = $this->fingerprintService->generate($components);
 
-        if ($clientHash !== '' && !hash_equals($fingerprint, $clientHash)) {
+        if (!hash_equals($fingerprint, $clientHash)) {
             $this->logger->warning('fingerprint.spoof_detected', ['user_id' => $userId]);
             $this->error('اعتبارسنجی فینگرپرینت شکست خورد', 403);
         }
