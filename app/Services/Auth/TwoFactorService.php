@@ -333,8 +333,15 @@ class TwoFactorService extends \App\Services\BaseService
             }
 
             if ($found && $matchedRecord) {
-                // Delete or mark as used immediately within the locked transaction
-                $this->securityModel->deleteTwoFactorCode((int)$matchedRecord->id);
+                if (!$this->securityModel->deleteTwoFactorCodeAtomic((int)$matchedRecord->id, $userId)) {
+                    $db->rollBack();
+                    $this->logger->critical('2fa.recovery_code.race_condition_detected', [
+                        'user_id' => $userId,
+                        'code_id' => $matchedRecord->id
+                    ]);
+                    return false;
+                }
+
                 $db->commit();
                 
                 // MEDIUM-M-14 Fix: Clear rate limit on successful verification

@@ -174,22 +174,35 @@ class AuthService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'اطلاعات ورود نامعتبر است یا دسترسی شما محدود شده است.'];
         }
 
-        // CRITICAL-02 Fix: Status check MUST come BEFORE password verification to prevent lockout bypass
-        if ($user) {
-            if ($user->status === 'locked' || $user->status === 'locked_2fa') {
-                $this->verifyPassword($password, $this->getDummyHash()); // timing safety
-                return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
-            }
+        $user = null;
+        $this->db->beginTransaction();
+        try {
+            $user = $this->userModel->findByCredentialsForUpdate($identifier);
 
-            if ($user->status === 'banned' || $user->status === 'suspended') {
-                $this->verifyPassword($password, $this->getDummyHash()); // timing safety
-                return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.'];
-            }
+            if ($user) {
+                if ($user->status === 'locked' || $user->status === 'locked_2fa') {
+                    $this->verifyPassword($password, $this->getDummyHash()); // timing safety
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
+                }
 
-            if (empty($user->email_verified_at)) {
-                $this->verifyPassword($password, $this->getDummyHash()); // timing safety
-                return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.', 'email_unverified' => true, 'email' => $user->email];
+                if ($user->status === 'banned' || $user->status === 'suspended') {
+                    $this->verifyPassword($password, $this->getDummyHash()); // timing safety
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'حساب کاربری شما مسدود یا تعلیق شده است.'];
+                }
+
+                if (empty($user->email_verified_at)) {
+                    $this->verifyPassword($password, $this->getDummyHash()); // timing safety
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.', 'email_unverified' => true, 'email' => $user->email];
+                }
             }
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
         }
 
         $passwordToVerify = $user ? $user->password : $this->getDummyHash();
@@ -215,8 +228,16 @@ class AuthService extends \App\Services\BaseService
                     }
                 }
             }
+
+            if ($this->db->inTransaction()) {
+                $this->db->commit();
+            }
             
             return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
+        }
+
+        if ($this->db->inTransaction()) {
+            $this->db->commit();
         }
 
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
