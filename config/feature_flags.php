@@ -63,6 +63,11 @@ return [
     'coupons' => [
         'enabled' => env('FEATURE_COUPONS_ENABLED', false),
     ],
+
+    // OAuth security extensions
+    'oauth_strict_ip_binding' => [
+        'enabled' => false,
+    ],
     
     // کیف پول رمزارز
     'crypto_wallet' => [

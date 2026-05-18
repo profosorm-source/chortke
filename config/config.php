@@ -34,6 +34,8 @@ return [
     
     'session' => [
         'lifetime' => env('SESSION_LIFETIME', 7200),
+        'driver' => env('SESSION_DRIVER', 'redis'),
+        'fallback' => env('SESSION_FALLBACK_STORAGE', 'file'),
         'name' => 'CHORTKE_SESSION',
         // ── Fix #1: Lax برای سازگاری با OAuth callback (Google/Facebook)
         // ── Fix #2: secure بر اساس HTTPS واقعی + trusted proxy (نه فقط APP_ENV)
