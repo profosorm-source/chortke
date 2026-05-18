@@ -33,6 +33,21 @@ class RedisSessionHandler implements \SessionHandlerInterface
             return;
         }
 
+        // Use explicit session driver configuration for Redis-first session storage.
+        $sessionDriver = config('session.driver', 'redis');
+        if ($sessionDriver !== 'redis') {
+            $this->useRedis = false;
+            $this->savePath = __DIR__ . '/../storage/sessions';
+            if (function_exists('logger')) {
+                try {
+                    logger()->info('Session handler: Redis disabled by session.driver config, using file fallback.', ['driver' => $sessionDriver]);
+                } catch (\Throwable $e) {
+                    // ignore logger errors
+                }
+            }
+            return;
+        }
+
         // استفاده از تنظیمات مشترک Cache
         $cache = \Core\Cache::getInstance();
 
