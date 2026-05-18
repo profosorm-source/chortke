@@ -9,12 +9,15 @@ use App\Controllers\User\BaseUserController;
 class CryptoDepositController extends BaseUserController
 {
     private CryptoDeposit $depositModel;
+    private \Core\IdempotencyKey $idempotencyKey;
 
     public function __construct(
-        \App\Models\CryptoDeposit $depositModel
+        \App\Models\CryptoDeposit $depositModel,
+        \Core\IdempotencyKey $idempotencyKey
     ) {
         parent::__construct();
         $this->depositModel = $depositModel;
+        $this->idempotencyKey = $idempotencyKey;
     }
 
     /**
@@ -139,6 +142,10 @@ class CryptoDepositController extends BaseUserController
             if (!preg_match('/^[1-9A-HJ-NP-Za-km-z]{88}$/', $txHash)) {
                 $hashError = 'هش تراکنش Solana نامعتبر است (باید ۸۸ کاراکتر Base58 باشد)';
             }
+        } elseif ($network === 'ton') {
+            if (!preg_match('/^[a-f0-9]{64}$/i', $txHash) && !preg_match('/^[a-zA-Z0-9\/+]{43}=$/', $txHash)) {
+                $hashError = 'هش تراکنش TON نامعتبر است (باید ۶۴ کاراکتر هگزادسیمال یا ۴۴ کاراکتر Base64 باشد)';
+            }
         }
 
         if ($hashError !== null) {
@@ -152,7 +159,7 @@ class CryptoDepositController extends BaseUserController
         $idempotencyKey = $this->request->header('Idempotency-Key') ?: \Core\IdempotencyKey::generateFromPayload('crypto_deposit_store', array_merge($data, ['user_id' => $userId]));
 
         try {
-            $result = \Core\IdempotencyKey::wrap($idempotencyKey, $userId, 'crypto_deposit_store', function() use ($userId, $data) {
+            $result = $this->idempotencyKey->wrapInstance($idempotencyKey, $userId, 'crypto_deposit_store', function() use ($userId, $data) {
                 $db = \app()->db;
                 $db->beginTransaction();
 

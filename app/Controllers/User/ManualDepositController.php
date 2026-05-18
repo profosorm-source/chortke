@@ -14,16 +14,19 @@ class ManualDepositController extends BaseUserController
     private ManualDepositService $depositService;
     private BankCardService $cardService;
     private UploadService $uploadService;
+    private \Core\IdempotencyKey $idempotencyKey;
 
     public function __construct(
         ManualDepositService $depositService,
         BankCardService $cardService,
-        \App\Services\UploadService $uploadService)
+        \App\Services\UploadService $uploadService,
+        \Core\IdempotencyKey $idempotencyKey)
     {
         parent::__construct();
         $this->depositService = $depositService;
         $this->cardService = $cardService;
         $this->uploadService = $uploadService;
+        $this->idempotencyKey = $idempotencyKey;
     }
 
     /**
@@ -149,7 +152,7 @@ class ManualDepositController extends BaseUserController
             $effectiveIdempotencyKey = $idempotencyKey ?: hash('sha256', implode('|', [$userId, $data['tracking_code'], $data['amount'], $data['bank_card_id']]));
 
             // استفاده از Core\IdempotencyKey برای بسته‌بندی امن و تضمین Idempotency
-            $result = \Core\IdempotencyKey::wrap(
+            $result = $this->idempotencyKey->wrapInstance(
                 $effectiveIdempotencyKey,
                 $userId,
                 'manual_deposit_create',
