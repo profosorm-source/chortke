@@ -99,83 +99,112 @@ class PaymentController extends BaseController
     /**
      * بازگشت از درگاه پرداخت
      */
-   public function callback(): void
-{
-    $gateway = (string)(
-        $this->request->get('gateway')
-        ?? $this->request->param('gateway')
-        ?? ''
-    );
+    public function callback(): void
+    {
+        $gateway = (string)(
+            $this->request->get('gateway')
+            ?? $this->request->param('gateway')
+            ?? ''
+        );
 
-    if ($gateway === '') {
-        $this->session->setFlash('error', 'درگاه نامعتبر است');
-        $this->response->redirect(url('wallet'));
-        return;
-    }
+        if ($gateway === '') {
+            $this->session->setFlash('error', 'درگاه نامعتبر است');
+            $this->response->redirect(url('wallet'));
+            return;
+        }
 
-    try {
-        $result = $this->paymentService->callback($gateway, $this->request->all());
-
-        // ✅ **تطبیق پرداخت - همگام‌سازی داده‌ها**
-        // وب‌هوک داده‌های پرداخت را orders/wallets/commissions کے ساتھ ہم آہنگ کریں
-        if (!empty($result['success'])) {
-            // وب‌هوک‌های successful پرداخت کو reconcile کریں
-            $webhookData = [
-                'transaction_id' => $result['transaction_id'] ?? null,
-                'reference_id' => $result['reference_id'] ?? null,
-                'order_id' => $result['order_id'] ?? null,
-                'amount' => $result['amount'] ?? 0,
-                'currency' => $result['currency'] ?? 'irt',
-                'status' => 'success',
+        if (!$this->request->isPost()) {
+            $this->logger->warning('payment.callback.invalid_method', [
                 'gateway' => $gateway,
-                'timestamp' => time(),
-            ];
+                'method' => $this->request->method(),
+                'ip' => get_client_ip()
+            ]);
 
-            // ReconciliationService سے تطبیق کریں
-            $reconciliation = $this->reconciliationService->reconcilePayment($webhookData);
-            
-            if (!$reconciliation['success']) {
-                // ⚠️ تنبیہ اگر تطبیق ناکام ہو
-                $this->logger->warning('payment.reconciliation.failed', [
-                    'channel' => 'payment',
+            $this->response->status(405)->json([
+                'success' => false,
+                'message' => 'Callback must be delivered via POST request'
+            ]);
+            return;
+        }
+
+        try {
+            $result = $this->paymentService->callback(
+                $gateway,
+                $this->request->all(),
+                $this->userId()
+            );
+
+            if (!empty($result['success'])) {
+                $webhookData = [
+                    'transaction_id' => $result['transaction_id'] ?? null,
+                    'reference_id' => $result['reference_id'] ?? null,
+                    'order_id' => $result['order_id'] ?? null,
+                    'amount' => $result['amount'] ?? 0,
+                    'currency' => $result['currency'] ?? 'irt',
+                    'status' => 'success',
                     'gateway' => $gateway,
-                    'transaction_id' => $webhookData['transaction_id'],
-                    'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
-                ]);
+                    'timestamp' => time(),
+                ];
+
+                $reconciliation = $this->reconciliationService->reconcilePayment($webhookData);
+                if (!$reconciliation['success']) {
+                    $this->logger->warning('payment.reconciliation.failed', [
+                        'channel' => 'payment',
+                        'gateway' => $gateway,
+                        'transaction_id' => $webhookData['transaction_id'],
+                        'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
+                    ]);
+                }
+
+                $this->session->setFlash('success', $result['message'] ?? 'پرداخت با موفقیت انجام شد');
+            } else {
+                $webhookData = [
+                    'transaction_id' => $result['transaction_id'] ?? null,
+                    'reference_id' => $result['reference_id'] ?? null,
+                    'amount' => $result['amount'] ?? 0,
+                    'currency' => $result['currency'] ?? 'irt',
+                    'status' => 'failed',
+                    'failure_reason' => $result['message'] ?? 'Unknown error',
+                    'gateway' => $gateway,
+                    'timestamp' => time(),
+                ];
+
+                $this->reconciliationService->reconcilePayment($webhookData);
+                $this->session->setFlash('error', $result['message'] ?? 'پرداخت ناموفق بود');
             }
-
-            $this->session->setFlash('success', $result['message'] ?? 'پرداخت با موفقیت انجام شد');
-        } else {
-            // ناکام پرداخت کو بھی reconcile کریں
-            $webhookData = [
-                'transaction_id' => $result['transaction_id'] ?? null,
-                'reference_id' => $result['reference_id'] ?? null,
-                'amount' => $result['amount'] ?? 0,
-                'currency' => $result['currency'] ?? 'irt',
-                'status' => 'failed',
-                'failure_reason' => $result['message'] ?? 'Unknown error',
+        } catch (\Throwable $e) {
+            $this->logger->error('payment.callback.failed', [
+                'channel' => 'payment',
                 'gateway' => $gateway,
-                'timestamp' => time(),
-            ];
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
 
-            $reconciliation = $this->reconciliationService->reconcilePayment($webhookData);
-            
-            $this->session->setFlash('error', $result['message'] ?? 'پرداخت ناموفق بود');
+            $this->session->setFlash('error', 'پرداخت ناموفق بود');
         }
 
         $this->response->redirect(url('wallet'));
-    } catch (\Throwable $e) {
-        $this->logger->error('payment.callback.failed', [
-            'channel' => 'payment',
+    }
+
+    public function callbackGet(): void
+    {
+        $gateway = (string)(
+            $this->request->get('gateway')
+            ?? $this->request->param('gateway')
+            ?? ''
+        );
+
+        $this->logger->warning('payment.callback.get_not_allowed', [
             'gateway' => $gateway,
-            'error' => $e->getMessage(),
-            'exception' => get_class($e),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
+            'ip' => get_client_ip(),
+            'user_agent' => get_user_agent()
         ]);
 
-        $this->session->setFlash('error', 'پرداخت ناموفق بود');
-        $this->response->redirect(url('wallet'));
+        $this->response->status(405)->json([
+            'success' => false,
+            'message' => 'Callback must be sent using POST, not GET.'
+        ]);
     }
-}
 }
