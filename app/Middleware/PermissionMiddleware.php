@@ -90,7 +90,7 @@ class PermissionMiddleware extends BaseMiddleware
         // HIGH-05 Fix: Use Redis for permission caching with HMAC integrity protection
         $cacheKey = "user_permissions:{$userId}";
         $cachedPermissions = null;
-        $appKey = (string)config('app.key');
+        $appKey = secure_key();
         
         if ($this->redis->isAvailable()) {
             try {
