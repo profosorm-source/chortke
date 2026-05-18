@@ -76,7 +76,7 @@ class VerificationService extends \App\Services\BaseService
 
             $this->logger->info('verification.code.generated', [
                 'profile_id' => $profileId,
-                'code' => substr($code, 0, 2) . '****' . substr($code, -2),
+                'code_hash' => hash('sha256', $code),
             ]);
 
             return [
