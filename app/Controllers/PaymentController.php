@@ -135,41 +135,8 @@ class PaymentController extends BaseController
             );
 
             if (!empty($result['success'])) {
-                $webhookData = [
-                    'transaction_id' => $result['transaction_id'] ?? null,
-                    'reference_id' => $result['reference_id'] ?? null,
-                    'order_id' => $result['order_id'] ?? null,
-                    'amount' => $result['amount'] ?? 0,
-                    'currency' => $result['currency'] ?? 'irt',
-                    'status' => 'success',
-                    'gateway' => $gateway,
-                    'timestamp' => time(),
-                ];
-
-                $reconciliation = $this->reconciliationService->reconcilePayment($webhookData);
-                if (!$reconciliation['success']) {
-                    $this->logger->warning('payment.reconciliation.failed', [
-                        'channel' => 'payment',
-                        'gateway' => $gateway,
-                        'transaction_id' => $webhookData['transaction_id'],
-                        'message' => $reconciliation['message'] ?? 'Unknown reconciliation error',
-                    ]);
-                }
-
                 $this->session->setFlash('success', $result['message'] ?? 'پرداخت با موفقیت انجام شد');
             } else {
-                $webhookData = [
-                    'transaction_id' => $result['transaction_id'] ?? null,
-                    'reference_id' => $result['reference_id'] ?? null,
-                    'amount' => $result['amount'] ?? 0,
-                    'currency' => $result['currency'] ?? 'irt',
-                    'status' => 'failed',
-                    'failure_reason' => $result['message'] ?? 'Unknown error',
-                    'gateway' => $gateway,
-                    'timestamp' => time(),
-                ];
-
-                $this->reconciliationService->reconcilePayment($webhookData);
                 $this->session->setFlash('error', $result['message'] ?? 'پرداخت ناموفق بود');
             }
         } catch (\Throwable $e) {
