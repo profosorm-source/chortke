@@ -95,6 +95,11 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
         
         // Circuit Breaker check
         $disabledUntil = $cache->get('crypto_circuit_breaker_disabled_until');
+        $maxDisableDuration = 3600; // 1 hour max (VULN-03)
+        if ($disabledUntil && ((int)$disabledUntil - \time()) > $maxDisableDuration) {
+            $cache->forget('crypto_circuit_breaker_disabled_until');
+            $disabledUntil = null;
+        }
         if ($disabledUntil && (int)$disabledUntil > \time()) {
             $this->logger->warning('crypto.circuit_breaker.active', ['url' => $url]);
             return null;
@@ -142,7 +147,7 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
         $cache->put('crypto_circuit_breaker_failures', $failures, 10); // keep history for 10 mins
         
         if ($failures >= 5) {
-            $cache->put('crypto_circuit_breaker_disabled_until', \time() + 300, 5); // disable for 5 mins
+            $cache->put('crypto_circuit_breaker_disabled_until', \time() + 300, 300); // disable for 5 mins (M-07)
             $cache->forget('crypto_circuit_breaker_failures'); // RESET failures counter to prevent immediate re-tripping after cooldown!
             $this->logger->error('crypto.circuit_breaker.tripped', [
                 'failures' => $failures,
@@ -250,7 +255,10 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function verifyBscTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
         try {
-            $apiKey = $this->settingService->get('bscscan_api_key', '') ?: 'YourApiKeyToken';
+            $apiKey = $this->settingService->get('bscscan_api_key', '');
+            if (!$apiKey) {
+                return ['status' => 'error', 'reason' => 'BscScan API key not configured'];
+            }
             $url = "https://api.bscscan.com/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey);
             
             $response = $this->executeWithRetry($url);
@@ -275,7 +283,7 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             }
 
             $confirmations = isset($tx['confirmations']) ? (int)$tx['confirmations'] : 0;
-            $minConfirmations = (int) $this->settingService->get('crypto_min_confirmations_bnb20', 15);
+            $minConfirmations = (int) $this->settingService->get('crypto_min_confirmations_bnb20', \App\Constants\CryptoConstants::DEFAULT_MIN_CONFIRMATIONS_BNB20);
             if ($confirmations < $minConfirmations) {
                 return ['status' => 'pending', 'reason' => "تعداد تاییدهای تراکنش BSC کافی نیست (حداقل $minConfirmations تایید نیاز است، فعلی: $confirmations)"];
             }
@@ -291,13 +299,18 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                 return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده مطابقت ندارد'];
             }
 
-            // Check amount using integer raw comparisons (H-02)
+            // Check amount using integer raw comparisons (H-02, M-05)
             $decimals = (int)($tx['tokenDecimal'] ?? 18);
-            $amountRaw = isset($tx['value']) ? (float)$tx['value'] : 0.0;
-            $expectedRaw = $expectedAmount * pow(10, $decimals);
-            $toleranceRaw = 0.01 * pow(10, $decimals);
+            $amountRaw = $tx['value'] ?? '0';
+            $expectedRaw = bcmul((string)$expectedAmount, bcpow('10', (string)$decimals, 0), 0);
+            $toleranceRaw = bcmul('0.01', bcpow('10', (string)$decimals, 0), 0);
 
-            if (abs($amountRaw - $expectedRaw) > $toleranceRaw) {
+            $diff = bcsub($amountRaw, $expectedRaw, 0);
+            if (str_starts_with($diff, '-')) {
+                $diff = substr($diff, 1);
+            }
+
+            if (bccomp($diff, $toleranceRaw, 0) > 0) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
@@ -313,26 +326,215 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     }
 
     /**
-     * Verify Ethereum transaction
+     * Verify Ethereum transaction (M-03, M-04, M-05)
      */
     private function verifyEthereumTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
-        return ['status' => 'manual', 'reason' => 'Ethereum verification needs manual review'];
+        try {
+            $apiKey = $this->settingService->get('etherscan_api_key', '');
+            if (!$apiKey) {
+                return ['status' => 'error', 'reason' => 'Etherscan API key not configured'];
+            }
+            $url = "https://api.etherscan.io/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey);
+            $response = $this->executeWithRetry($url);
+            if (!$response) {
+                return ['status' => 'error', 'reason' => 'خطا در اتصال به Etherscan API یا فعال بودن مدار قطع‌کننده'];
+            }
+
+            $data = json_decode($response, true);
+            $tx = null;
+            if (isset($data['result']) && is_array($data['result']) && count($data['result']) > 0) {
+                $tx = $data['result'][0];
+            }
+
+            if (!$tx) {
+                return ['status' => 'error', 'reason' => 'تراکنش یافت نشد یا توکن منتقل نشده است'];
+            }
+
+            if (!isset($tx['blockNumber']) || empty($tx['blockNumber'])) {
+                return ['status' => 'pending', 'reason' => 'تراکنش هنوز در بلاک قرار نگرفته است'];
+            }
+
+            $confirmations = isset($tx['confirmations']) ? (int)$tx['confirmations'] : 0;
+            $minConfirmations = (int) $this->settingService->get('crypto_min_confirmations_erc20', \App\Constants\CryptoConstants::DEFAULT_MIN_CONFIRMATIONS_ERC20);
+            if ($confirmations < $minConfirmations) {
+                return ['status' => 'pending', 'reason' => "تعداد تاییدهای تراکنش Ethereum کافی نیست (حداقل $minConfirmations تایید نیاز است، فعلی: $confirmations)"];
+            }
+
+            $validContract = $this->settingService->get('crypto_contract_erc20_usdt', '0xdac17f958d2ee523a2206206994597c13d831ec7');
+            if ($this->normalizeAddress($tx['contractAddress'] ?? '', 'ethereum') !== $this->normalizeAddress($validContract, 'ethereum')) {
+                return ['status' => 'mismatch', 'reason' => 'توکن ارسالی USDT (ERC20) نیست'];
+            }
+
+            if ($this->normalizeAddress($tx['to'] ?? '', 'ethereum') !== $this->normalizeAddress($toWallet, 'ethereum')) {
+                return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده مطابقت ندارد'];
+            }
+
+            $decimals = (int)($tx['tokenDecimal'] ?? 6);
+            $amountRaw = $tx['value'] ?? '0';
+            $expectedRaw = bcmul((string)$expectedAmount, bcpow('10', (string)$decimals, 0), 0);
+            $toleranceRaw = bcmul('0.01', bcpow('10', (string)$decimals, 0), 0);
+
+            $diff = bcsub($amountRaw, $expectedRaw, 0);
+            if (str_starts_with($diff, '-')) {
+                $diff = substr($diff, 1);
+            }
+
+            if (bccomp($diff, $toleranceRaw, 0) > 0) {
+                return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
+            }
+
+            return ['status' => 'verified', 'details' => $tx];
+        } catch (\Exception $e) {
+            $this->logger->error('crypto.verify.ethereum.failed', [
+                'tx_hash' => $txHash,
+                'error' => $e->getMessage()
+            ]);
+            return ['status' => 'error', 'reason' => 'خطا در بررسی تراکنش Ethereum'];
+        }
     }
 
     /**
-     * Verify TON transaction
+     * Verify TON transaction (M-03)
      */
     private function verifyTonTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
-        return ['status' => 'manual', 'reason' => 'TON verification needs manual review'];
+        try {
+            $apiKey = $this->settingService->get('toncenter_api_key', '');
+            $url = "https://toncenter.com/api/v2/getTransactions?address=" . urlencode($toWallet) . "&limit=20&archival=true";
+            if ($apiKey) {
+                $url .= "&api_key=" . urlencode($apiKey);
+            }
+            $response = $this->executeWithRetry($url);
+            if (!$response) {
+                return ['status' => 'error', 'reason' => 'خطا در اتصال به Toncenter API'];
+            }
+
+            $data = json_decode($response, true);
+            if (!isset($data['ok']) || $data['ok'] !== true || !isset($data['result'])) {
+                return ['status' => 'error', 'reason' => 'پاسخ نامعتبر از API ترون'];
+            }
+
+            $foundTx = null;
+            foreach ($data['result'] as $tx) {
+                $hash = $tx['transaction_id']['hash'] ?? '';
+                if (strtolower($hash) === strtolower($txHash) || (is_string($hash) && @base64_encode(hex2bin($hash)) === $txHash)) {
+                    $foundTx = $tx;
+                    break;
+                }
+            }
+
+            if (!$foundTx) {
+                return ['status' => 'pending', 'reason' => 'تراکنش یافت نشد یا هنوز تأیید نشده است'];
+            }
+
+            $inMsg = $foundTx['in_msg'] ?? [];
+            $value = $inMsg['value'] ?? '0';
+            
+            $expectedRaw = bcmul((string)$expectedAmount, '1000000', 0);
+            $toleranceRaw = bcmul('0.01', '1000000', 0);
+            
+            $diff = bcsub($value, $expectedRaw, 0);
+            if (str_starts_with($diff, '-')) {
+                $diff = substr($diff, 1);
+            }
+            if (bccomp($diff, $toleranceRaw, 0) > 0) {
+                return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
+            }
+
+            return ['status' => 'verified', 'details' => $foundTx];
+        } catch (\Exception $e) {
+            $this->logger->error('crypto.verify.ton.failed', [
+                'tx_hash' => $txHash,
+                'error' => $e->getMessage()
+            ]);
+            return ['status' => 'error', 'reason' => 'خطا در بررسی تراکنش TON'];
+        }
     }
 
     /**
-     * Verify Solana transaction
+     * Verify Solana transaction (M-03)
      */
     private function verifySolanaTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
-        return ['status' => 'manual', 'reason' => 'Solana verification needs manual review'];
+        try {
+            $rpcUrl = $this->settingService->get('solana_rpc_url', 'https://api.mainnet-beta.solana.com');
+            $payload = json_encode([
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'method' => 'getTransaction',
+                'params' => [
+                    $txHash,
+                    ['encoding' => 'jsonParsed', 'maxSupportedTransactionVersion' => 0]
+                ]
+            ]);
+
+            $ch = \curl_init($rpcUrl);
+            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            \curl_setopt($ch, CURLOPT_POST, true);
+            \curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            \curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            \curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+            $response = \curl_exec($ch);
+            \curl_close($ch);
+
+            if (!$response) {
+                return ['status' => 'error', 'reason' => 'خطا در اتصال به Solana RPC'];
+            }
+
+            $data = json_decode($response, true);
+            $result = $data['result'] ?? null;
+            if (!$result) {
+                return ['status' => 'pending', 'reason' => 'تراکنش در شبکه سولانا یافت نشد'];
+            }
+
+            $meta = $result['meta'] ?? [];
+            if (isset($meta['err']) && $meta['err'] !== null) {
+                return ['status' => 'mismatch', 'reason' => 'تراکنش ناموفق در شبکه سولانا'];
+            }
+
+            $postBalances = $meta['postTokenBalances'] ?? [];
+            $preBalances = $meta['preTokenBalances'] ?? [];
+            
+            $usdtMint = 'Es9vMFrzaCERmJfrF4H2FYBnIiXMfYm4bov5BqNW9blI';
+            $transferAmount = 0.0;
+            $receiverFound = false;
+
+            foreach ($postBalances as $post) {
+                if (($post['mint'] ?? '') === $usdtMint) {
+                    $owner = $post['owner'] ?? '';
+                    if (strtolower($owner) === strtolower($toWallet)) {
+                        $receiverFound = true;
+                        $preAmount = 0.0;
+                        foreach ($preBalances as $pre) {
+                            if (($pre['owner'] ?? '') === $owner && ($pre['mint'] ?? '') === $usdtMint) {
+                                $preAmount = (float)($pre['uiTokenAmount']['uiAmount'] ?? 0.0);
+                                break;
+                            }
+                        }
+                        $postAmount = (float)($post['uiTokenAmount']['uiAmount'] ?? 0.0);
+                        $transferAmount = $postAmount - $preAmount;
+                        break;
+                    }
+                }
+            }
+
+            if (!$receiverFound) {
+                return ['status' => 'mismatch', 'reason' => 'آدرس گیرنده یا توکن USDT یافت نشد'];
+            }
+
+            $expected = (float)$expectedAmount;
+            if (abs($transferAmount - $expected) > 0.01) {
+                return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
+            }
+
+            return ['status' => 'verified', 'details' => $result];
+        } catch (\Exception $e) {
+            $this->logger->error('crypto.verify.solana.failed', [
+                'tx_hash' => $txHash,
+                'error' => $e->getMessage()
+            ]);
+            return ['status' => 'error', 'reason' => 'خطا در بررسی تراکنش Solana'];
+        }
     }
 }
