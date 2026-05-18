@@ -139,13 +139,13 @@ $openIf = function(array $paths) use ($uri): string {
         <div class="nav-section">
             <div class="nav-section-label">مالی و تراکنش‌ها</div>
 
-            <div class="nav-item has-sub <?= e($openIf(['/admin/transactions', '/admin/manual-deposits', '/admin/crypto-deposits'])) ?>"
+            <div class="nav-item has-sub <?= e($openIf(['/admin/transactions', '/admin/manual-deposits', '/admin/crypto-deposits', '/admin/gateway-payments'])) ?>"
                  onclick="toggleAdminSub(this)">
                 <span class="material-icons nav-icon">account_balance_wallet</span>
                 <span class="nav-label">کیف پول و تراکنش‌ها</span>
                 <span class="material-icons nav-arrow">chevron_left</span>
             </div>
-            <div class="nav-submenu <?= e($openIf(['/admin/transactions', '/admin/manual-deposits', '/admin/crypto-deposits'])) ?>">
+            <div class="nav-submenu <?= e($openIf(['/admin/transactions', '/admin/manual-deposits', '/admin/crypto-deposits', '/admin/gateway-payments'])) ?>">
                 <a class="nav-sub-item <?= e($ac('/admin/transactions')) ?>" href="<?= url('/admin/transactions') ?>">
                     <span class="nav-sub-dot"></span>همه تراکنش‌ها
                 </a>
@@ -154,6 +154,17 @@ $openIf = function(array $paths) use ($uri): string {
                 </a>
                 <a class="nav-sub-item <?= e($ac('/admin/crypto-deposits')) ?>" href="<?= url('/admin/crypto-deposits') ?>">
                     <span class="nav-sub-dot"></span>واریزهای کریپتو
+                </a>
+                <a class="nav-sub-item <?= e($ac('/admin/gateway-payments')) ?>" href="<?= url('/admin/gateway-payments') ?>">
+                    <span class="nav-sub-dot"></span>پرداخت‌های معلق درگاه
+                    <?php
+                    try {
+                        $gpPending = \Core\Database::getInstance()->selectOne("SELECT COUNT(*) as c FROM payment_logs WHERE status='pending_verification'")->c ?? 0;
+                        if ($gpPending > 0): ?>
+                        <span class="nav-badge badge-orange" style="margin-right:auto;"><?= fa_number($gpPending) ?></span>
+                        <?php endif;
+                    } catch(\Exception $e) {}
+                    ?>
                 </a>
             </div>
 
