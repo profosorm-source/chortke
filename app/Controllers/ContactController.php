@@ -38,16 +38,16 @@ class ContactController extends BaseController
         $message = (string)$this->request->input('message');
 
         // 🛡️ MED-09: اعتبارسنجی طول فیلدهای نام و موضوع جهت مقابله با سرریز حافظه
-        if (mb_strlen($name) > 100) {
+        if (mb_strlen($name) < 2 || mb_strlen($name) > 100) {
             return $this->response->json([
                 'success' => false,
-                'message' => 'نام نامعتبر است (حداکثر ۱۰۰ کاراکتر مجاز است).'
+                'message' => 'نام باید بین ۲ تا ۱۰۰ کاراکتر باشد.'
             ], 422);
         }
-        if (mb_strlen($subject) > 200) {
+        if (mb_strlen($subject) < 5 || mb_strlen($subject) > 200) {
             return $this->response->json([
                 'success' => false,
-                'message' => 'موضوع نامعتبر است (حداکثر ۲۰۰ کاراکتر مجاز است).'
+                'message' => 'موضوع باید بین ۵ تا ۲۰۰ کاراکتر باشد.'
             ], 422);
         }
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
