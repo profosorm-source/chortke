@@ -21,11 +21,14 @@ class UserSettingsService extends \App\Services\BaseService
 
     // ─── Cache ───────────────────────────────────────────────────────────────
     private const CACHE_PREFIX = 'user_settings:';
-    private const CACHE_TTL = 300; // 5 دقیقه (MED-09: Optimized from 3600 to 300s for higher sync speed)
+    private const CACHE_TTL = 3600; // 1 ساعت
 
     // لیست کلیدهای حساس که نباید در لاگ‌ها دیده شوند
     private const SENSITIVE_KEYS = [
-        'phone', 'address', 'national_id', 'card_number', 'password', 'secret'
+        'phone', 'mobile', 'address', 'national_id', 'card_number', 
+        'password', 'secret', '2fa_secret', 'backup_codes',
+        'email', 'full_name', 'birth_date', 'sheba', 'iban',
+        'passport_number', 'ssn', 'tax_id'
     ];
 
     // ─── تنظیمات پیش‌فرض ─────────────────────────────────────────────────────
@@ -379,6 +382,24 @@ class UserSettingsService extends \App\Services\BaseService
      */
     private function validateSetting(string $key, $value): bool
     {
+        // Whitelist allowed keys
+        if (!array_key_exists($key, self::DEFAULT_SETTINGS)) {
+            $this->logger->warning('settings.invalid_key', ['key' => $key]);
+            return false;
+        }
+
+        // Type validation
+        $expected = self::DEFAULT_SETTINGS[$key];
+        if (is_bool($expected) && !is_bool($value)) {
+            return false;
+        }
+        if (is_int($expected) && !is_int($value)) {
+            return false;
+        }
+        if (is_string($expected) && !is_string($value)) {
+            return false;
+        }
+
         $validations = [
             'language' => fn($v) => in_array($v, ['fa', 'en']),
             'timezone' => fn($v) => in_array($v, timezone_identifiers_list()),
@@ -386,19 +407,12 @@ class UserSettingsService extends \App\Services\BaseService
             'date_format' => fn($v) => in_array($v, ['jalali', 'gregorian']),
             'currency' => fn($v) => in_array($v, ['IRT', 'IRR', 'USD']),
             'profile_visibility' => fn($v) => in_array($v, ['public', 'friends', 'private']),
-            'session_timeout' => fn($v) => is_int($v) && $v >= 5 && $v <= 480,
+            'session_timeout' => fn($v) => is_int($v) && $v >= 5 && $v <= 1440,
             'items_per_page' => fn($v) => is_int($v) && $v >= 10 && $v <= 100,
         ];
 
         if (isset($validations[$key])) {
             return $validations[$key]($value);
-        }
-
-        // برای تنظیمات boolean
-        if (in_array($key, ['show_online_status', 'show_activity', 'allow_messages', 'allow_friend_requests',
-                           'email_notifications', 'push_notifications', 'sms_notifications', 'marketing_emails',
-                           'login_alerts', 'suspicious_activity_alerts', 'auto_refresh', 'compact_view'])) {
-            return is_bool($value);
         }
 
         return true;

@@ -62,7 +62,25 @@ class AccountDeletionService extends \App\Services\BaseService
                 $deletedCount = 0;
 
                 foreach ($expiredRequests as $request) {
-                    if ($this->deleteUserAccount((int)$request['user_id'], 'Automated deletion after 7-day period')) {
+                    $userId = (int)$request['user_id'];
+                    
+                    // Pre-check wallet balance (CRIT-02)
+                    $wallet = $this->db->fetch(
+                        "SELECT balance_irt, balance_usdt FROM wallets WHERE user_id = ?",
+                        [$userId]
+                    );
+                    if ($wallet && ((float)$wallet['balance_irt'] > 0 || (float)$wallet['balance_usdt'] > 0)) {
+                        // Cancel the deletion request to preserve customer funds
+                        $this->deletionLogModel->cancelDeletionRequest($userId);
+                        $this->logger->warning('account_deletion.cancelled_due_to_positive_balance', [
+                            'user_id' => $userId,
+                            'balance_irt' => $wallet['balance_irt'],
+                            'balance_usdt' => $wallet['balance_usdt']
+                        ]);
+                        continue;
+                    }
+
+                    if ($this->deleteUserAccount($userId, 'Automated deletion after 7-day period')) {
                         $deletedCount++;
                     }
                 }

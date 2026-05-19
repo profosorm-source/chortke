@@ -1140,7 +1140,7 @@ class CustomTaskService extends \App\Services\BaseService
                     $refundAmount = round($remaining * (1 + ($feePercent / 100)), 2);
                     $currency = $adArr['currency'] ?? 'irt';
 
-                    $idempotencyKey = "escrow_rfnd_ad_" . ($adArr['id'] ?? 0) . "_" . time();
+                    $idempotencyKey = "escrow_rfnd_ad_" . ($adArr['id'] ?? 0) . "_del";
                     
                     // Perform immediate wallet deposit via Service
                     $this->walletService->deposit($userId, $refundAmount, $currency, [
@@ -1169,6 +1169,7 @@ class CustomTaskService extends \App\Services\BaseService
                 'user_id' => $userId,
                 'error' => $e->getMessage()
             ]);
+            throw $e;
         }
     }
 }

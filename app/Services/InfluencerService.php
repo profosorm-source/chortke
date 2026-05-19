@@ -488,7 +488,7 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
 
             // تخصیص امتیاز تجربه (XP) گیمیفای شده به اینفلوئنسر
             try {
-                $this->xpEngine->awardXP((int)$order->influencer_user_id, 'youtube', 'influencer_order_completed');
+                $this->xpEngine->awardXP((int)$order->influencer_user_id, 'youtube', 'influencer_order_completed', (int)$order->id);
             } catch (\Throwable $t) {
                 $this->logger->error('xp_error', ['error' => $t->getMessage()]);
             }

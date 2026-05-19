@@ -37,7 +37,7 @@ class XPEngine extends BaseService
      * @param string $module نام ماژول اصلی (youtube, custom_tasks, social_tasks, google_search)
      * @param string $activityType نوع رویداد انجام‌شده
      */
-    public function awardXP(int $userId, string $module, string $activityType): bool
+    public function awardXP(int $userId, string $module, string $activityType, ?int $taskExecutionId = null): bool
     {
         // ۱. تعیین میزان امتیاز پایه مصوب برای هر فعالیت
         $baseXpMap = $this->settingService->get('xp_engine_base_xp', [
@@ -53,7 +53,8 @@ class XPEngine extends BaseService
         }
 
         // Acquire MySQL/MariaDB advisory lock to guarantee idempotency in concurrent execution
-        $lockName = "xp_lock_{$userId}_{$module}_{$activityType}_" . date('YmdH');
+        $lockSuffix = $taskExecutionId ? "exec_{$taskExecutionId}" : date('YmdH');
+        $lockName = "xp_lock_{$userId}_{$module}_{$activityType}_{$lockSuffix}";
         $stmtLock = $this->db->prepare("SELECT GET_LOCK(?, 10)");
         $stmtLock->execute([$lockName]);
         $lockAcquired = (int)$stmtLock->fetchColumn();
@@ -68,16 +69,37 @@ class XPEngine extends BaseService
         }
 
         try {
-            // ۱.۵. Idempotency Check - جلوگیری از پاداش مضاعف در یک ساعت برای یک فعالیت خاص
-            $idempotencyKey = hash('sha256', "{$userId}:{$module}:{$activityType}:" . date('Y-m-d-H'));
-            $existing = $this->db->prepare("
-                SELECT id FROM score_events 
-                WHERE entity_id = ? AND domain = ? AND source = ? 
-                AND meta_json LIKE ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) 
-                LIMIT 1
-            ");
-            $existing->execute([$userId, 'xp_' . $module, $activityType, "%{$idempotencyKey}%"]);
-            
+            // ۱.۵. Idempotency Check
+            $idempotencyKey = null;
+            if ($taskExecutionId) {
+                // Check if a score event was already awarded for this execution
+                $existing = $this->db->prepare("
+                    SELECT id FROM score_events 
+                    WHERE entity_id = ? AND domain = ? AND source = ? 
+                    AND (
+                        JSON_EXTRACT(meta_json, '$.task_execution_id') = ?
+                        OR meta_json LIKE ?
+                    )
+                    LIMIT 1
+                ");
+                $existing->execute([
+                    $userId,
+                    'xp_' . $module,
+                    $activityType,
+                    $taskExecutionId,
+                    '%"task_execution_id":' . $taskExecutionId . '%'
+                ]);
+            } else {
+                $idempotencyKey = hash('sha256', "{$userId}:{$module}:{$activityType}:" . date('Y-m-d-H'));
+                $existing = $this->db->prepare("
+                    SELECT id FROM score_events 
+                    WHERE entity_id = ? AND domain = ? AND source = ? 
+                    AND meta_json LIKE ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) 
+                    LIMIT 1
+                ");
+                $existing->execute([$userId, 'xp_' . $module, $activityType, "%{$idempotencyKey}%"]);
+            }
+
             if ($existing->fetch()) {
                 $this->logger->warning('xp_engine.award_xp.duplicate_ignored', [
                     'user_id' => $userId,
@@ -87,6 +109,16 @@ class XPEngine extends BaseService
                 return false;
             }
 
+            $metaData = [
+                'base_xp' => $baseXp,
+                'module' => $module,
+            ];
+            if ($taskExecutionId) {
+                $metaData['task_execution_id'] = $taskExecutionId;
+            } else {
+                $metaData['idempotency_key'] = $idempotencyKey;
+            }
+
             // ۲. ثبت امتیاز در تخصص ماژولار (لایه اول - دامنه‌های مستقل)
             $this->scoreModel->addEvent([
                 'entity_type' => 'user',
@@ -94,11 +126,7 @@ class XPEngine extends BaseService
                 'domain' => 'xp_' . $module,
                 'delta' => $baseXp,
                 'source' => $activityType,
-                'meta' => [
-                    'base_xp' => $baseXp,
-                    'module' => $module,
-                    'idempotency_key' => $idempotencyKey
-                ]
+                'meta' => $metaData
             ]);
 
             // ۳. محاسبه ضریب هم‌افزایی روزانه (Synergy Multiplier)
@@ -108,18 +136,23 @@ class XPEngine extends BaseService
             // ۴. ثبت امتیاز تجربه عمومی (Global XP) با اعمال ضریب هم‌افزایی
             $finalGlobalXp = $baseXp * $multiplier;
 
+            $globalMeta = [
+                'base_xp' => $baseXp,
+                'synergy_multiplier' => $multiplier,
+                'final_global_xp' => $finalGlobalXp,
+                'module' => $module
+            ];
+            if ($taskExecutionId) {
+                $globalMeta['task_execution_id'] = $taskExecutionId;
+            }
+
             return $this->scoreModel->addEvent([
                 'entity_type' => 'user',
                 'entity_id' => $userId,
                 'domain' => 'xp_global',
                 'delta' => $finalGlobalXp,
                 'source' => $activityType,
-                'meta' => [
-                    'base_xp' => $baseXp,
-                    'synergy_multiplier' => $multiplier,
-                    'final_global_xp' => $finalGlobalXp,
-                    'module' => $module
-                ]
+                'meta' => $globalMeta
             ]);
         } finally {
             $stmtRelease = $this->db->prepare("SELECT RELEASE_LOCK(?)");

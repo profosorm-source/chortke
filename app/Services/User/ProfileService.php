@@ -30,6 +30,32 @@ class ProfileService extends \App\Services\BaseService
         return $this->model->find($userId);
     }
 
+    private function maskPII(string $field, $value): string
+    {
+        if (empty($value)) return '';
+        $value = (string)$value;
+        if ($field === 'national_id' && strlen($value) === 10) {
+            return substr($value, 0, 2) . '******' . substr($value, -2);
+        }
+        if ($field === 'mobile' && strlen($value) === 11) {
+            return substr($value, 0, 4) . '***' . substr($value, -2);
+        }
+        if ($field === 'address') {
+            return '[REDACTED]';
+        }
+        if ($field === 'email') {
+            if (strpos($value, '@') !== false) {
+                [$u, $domain] = explode('@', $value);
+                return substr($u, 0, min(2, strlen($u))) . '***@' . $domain;
+            }
+            return '[REDACTED]';
+        }
+        if (in_array($field, ['national_id', 'mobile', 'address', 'email'])) {
+            return '[REDACTED]';
+        }
+        return $value;
+    }
+
     public function updateProfile(int $userId, array $data): bool
     {
         $allowedFields = ['full_name', 'bio', 'avatar', 'website', 'location', 'mobile', 'national_id', 'birth_date', 'gender', 'address'];
@@ -39,9 +65,9 @@ class ProfileService extends \App\Services\BaseService
 
         $this->model->beginTransaction();
         try {
-            // Lock user row
+            // Lock user row (CRIT-01)
             $current = $this->model->getDb()->fetch(
-                "SELECT id FROM users WHERE id = ? FOR UPDATE",
+                "SELECT id, mobile, national_id FROM users WHERE id = ? FOR UPDATE",
                 [$userId]
             );
             
@@ -50,16 +76,41 @@ class ProfileService extends \App\Services\BaseService
                 return false;
             }
 
+            // Check uniqueness under FOR UPDATE lock
+            if (isset($updateData['mobile'])) {
+                $exists = $this->model->getDb()->fetch(
+                    "SELECT id FROM users WHERE mobile = ? AND id != ? FOR UPDATE",
+                    [$updateData['mobile'], $userId]
+                );
+                if ($exists) {
+                    throw new \RuntimeException('شماره موبایل قبلاً ثبت شده است');
+                }
+            }
+            if (isset($updateData['national_id'])) {
+                $exists = $this->model->getDb()->fetch(
+                    "SELECT id FROM users WHERE national_id = ? AND id != ? FOR UPDATE",
+                    [$updateData['national_id'], $userId]
+                );
+                if ($exists) {
+                    throw new \RuntimeException('کد ملی قبلاً ثبت شده است');
+                }
+            }
+
             $updateData['updated_at'] = date('Y-m-d H:i:s');
             $success = $this->model->update($userId, $updateData);
 
             if ($success) {
                 $this->model->commit();
+                
+                $maskedData = [];
+                foreach ($updateData as $k => $v) {
+                    $maskedData[$k] = $this->maskPII($k, $v);
+                }
+
                 $this->logger->info('user.profile.updated', [
                     'user_id' => $userId,
                     'fields' => array_keys($updateData),
-                    'national_id_masked' => isset($data['national_id']) ? substr($data['national_id'], 0, 3) . '****' : null,
-                    'mobile_masked' => isset($data['mobile']) ? substr($data['mobile'], 0, 4) . '***' . substr($data['mobile'], -2) : null
+                    'values_masked' => $maskedData
                 ]);
                 return true;
             }
@@ -143,8 +194,22 @@ class ProfileService extends \App\Services\BaseService
         // Mobile validation
         if (isset($data['mobile']) && $data['mobile'] !== '') {
             $mobile = trim($data['mobile']);
+            
+            $validPrefixes = [
+                '0910', '0911', '0912', '0913', '0914', '0915', '0916', '0917', '0918', '0919',  // Hamrah-e-aval
+                '0901', '0902', '0903',  // Irancell
+                '0930', '0933', '0935', '0936', '0937', '0938', '0939',  // Irancell
+                '0920', '0921',  // Rightel
+                '0932',  // TeleKish
+            ];
+
+            $prefix = substr($mobile, 0, 4);
             if (!preg_match('/^09[0-9]{9}$/', $mobile)) {
                 $errors['mobile'] = 'شماره موبایل نامعتبر است (باید با 09 شروع شود)';
+            } elseif (!in_array($prefix, $validPrefixes)) {
+                $errors['mobile'] = 'پیش‌شماره موبایل نامعتبر است';
+            } elseif (preg_match('/^09(\d)\1{8}$/', $mobile)) {  // e.g., 09111111111
+                $errors['mobile'] = 'شماره موبایل معتبر نیست';
             } else {
                 // Check mobile uniqueness
                 $existing = $this->model->where('mobile', '=', $mobile)->where('id', '!=', $userId)->first();
@@ -157,8 +222,15 @@ class ProfileService extends \App\Services\BaseService
         // National ID validation
         if (isset($data['national_id']) && $data['national_id'] !== '') {
             $nationalId = trim($data['national_id']);
+            
+            $blacklist = ['0000000000', '1111111111', '2222222222', '3333333333', 
+                          '4444444444', '5555555555', '6666666666', '7777777777',
+                          '8888888888', '9999999999'];
+
             if (!preg_match('/^[0-9]{10}$/', $nationalId)) {
                 $errors['national_id'] = 'کد ملی باید 10 رقم باشد';
+            } elseif (in_array($nationalId, $blacklist)) {
+                $errors['national_id'] = 'کد ملی نامعتبر';
             } else {
                 // Checksum validation
                 $check = (int)$nationalId[9];

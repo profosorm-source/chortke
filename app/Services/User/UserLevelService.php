@@ -140,6 +140,11 @@ class UserLevelService extends \App\Services\BaseService
             $stmt->execute([$userId]);
             $user = $stmt->fetch(\PDO::FETCH_OBJ);
 
+            // Lock latest history record to prevent double history insertion concurrently (MED-08)
+            $stmtHist = $this->db->prepare("SELECT id FROM user_level_histories WHERE user_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE");
+            $stmtHist->execute([$userId]);
+            $stmtHist->fetch();
+
             if (!$user) {
                 $this->db->rollBack();
                 return null;
@@ -223,19 +228,25 @@ class UserLevelService extends \App\Services\BaseService
         // Ensure safe idempotency token - include hour to allow retry later in day if previous expired
         $idempotencyKey = "level_purch_{$userId}_{$levelSlug}_" . \date('YmdH');
 
-        // MED-05: Enforce strong validation overlap: Block duplicate purchases of levels that haven't expired yet
-        $stmt = $this->db->prepare("SELECT level_slug, level_expires_at, level_type FROM users WHERE id = ?");
-        $stmt->execute([$userId]);
-        $u = $stmt->fetch(\PDO::FETCH_OBJ);
-
-        if ($u && $u->level_slug === $levelSlug && $u->level_type === 'purchased') {
-            if ($u->level_expires_at && \strtotime($u->level_expires_at) > \time()) {
-                return ['success' => false, 'message' => 'شما در حال حاضر اشتراک فعال برای این سطح را دارا هستید.'];
-            }
-        }
-
         try {
             $this->db->beginTransaction();
+
+            // 🛡️ Pessimistic Lock on Users and Wallet together to prevent race conditions (CRIT-04)
+            $stmt = $this->db->prepare("SELECT level_slug, level_expires_at, level_type FROM users WHERE id = ? FOR UPDATE");
+            $stmt->execute([$userId]);
+            $u = $stmt->fetch(\PDO::FETCH_OBJ);
+
+            if ($u && $u->level_slug === $levelSlug && $u->level_type === 'purchased') {
+                if ($u->level_expires_at && \strtotime($u->level_expires_at) > \time()) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'شما در حال حاضر اشتراک فعال برای این سطح را دارا هستید.'];
+                }
+            }
+
+            // Lock latest history record to prevent double history insertion concurrently (MED-08)
+            $stmtHist = $this->db->prepare("SELECT id FROM user_level_histories WHERE user_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE");
+            $stmtHist->execute([$userId]);
+            $stmtHist->fetch();
 
             // Check idempotency INSIDE transaction with lock
             $stmt = $this->db->prepare("SELECT id FROM user_level_purchases WHERE idempotency_key = ? FOR UPDATE");
