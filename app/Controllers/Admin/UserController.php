@@ -163,7 +163,7 @@ public function update(int $id): void
     $result = $this->userService->updateUser($id, $validated);
 
     if (!empty($result['success'])) {
-        \App\Middleware\PermissionMiddleware::clearCache();
+        \App\Middleware\PermissionMiddleware::clearCache($id);
         $this->response->json([
             'success' => true,
             'message' => $result['message'] ?? 'کاربر با موفقیت به‌روزرسانی شد',

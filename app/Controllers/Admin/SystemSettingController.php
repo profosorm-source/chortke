@@ -64,11 +64,22 @@ class SystemSettingController extends BaseAdminController
             $this->jsonError('درخواست نامعتبر است');
         }
 
+        $oldSetting = $this->settingService->find($id);
+        $oldValue = $oldSetting->value ?? null;
+
         $ok = $this->settingService->updateById($id, $key, $value);
 
         if (!$ok) {
             $this->jsonError('تنظیمات یافت نشد یا کلید معتبر نیست');
         }
+
+        // Log the change
+        $this->logger->activity('setting.updated', 'تغییر تنظیمات سیستم', $this->userId(), [
+            'setting_id' => $id,
+            'key' => $key,
+            'old_value' => $oldValue,
+            'new_value' => $value,
+        ]);
 
         $this->settingService->clearCache();
 
@@ -122,6 +133,14 @@ class SystemSettingController extends BaseAdminController
             if (!$updated) {
                 throw new \Exception('خطا در ذخیره اطلاعات در دیتابیس');
             }
+
+            // Log the change
+            $this->logger->activity('setting.image_uploaded', 'آپلود تصویر تنظیمات سیستم', $this->userId(), [
+                'setting_id' => $settingId,
+                'key' => $setting->key ?? null,
+                'old_value' => $setting->value ?? null,
+                'new_value' => $imagePath,
+            ]);
             
             $this->settingService->clearCache();
             
@@ -158,6 +177,15 @@ class SystemSettingController extends BaseAdminController
             }
             
             $this->settingService->updateValueById($settingId, '');
+
+            // Log the change
+            $this->logger->activity('setting.image_removed', 'حذف تصویر تنظیمات سیستم', $this->userId(), [
+                'setting_id' => $settingId,
+                'key' => $setting->key ?? null,
+                'old_value' => $setting->value ?? null,
+                'new_value' => '',
+            ]);
+
             $this->settingService->clearCache();
             
             $this->jsonSuccess('تصویر با موفقیت حذف شد');

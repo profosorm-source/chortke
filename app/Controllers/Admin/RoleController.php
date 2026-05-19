@@ -194,7 +194,14 @@ class RoleController extends BaseAdminController
         $roleModel->syncPermissions($id, $permissionIds);
         
         // پاکسازی کش دسترسی‌ها
-        PermissionMiddleware::clearCache();
+        $db = $this->roleModel->getDb();
+        $userIds = $db->fetchAll(
+            "SELECT id FROM users WHERE role_id = ? AND deleted_at IS NULL",
+            [$id]
+        );
+        foreach ($userIds as $row) {
+            PermissionMiddleware::clearCache((int)$row->id);
+        }
         
         $this->logger->activity('roles.update', 'ویرایش نقش', user_id(), [
             'role_id'   => $id,
@@ -210,6 +217,14 @@ class RoleController extends BaseAdminController
      */
     public function delete()
     {
+        // CSRF Check
+        if (!verify_csrf_token($this->request->post('csrf_token') ?? $this->request->header('X-CSRF-Token'))) {
+            return $this->response->json([
+                'success' => false,
+                'message' => 'توکن امنیتی نامعتبر است.'
+            ], 403);
+        }
+
         $id = (int) $this->request->param('id');
         $roleModel = $this->roleModel;
         $role = $roleModel->find($id);
@@ -290,7 +305,14 @@ class RoleController extends BaseAdminController
         $newStatus = $role->is_active ? 0 : 1;
         $roleModel->update($id, ['is_active' => $newStatus]);
         
-        PermissionMiddleware::clearCache();
+        $db = $this->roleModel->getDb();
+        $userIds = $db->fetchAll(
+            "SELECT id FROM users WHERE role_id = ? AND deleted_at IS NULL",
+            [$id]
+        );
+        foreach ($userIds as $row) {
+            PermissionMiddleware::clearCache((int)$row->id);
+        }
         
         $statusText = $newStatus ? 'فعال' : 'غیرفعال';
         
