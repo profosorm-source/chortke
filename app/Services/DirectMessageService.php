@@ -211,10 +211,10 @@ class DirectMessageService extends \App\Services\BaseService
             $isEncrypted = (bool)($conv->is_encrypted ?? false);
 
             if ($isEncrypted) {
-                $lastMessage = '🔒 پیام رمزشده';
+                $lastMessage = '[پیام رمزشده]';
             } else {
                 if (mb_strlen($lastMessage) > 50) {
-                    $lastMessage = mb_substr($lastMessage, 0, 47) . '...';
+                    $lastMessage = mb_substr($lastMessage, 0, 50) . '...';
                 }
             }
 
@@ -252,12 +252,19 @@ class DirectMessageService extends \App\Services\BaseService
             $isOnline = (bool) $user->is_online;
         }
 
+        // 🛡️ BLF-06: بررسی مسدودی در اطلاعات کاربر دریافتی
+        $isBlocked = false;
+        if ($requesterId !== null) {
+            $isBlocked = $this->isBlocked($userId, $requesterId) || $this->isBlocked($requesterId, $userId);
+        }
+
         return [
             'id' => $user->id,
             'username' => $user->username,
             'full_name' => $user->full_name,
             'avatar' => $user->avatar,
-            'is_online' => $isOnline
+            'is_online' => $isOnline,
+            'is_blocked' => $isBlocked
         ];
     }
 
@@ -346,14 +353,26 @@ class DirectMessageService extends \App\Services\BaseService
         }
     }
 
+    private const ENCRYPTION_METHOD = 'AES-256-CBC';
+
     /**
      * رمزنگاری پیام
      */
     private function encryptMessage(string $message): string
     {
-        // استفاده از encryption ساده برای نمونه
-        // در تولید، باید از یک روش قوی استفاده شود
-        return base64_encode($message);
+        $keyVersion = (int)config('app.encryption_key_version', 1);
+        $key = $this->getEncryptionKey($keyVersion);
+        
+        $iv = random_bytes(16);
+        $encrypted = openssl_encrypt($message, self::ENCRYPTION_METHOD, $key, 0, $iv);
+        
+        if ($encrypted === false) {
+            throw new \Exception('Encryption failed');
+        }
+        
+        // Prepend version (1 byte) + IV (16 bytes) + encrypted data
+        $version = pack('C', $keyVersion);
+        return base64_encode($version . $iv . $encrypted);
     }
 
     /**
@@ -362,10 +381,50 @@ class DirectMessageService extends \App\Services\BaseService
     private function decryptMessage(string $encrypted): string
     {
         try {
-            return base64_decode($encrypted);
+            $data = base64_decode($encrypted, true);
+            if ($data === false) {
+                return '[پیام رمزشده - خطا در رمزگشایی]';
+            }
+            
+            if (strlen($data) < 17) {
+                return '[پیام رمزشده - فرمت نامعتبر]';
+            }
+            
+            $keyVersion = unpack('C', substr($data, 0, 1))[1];
+            $key = $this->getEncryptionKey($keyVersion);
+            
+            $iv = substr($data, 1, 16);
+            $ciphertext = substr($data, 17);
+            
+            $decrypted = openssl_decrypt($ciphertext, self::ENCRYPTION_METHOD, $key, 0, $iv);
+            
+            if ($decrypted === false) {
+                return '[پیام رمزشده - خطا در رمزگشایی]';
+            }
+            
+            return $decrypted;
+            
         } catch (\Exception $e) {
-            return '[رمزنگاری شده - نمی‌توان رمزگشایی کرد]';
+            $this->logger->error('message.decrypt.failed', ['error' => $e->getMessage()]);
+            return '[پیام رمزشده]';
         }
+    }
+
+    private function getEncryptionKey(int $version): string
+    {
+        $keys = config('encryption.message_keys', []);
+        if (empty($keys)) {
+            $keys = config('encryption.dm_keys', []);
+        }
+        
+        if (!isset($keys[$version])) {
+            if ($version === 1) {
+                return 'strong_message_enc_key_v1_32bytes_long';
+            }
+            throw new \Exception("Encryption key version {$version} not found");
+        }
+        
+        return base64_decode($keys[$version]);
     }
 
     /**
@@ -381,95 +440,130 @@ class DirectMessageService extends \App\Services\BaseService
      */
     private function checkRateLimit(int $userId): bool
     {
-        $key = 'rate_limit:messages:' . $userId;
+        $key = 'rate_limit:messages:send:' . $userId;
         $currentCount = (int)($this->redis->get($key) ?? 0);
-
-        $limit = (int)$this->settingService->get('dm_rate_limit_per_min', 10);
-        if ($currentCount >= $limit) { // دینامیک پیام در دقیقه
+        
+        // حداکثر 30 پیام در دقیقه
+        if ($currentCount >= 30) {
             return false;
         }
-
+        
         $this->redis->incr($key);
         $this->redis->expire($key, 60);
-
+        
         return true;
     }
 
-    /**
-     * تعداد پیام‌های خوانده نشده
-     */
     public function getUnreadCount(int $userId, ?int $fromUserId = null): int
     {
+        // Try Redis first
+        $redisAvailable = false;
+        try {
+            $redisAvailable = $this->redis && $this->redis->isAvailable();
+        } catch (\Throwable $e) {}
+
         if ($fromUserId) {
-            $key = self::UNREAD_PREFIX . $userId . ':' . $fromUserId;
-            return (int)($this->redis->get($key) ?? 0);
+            if ($redisAvailable) {
+                try {
+                    $key = self::UNREAD_PREFIX . $userId . ':' . $fromUserId;
+                    return (int)($this->redis->get($key) ?? 0);
+                } catch (\Exception $e) {
+                    $this->logger->warning('unread.redis.failed', ['error' => $e->getMessage()]);
+                }
+            }
+            return $this->directMessageModel->countUnread($userId, $fromUserId);
         }
 
-        return $this->directMessageModel->countUnread($userId);
+        // Cache در memory
+        static $cache = [];
+        if (isset($cache[$userId])) {
+            return $cache[$userId];
+        }
+        
+        if ($redisAvailable) {
+            $pattern = self::UNREAD_PREFIX . $userId . ':*';
+            try {
+                $keys = $this->redis->scanKeys($pattern, 100, 50);
+                
+                $total = 0;
+                foreach ($keys as $key) {
+                    $total += (int)($this->redis->get($key) ?? 0);
+                }
+                
+                $cache[$userId] = $total;
+                return $total;
+            } catch (\Exception $e) {
+                $this->logger->warning('unread.redis.failed', ['error' => $e->getMessage()]);
+            }
+        }
+        
+        // Fallback to database
+        $count = $this->directMessageModel->countUnread($userId);
+        $cache[$userId] = $count;
+        
+        return $count;
     }
 
     /**
      * 🛡️ بررسی محتوای ممنوعه (لینک، شماره، آیدی)
      */
-    private function containsForbiddenContent(string $msg): bool
+    private function containsForbiddenContent(string $message): bool
     {
-        // 🛡️ BLF-06: جلوگیری از دور زدن فیلترینگ کلمات ممنوعه با استفاده از کاراکترهای یونیکد خاص، فواصل، تب‌ها یا اعداد مختلف
-        $msg = mb_strtolower($msg, 'UTF-8');
-
-        // حذف کاراکترهای Zero-width
-        $msg = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}]/u', '', $msg);
-
-        // نرمال‌سازی کاراکترهای Fullwidth/Homoglyph رایج
-        $msg = str_replace('＠', '@', $msg);
-
-        // تبدیل تمام اعداد فارسی و عربی به انگلیسی
-        $persian = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
-        $arabic  = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
-        $english = ['0','1','2','3','4','5','6','7','8','9'];
-        $msg = str_replace($persian, $english, $msg);
-        $msg = str_replace($arabic, $english, $msg);
-
-        // ایجاد نسخه کاملاً فشرده (بدون فاصله، خط تیره، نقطه و آندرلاین) برای بررسی الگوهای دور زدن
-        $cleaned = preg_replace('/[\s\-\._]+/', '', $msg);
-
-        // Whitelist internal domain to avoid false positives
-        $appUrl = config('app.url', '');
-        $host = parse_url($appUrl, PHP_URL_HOST) ?: '';
-        if ($host !== '') {
-            $msg = str_replace(mb_strtolower($host, 'UTF-8'), 'whitelisted_domain', $msg);
-            $cleaned = str_replace(mb_strtolower($host, 'UTF-8'), 'whitelisted_domain', $cleaned);
-        }
-
-        // الگوهای تشخیص روی متن خام نرمال‌شده
-        $patterns = [
-            'url'    => '/https?:\/\/[^\s]+|\b[a-z0-9.-]+\.(ir|com|org|net|biz|info|me|online|tk)\b/i', // آدرس‌های وب
-            'phone'  => '/(\+?98|0)?9\d{9}/', // شماره موبایل ایران
-            'generic'=> '/\d{10,12}/', // اعداد متوالی شبیه شماره تماس
-            'email'  => '/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i', // ایمیل
-            'id'     => '/@[a-z0-9_]{4,}/i', // آیدی شبکه‌ها مثل تلگرام
-            'tme'    => '/t\.me\/|instagram\.com\//i', // دامنه‌های خاص شبکه اجتماعی
+        // Normalize
+        $normalized = $this->normalizeUnicode($message);
+        $normalizedEng = $this->convertToEnglishDigits($normalized);
+        
+        $cleaned = preg_replace('/[\s\-\._]+/', '', $normalized);
+        $cleanedEng = $this->convertToEnglishDigits($cleaned);
+        
+        $patternsWithBoundaries = [
+            '/\b0?9\d{9}\b/u',  // Mobile
+            '/@[a-zA-Z0-9_]{3,}/u',  // Username
+            '/\b(telegram|whatsapp|instagram|viber|rubika|gap|eitaa|soroush|bale)\b/iu',
+            '/(https?|hxxp|h\[tt\]p):\/\//iu',
+            '/\b[a-z0-9\-]+\.(com|ir|org|net|co|me|io)\b/iu',
+            '/\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/iu', // Email
         ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $msg)) {
+        
+        foreach ($patternsWithBoundaries as $pattern) {
+            if (preg_match($pattern, $normalizedEng)) {
                 return true;
             }
         }
-
-        // الگوهای تشخیص روی متن کاملاً فشرده‌شده برای مقابله با فاصله‌گذاری و تزریق کاراکتر (مانند ۰ ۹ ۱ ۲ یا 0-9-1-2)
-        $cleanedPatterns = [
-            'phone_clean'   => '/0?9\d{9}/',
-            'generic_clean' => '/\d{10,12}/',
-            'id_clean'      => '/@[a-z0-9_]{4,}/i',
-            'email_clean'   => '/[a-z0-9]+@[a-z0-9]+\.[a-z]{2,}/i',
+        
+        $patternsWithoutBoundaries = [
+            '/0?9\d{9}/u',
+            '/@[a-zA-Z0-9_]{3,}/u',
+            '/(telegram|whatsapp|instagram|viber|rubika|gap|eitaa|soroush|bale)/iu',
+            '/(https?|hxxp|h\[tt\]p)/iu',
+            '/[a-z0-9\-]+\.(com|ir|org|net|co|me|io)/iu',
+            '/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/iu',
         ];
-
-        foreach ($cleanedPatterns as $pattern) {
-            if (preg_match($pattern, $cleaned)) {
+        
+        foreach ($patternsWithoutBoundaries as $pattern) {
+            if (preg_match($pattern, $cleanedEng)) {
                 return true;
             }
         }
-
+        
         return false;
+    }
+
+    private function normalizeUnicode(string $text): string
+    {
+        $text = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}]/u', '', $text);
+        $text = str_replace(['＠', '．'], ['@', '.'], $text);
+        return $text;
+    }
+
+    private function convertToEnglishDigits(string $text): string
+    {
+        $persian = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+        $arabic = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
+        $english = ['0','1','2','3','4','5','6','7','8','9'];
+        
+        $text = str_replace($persian, $english, $text);
+        $text = str_replace($arabic, $english, $text);
+        return $text;
     }
 }

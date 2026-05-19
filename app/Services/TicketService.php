@@ -83,6 +83,9 @@ class TicketService extends \App\Services\BaseService
 
         // Ported smart features: Detect dynamic priority if not explicitly set to High/Urgent
         $priority = $data['priority'] ?? 'normal';
+        if (!in_array($priority, ['low', 'normal', 'high', 'urgent'], true)) {
+            $priority = 'normal';
+        }
         if ($priority === 'normal') {
             $priority = $this->detectPriority($subject . ' ' . $data['message'], $categoryId);
         }
@@ -153,43 +156,49 @@ class TicketService extends \App\Services\BaseService
      */
     public function reply(int $ticketId, int $userId, string $message, bool $isAdmin = false, array $attachments = []): array
     {
-        $ticket = $this->ticketModel->findById($ticketId);
-        
-        if (!$ticket) {
-            return ['success' => false, 'message' => 'تیکت یافت نشد.'];
-        }
-        
-        // بررسی دسترسی
-        if (!$isAdmin && (int)$ticket->user_id !== $userId) {
-            return ['success' => false, 'message' => 'دسترسی غیرمجاز.'];
-        }
-        
-        // بررسی وضعیت
-        if ($ticket->status === 'closed' && !$isAdmin) {
-            return ['success' => false, 'message' => 'تیکت بسته شده است.'];
-        }
-
-        // 🛡️ مقابله با سوءاستفاده: ارزیابی طول پیام
-        $msgLen = mb_strlen($message, 'UTF-8');
-        if ($msgLen > 5000) {
-            return ['success' => false, 'message' => 'متن پاسخ نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
-        }
-        
-        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت پاسخ‌ها (حداکثر ۵ پاسخ در ساعت برای کاربران عادی)
-        if (!$isAdmin) {
-            $rateKey = "ticket_reply_limit:{$userId}";
-            if (!$this->rateLimiter->attempt($rateKey, 5, 3600)) {
-                $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
-                return [
-                    'success' => false,
-                    'message' => 'تعداد پیام‌های ارسالی شما بیش از حد مجاز ساعتی است. لطفا کمی صبر کنید.'
-                ];
-            }
-        }
-        
+        // 🛡️ Item 6: Pessimistic Locking inside Transaction
         $this->db->beginTransaction();
         
         try {
+            $ticket = $this->db->fetch("SELECT * FROM tickets WHERE id = ? FOR UPDATE", [$ticketId]);
+            
+            if (!$ticket) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'تیکت یافت نشد.'];
+            }
+            
+            // بررسی دسترسی
+            if (!$isAdmin && (int)$ticket->user_id !== $userId) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'دسترسی غیرمجاز.'];
+            }
+            
+            // بررسی وضعیت
+            if ($ticket->status === 'closed' && !$isAdmin) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'تیکت بسته شده است.'];
+            }
+
+            // 🛡️ مقابله با سوءاستفاده: ارزیابی طول پیام
+            $msgLen = mb_strlen($message, 'UTF-8');
+            if ($msgLen > 5000) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'متن پاسخ نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
+            }
+            
+            // 🛡️ مقابله با سوءاستفاده: ریت لیمیت پاسخ‌ها (حداکثر ۵ پاسخ در ساعت برای کاربران عادی)
+            if (!$isAdmin) {
+                $rateKey = "ticket_reply_limit:{$userId}";
+                if (!$this->rateLimiter->attempt($rateKey, 5, 3600)) {
+                    $this->db->rollBack();
+                    $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
+                    return [
+                        'success' => false,
+                        'message' => 'تعداد پیام‌های ارسالی شما بیش از حد مجاز ساعتی است. لطفا کمی صبر کنید.'
+                    ];
+                }
+            }
+
             // ایجاد پیام
             $this->messageModel->create([
                 'ticket_id' => $ticketId,
@@ -213,6 +222,8 @@ class TicketService extends \App\Services\BaseService
                 }
             } catch (\Exception $redisEx) {
                 $this->logger->warning('ticket.reply.redis_failed_lock', ['error' => $redisEx->getMessage()]);
+                // ✅ در صورت قطعی ردیس، دیفالت را به false تغییر دهید تا ایمیل/نوتیفیکیشن اسپم نشود (Item 10)
+                $canSendNotification = false;
             }
 
             if ($canSendNotification) {

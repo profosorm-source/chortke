@@ -22,12 +22,31 @@ class ContactService extends \App\Services\BaseService
      */
     public function sendMessage(array $data): array
     {
-        // H-07: Rate Limiting by IP to prevent spam flood
+        // 1. Honeypot check
+        if (!empty($data['website'])) {
+            return $this->successResponse('پیام شما با موفقیت ارسال شد. به زودی پاسخ خواهیم داد.'); // Fake success for bots
+        }
+
+        // 2. CAPTCHA Verification
+        $captchaToken = $data['captcha_token'] ?? '';
+        $captchaResponse = $data['captcha_response'] ?? '';
+        if (!$this->verifyCaptcha($captchaToken, $captchaResponse)) {
+            return $this->errorResponse('لطفاً کپچا را تأیید کنید.', [], 422);
+        }
+
+        // 3. IP Rate Limiting: 3 messages per hour per IP
         $ip = get_client_ip();
-        $rateKey = "contact_form:{$ip}";
-        // محدودیت ۵ پیام در ساعت برای هر IP
-        if (!app(\Core\RateLimiter::class)->attempt($rateKey, 5, 3600)) {
-            return $this->errorResponse('شما بیش از حد مجاز پیام ارسال کرده‌اید. لطفاً ساعتی دیگر تلاش کنید.', [], 429);
+        $ipRateKey = "contact_form:ip:{$ip}";
+        if (!app(\Core\RateLimiter::class)->attempt($ipRateKey, 3, 3600)) {
+            return $this->errorResponse('تعداد پیام‌های ارسالی شما بیش از حد مجاز است. لطفاً ساعتی دیگر تلاش کنید.', [], 429);
+        }
+
+        // 4. Email Rate Limiting: 5 messages per day
+        if (!empty($data['email'])) {
+            $emailKey = "contact_form:email:" . md5(strtolower($data['email']));
+            if (!app(\Core\RateLimiter::class)->attempt($emailKey, 5, 86400)) {
+                return $this->errorResponse('این ایمیل امروز پیام‌های زیادی ارسال کرده است. لطفاً فردا تلاش کنید.', [], 429);
+            }
         }
 
         // Validation logic
@@ -60,6 +79,18 @@ class ContactService extends \App\Services\BaseService
 
             return $this->errorResponse('خطا در ارسال پیام. لطفاً دوباره تلاش کنید.');
         }
+    }
+
+    private function verifyCaptcha(?string $token, ?string $response): bool
+    {
+        if (empty($token) || empty($response)) {
+            return false;
+        }
+        $captchaService = app(\App\Services\CaptchaService::class);
+        if (!$captchaService->isEnabled()) {
+            return true;
+        }
+        return $captchaService->verify($token, $response);
     }
 
     /**

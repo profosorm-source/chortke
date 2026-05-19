@@ -72,8 +72,6 @@ extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'این گزارش قبلاً تعیین تکلیف و نهایی شده است'];
             }
 
-            $this->moderationModel->updateReportStatus($reportId, 'resolved', $adminId);
-
             switch ($action) {
                 case 'warn':
                     $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [(int)$report['sender_id']]);
@@ -87,6 +85,8 @@ extends \App\Services\BaseService
                     $this->banUser((int)$report['sender_id']);
                     break;
             }
+
+            $this->moderationModel->updateReportStatus($reportId, 'resolved', $adminId);
 
             $this->db->commit();
             $this->cache->forget('message_moderation_stats_v2');
@@ -193,6 +193,7 @@ extends \App\Services\BaseService
              WHERE id = ?",
             [$messageId]
         );
+        $this->cache->forget('message_moderation_stats_v2');
     }
 
     private function warnUser(int $userId): void
@@ -203,6 +204,7 @@ extends \App\Services\BaseService
              WHERE id = ?",
             [$userId]
         );
+        $this->cache->forget('message_moderation_stats_v2');
     }
 
     private function banUser(int $userId): void
@@ -213,6 +215,7 @@ extends \App\Services\BaseService
              WHERE id = ?",
             [$userId]
         );
+        $this->cache->forget('message_moderation_stats_v2');
     }
 
     /**
@@ -260,6 +263,7 @@ extends \App\Services\BaseService
             );
 
             $this->db->commit();
+            $this->cache->forget('message_moderation_stats_v2');
             $this->logger->info('user.blocked', ['user_id' => $userId, 'admin_id' => $adminId, 'reason' => $reason]);
             return ['success' => true, 'message' => 'کاربر مسدود شد'];
         } catch (\Throwable $e) {
@@ -276,6 +280,7 @@ extends \App\Services\BaseService
     {
         try {
             $this->db->query("DELETE FROM user_blocks WHERE user_id = ?", [$userId]);
+            $this->cache->forget('message_moderation_stats_v2');
             $this->logger->info('user.unblocked', ['user_id' => $userId]);
             return true;
         } catch (\Exception $e) {
