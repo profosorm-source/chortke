@@ -67,6 +67,16 @@ class BugReportController extends BaseUserController
                 $this->response->json(['success' => false, 'message' => 'آدرس صفحه نامعتبر است.'], 422);
                 return;
             }
+            
+            // ✅ اطمینان از اینکه URL در دامنه خود سایت است
+            $parsedUrl = parse_url($sanitizedUrl);
+            $host = preg_replace('/^www\./', '', strtolower($parsedUrl['host'] ?? ''));
+            $serverHost = preg_replace('/^www\./', '', strtolower($_SERVER['HTTP_HOST'] ?? ''));
+            if ($host && $serverHost && $host !== $serverHost) {
+                $this->response->json(['success' => false, 'message' => 'آدرس صفحه باید در دامنه سایت باشد'], 422);
+                return;
+            }
+            
             $pageUrl = $sanitizedUrl;
         } else {
             $pageUrl = '';
@@ -207,7 +217,12 @@ class BugReportController extends BaseUserController
         $comment = trim($data['comment'] ?? '');
 
         if (empty($comment)) {
-            $this->response->json(['success' => false, 'message' => 'متن نظر نمی‌تواند خالی باشد']);
+            $this->response->json(['success' => false, 'message' => 'متن نظر نمی‌تواند خالی باشد'], 422);
+            return;
+        }
+
+        if (mb_strlen($comment) > 2000) {
+            $this->response->json(['success' => false, 'message' => 'کامنت بیش از حد طولانی است'], 422);
             return;
         }
 
