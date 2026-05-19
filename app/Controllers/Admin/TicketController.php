@@ -150,6 +150,20 @@ class TicketController extends BaseAdminController
             ], 404);
         }
         
+        // 🛡️ HIGH-03: Prevent admin IDOR by ensuring they own the ticket or have global permissions
+        $adminId = user_id();
+        $isAssignedToMe = ($ticket->assigned_to !== null && (int)$ticket->assigned_to === $adminId);
+        if (!$isAssignedToMe) {
+            try {
+                $hasPermission = (bool) $this->policyService->authorizeById('tickets.view_all', $adminId);
+            } catch (\Throwable $e) {
+                $hasPermission = false;
+            }
+            if (!$hasPermission) {
+                return $this->response->json(['success' => false, 'message' => 'شما دسترسی لازم برای پاسخ به این تیکت را ندارید.'], 403);
+            }
+        }
+        
         $result = $this->ticketService->reply(
             $ticketId,
             user_id(),
@@ -166,8 +180,9 @@ class TicketController extends BaseAdminController
             
             // 🛡️ NEW-12: ثبت کامل ردپای حسابرسی ادمین به همراه هش پیام پیام جهت امنیت کامل حسابرسی
             $this->auditLog('ticket_admin_reply', 'ticket', $ticketId, null, [
-                'message_length' => mb_strlen($message),
-                'message_hash' => hash('sha256', $message),
+                'message_length' => mb_strlen($rawMessage),
+                'message_hash' => hash('sha256', $rawMessage), // 🛡️ MEDIUM-03: Hash the raw message for integrity verification
+
                 'has_sanitized' => true,
                 'ip_address' => $this->request->ip(),
                 'user_agent' => substr($this->request->header('User-Agent') ?? '', 0, 255)
@@ -198,6 +213,20 @@ class TicketController extends BaseAdminController
         $ticket = $this->ticketService->getById($ticketId);
         if (!$ticket) {
             return $this->response->json(['success' => false, 'message' => 'تیکت یافت نشد.']);
+        }
+        
+        // 🛡️ CRITICAL-03: Prevent admin IDOR by ensuring they own the ticket or have global permissions
+        $adminId = user_id();
+        $isAssignedToMe = ($ticket->assigned_to !== null && (int)$ticket->assigned_to === $adminId);
+        if (!$isAssignedToMe) {
+            try {
+                $hasPermission = (bool) $this->policyService->authorizeById('tickets.view_all', $adminId);
+            } catch (\Throwable $e) {
+                $hasPermission = false;
+            }
+            if (!$hasPermission) {
+                return $this->response->json(['success' => false, 'message' => 'شما دسترسی لازم برای تغییر وضعیت این تیکت را ندارید.'], 403);
+            }
         }
         
         $oldStatus = $ticket->status;
