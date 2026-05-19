@@ -234,14 +234,16 @@ class UserLevelService extends \App\Services\BaseService
             }
         }
 
-        $stmt = $this->db->prepare("SELECT id FROM user_level_purchases WHERE idempotency_key = ?");
-        $stmt->execute([$idempotencyKey]);
-        if ($stmt->fetch()) {
-            return ['success' => false, 'message' => 'شما امروز درخواست مشابهی برای ارتقای این سطح ثبت کرده‌اید.'];
-        }
-
         try {
             $this->db->beginTransaction();
+
+            // Check idempotency INSIDE transaction with lock
+            $stmt = $this->db->prepare("SELECT id FROM user_level_purchases WHERE idempotency_key = ? FOR UPDATE");
+            $stmt->execute([$idempotencyKey]);
+            if ($stmt->fetch()) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'شما امروز درخواست مشابهی برای ارتقای این سطح ثبت کرده‌اید.'];
+            }
 
             // 🛡️ MED-12 Fix (CRITICAL): Implement atomic transaction-level locking
             // Lock user wallet with FOR UPDATE to prevent race conditions during purchase

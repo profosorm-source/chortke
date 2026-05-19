@@ -37,14 +37,40 @@ class ProfileService extends \App\Services\BaseService
         
         if (empty($updateData)) return false;
 
-        $updateData['updated_at'] = date('Y-m-d H:i:s');
-        $success = $this->model->update($userId, $updateData);
+        $this->model->beginTransaction();
+        try {
+            // Lock user row
+            $current = $this->model->getDb()->fetch(
+                "SELECT id FROM users WHERE id = ? FOR UPDATE",
+                [$userId]
+            );
+            
+            if (!$current) {
+                $this->model->rollback();
+                return false;
+            }
 
-        if ($success) {
-            $this->logger->info('user.profile.updated', ['user_id' => $userId, 'fields' => array_keys($updateData)]);
+            $updateData['updated_at'] = date('Y-m-d H:i:s');
+            $success = $this->model->update($userId, $updateData);
+
+            if ($success) {
+                $this->model->commit();
+                $this->logger->info('user.profile.updated', [
+                    'user_id' => $userId,
+                    'fields' => array_keys($updateData),
+                    'national_id_masked' => isset($data['national_id']) ? substr($data['national_id'], 0, 3) . '****' : null,
+                    'mobile_masked' => isset($data['mobile']) ? substr($data['mobile'], 0, 4) . '***' . substr($data['mobile'], -2) : null
+                ]);
+                return true;
+            }
+
+            $this->model->rollback();
+            return false;
+        } catch (\Throwable $e) {
+            $this->model->rollback();
+            $this->logger->error('user.profile.update_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return false;
         }
-
-        return $success;
     }
 
     public function getSettings(int $userId): array
@@ -212,6 +238,10 @@ class ProfileService extends \App\Services\BaseService
                 $value = $data[$field];
                 if (is_string($value)) {
                     $value = trim($value);
+                    // Sanitize HTML-prone fields
+                    if (in_array($field, ['bio', 'address', 'website', 'full_name'])) {
+                        $value = strip_tags($value);
+                    }
                 }
                 $sanitized[$field] = $value;
             }

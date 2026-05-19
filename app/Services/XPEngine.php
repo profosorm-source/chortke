@@ -52,18 +52,14 @@ class XPEngine extends BaseService
             return false;
         }
 
-        // ۱.۵. Idempotency Check - جلوگیری از پاداش مضاعف در یک ساعت برای یک فعالیت خاص
-        $idempotencyKey = hash('sha256', "{$userId}:{$module}:{$activityType}:" . date('Y-m-d-H'));
-        $existing = $this->db->prepare("
-            SELECT id FROM score_events 
-            WHERE entity_id = ? AND domain = ? AND source = ? 
-            AND meta_json LIKE ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) 
-            LIMIT 1
-        ");
-        $existing->execute([$userId, 'xp_' . $module, $activityType, "%{$idempotencyKey}%"]);
-        
-        if ($existing->fetch()) {
-            $this->logger->warning('xp_engine.award_xp.duplicate_ignored', [
+        // Acquire MySQL/MariaDB advisory lock to guarantee idempotency in concurrent execution
+        $lockName = "xp_lock_{$userId}_{$module}_{$activityType}_" . date('YmdH');
+        $stmtLock = $this->db->prepare("SELECT GET_LOCK(?, 10)");
+        $stmtLock->execute([$lockName]);
+        $lockAcquired = (int)$stmtLock->fetchColumn();
+
+        if (!$lockAcquired) {
+            $this->logger->warning('xp_engine.award_xp.lock_failed', [
                 'user_id' => $userId,
                 'module' => $module,
                 'activity' => $activityType
@@ -71,40 +67,64 @@ class XPEngine extends BaseService
             return false;
         }
 
-        // ۲. ثبت امتیاز در تخصص ماژولار (لایه اول - دامنه‌های مستقل)
-        $this->scoreModel->addEvent([
-            'entity_type' => 'user',
-            'entity_id' => $userId,
-            'domain' => 'xp_' . $module,
-            'delta' => $baseXp,
-            'source' => $activityType,
-            'meta' => [
-                'base_xp' => $baseXp,
-                'module' => $module,
-                'idempotency_key' => $idempotencyKey
-            ]
-        ]);
+        try {
+            // ۱.۵. Idempotency Check - جلوگیری از پاداش مضاعف در یک ساعت برای یک فعالیت خاص
+            $idempotencyKey = hash('sha256', "{$userId}:{$module}:{$activityType}:" . date('Y-m-d-H'));
+            $existing = $this->db->prepare("
+                SELECT id FROM score_events 
+                WHERE entity_id = ? AND domain = ? AND source = ? 
+                AND meta_json LIKE ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) 
+                LIMIT 1
+            ");
+            $existing->execute([$userId, 'xp_' . $module, $activityType, "%{$idempotencyKey}%"]);
+            
+            if ($existing->fetch()) {
+                $this->logger->warning('xp_engine.award_xp.duplicate_ignored', [
+                    'user_id' => $userId,
+                    'module' => $module,
+                    'activity' => $activityType
+                ]);
+                return false;
+            }
 
-        // ۳. محاسبه ضریب هم‌افزایی روزانه (Synergy Multiplier)
-        // بررسی تعداد ماژول‌های متمایزی که کاربر امروز در آن‌ها فعالیت کرده است
-        $multiplier = $this->calculateDailySynergyMultiplier($userId);
+            // ۲. ثبت امتیاز در تخصص ماژولار (لایه اول - دامنه‌های مستقل)
+            $this->scoreModel->addEvent([
+                'entity_type' => 'user',
+                'entity_id' => $userId,
+                'domain' => 'xp_' . $module,
+                'delta' => $baseXp,
+                'source' => $activityType,
+                'meta' => [
+                    'base_xp' => $baseXp,
+                    'module' => $module,
+                    'idempotency_key' => $idempotencyKey
+                ]
+            ]);
 
-        // ۴. ثبت امتیاز تجربه عمومی (Global XP) با اعمال ضریب هم‌افزایی
-        $finalGlobalXp = $baseXp * $multiplier;
+            // ۳. محاسبه ضریب هم‌افزایی روزانه (Synergy Multiplier)
+            // بررسی تعداد ماژول‌های متمایزی که کاربر امروز در آن‌ها فعالیت کرده است
+            $multiplier = $this->calculateDailySynergyMultiplier($userId);
 
-        return $this->scoreModel->addEvent([
-            'entity_type' => 'user',
-            'entity_id' => $userId,
-            'domain' => 'xp_global',
-            'delta' => $finalGlobalXp,
-            'source' => $activityType,
-            'meta' => [
-                'base_xp' => $baseXp,
-                'synergy_multiplier' => $multiplier,
-                'final_global_xp' => $finalGlobalXp,
-                'module' => $module
-            ]
-        ]);
+            // ۴. ثبت امتیاز تجربه عمومی (Global XP) با اعمال ضریب هم‌افزایی
+            $finalGlobalXp = $baseXp * $multiplier;
+
+            return $this->scoreModel->addEvent([
+                'entity_type' => 'user',
+                'entity_id' => $userId,
+                'domain' => 'xp_global',
+                'delta' => $finalGlobalXp,
+                'source' => $activityType,
+                'meta' => [
+                    'base_xp' => $baseXp,
+                    'synergy_multiplier' => $multiplier,
+                    'final_global_xp' => $finalGlobalXp,
+                    'module' => $module
+                ]
+            ]);
+        } finally {
+            $stmtRelease = $this->db->prepare("SELECT RELEASE_LOCK(?)");
+            $stmtRelease->execute([$lockName]);
+        }
     }
 
     /**
