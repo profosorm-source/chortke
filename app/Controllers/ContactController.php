@@ -23,8 +23,8 @@ class ContactController extends BaseController
     {
         $this->validateCsrf();
 
-        // 🛡️ MEDIUM-09: فیلد Honeypot در سطح کنترلر (لبه سیستم) جهت پیشگیری از ارسال درخواست به لایه بیزینس
-        $honeypots = ['website', 'company', 'url', 'homepage'];
+        // 🛡️ MED-03: استفاده از نام‌های فیلد گمراه‌کننده جهت جلوگیری از دور زدن Honeypot توسط بات‌های هوشمند
+        $honeypots = ['user_name', 'confirm_email', 'address', 'phone_number_ext'];
         foreach ($honeypots as $field) {
             if (!empty($this->request->input($field))) {
                 // لاگ آی‌پی بات
