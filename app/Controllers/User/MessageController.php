@@ -125,6 +125,11 @@ class MessageController extends BaseUserController
                 return;
             }
 
+            if (mb_strlen($message) > 5000) {
+                $this->jsonError('متن پیام نمی‌تواند بیش از ۵۰۰۰ کاراکتر باشد', [], 422);
+                return;
+            }
+
             // Attachments
             $attachments = [];
             if ($this->request->hasFiles('attachments')) {
@@ -165,6 +170,7 @@ class MessageController extends BaseUserController
     public function setTyping(): void
     {
         $this->requireAuth();
+        $this->validateCsrf();
 
         try {
             $userId = $this->userId();

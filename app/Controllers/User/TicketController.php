@@ -226,7 +226,7 @@ class TicketController extends BaseUserController
 
         $validator = new Validator($data, [
             'ticket_id' => 'required|integer',
-            'message'   => 'required|min:5'
+            'message'   => 'required|min:5|max:5000'
         ]);
 
         if ($validator->fails()) {
