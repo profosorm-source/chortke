@@ -76,15 +76,15 @@ class Application
         });
 
         // ── Core fallback logger — available during early bootstrap
-        $c->singleton(\App\Contracts\LoggerInterface::class, function($c) {
-            return $c->make(\Core\Logger::class);
-        });
+        $c->singleton(\App\Contracts\LoggerInterface::class, \Core\Logger::class);
+
+        // ── Metrics Collector binding ──
+        $c->singleton(\App\Contracts\MetricsCollectorInterface::class, \App\Services\Metrics\MetricsCollector::class);
 
         // ── App-level singletons — یک بار در طول request ────────
         // هر Controller که AuthService یا User نیاز دارد،
-        // همین instance را دریافت می\u200cکند (نه instance جدید)
+        // همین instance را دریافت می‌کند (نه instance جدید)
         $c->singleton(\App\Services\Auth\AuthService::class);
-        $c->bind(\App\Models\User::class);
     }
 
     /**
