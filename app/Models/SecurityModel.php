@@ -11,6 +11,8 @@ use Core\Model;
  */
 class SecurityModel extends Model
 {
+    protected static string $table = 'user_sessions';
+
     // --- 2FA Methods ---
 
     public function deleteTwoFactorCodes(int $userId): bool

@@ -8,6 +8,8 @@ use Core\Model;
 
 class InfluencerReputation extends Model
 {
+    protected static string $table = 'influencer_reputation_events';
+
     private InfluencerModel $influencerModel;
 
     public function __construct(\Core\Database $db, InfluencerModel $influencerModel)

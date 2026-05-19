@@ -20,6 +20,8 @@ use Core\Model;
  */
 class Score extends Model
 {
+    protected static string $table = 'score_events';
+
     // ==========================================
     // Event Management (from UserScoreEvent)
     // ==========================================
