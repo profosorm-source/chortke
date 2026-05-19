@@ -150,6 +150,9 @@ class TicketService extends \App\Services\BaseService
         } catch (\Exception $e) {
             $this->db->rollBack();
             
+            // 🛡️ CRITICAL-12: Restore rate limit counter if the ticket creation fails
+            $this->redis->decr("ticket_creation_limit:{$userId}");
+            
             $this->logger->error('ticket.create.failed', [
                 'user_id' => $userId,
                 'error' => $e->getMessage(),
@@ -171,7 +174,12 @@ class TicketService extends \App\Services\BaseService
         // 🛡️ HIGH-14: ریت لیمیت پیش از شروع تراکنش دیتابیس جهت مقابله با فرسایش استخر اتصالات
         if (!$isAdmin) {
             $rateKey = "ticket_reply_limit:{$userId}";
-            if (!$this->rateLimiter->attempt($rateKey, 5, 3600)) {
+            $count = (int)$this->redis->incr($rateKey);
+            if ($count === 1) {
+                $this->redis->expire($rateKey, 3600);
+            }
+            if ($count > 5) {
+                $this->redis->decr($rateKey);
                 $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
                 return [
                     'success' => false,
@@ -188,18 +196,27 @@ class TicketService extends \App\Services\BaseService
             
             if (!$ticket) {
                 $this->db->rollBack();
+                if (!$isAdmin) {
+                    $this->redis->decr("ticket_reply_limit:{$userId}");
+                }
                 return ['success' => false, 'message' => 'تیکت یافت نشد.'];
             }
             
             // بررسی دسترسی
             if (!$isAdmin && (int)$ticket->user_id !== $userId) {
                 $this->db->rollBack();
+                if (!$isAdmin) {
+                    $this->redis->decr("ticket_reply_limit:{$userId}");
+                }
                 return ['success' => false, 'message' => 'دسترسی غیرمجاز.'];
             }
             
             // بررسی وضعیت
             if ($ticket->status === 'closed' && !$isAdmin) {
                 $this->db->rollBack();
+                if (!$isAdmin) {
+                    $this->redis->decr("ticket_reply_limit:{$userId}");
+                }
                 return ['success' => false, 'message' => 'تیکت بسته شده است.'];
             }
 
@@ -207,6 +224,9 @@ class TicketService extends \App\Services\BaseService
             $msgLen = mb_strlen($message, 'UTF-8');
             if ($msgLen > 5000) {
                 $this->db->rollBack();
+                if (!$isAdmin) {
+                    $this->redis->decr("ticket_reply_limit:{$userId}");
+                }
                 return ['success' => false, 'message' => 'متن پاسخ نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
             }
 
@@ -268,6 +288,11 @@ class TicketService extends \App\Services\BaseService
             
         } catch (\Exception $e) {
             $this->db->rollBack();
+            
+            // 🛡️ CRITICAL-13: Restore rate limit counter if ticket reply fails
+            if (!$isAdmin) {
+                $this->redis->decr("ticket_reply_limit:{$userId}");
+            }
             
             $this->logger->error('ticket.reply.failed', [
                 'ticket_id' => $ticketId,

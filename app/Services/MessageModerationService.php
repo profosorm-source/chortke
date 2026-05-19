@@ -129,7 +129,20 @@ extends \App\Services\BaseService
 
     public function getBlockedUsers(int $limit, int $offset): array
     {
-        return $this->moderationModel->getBlockedUsers($limit, $offset);
+        $blocked = $this->moderationModel->getBlockedUsers($limit, $offset);
+        
+        // 🛡️ MEDIUM-08: Redaction of sensitive PII in the service layer instead of view/controller
+        foreach ($blocked as &$user) {
+            if (!empty($user['blocked_email'])) {
+                $email = $user['blocked_email'];
+                $parts = explode('@', $email);
+                if (count($parts) === 2) {
+                    $user['blocked_email'] = substr($parts[0], 0, 2) . '***@' . $parts[1];
+                }
+            }
+        }
+        
+        return $blocked;
     }
 
     public function getBlockedUsersCount(): int
@@ -228,6 +241,16 @@ extends \App\Services\BaseService
             'warning_count' => $count
         ]);
 
+        // 🛡️ CRITICAL-16: Alert the user via an in-app notification when a warning is issued
+        $notificationModel = new \App\Models\Notification($this->db);
+        $notificationModel->create([
+            'user_id' => $userId,
+            'type' => \App\Models\Notification::TYPE_SECURITY,
+            'title' => 'اخطار مدیریت پیام‌ها',
+            'message' => 'کاربر گرامی، شما یک اخطار به دلیل گزارش‌های دریافتی از پیام‌هایتان دریافت کرده‌اید (' . $count . '/3). لطفاً قوانین سایت را رعایت کنید.',
+            'priority' => \App\Models\Notification::PRIORITY_HIGH,
+        ]);
+
         if ($count >= 3) {
             $this->banUser($userId, $adminId, $reportId);
         }
@@ -249,6 +272,16 @@ extends \App\Services\BaseService
             'admin_id' => $adminId,
             'report_id' => $reportId,
             'reason' => 'Inappropriate messaging'
+        ]);
+
+        // 🛡️ CRITICAL-16: Alert the user via an in-app notification when they are banned
+        $notificationModel = new \App\Models\Notification($this->db);
+        $notificationModel->create([
+            'user_id' => $userId,
+            'type' => \App\Models\Notification::TYPE_SECURITY,
+            'title' => 'مسدودسازی حساب کاربری',
+            'message' => 'حساب کاربری شما به دلیل نقض مکرر قوانین در سیستم پیام‌رسانی مسدود شد.',
+            'priority' => \App\Models\Notification::PRIORITY_URGENT,
         ]);
 
         $this->cache->forget('message_moderation_stats_v2');

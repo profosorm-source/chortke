@@ -30,10 +30,7 @@ class ContactService extends \App\Services\BaseService
      */
     public function sendMessage(array $data): array
     {
-        // 1. Honeypot check
-        if (!empty($data['website'])) {
-            return $this->successResponse('پیام شما با موفقیت ارسال شد. به زودی پاسخ خواهیم داد.'); // Fake success for bots
-        }
+        // Honeypot check moved to ContactController
 
         // 2. CAPTCHA Verification
         $captchaToken = $data['captcha_token'] ?? '';
@@ -111,6 +108,12 @@ class ContactService extends \App\Services\BaseService
             }
             return $this->captchaService->verify($token, $response);
         }
+        
+        // 🛡️ HIGH-14: Alert admins if CAPTCHA is bypassed globally
+        $this->logger->critical('security.captcha_bypassed_globally', [
+            'ip' => get_client_ip(),
+            'action' => 'contact_form_submission'
+        ]);
         return true;
     }
 
