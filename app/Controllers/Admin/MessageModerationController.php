@@ -35,6 +35,9 @@ class MessageModerationController extends BaseAdminController
         }
 
         $status = $this->request->input('status', 'pending');
+        if (!in_array($status, ['pending', 'approved', 'dismissed'], true)) {
+            $status = 'pending';
+        }
         $page   = (int) $this->request->input('page', 1);
         $limit  = 20;
         $offset = ($page - 1) * $limit;
@@ -112,6 +115,13 @@ class MessageModerationController extends BaseAdminController
         }
 
         $id     = (int) $this->request->input('report_id');
+        
+        // 🛡️ CRITICAL-08: Validate existence of the report before proceeding
+        if ($id <= 0 || !$this->moderationService->getReportDetail($id)) {
+            $this->response->json(['error' => 'گزارش یافت نشد'], 404);
+            return;
+        }
+
         $action = $this->request->input('action', 'warn');
 
         $allowedActions = ['warn', 'delete', 'ban'];
@@ -154,17 +164,23 @@ class MessageModerationController extends BaseAdminController
         }
 
         $id = (int) $this->request->input('report_id');
+        
+        // 🛡️ CRITICAL-08: Validate existence of the report before proceeding
+        if ($id <= 0 || !$this->moderationService->getReportDetail($id)) {
+            $this->response->json(['error' => 'گزارش یافت نشد'], 404);
+            return;
+        }
 
         $ok = $this->moderationService->dismissReport($id, (int)user_id());
 
         if ($ok) {
             $this->auditLog('message_report_dismissed', 'message_report', $id, ['status' => 'pending'], ['status' => 'dismissed']);
+            // 🛡️ MEDIUM-07: Log success inside the success condition
+            $this->logger->info('Message report dismissed', [
+                'report_id' => $id,
+                'admin_id' => user_id()
+            ]);
         }
-
-        $this->logger->info('Message report dismissed', [
-            'report_id' => $id,
-            'admin_id' => user_id()
-        ]);
 
         $this->response->json(['success' => $ok, 'message' => $ok ? 'گزارش رد شد' : 'خطا در رد گزارش']);
     }
@@ -190,17 +206,6 @@ class MessageModerationController extends BaseAdminController
 
         $blocked = $this->moderationService->getBlockedUsers($limit, $offset);
         $total = $this->moderationService->getBlockedUsersCount();
-
-        // M05: Redaction of sensitive PII in administrative views
-        foreach ($blocked as &$user) {
-            if (!empty($user['blocked_email'])) {
-                $email = $user['blocked_email'];
-                $parts = explode('@', $email);
-                if (count($parts) === 2) {
-                    $user['blocked_email'] = substr($parts[0], 0, 2) . '***@' . $parts[1];
-                }
-            }
-        }
 
         $this->view('admin/messages/blocked-users', [
             'blocked'      => $blocked,

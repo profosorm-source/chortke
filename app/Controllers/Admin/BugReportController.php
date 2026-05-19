@@ -105,15 +105,14 @@ class BugReportController extends BaseAdminController
     {
         $this->validateCsrf();
 
-        // 🛡️ CRIT-02: بررسی دسترسی ادمین
-        if (!$this->policyService->authorizeById('bug_reports.view', user_id())) {
+        // 🛡️ HIGH-11: بررسی دسترسی اختصاصی جهت تغییر وضعیت گزارش‌های باگ
+        if (!$this->policyService->authorizeById('bug_reports.update_status', user_id())) {
             $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز.'], 403);
             return;
         }
 
         $id = (int)$this->request->param('id');
-        $rawData = \file_get_contents('php://input');
-        $data = \json_decode($rawData, true) ?? [];
+        $data = $this->request->json() ?? [];
 
         $status = $data['status'] ?? '';
         if (!in_array($status, \App\Enums\TicketStatus::all(), true)) {
@@ -144,15 +143,14 @@ class BugReportController extends BaseAdminController
     {
         $this->validateCsrf();
 
-        // 🛡️ CRIT-02: بررسی دسترسی ادمین
-        if (!$this->policyService->authorizeById('bug_reports.view', user_id())) {
+        // 🛡️ HIGH-11: بررسی دسترسی اختصاصی جهت تغییر اولویت گزارش‌های باگ
+        if (!$this->policyService->authorizeById('bug_reports.update_priority', user_id())) {
             $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز.'], 403);
             return;
         }
 
         $id = (int)$this->request->param('id');
-        $rawData = \file_get_contents('php://input');
-        $data = \json_decode($rawData, true) ?? [];
+        $data = $this->request->json() ?? [];
 
         $priority = $data['priority'] ?? '';
         if (!in_array($priority, ['low', 'normal', 'high', 'urgent'], true)) {
@@ -204,12 +202,7 @@ class BugReportController extends BaseAdminController
             return;
         }
 
-        $rawData = \file_get_contents('php://input');
-        $data = \json_decode($rawData, true);
-        if (!\is_array($data)) {
-            $data = [];
-        }
-
+        $data = $this->request->json() ?? [];
         if (empty($data)) {
             $data = $this->request->all();
         }

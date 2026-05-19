@@ -92,10 +92,16 @@ class TicketController extends BaseAdminController
             return redirect('/admin/tickets');
         }
 
-        // 🛡️ HIGH-01: جلوگیری از دسترسی ادمین‌های عادی به تیکت‌های غیرمنتسب به خودشان یا فاقد انتساب
+        // 🛡️ HIGH-01: جلوگیری از دسترسی ادمین‌های عادی به تیکت‌های غیرمنتسب به خودشان یا فاقد انتساب (Fail-Closed)
         $adminId = user_id();
-        if ((int)$ticket->assigned_to !== $adminId) {
-            if (!$this->policyService->authorizeById('tickets.view_all', $adminId)) {
+        $isAssignedToMe = ($ticket->assigned_to !== null && (int)$ticket->assigned_to === $adminId);
+        if (!$isAssignedToMe) {
+            try {
+                $hasPermission = (bool) $this->policyService->authorizeById('tickets.view_all', $adminId);
+            } catch (\Throwable $e) {
+                $hasPermission = false; // Fail-Closed
+            }
+            if (!$hasPermission) {
                 $this->session->setFlash('error', 'شما دسترسی مشاهده این تیکت را ندارید.');
                 return redirect('/admin/tickets');
             }
@@ -120,20 +126,21 @@ class TicketController extends BaseAdminController
         $data = $this->request->json();
         $ticketId = (int) ($data['ticket_id'] ?? 0);
         
-        // 🛡️ HIGH-08: ضدعفونی صریح پیام پاسخ ادمین جهت مقابله با حملات Stored XSS
-        $message = htmlspecialchars(trim($data['message'] ?? ''), ENT_QUOTES, 'UTF-8', false);
-
-        if (!$ticketId || empty($message)) {
+        $rawMessage = trim($data['message'] ?? '');
+        if (!$ticketId || empty($rawMessage)) {
             return $this->response->json(['success' => false, 'message' => 'ارسال پیام الزامی است.']);
         }
 
-        // 🛡️ NEW-13: کنترل طول داده ورودی
-        if (mb_strlen($message) > 5000) {
+        // 🛡️ CRITICAL-05: کنترل طول داده ورودی بر روی داده خام قبل از ضدعفونی
+        if (mb_strlen($rawMessage) > 5000) {
             return $this->response->json([
                 'success' => false, 
                 'message' => 'پیام نباید بیشتر از ۵۰۰۰ کاراکتر باشد'
             ], 422);
         }
+
+        // 🛡️ HIGH-08: ضدعفونی صریح پیام پاسخ ادمین جهت مقابله با حملات Stored XSS پس از ولیدیشن طول
+        $message = htmlspecialchars($rawMessage, ENT_QUOTES, 'UTF-8', false);
 
         $ticket = $this->ticketService->getById($ticketId);
         if (!$ticket) {
@@ -157,9 +164,10 @@ class TicketController extends BaseAdminController
                 ['ticket_id' => $ticketId, 'message_length' => mb_strlen($message)]
             );
             
-            // 🛡️ NEW-12: ثبت کامل ردپای حسابرسی ادمین (فقط متادیتا لاگ می‌شود جهت ممانعت از نشت PII)
+            // 🛡️ NEW-12: ثبت کامل ردپای حسابرسی ادمین به همراه هش پیام پیام جهت امنیت کامل حسابرسی
             $this->auditLog('ticket_admin_reply', 'ticket', $ticketId, null, [
                 'message_length' => mb_strlen($message),
+                'message_hash' => hash('sha256', $message),
                 'has_sanitized' => true,
                 'ip_address' => $this->request->ip(),
                 'user_agent' => substr($this->request->header('User-Agent') ?? '', 0, 255)
