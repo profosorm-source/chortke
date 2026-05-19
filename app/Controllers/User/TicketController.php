@@ -82,17 +82,8 @@ class TicketController extends BaseUserController
      */
     public function store()
     {
+        $this->validateCsrf();
         $userId = user_id();
-
-        // Rate Limiting - محدودیت ایجاد تیکت
-        try {
-            rate_limit('social', 'ticket_create', "user_{$userId}");
-        } catch (\Exception $e) {
-            if ($e->getCode() === 429) {
-                session()->setFlash('error', $e->getMessage());
-                return redirect('/tickets/create');
-            }
-        }
 
         $data = $this->request->all();
         
@@ -110,6 +101,9 @@ class TicketController extends BaseUserController
             session()->setFlash('old', $data);
             return redirect('/tickets/create');
         }
+        
+        // 🛡️ HIGH-01: فرار دادن پیام ورودی جهت مقابله با حملات Stored XSS
+        $data['message'] = htmlspecialchars(trim($data['message'] ?? ''), ENT_QUOTES, 'UTF-8');
         
         // آپلود فایل
         $attachments = [];
@@ -143,8 +137,10 @@ class TicketController extends BaseUserController
                     continue;
                 }
                 
+                // 🛡️ MEDIUM-02: فیلتر کاراکترهای نام پیوست با Regex و basename جهت ارتقای امنیت نام فایل
+                $cleanName = preg_replace('/[^a-zA-Z0-9._-]/', '', basename($file['name'] ?? 'attachment'));
                 $attachments[] = [
-                    'name' => htmlspecialchars(basename($file['name'] ?? 'attachment'), ENT_QUOTES, 'UTF-8'),
+                    'name' => htmlspecialchars($cleanName, ENT_QUOTES, 'UTF-8'),
                     'path' => $uploadResult['path']
                 ];
             }
@@ -153,7 +149,7 @@ class TicketController extends BaseUserController
         $data['attachments'] = $attachments;
         
         // ایجاد تیکت
-        $result = $this->ticketService->create(user_id(), $data);
+        $result = $this->ticketService->create($userId, $data);
         
         if ($result['success']) {
             session()->setFlash('success', $result['message']);
@@ -201,20 +197,8 @@ class TicketController extends BaseUserController
      */
     public function reply(): void
     {
+        $this->validateCsrf();
         $userId = user_id();
-
-        // Rate Limiting - محدودیت پاسخ به تیکت
-        try {
-            rate_limit('social', 'ticket_reply', "user_{$userId}");
-        } catch (\Exception $e) {
-            if ($e->getCode() === 429) {
-                $this->response->json([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ], 429);
-                return;
-            }
-        }
 
         // پشتیبانی از هر دو حالت: JSON ساده و FormData (با فایل پیوست)
         $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
@@ -238,6 +222,10 @@ class TicketController extends BaseUserController
             return;
         }
 
+        // 🛡️ HIGH-01: فرار دادن پیام ورودی جهت مقابله با حملات Stored XSS
+        $messageRaw = trim($data['message'] ?? '');
+        $message = htmlspecialchars($messageRaw, ENT_QUOTES, 'UTF-8');
+
         // 🛡️ IDOR Check: بررسی مالکیت تیکت قبل از پاسخ
         $ticketId = (int)($data['ticket_id'] ?? 0);
         $ticket = $this->ticketService->getById($ticketId);
@@ -252,8 +240,9 @@ class TicketController extends BaseUserController
         // پردازش فایل‌های پیوست با استفاده از Request Wrapper
         $attachments = [];
         $attachmentsFile = $this->request->file('attachments');
-        if ($attachmentsFile && !empty($attachmentsFile['name'][0])) {
-            if (is_array($attachmentsFile['name']) && count($attachmentsFile['name']) > 5) {
+        if ($attachmentsFile && !empty($attachmentsFile['name'])) {
+            $filesCount = is_array($attachmentsFile['name']) ? count($attachmentsFile['name']) : 1;
+            if ($filesCount > 5) {
                 $this->response->json([
                     'success' => false,
                     'message' => 'حداکثر ۵ فایل مجاز است.'
@@ -261,15 +250,30 @@ class TicketController extends BaseUserController
                 return;
             }
 
-            foreach ($attachmentsFile['name'] as $key => $name) {
-                if ($attachmentsFile['error'][$key] === UPLOAD_ERR_OK) {
-                    $file = [
+            // نرمال سازی فایل ها جهت پردازش صحیح تک فایل یا چند فایل
+            $normalizedFiles = [];
+            if (!is_array($attachmentsFile['name'])) {
+                $normalizedFiles[] = [
+                    'name'     => $attachmentsFile['name'],
+                    'type'     => $attachmentsFile['type'],
+                    'tmp_name' => $attachmentsFile['tmp_name'],
+                    'error'    => $attachmentsFile['error'],
+                    'size'     => $attachmentsFile['size'],
+                ];
+            } else {
+                foreach ($attachmentsFile['name'] as $key => $name) {
+                    $normalizedFiles[] = [
                         'name'     => $attachmentsFile['name'][$key],
                         'type'     => $attachmentsFile['type'][$key],
                         'tmp_name' => $attachmentsFile['tmp_name'][$key],
                         'error'    => $attachmentsFile['error'][$key],
                         'size'     => $attachmentsFile['size'][$key],
                     ];
+                }
+            }
+
+            foreach ($normalizedFiles as $file) {
+                if ($file['error'] === UPLOAD_ERR_OK) {
                     $uploadResult = $this->uploadService->upload(
                         $file,
                         'ticket_attachments',
@@ -283,8 +287,11 @@ class TicketController extends BaseUserController
                         ]);
                         continue;
                     }
+                    
+                    // 🛡️ MEDIUM-02: فیلتر کاراکترهای نام پیوست با Regex و basename جهت ارتقای امنیت نام فایل
+                    $cleanName = preg_replace('/[^a-zA-Z0-9._-]/', '', basename($file['name'] ?? 'attachment'));
                     $attachments[] = [
-                        'name' => htmlspecialchars(basename($name), ENT_QUOTES, 'UTF-8'),
+                        'name' => htmlspecialchars($cleanName, ENT_QUOTES, 'UTF-8'),
                         'path' => $uploadResult['path'],
                     ];
                 }
@@ -292,9 +299,9 @@ class TicketController extends BaseUserController
         }
 
         $result = $this->ticketService->reply(
-            (int) $data['ticket_id'],
-            user_id(),
-            $data['message'],
+            $ticketId,
+            $userId,
+            $message,
             false,
             $attachments
         );

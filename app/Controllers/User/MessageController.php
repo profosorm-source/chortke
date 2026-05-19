@@ -79,19 +79,25 @@ class MessageController extends BaseUserController
                 return;
             }
 
+            $otherUser = $this->messageService->getUserInfo($otherUserId, $userId);
+
+            if (!$otherUser) {
+                $this->response->error('مکالمه‌ای با کاربر مورد نظر یافت نشد.', [], 404);
+                return;
+            }
+
+            // 🛡️ HIGH-06: جلوگیری از نمایش مکالمه‌های خالی یا ثبت سوابق نامطلوب بدون تاریخچه معتبر بین طرفین
+            if (!$this->messageService->hasConversation($userId, $otherUserId)) {
+                $this->response->error('مکالمه‌ای با کاربر مورد نظر یافت نشد.', [], 404);
+                return;
+            }
+
             $messages = $this->messageService->getConversation(
                 $userId,
                 $otherUserId,
                 $limit,
                 $offset
             );
-
-            $otherUser = $this->messageService->getUserInfo($otherUserId, $userId);
-
-            if (!$otherUser) {
-                $this->response->error('کاربر یافت نشد');
-                return;
-            }
 
             $this->view('user/messages/show', [
                 'messages' => $messages,
@@ -250,6 +256,7 @@ class MessageController extends BaseUserController
     public function addReaction(): void
     {
         $this->requireAuth();
+        $this->validateCsrf();
 
         try {
             $userId = $this->userId();

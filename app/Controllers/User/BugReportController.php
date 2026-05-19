@@ -25,10 +25,10 @@ class BugReportController extends BaseUserController
 
     public function store(): void
     {
-        // CORE-036: CSRF Protection
-        $this->validateCsrf();
-
+        // 🛡️ CRITICAL-10: بررسی هویت کاربر باید پیش از بررسی توکن CSRF رخ دهد
         $this->requireAuth();
+        $this->validateCsrf();
+        
         $userId = $this->userId();
 
         // H-08: Spam Flood Protection
@@ -97,6 +97,18 @@ class BugReportController extends BaseUserController
             if (!in_array($ext, ['jpg', 'png', 'jpeg'], true)) {
                 $this->response->json(['success' => false, 'message' => 'نوع فایل مجاز نیست.'], 400);
                 return;
+            }
+
+            // 🛡️ HIGH-10: بررسی بایت‌های جادویی (Magic Bytes) فایل جهت ممانعت از آپلود فایل‌های مخرب
+            $tmpPath = $screenshotFile['tmp_name'] ?? '';
+            if ($tmpPath && file_exists($tmpPath)) {
+                $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                $mime = finfo_file($finfo, $tmpPath);
+                finfo_close($finfo);
+                if (!in_array($mime, ['image/jpeg', 'image/png'], true)) {
+                    $this->response->json(['success' => false, 'message' => 'محتوای فایل اسکرین‌شات نامعتبر است.'], 400);
+                    return;
+                }
             }
 
             $uploadResult = $this->uploadService->upload(
@@ -177,10 +189,10 @@ class BugReportController extends BaseUserController
 
     public function addComment(): void
     {
-        // CORE-036: CSRF Protection
-        $this->validateCsrf();
-
+        // 🛡️ CRITICAL-10: بررسی هویت کاربر باید پیش از بررسی توکن CSRF رخ دهد
         $this->requireAuth();
+        $this->validateCsrf();
+        
         $userId = $this->userId();
         $id = (int)$this->request->param('id');
 
