@@ -40,22 +40,26 @@ class FeatureFlag extends Model
         $sql = "SELECT * FROM feature_flags ORDER BY name ASC";
         $features = $this->db->fetchAll($sql);
         
-        foreach ($features as $feature) {
-            $feature->enabled = (bool)($feature->is_enabled ?? $feature->enabled ?? true);
-            $feature->enabled_percentage = (int)($feature->rollout_percentage ?? $feature->enabled_percentage ?? 100);
-            $feature->enabled_for_users = $feature->allowed_users ?? $feature->enabled_for_users ?? null;
-            $feature->enabled_from = $feature->enabled_from ?? null;
-            $feature->enabled_until = $feature->enabled_until ?? null;
-            $feature->targeted_user_ids = $feature->targeted_user_ids ?? null;
-            $feature->targeted_roles = $feature->targeted_roles ?? null;
-            $feature->targeted_countries = $feature->targeted_countries ?? null;
-            $feature->targeted_plans = $feature->targeted_plans ?? null;
-            $feature->targeted_devices = $feature->targeted_devices ?? null;
-            $feature->targeted_routes = $feature->targeted_routes ?? null;
-            $feature->target_age_min = $feature->target_age_min ?? null;
-            $feature->target_age_max = $feature->target_age_max ?? null;
-            $feature->percentage_rollout = $feature->percentage_rollout ?? 100;
-            $this->cachedFeatures[$feature->name] = $feature;
+        foreach ($features as $row) {
+            $feature = new self($this->db);
+            foreach (get_object_vars($row) as $key => $val) {
+                $feature->$key = $val;
+            }
+            $feature->enabled = (bool)($row->is_enabled ?? $row->enabled ?? true);
+            $feature->enabled_percentage = (int)($row->rollout_percentage ?? $row->enabled_percentage ?? 100);
+            $feature->enabled_for_users = $row->allowed_users ?? $row->enabled_for_users ?? null;
+            $feature->enabled_from = $row->enabled_from ?? null;
+            $feature->enabled_until = $row->enabled_until ?? null;
+            $feature->targeted_user_ids = $row->targeted_user_ids ?? null;
+            $feature->targeted_roles = $row->targeted_roles ?? null;
+            $feature->targeted_countries = $row->targeted_countries ?? null;
+            $feature->targeted_plans = $row->targeted_plans ?? null;
+            $feature->targeted_devices = $row->targeted_devices ?? null;
+            $feature->targeted_routes = $row->targeted_routes ?? null;
+            $feature->target_age_min = $row->target_age_min ?? null;
+            $feature->target_age_max = $row->target_age_max ?? null;
+            $feature->percentage_rollout = $row->percentage_rollout ?? 100;
+            $this->cachedFeatures[$row->name] = $feature;
         }
         
         $this->loaded = true;
