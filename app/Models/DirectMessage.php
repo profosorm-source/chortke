@@ -101,15 +101,17 @@ class DirectMessage extends Model
                 ORDER BY uc.updated_at DESC
                 LIMIT ? OFFSET ?";
 
-        return $this->db->fetchAll($sql, [
-            $userId, 
-            $userId, 
-            $userId, 
-            $userId, 
-            $userId, 
-            $limit, 
-            $offset
-        ]);
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(1, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(2, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(3, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(4, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(5, $userId, \PDO::PARAM_INT);
+        $stmt->bindValue(6, $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(7, $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(\PDO::FETCH_OBJ);
     }
 
     public function getUserInfo(int $userId): ?object
