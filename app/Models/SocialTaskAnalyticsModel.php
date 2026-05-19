@@ -17,6 +17,22 @@ class SocialTaskAnalyticsModel extends Model
 
     public function createRating(array $data): int
     {
+        // ۱. بررسی وضعیت execution (فقط تسک‌های با موفقیت انجام‌شده قابل امتیازدهی هستند)
+        $exec = $this->db->fetch(
+            "SELECT id FROM social_task_executions 
+             WHERE id = ? AND status IN ('approved', 'soft_approved') LIMIT 1",
+            [$data['execution_id']]
+        );
+        
+        if (!$exec) {
+            throw new \RuntimeException('Cannot rate incomplete or rejected execution');
+        }
+
+        // ۲. بررسی عدم ارسال امتیاز تکراری
+        if ($this->hasUserRated($data['execution_id'], $data['rater_id'], $data['rater_type'])) {
+            throw new \RuntimeException('You have already rated this execution');
+        }
+
         return $this->db->insert(
             "INSERT INTO social_ratings
                (execution_id, rater_id, rated_id, rater_type, stars, comment, status, created_at)
@@ -106,6 +122,11 @@ class SocialTaskAnalyticsModel extends Model
 
     public function getRatingHistoryFull(int $userId, string $column, int $limit, int $offset): array
     {
+        $allowedColumns = ['rater_id', 'rated_id'];
+        if (!in_array($column, $allowedColumns, true)) {
+            throw new \InvalidArgumentException('Invalid column name');
+        }
+
         return $this->db->fetchAll(
             "SELECT sr.*, u.full_name AS rater_name, rated.full_name AS rated_name, sa.title AS ad_title
              FROM social_ratings sr
@@ -130,12 +151,21 @@ class SocialTaskAnalyticsModel extends Model
         return (bool)$row;
     }
 
-    public function updateUserStats(int $userId, float $rating, int $count, string $type): bool
+    public function recalculateUserStats(int $userId, string $type): bool
     {
+        $raterType = $type === 'advertiser' ? 'executor' : 'advertiser';
+        
+        $stats = $this->db->fetch("
+            SELECT AVG(stars) as avg_rating, COUNT(*) as count
+            FROM social_ratings
+            WHERE rated_id = ? AND rater_type = ? AND status = 'approved'
+        ", [$userId, $raterType]);
+        
         $colRating = $type === 'advertiser' ? 'social_advertiser_rating' : 'social_executor_rating';
+        
         return (bool)$this->db->query(
             "UPDATE users SET {$colRating} = ?, social_rating_count = ? WHERE id = ?",
-            [$rating, $count, $userId]
+            [$stats->avg_rating ?? 0, $stats->count ?? 0, $userId]
         );
     }
 
@@ -145,24 +175,10 @@ class SocialTaskAnalyticsModel extends Model
     {
         $sql = "SELECT trust_score FROM social_user_trust WHERE user_id = ? LIMIT 1";
         if ($forUpdate) {
-            $sql .= " FOR UPDATE";
-            $startedTransaction = false;
             if (!$this->db->inTransaction()) {
-                $this->db->beginTransaction();
-                $startedTransaction = true;
+                throw new \RuntimeException('Database transaction required for pessimistic locking in getUserTrust');
             }
-            try {
-                $row = $this->db->fetch($sql, [$userId]);
-                if ($startedTransaction) {
-                    $this->db->commit();
-                }
-                return $row;
-            } catch (\Throwable $e) {
-                if ($startedTransaction && $this->db->inTransaction()) {
-                    $this->db->rollBack();
-                }
-                throw $e;
-            }
+            $sql .= " FOR UPDATE";
         }
         return $this->db->fetch($sql, [$userId]);
     }

@@ -203,6 +203,9 @@ class SeoExecution extends Model
     /** تکمیل اجرا با امتیازها */
     public function complete(int $id, array $scores, float $payout): bool
     {
+        $engagementData = $scores['engagement_data'] ?? [];
+        $this->validateEngagementData($engagementData);
+
         $stmt = $this->db->prepare(
             "UPDATE seo_executions
              SET time_score = ?,
@@ -225,9 +228,28 @@ class SeoExecution extends Model
             (float)$scores['quality_score'],
             (float)$scores['final_score'],
             (float)$payout,
-            json_encode($scores['engagement_data'] ?? []),
+            json_encode($engagementData),
             $id
         ]);
+    }
+
+    private function validateEngagementData(array $data): void
+    {
+        $required = ['duration', 'scroll_depth', 'interactions'];
+        foreach ($required as $field) {
+            if (!isset($data[$field]) || !is_numeric($data[$field])) {
+                throw new \InvalidArgumentException("Missing or invalid {$field}");
+            }
+        }
+        
+        // Range validation
+        if ($data['duration'] < 0 || $data['duration'] > 3600) {
+            throw new \InvalidArgumentException('Invalid duration');
+        }
+        
+        if ($data['scroll_depth'] < 0 || $data['scroll_depth'] > 100) {
+            throw new \InvalidArgumentException('Invalid scroll_depth');
+        }
     }
 
     /** علامت‌گذاری به عنوان تقلب */

@@ -43,16 +43,16 @@ class CustomTaskSubmissionModel extends Model
                 return null;
             }
 
-            // 2. Lock duplicate check in transaction
+            // 2. Lock duplicate check in transaction (lock actual rows to prevent concurrent TOCTOU races)
             $stmt = $this->db->prepare("
-                SELECT COUNT(*) FROM custom_task_submissions
+                SELECT id FROM custom_task_submissions
                 WHERE task_id = ? AND worker_id = ? AND status NOT IN ('expired','rejected')
                 FOR UPDATE
             ");
             $stmt->execute([$d['task_id'], $d['worker_id']]);
-            $hasDone = (int)$stmt->fetchColumn() > 0;
+            $existing = $stmt->fetch(\PDO::FETCH_OBJ);
 
-            if ($hasDone) {
+            if ($existing) {
                 $this->db->rollBack();
                 return null;
             }

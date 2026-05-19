@@ -17,24 +17,10 @@ class SocialTaskExecutionModel extends Model
     {
         $sql = "SELECT * FROM social_task_executions WHERE id = ?";
         if ($forUpdate) {
-            $sql .= " FOR UPDATE";
-            $startedTransaction = false;
             if (!$this->db->inTransaction()) {
-                $this->db->beginTransaction();
-                $startedTransaction = true;
+                throw new \RuntimeException('FOR UPDATE must be called inside an active transaction');
             }
-            try {
-                $row = $this->db->fetch($sql, [$id]);
-                if ($startedTransaction) {
-                    $this->db->commit();
-                }
-                return $row;
-            } catch (\Throwable $e) {
-                if ($startedTransaction && $this->db->inTransaction()) {
-                    $this->db->rollBack();
-                }
-                throw $e;
-            }
+            $sql .= " FOR UPDATE";
         }
         return $this->db->fetch($sql, [$id]);
     }
@@ -46,24 +32,10 @@ class SocialTaskExecutionModel extends Model
                 INNER JOIN ads a ON a.id = e.ad_id
                 WHERE e.id = ? AND e.executor_id = ?";
         if ($forUpdate) {
-            $sql .= " FOR UPDATE";
-            $startedTransaction = false;
             if (!$this->db->inTransaction()) {
-                $this->db->beginTransaction();
-                $startedTransaction = true;
+                throw new \RuntimeException('FOR UPDATE must be called inside an active transaction');
             }
-            try {
-                $row = $this->db->fetch($sql, [$executionId, $userId]);
-                if ($startedTransaction) {
-                    $this->db->commit();
-                }
-                return $row;
-            } catch (\Throwable $e) {
-                if ($startedTransaction && $this->db->inTransaction()) {
-                    $this->db->rollBack();
-                }
-                throw $e;
-            }
+            $sql .= " FOR UPDATE";
         }
         return $this->db->fetch($sql, [$executionId, $userId]);
     }
@@ -75,24 +47,10 @@ class SocialTaskExecutionModel extends Model
                 INNER JOIN ads a ON a.id = e.ad_id
                 WHERE e.id = ? AND a.user_id = ?";
         if ($forUpdate) {
-            $sql .= " FOR UPDATE";
-            $startedTransaction = false;
             if (!$this->db->inTransaction()) {
-                $this->db->beginTransaction();
-                $startedTransaction = true;
+                throw new \RuntimeException('FOR UPDATE must be called inside an active transaction');
             }
-            try {
-                $row = $this->db->fetch($sql, [$executionId, $advertiserId]);
-                if ($startedTransaction) {
-                    $this->db->commit();
-                }
-                return $row;
-            } catch (\Throwable $e) {
-                if ($startedTransaction && $this->db->inTransaction()) {
-                    $this->db->rollBack();
-                }
-                throw $e;
-            }
+            $sql .= " FOR UPDATE";
         }
         return $this->db->fetch($sql, [$executionId, $advertiserId]);
     }
@@ -126,6 +84,16 @@ class SocialTaskExecutionModel extends Model
         );
     }
 
+    private const STATE_TRANSITIONS = [
+        'pending' => ['started', 'cancelled'],
+        'started' => ['submitted', 'expired', 'cancelled'],
+        'submitted' => ['approved', 'soft_approved', 'rejected'],
+        'approved' => [], // terminal
+        'rejected' => [], // terminal
+        'cancelled' => [], // terminal
+        'expired' => [], // terminal
+    ];
+
     private const ALLOWED_UPDATE_FIELDS = [
         'status', 'task_score', 'active_time', 'decision', 'rejection_reason', 
         'behavior_data', 'flag_review', 'flag_note', 'proof_url', 'proof_text', 
@@ -135,6 +103,25 @@ class SocialTaskExecutionModel extends Model
 
     public function updateExecutionStatus(int $id, string $status, array $data = []): bool
     {
+        // گرفتن وضعیت فعلی
+        $current = $this->db->fetch("SELECT status FROM social_task_executions WHERE id = ? LIMIT 1", [$id]);
+        
+        if (!$current) {
+            throw new \RuntimeException('Execution not found');
+        }
+        
+        $currentStatus = $current->status;
+        
+        // بررسی معتبر بودن transition (تغییر وضعیت به خودش همیشه مجاز است)
+        if ($currentStatus !== $status) {
+            $allowed = self::STATE_TRANSITIONS[$currentStatus] ?? [];
+            if (!in_array($status, $allowed, true)) {
+                throw new \InvalidArgumentException(
+                    "Invalid state transition: {$currentStatus} → {$status}"
+                );
+            }
+        }
+
         $updates = ["status = ?", "updated_at = NOW()"];
         $params = [$status];
 
