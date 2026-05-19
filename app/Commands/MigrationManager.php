@@ -60,18 +60,30 @@ class MigrationManager
             $sql = file_get_contents($realPath);
             
             try {
-                // HIGH-04 Fix: Use Database Transaction wrapper for data consistency
-                $this->db->beginTransaction();
+                // MySQL DDL statements (CREATE, ALTER, DROP, etc.) trigger implicit commits,
+                // making transaction wrappers fail on commit. We only wrap non-DDL scripts.
+                $isDdl = (bool)preg_match('/\b(ALTER|CREATE|DROP|RENAME|TRUNCATE)\b/i', $sql);
+                $useTx = !$isDdl;
+
+                if ($useTx) {
+                    $this->db->beginTransaction();
+                }
+                
                 // Split multi-queries if needed, though simple exec() handles multiple statements usually
                 // We'll perform robust execution.
                 $this->db->getPdo()->exec($sql);
                 
                 // Record success
                 $this->record($filename, $batch);
-                $this->db->commit();
+                
+                if ($useTx && $this->db->inTransaction()) {
+                    $this->db->commit();
+                }
                 $executedCount++;
             } catch (\Exception $e) {
-                $this->db->rollBack();
+                if (isset($useTx) && $useTx && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
                 $errors[] = "Failed executing {$filename}: " . $e->getMessage();
                 // Halt migration chain upon error to prevent corrupt/partial state
                 break; 

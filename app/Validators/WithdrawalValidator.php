@@ -45,4 +45,32 @@ class WithdrawalValidator extends Validator
             $this->rules['amount'] .= '|min:1';
         }
     }
+
+    public function validate(?array $rules = null): void
+    {
+        parent::validate($rules);
+
+        $amount = $this->data['amount'] ?? null;
+        $currency = strtoupper((string)($this->data['currency'] ?? 'IRT'));
+
+        if ($amount !== null && $amount !== '') {
+            if ($currency === 'IRT') {
+                // IRT must not have any decimal places (must be an integer)
+                if (\strpos((string)$amount, '.') !== false) {
+                    $parts = \explode('.', (string)$amount, 2);
+                    if (isset($parts[1]) && \preg_match('/[1-9]/', $parts[1])) {
+                        $this->addError('amount', 'مبلغ تومان نمی‌تواند اعشاری باشد.');
+                    }
+                }
+            } else {
+                // USDT can have up to 8 decimal places
+                if (\strpos((string)$amount, '.') !== false) {
+                    $parts = \explode('.', (string)$amount, 2);
+                    if (isset($parts[1]) && \strlen($parts[1]) > 8) {
+                        $this->addError('amount', 'مبلغ تتر حداکثر ۸ رقم اعشار می‌تواند داشته باشد.');
+                    }
+                }
+            }
+        }
+    }
 }

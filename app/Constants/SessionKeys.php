@@ -26,6 +26,9 @@ class SessionKeys
     public const OAUTH_STATE = 'oauth_state';
     public const OAUTH_LINKING_USER_ID = 'oauth_linking_user_id';
     
+    // Auth data
+    public const USER_EMAIL = 'user_email';
+    
     // 2FA Setup
     public const TWO_FACTOR_SETUP_AUTHORIZED = '2fa_setup_authorized';
 }
