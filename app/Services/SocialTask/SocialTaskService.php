@@ -168,11 +168,13 @@ class SocialTaskService extends \App\Services\BaseService
             $currency = (string)($ad->currency ?? 'irt');
 
             if ($refund > 0) {
-                $walletResult = $this->wallet->deposit((int)$ad->user_id, $refund, $currency, [
+                $idempotencyKey = "social_ad_cancel_refund_{$adId}";
+                $walletResult = $this->wallet->deposit((int)$ad->user_id, (string)$refund, $currency, [
                     'type' => 'social_ad_refund',
                     'description' => "Refund for cancelled social ad #{$adId}",
+                    'idempotency_key' => $idempotencyKey,
                     'gateway' => 'social_ad_refund',
-                    'gateway_transaction_id' => 'refund_' . $adId . '_' . time(),
+                    'gateway_transaction_id' => 'refund_' . $adId,
                     'ref_id' => $adId,
                     'ref_type' => 'social_ad',
                 ]);
@@ -421,21 +423,41 @@ class SocialTaskService extends \App\Services\BaseService
             
             // Capture Fraud in Real-Time via CameraVerification if signals are suspicious
             $behaviorSignals = (array)($payload['behavior_signals'] ?? []);
-            if ($this->cameraVerification && $this->cameraVerification->isRequired((int)$executionId, (float)($score['task_score'] ?? 0), $behaviorSignals)) {
-                $this->cameraVerification->createRequest((int)$executionId, $userId);
-                $this->model->updateExecutionStatus($executionId, 'pending_camera_verification', [
-                    'anti_fraud_score' => (float)($score['task_score'] ?? 0),
-                    'proof_url'        => $proofUrl !== '' ? $proofUrl : null,
-                    'proof_text'       => $proofText !== '' ? $proofText : null,
+            $requireCamera = false;
+            try {
+                if ($this->cameraVerification && $this->cameraVerification->isRequired((int)$executionId, (float)($score['task_score'] ?? 0), $behaviorSignals)) {
+                    $requireCamera = true;
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('camera_verification.check_failed_fallback_allowed', [
+                    'execution_id' => $executionId,
+                    'error' => $e->getMessage()
                 ]);
-                $this->model->commit();
+            }
 
-                return [
-                    'success' => true,
-                    'status'  => 'pending_camera_verification',
-                    'message' => 'تسک شما مشکوک تشخیص داده شد. لطفاً با استفاده از دوربین هویت تصویری خود را تأیید کنید تا پاداش آزاد شود.',
-                    'score'   => $score['task_score'] ?? 0,
-                ];
+            if ($requireCamera) {
+                try {
+                    $this->cameraVerification->createRequest((int)$executionId, $userId);
+                    $this->model->updateExecutionStatus($executionId, 'pending_camera_verification', [
+                        'anti_fraud_score' => (float)($score['task_score'] ?? 0),
+                        'proof_url'        => $proofUrl !== '' ? $proofUrl : null,
+                        'proof_text'       => $proofText !== '' ? $proofText : null,
+                    ]);
+                    $this->model->commit();
+
+                    return [
+                        'success' => true,
+                        'status'  => 'pending_camera_verification',
+                        'message' => 'تسک شما مشکوک تشخیص داده شد. لطفاً با استفاده از دوربین هویت تصویری خود را تأیید کنید تا پاداش آزاد شود.',
+                        'score'   => $score['task_score'] ?? 0,
+                    ];
+                } catch (\Throwable $e) {
+                    $this->logger->error('camera_verification.create_request_failed_fallback_bypass', [
+                        'execution_id' => $executionId,
+                        'error' => $e->getMessage()
+                    ]);
+                    // Fallback to normal decision flow because camera verification is temporarily down
+                }
             }
 
             $decision = $this->antiFraud->decisionFromScore($score);

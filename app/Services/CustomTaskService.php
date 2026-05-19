@@ -135,8 +135,11 @@ class CustomTaskService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // Ú©Ø³Ø± Ø¨ÙˆØ¯Ø¬Ù‡ Ø§Ø² Ú©ÛŒÙ Ù¾ÙˆÙ„
-            // Ú©Ø³Ø± Ø¨ÙˆØ¯Ø¬Ù‡ Ø§Ø² Ú©ÛŒÙ Ù¾ÙˆÙ„ - Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Ù‡Ø´ Ø§Ù…Ù† Ø¯ÛŒØªØ§ÛŒ ØªØ³Ú© Ø¨Ø±Ø§ÛŒ Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ù‚Ø·Ø¹ÛŒ Ø§Ø² Ø¯Ø¨Ù„â€ŒÚ©Ù„ÛŒÚ©
+            // Pessimistic lock on the user's wallet record to prevent budget race conditions
+            $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$creatorId])->fetch();
+
+            // Ú©Ø³Ø± Ø¨ÙˆØ¯Ø¬Ù‡ Ø§Ø² Ú©ÛŒÙ  Ù¾ÙˆÙ„
+            // Ú©Ø³Ø± Ø¨ÙˆØ¯Ø¬Ù‡ Ø§Ø² Ú©ÛŒÙ  Ù¾ÙˆÙ„ - Ø§Ø³ØªÙ Ø§Ø¯Ù‡ Ø§Ø² Ù‡Ø´ Ø§Ù…Ù† Ø¯ÛŒØªØ§ÛŒ ØªØ³Ú© Ø¨Ø±Ø§ÛŒ Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ù‚Ø·Ø¹ÛŒ Ø§Ø² Ø¯Ø¨Ù„â€ŒÚ©Ù„ÛŒÚ©
             $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('task_budget_allocation', [
                 'creator_id' => $creatorId,
                 'title' => $data['title'] ?? 'untitled',
@@ -150,7 +153,7 @@ class CustomTaskService extends \App\Services\BaseService
                 $currency,
                 [
                     'type' => 'task_budget',
-                    'description' => "Ø¨ÙˆØ¯Ø¬Ù‡ ÙˆØ¸ÛŒÙÙ‡: {$data['title']}",
+                    'description' => "Ø¨ÙˆØ¯Ø¬Ù‡ ÙˆØ¸ÛŒÙ Ù‡: {$data['title']}",
                     'idempotency_key' => $idempotencyKey,
                 ]
             );
@@ -277,7 +280,7 @@ class CustomTaskService extends \App\Services\BaseService
         $recentCount = $this->submissionModel->submission_todayCount($userId);
         $dailyLimit = (int) $this->settingService->get('custom_task_max_daily_submissions', 20);
         if ($recentCount > $dailyLimit * 0.8) {
-            $scores[] = 40; // Ù†Ø²Ø¯ÛŒÚ© Ø¨Ù‡ Ø³Ù‚Ù
+            $scores[] = 40; // Ù†Ø²Ø¯ÛŒÚ© Ø¨Ù‡ Ø³Ù‚Ù 
         }
 
         // Ù…Ø­Ø§Ø³Ø¨Ù‡ Ù…ÛŒØ§Ù†Ú¯ÛŒÙ†
@@ -289,39 +292,44 @@ class CustomTaskService extends \App\Services\BaseService
      */
     public function submitProof(int $submissionId, int $workerId, array $proofData): array
     {
-        // Ù…Ø­Ø¯ÙˆØ¯ÛŒØª Ø¯ÙØ¹Ø§Øª Ø³Ø§Ø¨Ù…ÛŒØª Ù…Ø¯Ø±Ú© (Ù…Ø«Ù„Ø§ Û±Û° ØªÙ„Ø§Ø´ Ø¯Ø± Û±Û° Ø¯Ù‚ÛŒÙ‚Ù‡)
+        // محدودیت دفعات سابمیت مدرک (مثلا ۱۰ تلاش در ۱۰ دقیقه)
         if (!$this->rateLimiter->attempt('custom_task:submit:' . $workerId, 10, 10)) {
             $wait = ceil($this->rateLimiter->availableIn('custom_task:submit:' . $workerId) / 60);
-            return ['success' => false, 'message' => "ØªØ¹Ø¯Ø§Ø¯ ØªÙ„Ø§Ø´â€ŒÙ‡Ø§ÛŒ Ø§Ø±Ø³Ø§Ù„ Ù¾Ø§Ø³Ø® Ø´Ù…Ø§ ÙØ±Ø§ØªØ± Ø§Ø² Ø­Ø¯ Ù…Ø¬Ø§Ø² Ø§Ø³Øª. Ù„Ø·ÙØ§Ù‹ {$wait} Ø¯Ù‚ÛŒÙ‚Ù‡ Ø¯ÛŒÚ¯Ø± Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†ÛŒØ¯."];
-        }
-
-        $submission = $this->submissionModel->submission_find($submissionId);
-
-        if (!$submission || $submission->worker_id !== $workerId) {
-            return ['success' => false, 'message' => 'Ø¯Ø³ØªØ±Ø³ÛŒ ØºÛŒØ±Ù…Ø¬Ø§Ø².'];
-        }
-
-        if ($submission->status !== 'in_progress') {
-            return ['success' => false, 'message' => 'ÙˆØ¶Ø¹ÛŒØª Ù†Ø§Ù…Ø¹ØªØ¨Ø±.'];
-        }
-
-        // Ø¨Ø±Ø±Ø³ÛŒ deadline
-        if (strtotime($submission->deadline_at) < time()) {
-            return ['success' => false, 'message' => 'Ù…Ù‡Ù„Øª Ø§Ø±Ø³Ø§Ù„ Ø¨Ù‡ Ù¾Ø§ÛŒØ§Ù† Ø±Ø³ÛŒØ¯Ù‡.'];
-        }
-
-        // Ø¨Ø±Ø±Ø³ÛŒ ØªÚ©Ø±Ø§Ø±ÛŒ Ø¨ÙˆØ¯Ù† proof
-        if (!empty($proofData['proof_file_hash'])) {
-            if ($this->submissionModel->submission_isDuplicateImage(
-                $proofData['proof_file_hash'],
-                $submission->task_id
-            )) {
-                return ['success' => false, 'message' => 'Ø§ÛŒÙ† Ù…Ø¯Ø±Ú© Ù‚Ø¨Ù„Ø§Ù‹ Ø§Ø±Ø³Ø§Ù„ Ø´Ø¯Ù‡ Ø§Ø³Øª.'];
-            }
+            return ['success' => false, 'message' => "تعداد تلاش‌های ارسال پاسخ شما فراتر از حد مجاز است. لطفاً {$wait} دقیقه دیگر امتحان کنید."];
         }
 
         try {
             $this->db->beginTransaction();
+
+            // Pessimistic lock on the submission row to prevent concurrent race conditions/TOCTOU
+            $submission = $this->db->query("SELECT * FROM custom_task_submissions WHERE id = ? FOR UPDATE", [$submissionId])->fetch(\PDO::FETCH_OBJ);
+
+            if (!$submission || (int)$submission->worker_id !== $workerId) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'دسترسی غیرمجاز.'];
+            }
+
+            if ($submission->status !== 'in_progress') {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'وضعیت نامعتبر.'];
+            }
+
+            // بررسی deadline
+            if (strtotime($submission->deadline_at) < time()) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'مهلت ارسال به پایان رسیده.'];
+            }
+
+            // بررسی تکراری بودن proof
+            if (!empty($proofData['proof_file_hash'])) {
+                if ($this->submissionModel->submission_isDuplicateImage(
+                    $proofData['proof_file_hash'],
+                    $submission->task_id
+                )) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'این مدرک قبلاً ارسال شده است.'];
+                }
+            }
 
             $updateData = [
                 'proof_text' => $proofData['proof_text'] ?? null,
@@ -340,7 +348,7 @@ class CustomTaskService extends \App\Services\BaseService
                 'worker_id' => $workerId,
             ]);
 
-            // Ø§Ø±Ø³Ø§Ù„ Ù†ÙˆØªÛŒÙÛŒÚ©ÛŒØ´Ù† Ø¨Ù‡ Ø³Ø§Ø²Ù†Ø¯Ù‡ ØªØ³Ú©
+            // ارسال نوتیفیکیشن به سازنده تسک
             $task = $this->taskModel->find($submission->task_id);
             $this->notificationService->send(
                 $task->user_id,
@@ -487,6 +495,24 @@ class CustomTaskService extends \App\Services\BaseService
     {
         try {
             $this->db->beginTransaction();
+
+            // قفل‌گذاری روی سابمیشن برای جلوگیری از رد مضاعف یا تداخل
+            $sub = $this->db->query("SELECT * FROM custom_task_submissions WHERE id = ? FOR UPDATE", [$submission->id])->fetch(\PDO::FETCH_OBJ);
+            
+            if (!$sub) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'درخواست یافت نشد.'];
+            }
+
+            if ($sub->status === 'rejected') {
+                $this->db->rollBack();
+                return ['success' => true, 'message' => 'این درخواست قبلاً رد شده است.'];
+            }
+
+            if ($sub->status !== 'submitted') {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'وضعیت غیرقابل تغییر است.'];
+            }
 
             $this->submissionModel->submission_update($submission->id, [
                 'status' => 'rejected',

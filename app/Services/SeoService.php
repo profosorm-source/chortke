@@ -139,6 +139,9 @@ class SeoService extends \App\Services\BaseService
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logger->error('seo_task.start_failed', ['error' => $e->getMessage()]);
+            if (str_contains($e->getMessage(), '1062') || str_contains($e->getMessage(), 'Duplicate entry')) {
+                return ['success' => false, 'message' => 'شما امروز این تسک را قبلاً انجام داده‌اید'];
+            }
             return ['success' => false, 'message' => 'خطای سیستمی'];
         }
     }
@@ -242,11 +245,26 @@ class SeoService extends \App\Services\BaseService
 
             $payout = $payoutResult['payout'];
 
-            // 6. تکمیل Execution
-            $this->executionModel->complete($executionId, $scores, $payout);
+            // 6. تکمیل Execution (با چک کردن تغییر وضعیت اتمیک)
+            if (!$this->executionModel->complete($executionId, $scores, $payout)) {
+                $this->db->rollBack();
+                $this->logger->warning('seo_task.complete_state_failed', [
+                    'user_id' => $userId,
+                    'execution_id' => $executionId
+                ]);
+                return ['success' => false, 'message' => 'این تسک قبلاً تکمیل یا لغو شده است'];
+            }
 
-            // 7. کسر از بودجه آگهی
-            $this->payoutService->deductFromBudget($ad->id, $payout);
+            // 7. کسر از بودجه آگهی (با تایید موفقیت تراکنش انتقال بودجه امانی)
+            if (!$this->payoutService->deductFromBudget($ad->id, $payout)) {
+                $this->db->rollBack();
+                $this->logger->error('seo_task.deduct_from_budget_failed', [
+                    'user_id' => $userId,
+                    'ad_id' => $ad->id,
+                    'payout' => $payout
+                ]);
+                return ['success' => false, 'message' => 'موجودی امانی آگهی کافی نیست'];
+            }
 
             $adCurrency = strtolower((string)($ad->currency ?? $this->settingService->get('currency_mode', 'irt')));
             if (!in_array($adCurrency, ['irt', 'usdt'])) {
