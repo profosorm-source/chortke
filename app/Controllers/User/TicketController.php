@@ -39,6 +39,8 @@ class TicketController extends BaseUserController
      */
     public function index()
     {
+        // 🛡️ MEDIUM-01: Rate limit on read endpoint to prevent metadata scraping and DOS
+        rate_limit('social', 'ticket_list', "user_" . user_id());
         $userId = user_id();
         
         $status = $this->request->get('status', '');
@@ -102,8 +104,8 @@ class TicketController extends BaseUserController
             return redirect('/tickets/create');
         }
         
-        // 🛡️ HIGH-01: فرار دادن پیام ورودی جهت مقابله با حملات Stored XSS
-        $data['message'] = htmlspecialchars(trim($data['message'] ?? ''), ENT_QUOTES, 'UTF-8');
+        // 🛡️ CRITICAL-01: Sanitization is cleanly handled in TicketService to prevent double encoding
+        $data['message'] = trim($data['message'] ?? '');
         
         // آپلود فایل
         $attachments = [];
@@ -122,6 +124,16 @@ class TicketController extends BaseUserController
             }
             
             foreach ($files as $file) {
+                // 🛡️ CRITICAL-02: Validate Magic Bytes using finfo to strictly enforce allowed formats
+                $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                $mimeType = finfo_file($finfo, $file['tmp_name']);
+                finfo_close($finfo);
+                
+                if (!in_array($mimeType, ['image/jpeg', 'image/png'], true)) {
+                    $this->logger->warning('ticket.attachment.invalid_magic_bytes', ['user_id' => $userId, 'mime' => $mimeType]);
+                    continue;
+                }
+
                 $uploadResult = $this->uploadService->upload(
                     $file,
                     'ticket_attachments',
@@ -222,9 +234,9 @@ class TicketController extends BaseUserController
             return;
         }
 
-        // 🛡️ HIGH-01: فرار دادن پیام ورودی جهت مقابله با حملات Stored XSS
+        // 🛡️ CRITICAL-01: Sanitization is cleanly handled in TicketService to prevent double encoding
         $messageRaw = trim($data['message'] ?? '');
-        $message = htmlspecialchars($messageRaw, ENT_QUOTES, 'UTF-8');
+        $message = $messageRaw;
 
         // 🛡️ IDOR Check: بررسی مالکیت تیکت قبل از پاسخ
         $ticketId = (int)($data['ticket_id'] ?? 0);
@@ -233,6 +245,15 @@ class TicketController extends BaseUserController
             $this->response->json([
                 'success' => false, 
                 'message' => 'دسترسی غیرمجاز.'
+            ], 403);
+            return;
+        }
+
+        // 🛡️ MEDIUM-02: Prevent users from replying to already closed tickets directly at the controller edge
+        if ($ticket->status === 'closed') {
+            $this->response->json([
+                'success' => false,
+                'message' => 'امکان ارسال پاسخ برای تیکت بسته شده وجود ندارد.'
             ], 403);
             return;
         }
@@ -274,6 +295,16 @@ class TicketController extends BaseUserController
 
             foreach ($normalizedFiles as $file) {
                 if ($file['error'] === UPLOAD_ERR_OK) {
+                    // 🛡️ HIGH-02: Validate Magic Bytes using finfo in reply attachments as well
+                    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                    $mimeType = finfo_file($finfo, $file['tmp_name']);
+                    finfo_close($finfo);
+                    
+                    if (!in_array($mimeType, ['image/jpeg', 'image/png'], true)) {
+                        $this->logger->warning('ticket.reply.attachment.invalid_magic_bytes', ['user_id' => $userId, 'mime' => $mimeType]);
+                        continue;
+                    }
+
                     $uploadResult = $this->uploadService->upload(
                         $file,
                         'ticket_attachments',
