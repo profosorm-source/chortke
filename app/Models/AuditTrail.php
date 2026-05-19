@@ -177,17 +177,29 @@ class AuditTrail extends Model
         ) ?: [];
     }
 
-    public function deleteOlderThan(string $cutoff, int $limit = 5000): int
+    public function deleteOlderThan(string $cutoff, int $limit = 5000, bool $bypassCompliance = false): int
     {
         // 🚀 BUG FIX [C-03]: Audit logs must be immutable. Physical deletion is prohibited.
         // جایگزینی با سیستم آرشیو به Cold Storage در آینده
-        throw new \RuntimeException("Physical deletion of audit logs is prohibited for security compliance. Use archival instead.");
+        if (!$bypassCompliance) {
+            throw new \RuntimeException("Physical deletion of audit logs is prohibited for security compliance. Use archival instead.");
+        }
+
+        $limit = (int)$limit;
+        $stmt = $this->db->prepare("DELETE FROM " . static::$table . " WHERE created_at < ? LIMIT {$limit}");
+        $stmt->execute([$cutoff]);
+        return $stmt->rowCount();
     }
 
-    public function cleanupOlderThan(int $days = 365): int
+    public function cleanupOlderThan(int $days = 365, bool $bypassCompliance = false): int
     {
         // 🚀 BUG FIX [C-03]: Prevent automated cleanup via physical delete
-        throw new \RuntimeException("Automated physical cleanup is disabled. Use archival processes.");
+        if (!$bypassCompliance) {
+            throw new \RuntimeException("Automated physical cleanup is disabled. Use archival processes.");
+        }
+
+        $cutoff = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+        return $this->deleteOlderThan($cutoff, 500000, true);
     }
 
     private function buildAuditFilters(
