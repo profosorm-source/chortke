@@ -116,6 +116,15 @@ class TicketController extends BaseAdminController
             return $this->response->json(['success' => false, 'message' => 'ارسال پیام الزامی است.']);
         }
 
+        // 🛡️ NEW-13: جلوگیری از حملات Stored XSS و کنترل طول داده ورودی
+        $message = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+        if (mb_strlen($message) > 5000) {
+            return $this->response->json([
+                'success' => false, 
+                'message' => 'پیام نباید بیشتر از ۵۰۰۰ کاراکتر باشد'
+            ], 422);
+        }
+
         $ticket = $this->ticketService->getById($ticketId);
         if (!$ticket) {
             return $this->response->json([
@@ -137,6 +146,11 @@ class TicketController extends BaseAdminController
                 user_id(), 
                 ['ticket_id' => $ticketId, 'message_length' => mb_strlen($message)]
             );
+            
+            // 🛡️ NEW-12: ثبت کامل ردپای حسابرسی ادمین
+            $this->auditLog('ticket_admin_reply', 'ticket', $ticketId, null, [
+                'message' => $message
+            ]);
         }
         
         return $this->response->json($result);
@@ -160,9 +174,22 @@ class TicketController extends BaseAdminController
         if (!in_array($status, $allowedStatuses, true)) {
             return $this->response->json(['success' => false, 'message' => 'وضعیت نامعتبر است.']);
         }
+
+        $ticket = $this->ticketService->getById($ticketId);
+        if (!$ticket) {
+            return $this->response->json(['success' => false, 'message' => 'تیکت یافت نشد.']);
+        }
         
-        if ($this->ticketService->updateStatus($ticketId, $status)) {
+        $oldStatus = $ticket->status;
+        
+        if ($this->ticketService->updateStatus($ticketId, $status, user_id())) {
             $this->logger->activity('ticket_status_changed', "وضعیت تیکت #{$ticketId} به {$status} تغییر کرد", user_id(), []);
+            
+            // 🛡️ NEW-12: ثبت کامل ردپای حسابرسی ادمین
+            $this->auditLog('ticket_status_changed', 'ticket', $ticketId, 
+                ['status' => $oldStatus],
+                ['status' => $status]
+            );
             
             return $this->response->json([
                 'success' => true,
@@ -186,6 +213,13 @@ class TicketController extends BaseAdminController
             return $this->response->json(['success' => false, 'message' => 'داده‌های ناقص.']);
         }
 
+        $ticket = $this->ticketService->getById($ticketId);
+        if (!$ticket) {
+            return $this->response->json(['success' => false, 'message' => 'تیکت یافت نشد.']);
+        }
+
+        $oldAdminId = (int)($ticket->assigned_to ?? 0);
+
         if ($adminId > 0) {
             if (!$this->policyService->isAdminById($adminId)) {
                 return $this->response->json(['success' => false, 'message' => 'شناسه مدیر نامعتبر است.']);
@@ -197,6 +231,13 @@ class TicketController extends BaseAdminController
         
         if ($this->ticketService->assignTo($ticketId, $adminId)) {
             $this->logger->activity('ticket_assigned', "تیکت #{$ticketId} به مدیر {$adminId} تخصیص داده شد", user_id(), []);
+            
+            // 🛡️ NEW-12: ثبت کامل ردپای حسابرسی ادمین
+            $this->auditLog('ticket_assigned', 'ticket', $ticketId, 
+                ['assigned_to' => $oldAdminId],
+                ['assigned_to' => $adminId]
+            );
+
             return $this->response->json([
                 'success' => true,
                 'message' => 'تیکت تخصیص داده شد.'
@@ -204,5 +245,31 @@ class TicketController extends BaseAdminController
         }
         
         return $this->response->json(['success' => false, 'message' => 'خطا در تخصیص.']);
+    }
+
+    /**
+     * 🛡️ NEW-12: ثبت ردپای حسابرسی تغییرات و عملیات حساس ادمین‌ها در دیتابیس
+     */
+    private function auditLog(string $action, string $entityType, int $entityId, ?array $oldValues, ?array $newValues): void
+    {
+        try {
+            db()->query(
+                "INSERT INTO admin_audit_log (admin_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, session_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    user_id(),
+                    $action,
+                    $entityType,
+                    $entityId,
+                    $oldValues !== null ? json_encode($oldValues, JSON_UNESCAPED_UNICODE) : null,
+                    $newValues !== null ? json_encode($newValues, JSON_UNESCAPED_UNICODE) : null,
+                    $this->request->ip(),
+                    $this->request->userAgent() ?: 'unknown',
+                    session_id() ?: ''
+                ]
+            );
+        } catch (\Exception $e) {
+            $this->logger->error('admin.audit_log.failed', ['error' => $e->getMessage()]);
+        }
     }
 }
