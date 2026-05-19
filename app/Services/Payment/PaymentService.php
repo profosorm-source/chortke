@@ -426,14 +426,34 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
         return ['success' => false, 'message' => 'کاربر جلسه فعلی با پرداخت تطابق ندارد'];
     }
 
-    if ($pay->status !== 'pending' && $pay->status !== 'completed' && $pay->status !== 'failed' && $pay->status !== 'pending_verification') {
+    // CRITICAL-2: Verify amount from callback matches stored amount early
+    $callbackAmount = isset($callbackData['amount']) ? (float)$callbackData['amount'] : (isset($callbackData['Amount']) ? (float)$callbackData['Amount'] : null);
+    if ($callbackAmount !== null && abs($callbackAmount - (float)$pay->amount) > 0.01) {
+        $this->logger->critical('payment.callback.amount_mismatch', [
+            'gateway' => $gatewayName,
+            'authority' => $authority,
+            'expected' => (float)$pay->amount,
+            'received' => $callbackAmount,
+            'ip' => get_client_ip()
+        ]);
+        return ['success' => false, 'message' => 'مبلغ پرداخت شده با مبلغ تراکنش مطابقت ندارد'];
+    }
+
+    if ($pay->status === 'completed') {
+        return ['success' => false, 'message' => 'این پرداخت قبلاً تکمیل شده است', 'ref_id' => $pay->ref_id ?? null];
+    }
+
+    if ($pay->status !== 'pending' && $pay->status !== 'failed' && $pay->status !== 'pending_verification') {
         $this->logger->warning('payment.callback.invalid_status', [
             'gateway' => $gatewayName,
             'authority' => $authority,
             'status' => $pay->status,
             'ip' => get_client_ip()
         ]);
-        re    // استفاده از Wrapper امن برای مدیریت خودکار Lock, Complete و Fail
+        return ['success' => false, 'message' => 'وضعیت پرداخت نامعتبر است'];
+    }
+
+    // استفاده از Wrapper امن برای مدیریت خودکار Lock, Complete و Fail
     $callback = function() use ($gatewayName, $callbackData, $authority, $pay) {
 
         // حل کردن اینستنس گیت‌وی
@@ -735,62 +755,10 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
     if (str_contains(get_class($this->idempotencyKey), 'Mockery')) {
         return IdempotencyKey::wrap($idemKey, $userId, 'payment_callback', $callback, $callbackData);
     }
-    return $this->idempotencyKey->wrapInstance($idemKey, $userId, 'payment_callback', $callback, $callbackData);�رور (Transactional Outbox Pattern)
-            try {
-                $this->eventDispatcher->dispatchAsync('payment.completed', new \App\Events\PaymentCompletedEvent(
-                    (int)$pay->user_id,
-                    (string)($verify['ref_id'] ?? $authority),
-                    (float)$pay->amount,
-                    'IRT',
-                    $gatewayName
-                ));
-            } catch (\Throwable $e) {
-                $this->logger->error('payment.event_dispatch_failed', ['error' => $e->getMessage()]);
-            }
-
-            // commit تراکنش
-            $this->db->commit();
-
-            // نوتیفیکیشن موفقیت پرداخت
-            try {
-                $this->notifier->depositSuccess((int)$pay->user_id, (float)$pay->amount, 'IRT');
-            } catch (\Throwable $e) {
-                $this->logger->error('payment.notification_failed', ['error' => $e->getMessage()]);
-            }
-
-            $this->logger->info('payment.callback.completed', [
-                'gateway' => $gatewayName,
-                'authority' => $authority,
-                'user_id' => $pay->user_id,
-                'amount' => $pay->amount,
-                'ref_id' => $verify['ref_id'] ?? null
-            ]);
-
-            return [
-                'success' => true,
-                'message' => 'پرداخت با موفقیت تکمیل شد',
-                'ref_id' => $verify['ref_id'] ?? null
-            ];
-        } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-
-            $this->logger->critical('payment.callback.exception', [
-                'gateway' => $gatewayName,
-                'authority' => $authority,
-                'user_id' => $pay->user_id,
-                'amount' => $pay->amount,
-                'exception' => get_class($e),
-                'message' => $e->getMessage()
-            ]);
-
-            return ['success' => false, 'message' => 'خطای سیستمی در پردازش پرداخت'];
-        }
-    }, $callbackData);
+    return $this->idempotencyKey->wrapInstance($idemKey, $userId, 'payment_callback', $callback, $callbackData);
 }
 
-    private function createPendingVerificationReview(object $pay, array $verify): void
+private function createPendingVerificationReview(object $pay, array $verify): void
     {
         $existingResponse = @json_decode($pay->response_data ?? '', true);
         if (!is_array($existingResponse)) {

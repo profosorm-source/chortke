@@ -699,9 +699,15 @@ class CryptoDepositService extends \App\Services\BaseService
             }
         } elseif (($result['status'] ?? '') === 'mismatch') {
             return $this->moveToManualReview($depositId, $result['reason'] ?? 'عدم تطابق داده‌ها');
+        } elseif (($result['status'] ?? '') === 'pending') {
+            // Transaction found but confirmations count is insufficient - keep as pending for next cron check
+            return ['auto' => false, 'message' => $result['reason'] ?? 'تراکنش در انتظار تایید شبکه'];
         } else {
-            // unavailable or error - move to manual review
-            return $this->moveToManualReview($depositId, $result['reason'] ?? 'بررسی خودکار ناموفق');
+            // Temporary explorer error or circuit breaker active - keep as pending to retry via cron until max attempts (10)
+            if ((int)$d->auto_check_attempts >= 10) {
+                return $this->moveToManualReview($depositId, 'عدم موفقیت در استعلام پس از تلاشهای مکرر: ' . ($result['reason'] ?? 'بررسی خودکار ناموفق'));
+            }
+            return ['auto' => false, 'message' => 'خطای موقت در اتصال به شبکه رمزارز: ' . ($result['reason'] ?? 'ارتباط با Explorer قطع است')];
         }
     }
 
@@ -765,23 +771,33 @@ class CryptoDepositService extends \App\Services\BaseService
     {
         $maxAttempts = \App\Constants\CryptoConstants::MAX_UNIQUE_AMOUNT_ATTEMPTS;
         $attempt = 0;
+        $cache = \Core\Cache::getInstance();
+
         do {
             // HIGH-07: Formulate higher precision entropy bounds (8 decimals) to dilute collision density
             $randomAddition = \random_int(1, 9999999) / 100000000;
             $expected = \round($requestedAmount + $randomAddition, 8);
 
-            // Check global - both open/active intents and recently claimed intents to prevent amount collision replay attacks (C-08 & C-02)
-            $stmt = $this->db->prepare("
-                SELECT COUNT(*) FROM crypto_deposit_intents 
-                WHERE network = ? AND expected_amount = ? 
-                AND (status = 'open' OR (status = 'claimed' AND claimed_at > DATE_SUB(NOW(), INTERVAL 7 DAY)))
-            ");
-            $stmt->execute([$network, $expected]);
-            $count = (int)$stmt->fetchColumn();
+            // Use distributed cache lock to prevent concurrent race condition between threads generating unique amount (C-03)
+            $lockKey = "lock_intent_amount_" . md5($network . "_" . (string)$expected);
+            if ($cache->lock($lockKey, 10, 2)) {
+                // Check global - both open/active intents and recently claimed intents to prevent amount collision replay attacks (C-08 & C-02)
+                $stmt = $this->db->prepare("
+                    SELECT COUNT(*) FROM crypto_deposit_intents 
+                    WHERE network = ? AND expected_amount = ? 
+                    AND (status = 'open' OR (status = 'claimed' AND claimed_at > DATE_SUB(NOW(), INTERVAL 7 DAY)))
+                ");
+                $stmt->execute([$network, $expected]);
+                $count = (int)$stmt->fetchColumn();
 
-            if ($count === 0) {
-                return $expected;
+                if ($count === 0) {
+                    return $expected;
+                }
+
+                // If collision is detected, release the lock immediately so another attempt can be made
+                $cache->forget($lockKey);
             }
+
             $attempt++;
         } while ($attempt < $maxAttempts);
 

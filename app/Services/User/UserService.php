@@ -37,7 +37,7 @@ class UserService extends \App\Services\BaseService
         
         // CRITICAL-02 Fix: Store hashed token in DB
         $plainToken = bin2hex(random_bytes(32));
-        $data['email_verification_token'] = hash_hmac('sha256', $plainToken, (string)config('app.key'));
+        $data['email_verification_token'] = hash_hmac('sha256', $plainToken, secure_key());
         
         $data['status'] = $data['status'] ?? 'active';
         $data['role'] = $data['role'] ?? 'user';
