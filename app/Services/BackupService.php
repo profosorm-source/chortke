@@ -273,11 +273,18 @@ class BackupService extends \App\Services\BaseService
             
             // 2. Checksum Verification
             $backupRecord = $this->backupLogModel->findByFilename($filename);
-            if ($backupRecord && !empty($backupRecord['checksum'])) {
-                $currentChecksum = hash_file('sha256', $fileReal);
-                if ($currentChecksum !== $backupRecord['checksum']) {
-                    throw new \Exception('Backup file integrity check failed! File may be corrupted or tampered with.');
-                }
+            if (!$backupRecord || empty($backupRecord['checksum'])) {
+                throw new \Exception('Backup metadata not found');
+            }
+            
+            $currentChecksum = hash_file('sha256', $fileReal);
+            if ($currentChecksum !== $backupRecord['checksum']) {
+                $this->logger->critical('backup.checksum_mismatch', [
+                    'file' => $filename,
+                    'expected' => $backupRecord['checksum'],
+                    'actual' => $currentChecksum
+                ]);
+                throw new \Exception('Backup integrity check FAILED! File may be corrupted or tampered with.');
             }
 
             $restoreSourcePath = $fileReal;
