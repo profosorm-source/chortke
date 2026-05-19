@@ -23,16 +23,13 @@ class ContactController extends BaseController
     {
         $this->validateCsrf();
 
-        // 🛡️ HIGH-08: ریت لیمیت فرم تماس در سطح کنترلر جهت مقابله با دور زدن لایه سرویس
-        try {
-            rate_limit('social', 'message', "contact_ip_" . get_client_ip());
-        } catch (\Exception $e) {
-            if ($e->getCode() === 429) {
-                return $this->response->json([
-                    'success' => false,
-                    'message' => 'تعداد پیام‌های ارسالی شما بیش از حد مجاز است. لطفاً ساعتی دیگر تلاش کنید.'
-                ], 429);
-            }
+        // 🛡️ MEDIUM-09: فیلد Honeypot در سطح کنترلر (لبه سیستم) جهت پیشگیری از ارسال درخواست به لایه بیزینس
+        if (!empty($this->request->input('website'))) {
+            // بازگشت پاسخ موفق دروغین به بات‌ها
+            return $this->response->json([
+                'success' => true,
+                'message' => 'پیام شما با موفقیت ارسال شد. به زودی پاسخ خواهیم داد.'
+            ]);
         }
 
         $name = (string)$this->request->input('name');
