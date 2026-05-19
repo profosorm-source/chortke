@@ -178,11 +178,16 @@ class DirectMessage extends Model
             ->first();
     }
 
-    public function countUnread(int $userId): int
+    public function countUnread(int $userId, ?int $fromUserId = null): int
     {
-        return $this->db->table(static::$table)
+        $query = $this->db->table(static::$table)
             ->where('recipient_id', '=', $userId)
-            ->whereNull('read_at')
-            ->count();
+            ->whereNull('read_at');
+
+        if ($fromUserId !== null) {
+            $query->where('sender_id', '=', $fromUserId);
+        }
+
+        return $query->count();
     }
 }
