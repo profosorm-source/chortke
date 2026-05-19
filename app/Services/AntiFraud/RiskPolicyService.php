@@ -76,6 +76,21 @@ class RiskPolicyService extends \App\Services\BaseService
         return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
     }
 
+    public function getArray(string $domain, string $key, array $default = []): array
+    {
+        $value = $this->get($domain, $key, $default);
+        if (is_array($value)) {
+            return $value;
+        }
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                return $decoded;
+            }
+        }
+        return $default;
+    }
+
     /**
      * ثبت/آپدیت policy (برای پنل مدیریت)
      */
