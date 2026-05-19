@@ -106,7 +106,7 @@ class SeoExecution extends Model
     {
         $stmt = $this->db->prepare(
             "SELECT COUNT(*) FROM seo_executions
-             WHERE ad_id = ? AND user_id = ? AND DATE(created_at) = CURDATE()"
+             WHERE ad_id = ? AND user_id = ? AND execution_date = CURDATE()"
         );
         $stmt->execute([$adId, $userId]);
         return (int)$stmt->fetchColumn() > 0;
@@ -186,8 +186,8 @@ class SeoExecution extends Model
     {
         $stmt = $this->db->prepare(
             "INSERT INTO seo_executions
-             (ad_id, user_id, status, ip_address, device_fingerprint, started_at)
-             VALUES (?, ?, 'started', ?, ?, NOW())"
+             (ad_id, user_id, status, ip_address, device_fingerprint, started_at, execution_date)
+             VALUES (?, ?, 'started', ?, ?, NOW(), CURDATE())"
         );
         
         $ok = $stmt->execute([

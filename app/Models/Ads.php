@@ -48,6 +48,10 @@ class Ads extends Model
             'status' => $status
         ]);
 
+        if ($type === 'custom_task') {
+            $q->select('ads.*', '(SELECT COUNT(s.id) FROM custom_task_submissions s WHERE s.task_id = ads.id) as submission_count');
+        }
+
         return $q->orderBy('created_at', 'DESC')
             ->limit($limit)
             ->offset($offset)
