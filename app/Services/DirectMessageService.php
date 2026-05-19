@@ -80,15 +80,17 @@ class DirectMessageService extends \App\Services\BaseService
                 return ['error' => 'امکان ارسال پیام بین شما و این کاربر وجود ندارد'];
             }
 
-            // 🛡️ BLF-02: بررسی محدودیت سرعت پیام‌های رمزشده
+            // 🛡️ BLF-02: بررسی محدودیت سرعت پیام‌های رمزشده (اتمیک جهت جلوگیری از Race Condition)
             if ($isEncrypted) {
                 $encKey = 'rate_limit:messages:encrypted:' . $senderId;
-                $currentEncCount = (int)($this->redis->get($encKey) ?? 0);
-                if ($currentEncCount >= 3) { // حداکثر 3 پیام رمزگذاری شده در دقیقه
+                $count = (int)$this->redis->incr($encKey);
+                if ($count === 1) {
+                    $this->redis->expire($encKey, 60);
+                }
+                if ($count > 3) { // حداکثر 3 پیام رمزگذاری شده در دقیقه
+                    $this->redis->decr($encKey);
                     return ['error' => 'محدودیت ارسال پیام‌های رمزشده (حداکثر ۳ در دقیقه). لطفاً کمی صبر کنید'];
                 }
-                $this->redis->incr($encKey);
-                $this->redis->expire($encKey, 60);
             }
 
             // بررسی محدودیت سرعت (rate limiting) معمولی
@@ -120,8 +122,20 @@ class DirectMessageService extends \App\Services\BaseService
                 throw new \Exception('Unable to create direct message');
             }
 
-            // پیوست‌ها
+            // 🛡️ HIGH-06: اعتبارسنجی کامل پیوست‌ها در لایه سرویس
             if (!empty($attachments)) {
+                if (count($attachments) > self::MAX_ATTACHMENTS_PER_MESSAGE) {
+                    return ['error' => sprintf('حداکثر %d پیوست مجاز است', self::MAX_ATTACHMENTS_PER_MESSAGE)];
+                }
+                foreach ($attachments as $attachment) {
+                    $size = (int)($attachment['size'] ?? 0);
+                    if ($size > self::MAX_ATTACHMENT_SIZE) {
+                        return ['error' => sprintf('حجم پیوست نمی‌تواند بیش از %d مگابایت باشد', self::MAX_ATTACHMENT_SIZE / (1024 * 1024))];
+                    }
+                    if (empty($attachment['name']) || empty($attachment['path'])) {
+                        return ['error' => 'ساختار پیوست نامعتبر است'];
+                    }
+                }
                 $this->directMessageModel->addAttachments($messageId, $attachments);
             }
 
@@ -179,9 +193,12 @@ class DirectMessageService extends \App\Services\BaseService
         $unreadCount = (int)($this->redis->get($unreadCountKey) ?? 0);
 
         if ($unreadCount > 0 || ($currentTime - $lastSeen > 5)) {
-            $this->directMessageModel->markAsRead($userId, $otherUserId);
-            $this->redis->del($unreadCountKey);
-            $this->redis->setex($lastSeenKey, 60, (string)$currentTime);
+            // 🛡️ HIGH-07: تایید صریح وجود مکالمه فعال قبل از علامت‌گذاری به عنوان خوانده شده جهت ممانعت از نوشتن‌های اضافه در دیتابیس
+            if ($this->directMessageModel->hasConversation($userId, $otherUserId)) {
+                $this->directMessageModel->markAsRead($userId, $otherUserId);
+                $this->redis->del($unreadCountKey);
+                $this->redis->setex($lastSeenKey, 60, (string)$currentTime);
+            }
         }
 
         return array_map(function($msg) {
@@ -443,6 +460,7 @@ class DirectMessageService extends \App\Services\BaseService
         
         // حداکثر 30 پیام در دقیقه
         if ($count > 30) {
+            $this->redis->decr($key);
             return false;
         }
         

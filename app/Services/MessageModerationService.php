@@ -15,19 +15,22 @@ extends \App\Services\BaseService
     private InteractionModel $interactionModel;
     private MessageModerationModel $moderationModel;
     private \Core\Cache $cache;
+    private ?\App\Services\SettingService $settingService;
 
     public function __construct(
         Database $db, 
         LoggerInterface $logger, 
         InteractionModel $interactionModel, 
         MessageModerationModel $moderationModel,
-        \Core\Cache $cache
+        \Core\Cache $cache,
+        ?\App\Services\SettingService $settingService = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
         $this->interactionModel = $interactionModel;
         $this->moderationModel = $moderationModel;
         $this->cache = $cache;
+        $this->settingService = $settingService;
     }
 
     public function getReports(string $status, int $limit, int $offset): array
@@ -331,5 +334,107 @@ extends \App\Services\BaseService
             "SELECT * FROM direct_messages WHERE id = ?",
             [$messageId]
         )->fetch(\PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * 🛡️ HIGH-04: واکشی پیام گزارش شده به همراه پنجره محدودی از پیام‌های قبل و بعد جهت حفظ حریم خصوصی
+     */
+    public function getReportedMessageThread(int $senderId, int $recipientId, int $limit = 5): array
+    {
+        // 1. پیدا کردن شناسه پیام گزارش شده در این مکالمه
+        $reportedMsgId = (int)$this->db->query(
+            "SELECT mr.message_id 
+             FROM message_reports mr
+             JOIN direct_messages dm ON mr.message_id = dm.id
+             WHERE (dm.sender_id = ? AND dm.recipient_id = ?) OR (dm.sender_id = ? AND dm.recipient_id = ?)
+             ORDER BY mr.created_at DESC LIMIT 1",
+            [$senderId, $recipientId, $recipientId, $senderId]
+        )->fetchColumn();
+
+        if (!$reportedMsgId) {
+            return [];
+        }
+
+        // 2. واکشی ۲ پیام قبل از پیام گزارش شده
+        $prevMessages = $this->db->query(
+            "SELECT * FROM direct_messages 
+             WHERE ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))
+               AND id < ?
+             ORDER BY id DESC LIMIT 2",
+            [$senderId, $recipientId, $recipientId, $senderId, $reportedMsgId]
+        )->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+
+        // 3. واکشی خود پیام گزارش شده
+        $targetMessage = $this->db->query(
+            "SELECT * FROM direct_messages WHERE id = ?",
+            [$reportedMsgId]
+        )->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+
+        // 4. واکشی ۲ پیام بعد از پیام گزارش شده
+        $nextMessages = $this->db->query(
+            "SELECT * FROM direct_messages 
+             WHERE ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))
+               AND id > ?
+             ORDER BY id ASC LIMIT 2",
+            [$senderId, $recipientId, $recipientId, $senderId, $reportedMsgId]
+        )->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+
+        // ادغام و مرتب‌سازی صعودی
+        $merged = array_merge($prevMessages, $targetMessage, $nextMessages);
+        
+        usort($merged, function ($a, $b) {
+            return (int)$a['id'] <=> (int)$b['id'];
+        });
+
+        // 5. رمزگشایی در صورت لزوم
+        return array_map(function ($msg) {
+            $msgContent = $msg['message'] ?? '';
+            $isEncrypted = (bool)($msg['is_encrypted'] ?? false);
+            if ($isEncrypted) {
+                try {
+                    $msgContent = $this->decryptMessage($msgContent);
+                } catch (\Throwable) {
+                    $msgContent = '[رمزگشایی ناموفق]';
+                }
+            }
+            return [
+                'id' => (int)$msg['id'],
+                'sender_id' => (int)$msg['sender_id'],
+                'message' => $msgContent,
+                'is_encrypted' => $isEncrypted,
+                'created_at' => $msg['created_at'] ?? '',
+            ];
+        }, $merged);
+    }
+
+    private function decryptMessage(string $encrypted): string
+    {
+        try {
+            if (!$this->settingService) {
+                try {
+                    $this->settingService = \Core\Container::getInstance()->make(\App\Services\SettingService::class);
+                } catch (\Throwable $containerEx) {
+                    // Fallback in case container resolution is not bootstrapped in test
+                }
+            }
+            
+            $encryptionKey = $this->settingService ? $this->settingService->get('dm_encryption_key') : null;
+            if (!$encryptionKey) {
+                return '[خطا در دیکریپت - تنظیمات کلید یافت نشد]';
+            }
+            
+            $decoded = base64_decode($encrypted);
+            if ($decoded === false) {
+                return '[خطا در دیکریپت]';
+            }
+            $nonce = mb_substr($decoded, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES, '8bit');
+            $ciphertext = mb_substr($decoded, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES, null, '8bit');
+            
+            $decrypted = sodium_crypto_secretbox_open($ciphertext, $nonce, base64_decode($encryptionKey));
+            
+            return $decrypted !== false ? $decrypted : '[خطا در دیکریپت]';
+        } catch (\Exception $e) {
+            return '[خطا در دیکریپت]';
+        }
     }
 }

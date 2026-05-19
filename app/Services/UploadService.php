@@ -195,6 +195,24 @@ class UploadService extends \App\Services\BaseService
             );
         }
 
+        // 🛡️ HIGH-02: بررسی و انطباق پسوند اصلی فایل ورودی با نوع MIME های مجاز نهایی سرور
+        $origExt = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if ($origExt === '') {
+            return $this->fail('فایل فاقد پسوند معتبر است');
+        }
+        $allowedExts = [];
+        foreach ($allowed as $mimeItem) {
+            if (isset(self::MIME_TO_EXT[$mimeItem])) {
+                $allowedExts[] = self::MIME_TO_EXT[$mimeItem];
+            }
+        }
+        if (in_array('jpg', $allowedExts, true)) {
+            $allowedExts[] = 'jpeg';
+        }
+        if (!in_array($origExt, $allowedExts, true)) {
+            return $this->fail('پسوند فایل با نوع مجاز تعیین شده همخوانی ندارد');
+        }
+
         // ── 7. Magic bytes ───────────────────────────────────────────────────
         if (!$this->checkMagicBytes($tmp, $realMime)) {
             return $this->fail('امضای باینری فایل با نوع اعلام‌شده مطابقت ندارد');
