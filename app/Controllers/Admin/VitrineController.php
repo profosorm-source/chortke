@@ -70,12 +70,6 @@ class VitrineController extends BaseAdminController
      */
     public function approve(int $id): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         if (!is_admin()) {
             $this->response->json(['success' => false, 'message' => 'Unauthorized'], 403);
             return;
@@ -117,12 +111,6 @@ class VitrineController extends BaseAdminController
      */
     public function reject(int $id): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         if (!is_admin()) {
             $this->response->json(['success' => false, 'message' => 'Unauthorized'], 403);
             return;
@@ -183,12 +171,6 @@ class VitrineController extends BaseAdminController
      */
     public function resolve(): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         $id     = (int) $this->request->param('id');
         $winner = $this->request->post('winner') ?? 'buyer';
         $adminId= (int) ($this->session->get('admin_id') ?? $this->session->get('user_id') ?? 0);
@@ -209,12 +191,6 @@ class VitrineController extends BaseAdminController
      */
     public function releaseFunds(): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         $id      = (int) $this->request->param('id');
         $listing = $this->service->getSafe($id);
 
@@ -245,12 +221,6 @@ class VitrineController extends BaseAdminController
      */
     public function refund(int $id): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         if (!is_admin()) {
             $this->response->json(['success' => false, 'message' => 'Unauthorized'], 403);
             return;

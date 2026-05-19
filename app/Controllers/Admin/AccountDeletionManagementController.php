@@ -133,12 +133,6 @@ class AccountDeletionManagementController extends BaseAdminController
                 return redirect('/admin/account-deletion/pending');
             }
 
-            // ✅ CSRF protection
-            if (!csrf_verify()) {
-                $this->session->setFlash('error', 'خطای اعتبارسنجی CSRF');
-                return redirect('/admin/account-deletion/pending');
-            }
-
             // بررسی وجود درخواست
             $deletion = $this->deletionLogModel->getUserDeletionRequest($userId);
             if (!$deletion) {
@@ -180,12 +174,6 @@ class AccountDeletionManagementController extends BaseAdminController
                 return redirect('/admin/account-deletion/pending');
             }
 
-            // ✅ CSRF protection
-            if (!csrf_verify()) {
-                $this->session->setFlash('error', 'خطای اعتبارسنجی CSRF');
-                return redirect('/admin/account-deletion/pending');
-            }
-
             // لغو درخواست
             $this->deletionService->cancelDeletion($userId);
 
@@ -222,6 +210,13 @@ class AccountDeletionManagementController extends BaseAdminController
             if (!$user) {
                 return $this->response->json(['success' => false, 'error' => 'کاربر یافت نشد'], 404);
             }
+
+            // ✅ Audit Log for admin accessing user PII
+            $this->logger->warning('admin.pii.accessed', [
+                'admin_id' => user_id(),
+                'target_user_id' => $userId,
+                'action' => 'get_user_details_for_deletion'
+            ]);
 
             $deletion = $this->deletionLogModel->getUserDeletionRequest($userId);
 

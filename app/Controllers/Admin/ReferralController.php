@@ -84,10 +84,7 @@ class ReferralController extends BaseAdminController
     {
 
                         
-        if (!verify_csrf_token($this->request->post('csrf_token'))) {
-            $this->session->setFlash('error', 'توکن امنیتی نامعتبر است.');
-            return redirect(url('/admin/referral/settings'));
-        }
+
 
         $settingsKeys = [
             'referral_commission_task_percent',

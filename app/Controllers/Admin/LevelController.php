@@ -80,10 +80,7 @@ class LevelController extends BaseAdminController
                         
         $id = (int) $this->request->param('id');
 
-        if (!verify_csrf_token($this->request->post('csrf_token'))) {
-            $this->session->setFlash('error', 'توکن امنیتی نامعتبر.');
-            return redirect(url('/admin/levels/' . $id . '/edit'));
-        }
+
 
         $validator = new Validator($this->request->all(), [
             'name' => 'required|min:2|max:50',
@@ -134,8 +131,6 @@ class LevelController extends BaseAdminController
      */
     public function changeUserLevel()
     {
-
-                
         $body = \json_decode(\file_get_contents('php://input'), true) ?? [];
         $userId = (int) ($body['user_id'] ?? 0);
         $newLevel = $body['level'] ?? '';
@@ -232,10 +227,7 @@ class LevelController extends BaseAdminController
     public function store()
     {
 
-        if (!verify_csrf_token($this->request->post('csrf_token'))) {
-            $this->session->setFlash('error', 'توکن امنیتی نامعتبر.');
-            return redirect(url('/admin/levels/create'));
-        }
+
 
         $validator = new Validator($this->request->all(), [
             'name'                  => 'required|min:2|max:50',

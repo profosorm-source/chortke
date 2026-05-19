@@ -55,11 +55,7 @@ class RoleController extends BaseAdminController
      */
     public function store()
     {
-        // CSRF Check
-        if (!verify_csrf_token($this->request->post('csrf_token'))) {
-            $this->session->setFlash('error', 'توکن امنیتی نامعتبر است.');
-            return redirect(url('/admin/roles/create'));
-        }
+
         
         $validator = new Validator($this->request->all(), [
             'name'        => 'required|min:2|max:50',
@@ -158,11 +154,7 @@ class RoleController extends BaseAdminController
             return redirect(url('/admin/roles'));
         }
         
-        // CSRF Check
-        if (!verify_csrf_token($this->request->post('csrf_token'))) {
-            $this->session->setFlash('error', 'توکن امنیتی نامعتبر است.');
-            return redirect(url('/admin/roles/' . $id . '/edit'));
-        }
+
         
         $validator = new Validator($this->request->all(), [
             'name'        => 'required|min:2|max:50',
@@ -217,13 +209,7 @@ class RoleController extends BaseAdminController
      */
     public function delete()
     {
-        // CSRF Check
-        if (!verify_csrf_token($this->request->post('csrf_token') ?? $this->request->header('X-CSRF-Token'))) {
-            return $this->response->json([
-                'success' => false,
-                'message' => 'توکن امنیتی نامعتبر است.'
-            ], 403);
-        }
+
 
         $id = (int) $this->request->param('id');
         $roleModel = $this->roleModel;

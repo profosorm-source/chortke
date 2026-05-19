@@ -98,11 +98,7 @@ class CustomTaskController extends BaseUserController
             }
         }
 
-        // CSRF
-        if (!verify_csrf_token($this->request->post('csrf_token'))) {
-            $this->session->setFlash('error', 'توکن امنیتی نامعتبر.');
-            return redirect(url('/custom-tasks/ad/create'));
-        }
+
 
         // Validation
         $validator = new Validator($this->request->all(), [

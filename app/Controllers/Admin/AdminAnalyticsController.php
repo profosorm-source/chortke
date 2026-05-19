@@ -251,11 +251,6 @@ class AdminAnalyticsController extends BaseAdminController
     public function exportReport(): void
     {
         try {
-            if (!csrf_verify()) {
-                $this->response->json(['success' => false, 'message' => 'توکن نامعتبر'], 419);
-                return;
-            }
-
             $format = $this->request->post('format') ?? 'pdf';
             $period = $this->request->post('period') ?? 'month';
 

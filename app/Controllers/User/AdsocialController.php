@@ -208,12 +208,6 @@ class AdsocialController extends BaseUserController
     public function cancel(): void
     {
         try {
-            // CSRF verification - درخواست‌های مخرب نیاز به CSRF token دارند
-            if (!csrf_verify()) {
-                $this->response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر است.'], 419);
-                return;
-            }
-
             $adId = (int)$this->request->param('id');
             $userId = (int)user_id();
 

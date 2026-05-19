@@ -113,13 +113,6 @@ class InfluencerController extends BaseUserController
      */
     public function storeProfile(): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->session->setFlash('error', 'توکن منقضی شد.');
-            redirect(url('/influencer/register'));
-            return;
-        }
-
         $userId = (int) user_id();
         $data   = $this->request->body();
 

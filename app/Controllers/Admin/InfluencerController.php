@@ -127,13 +127,6 @@ class InfluencerController extends BaseAdminController
      */
     public function approveProfile(): void
     {
-
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         $body      = \json_decode(\file_get_contents('php://input'), true) ?? [];
         $profileId = (int)($body['profile_id'] ?? 0);
         $decision  = $body['decision'] ?? '';
@@ -308,13 +301,6 @@ class InfluencerController extends BaseAdminController
      */
     public function resolveDispute(): void
     {
-
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         $body          = \json_decode(\file_get_contents('php://input'), true) ?? [];
         $disputeId     = (int)($body['dispute_id'] ?? 0);
         $verdict       = $body['verdict'] ?? '';
@@ -383,12 +369,6 @@ class InfluencerController extends BaseAdminController
      */
     public function approveVerification(): void
     {
-
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         $body = \json_decode(\file_get_contents('php://input'), true) ?? [];
         $verificationId = (int)($body['verification_id'] ?? 0);
 
@@ -410,12 +390,6 @@ class InfluencerController extends BaseAdminController
      */
     public function rejectVerification(): void
     {
-
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
-
         $body = \json_decode(\file_get_contents('php://input'), true) ?? [];
         $verificationId = (int)($body['verification_id'] ?? 0);
         $reason = \trim($body['reason'] ?? '');

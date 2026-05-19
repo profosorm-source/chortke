@@ -133,13 +133,6 @@ class VitrineController extends BaseUserController
 
     public function store(): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->session->setFlash('error', 'توکن منقضی شد.');
-            redirect(url('/vitrine/sell/create'));
-            return;
-        }
-
         $userId = (int) user_id();
         $data   = $this->request->body();
 

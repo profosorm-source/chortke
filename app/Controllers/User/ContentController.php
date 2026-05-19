@@ -26,17 +26,20 @@ class ContentController extends BaseUserController
     private ContentSubmission $contentSubmissionModel;
     private ContentRevenue $contentRevenueModel;
     private ?LoggerInterface $logger;
+    private \Core\CSRF $csrf;
 
     public function __construct(
         ContentRevenue $contentRevenueModel,
         ContentSubmission $contentSubmissionModel,
         ContentService $contentService,
+        \Core\CSRF $csrf,
         ?LoggerInterface $logger = null
     ) {
         parent::__construct();
         $this->contentRevenueModel = $contentRevenueModel;
         $this->contentSubmissionModel = $contentSubmissionModel;
         $this->contentService = $contentService;
+        $this->csrf = $csrf;
         $this->logger = $logger;
     }
 
@@ -351,7 +354,7 @@ class ContentController extends BaseUserController
             return false;
         }
         
-        return csrf_verify($token);
+        return $this->csrf->verify($token);
     }
 
     /**

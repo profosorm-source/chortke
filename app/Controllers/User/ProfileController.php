@@ -202,13 +202,6 @@ class ProfileController extends BaseUserController
     public function changePassword(): void
     {
         $userId = user_id();
-
-        // ✅ CSRF Check
-        if (!csrf_verify()) {
-            $this->session->setFlash('error', 'توکن امنیتی نامعتبر');
-            redirect('profile');
-            return;
-        }
         
         $currentPassword = $this->request->input('current_password');
         $newPassword = $this->request->input('new_password');

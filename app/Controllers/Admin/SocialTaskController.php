@@ -107,11 +107,6 @@ class SocialTaskController extends BaseAdminController
         return;
     }
 
-    if (!csrf_verify()) {
-        $this->response->json(['ok' => false, 'message' => 'CSRF invalid'], 419);
-        return;
-    }
-
     $reason = trim((string)($_POST['reason'] ?? ''));
     if (empty($reason) || mb_strlen($reason) < 5) {
         $this->response->json(['ok' => false, 'message' => 'دلیل رد باید حداقل ۵ کاراکتر باشد'], 422);
@@ -135,11 +130,6 @@ class SocialTaskController extends BaseAdminController
 
     public function pause(): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
 
         $result = $this->changeAdStatus((int)$this->request->param('id'), 'paused', 'admin_paused');
         if (is_ajax()) { $this->response->json($result); return; }
@@ -149,11 +139,6 @@ class SocialTaskController extends BaseAdminController
 
     public function resume(): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
 
         $result = $this->changeAdStatus((int)$this->request->param('id'), 'active', 'admin_resumed');
         if (is_ajax()) { $this->response->json($result); return; }
@@ -165,11 +150,6 @@ class SocialTaskController extends BaseAdminController
 {
     if (!is_admin()) {
         $this->response->json(['ok' => false, 'message' => 'Unauthorized'], 403);
-        return;
-    }
-
-    if (!csrf_verify()) {
-        $this->response->json(['ok' => false, 'message' => 'CSRF invalid'], 419);
         return;
     }
 
@@ -278,10 +258,6 @@ class SocialTaskController extends BaseAdminController
 
     public function moderateRating(): void
     {
-        if (!csrf_verify()) {
-            $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-            return;
-        }
 
         $reviewId = (int)$this->request->param('id');
         $action   = $this->request->post('action');

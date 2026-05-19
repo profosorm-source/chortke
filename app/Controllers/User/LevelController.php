@@ -57,10 +57,7 @@ class LevelController extends BaseUserController
         $levelSlug = $body['level'] ?? '';
         $currency = $body['currency'] ?? 'irt';
 
-        if (!verify_csrf_token($body['csrf_token'] ?? '')) {
-            $this->response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر'], 403);
-            return;
-        }
+
 
         $userId = $this->userId();
         $result = $this->levelService->purchaseLevel($userId, $levelSlug, $currency);

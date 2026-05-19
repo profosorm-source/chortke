@@ -118,17 +118,6 @@ class SocialTaskController extends BaseUserController
      */
     public function start(): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            if (is_ajax()) {
-                $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-                return;
-            }
-            $this->session->setFlash('error', 'توکن منقضی شد.');
-            redirect(url('/social-tasks'));
-            return;
-        }
-
         $userId = (int)user_id();
         $adId   = (int)($this->request->body()['ad_id'] ?? 0);
 
@@ -187,17 +176,6 @@ class SocialTaskController extends BaseUserController
      */
     public function submit(): void
     {
-        // ✅ CSRF verification
-        if (!csrf_verify()) {
-            if (is_ajax()) {
-                $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-                return;
-            }
-            $this->session->setFlash('error', 'توکن منقضی شد.');
-            redirect(url('/social-tasks'));
-            return;
-        }
-
         $userId      = (int)user_id();
         $executionId = (int)$this->request->param('id');
         $body        = $this->request->body();
@@ -291,16 +269,6 @@ class SocialTaskController extends BaseUserController
 
     public function rateExecution(): void
     {
-        if (!csrf_verify()) {
-            if (is_ajax()) {
-                $this->response->json(['success' => false, 'message' => 'توکن منقضی شد.'], 419);
-                return;
-            }
-            $this->session->setFlash('error', 'توکن منقضی شد.');
-            redirect(url('/social-tasks'));
-            return;
-        }
-
         $userId      = (int)user_id();
         $executionId = (int)$this->request->param('id');
         $stars       = min(5, max(1, (int)($this->request->post('stars') ?? 0)));

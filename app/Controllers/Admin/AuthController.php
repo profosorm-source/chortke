@@ -347,10 +347,9 @@ class AuthController extends BaseController
         if (!$this->request->isPost()) {
             return redirect('/admin/dashboard');
         }
-        
         $userId = null;
         try {
-            app(\Core\CSRF::class)->validate();
+            $this->validateCsrf();
             $userId = user_id();
 
             if ($userId) {
