@@ -51,6 +51,13 @@ class ContactService extends \App\Services\BaseService
         $lang = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '';
         $fingerprint = hash('sha256', $ip . $ua . $lang);
         
+        // 🛡️ MED-02: اضافه کردن Global Rate Limit برای مقاومت در برابر حملات توزیع شده
+        $globalKey = "contact_form:global";
+        if (!$this->rateLimiter->attempt($globalKey, 100, 3600)) {
+            $this->logger->critical('contact_form.global_rate_limit_exceeded', ['ip' => $ip]);
+            return $this->errorResponse('سیستم موقتاً در دسترس نیست. لطفاً ساعتی دیگر تلاش کنید.', [], 429);
+        }
+
         $fpRateKey = "contact_form:fp:{$fingerprint}";
         if (!$this->rateLimiter->attempt($fpRateKey, 3, 3600)) {
             return $this->errorResponse('تعداد پیام‌های ارسالی شما بیش از حد مجاز است. لطفاً ساعتی دیگر تلاش کنید.', [], 429);

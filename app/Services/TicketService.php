@@ -53,11 +53,11 @@ class TicketService extends \App\Services\BaseService
         $subjectLen = mb_strlen((string)$data['subject'], 'UTF-8');
         $messageLen = mb_strlen((string)$data['message'], 'UTF-8');
         
-        if ($subjectLen > 150) {
-            return ['success' => false, 'message' => 'موضوع تیکت نباید بیشتر از ۱۵۰ کاراکتر باشد.'];
+        if ($subjectLen < 5 || $subjectLen > 150) {
+            return ['success' => false, 'message' => 'موضوع تیکت باید بین ۵ تا ۱۵۰ کاراکتر باشد.'];
         }
-        if ($messageLen > 5000) {
-            return ['success' => false, 'message' => 'متن پیام تیکت نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
+        if ($messageLen < 10 || $messageLen > 5000) {
+            return ['success' => false, 'message' => 'متن پیام تیکت باید بین ۱۰ تا ۵۰۰۰ کاراکتر باشد.'];
         }
         
         // 🛡️ مقابله با سوءاستفاده: ریت لیمیت اتمیک ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم و Race Condition)

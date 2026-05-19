@@ -78,25 +78,35 @@ class DirectMessageService extends \App\Services\BaseService
             // 🛡️ CRIT-12: بررسی تنظیمات حریم خصوصی
             $userSettingsService = app(\App\Services\User\UserSettingsService::class);
             $allowMessages = $userSettingsService->get($recipientId, 'allow_messages', true);
-            if (!$allowMessages) {
-                usleep(random_int(10000, 50000));
-                return ['error' => 'امکان ارسال پیام بین شما و این کاربر وجود ندارد'];
-            }
 
             // 🛡️ BLF-01: بررسی وجود کاربر مقصد و مسدودی دوطرفه با جلوگیری از User Enumeration و برابر شدن زمان پاسخ
             $recipient = $this->directMessageModel->getUserInfo($recipientId);
-            $isBlocked = $this->isBlocked($senderId, $recipientId) || $this->isBlocked($recipientId, $senderId);
-            if (!$recipient || $isBlocked) {
-                usleep(random_int(10000, 50000));
+            $isBlocked = false;
+            if ($recipient) {
+                $isBlocked = $this->isBlocked($senderId, $recipientId) || $this->isBlocked($recipientId, $senderId);
+            }
+            
+            usleep(random_int(10000, 50000)); // همیشه تاخیر
+
+            if (!$recipient || $isBlocked || !$allowMessages) {
                 return ['error' => 'امکان ارسال پیام بین شما و این کاربر وجود ندارد'];
             }
 
-            // 🛡️ BLF-02: بررسی محدودیت سرعت پیام‌های رمزشده به صورت اتمیک در Redis جهت جلوگیری از Race Condition
+            // 🛡️ CRIT-05: جلوگیری از Race Condition در بررسی محدودیت سرعت پیام‌های رمزشده با Lua Script
             if ($isEncrypted) {
                 $encKey = 'rate_limit:messages:encrypted:' . $senderId;
-                $count = $this->incrementRedisCounterWithExpire($encKey, 60);
-                if ($count > 3) { // حداکثر 3 پیام رمزگذاری شده در دقیقه
-                    $this->redis->decr($encKey);
+                $lua = <<<LUA
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+if current > tonumber(ARGV[2]) then
+    return 0
+end
+return 1
+LUA;
+                $allowed = $this->redis->eval($lua, [$encKey, 60, 3], 1);
+                if (!$allowed) {
                     return ['error' => 'محدودیت ارسال پیام‌های رمزشده (حداکثر ۳ در دقیقه). لطفاً کمی صبر کنید'];
                 }
             }
@@ -147,16 +157,19 @@ class DirectMessageService extends \App\Services\BaseService
                         return ['error' => 'ساختار پیوست نامعتبر است'];
                     }
                     
-                    // 🛡️ HIGH-06: بررسی Magic Bytes
+                    // 🛡️ HIGH-06: بررسی وجود و Magic Bytes فایل
                     $filePath = \function_exists('storage_path') ? storage_path($attachment['path']) : base_path('storage/' . $attachment['path']);
-                    if (file_exists($filePath)) {
-                        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-                        $mimeType = finfo_file($finfo, $filePath);
-                        finfo_close($finfo);
-                        
-                        if (!in_array($mimeType, ['image/jpeg', 'image/png', 'application/pdf'], true)) {
-                            return ['error' => 'نوع فایل پیوست نامعتبر است'];
-                        }
+                    if (!file_exists($filePath)) {
+                        $this->logger->error('attachment_file_missing', ['path' => $attachment['path']]);
+                        return ['error' => 'فایل پیوست در سرور یافت نشد'];
+                    }
+
+                    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                    $mimeType = finfo_file($finfo, $filePath);
+                    finfo_close($finfo);
+                    
+                    if (!in_array($mimeType, ['image/jpeg', 'image/png', 'application/pdf'], true)) {
+                        return ['error' => 'نوع فایل پیوست نامعتبر است'];
                     }
                 }
                 $this->directMessageModel->addAttachments($messageId, $attachments);
@@ -182,7 +195,7 @@ class DirectMessageService extends \App\Services\BaseService
             } catch (\Exception $redisEx) {
                 $this->logger->warning('message.sent.redis_failed', [
                     'message_id' => $messageId,
-                    'error' => $redisEx->getMessage()
+                    'error_type' => get_class($redisEx)
                 ]);
             }
 
@@ -200,7 +213,7 @@ class DirectMessageService extends \App\Services\BaseService
 
         } catch (\Exception $e) {
             $this->db->rollBack();
-            $this->logger->error('message.send.failed', ['error' => $e->getMessage()]);
+            $this->logger->error('message.send.failed', ['error_type' => get_class($e)]);
             return ['error' => 'خطا در ارسال پیام'];
         }
     }
@@ -216,27 +229,16 @@ class DirectMessageService extends \App\Services\BaseService
     ): array {
         $messages = $this->directMessageModel->getConversation($userId, $otherUserId, $limit, $offset);
 
-        // 🛡️ RC-02 & BLF-03: بررسی خوانده شدن پیام‌ها به صورت Idempotent
         $lastSeenKey = "last_seen:{$userId}:{$otherUserId}";
-        $lastSeen = (int)($this->redis->get($lastSeenKey) ?? 0);
         $currentTime = time();
-        $unreadCountKey = self::UNREAD_PREFIX . $userId . ':' . $otherUserId;
-        $unreadCount = (int)($this->redis->get($unreadCountKey) ?? 0);
-
-        if ($unreadCount > 0 || ($currentTime - $lastSeen > 5)) {
-            // 🛡️ HIGH-07: تایید صریح وجود مکالمه فعال قبل از علامت‌گذاری به عنوان خوانده شده جهت ممانعت از نوشتن‌های اضافه در دیتابیس
-            if ($this->directMessageModel->hasConversation($userId, $otherUserId)) {
-                $this->directMessageModel->markAsRead($userId, $otherUserId);
-                $this->redis->del($unreadCountKey);
-                $this->redis->setex($lastSeenKey, 60, (string)$currentTime);
-            }
-        }
+        $this->redis->setex($lastSeenKey, 60, (string)$currentTime);
 
         return array_map(function($msg) {
             $msgContent = $msg->message;
             if ($msg->is_encrypted) {
                 try {
-                    $msgContent = $this->decryptMessage($msg->message);
+                    // 🛡️ CRIT-04: اعمال htmlspecialchars بر روی پیام رمزگشایی شده برای مقابله با XSS
+                    $msgContent = htmlspecialchars($this->decryptMessage($msg->message), ENT_QUOTES, 'UTF-8');
                 } catch (\Throwable $e) {
                     $msgContent = '[رمزگشایی ناموفق]';
                 }
@@ -375,6 +377,18 @@ class DirectMessageService extends \App\Services\BaseService
     public function hasConversation(int $userId, int $otherUserId): bool
     {
         return $this->directMessageModel->hasConversation($userId, $otherUserId);
+    }
+
+    /**
+     * علامت‌گذاری پیام‌ها به عنوان خوانده شده
+     */
+    public function markAsRead(int $userId, int $otherUserId): void
+    {
+        $unreadCountKey = self::UNREAD_PREFIX . $userId . ':' . $otherUserId;
+        if ($this->directMessageModel->hasConversation($userId, $otherUserId)) {
+            $this->directMessageModel->markAsRead($userId, $otherUserId);
+            $this->redis->del($unreadCountKey);
+        }
     }
 
     /**

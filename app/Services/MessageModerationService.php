@@ -263,6 +263,27 @@ extends \App\Services\BaseService
             'warning_count' => $count
         ]);
 
+        // 🛡️ MED-05: ثبت رویدادهای حساس در Audit Log برای امکان پیگیری و حسابرسی در پنل ادمین
+        try {
+            $this->db->query(
+                "INSERT INTO admin_audit_log (admin_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, session_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    $adminId,
+                    'user_warned',
+                    'user',
+                    $userId,
+                    json_encode(['warning_count' => $count - 1]),
+                    json_encode(['warning_count' => $count, 'reason' => 'Inappropriate messaging', 'report_id' => $reportId]),
+                    $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+                    $_SERVER['HTTP_USER_AGENT'] ?? 'unknown',
+                    session_id() ?: ''
+                ]
+            );
+        } catch (\Throwable $e) {
+            $this->logger->error('audit_log_failed', ['action' => 'user_warned', 'error' => $e->getMessage()]);
+        }
+
         // 🛡️ CRITICAL-16: Alert the user via an in-app notification when a warning is issued
         $notificationModel = new \App\Models\Notification($this->db);
         $notificationModel->create([
@@ -295,6 +316,27 @@ extends \App\Services\BaseService
             'report_id' => $reportId,
             'reason' => 'Inappropriate messaging'
         ]);
+
+        // 🛡️ MED-05: ثبت رویدادهای حساس در Audit Log برای امکان پیگیری و حسابرسی در پنل ادمین
+        try {
+            $this->db->query(
+                "INSERT INTO admin_audit_log (admin_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, session_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    $adminId,
+                    'user_banned',
+                    'user',
+                    $userId,
+                    json_encode(['status' => 'active']),
+                    json_encode(['status' => 'banned', 'reason' => 'Inappropriate messaging', 'report_id' => $reportId]),
+                    $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+                    $_SERVER['HTTP_USER_AGENT'] ?? 'unknown',
+                    session_id() ?: ''
+                ]
+            );
+        } catch (\Throwable $e) {
+            $this->logger->error('audit_log_failed', ['action' => 'user_banned', 'error' => $e->getMessage()]);
+        }
 
         // 🛡️ CRITICAL-16: Alert the user via an in-app notification when they are banned
         $notificationModel = new \App\Models\Notification($this->db);
