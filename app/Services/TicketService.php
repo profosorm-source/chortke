@@ -135,9 +135,15 @@ class TicketService extends \App\Services\BaseService
         } catch (\Exception $e) {
             $this->db->rollBack();
             
+            $this->logger->error('ticket.create.failed', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return [
                 'success' => false,
-                'message' => 'خطا در ایجاد تیکت: ' . $e->getMessage()
+                'message' => 'خطایی در ایجاد تیکت رخ داد. لطفاً دوباره تلاش کنید.'
             ];
         }
     }
@@ -233,9 +239,16 @@ class TicketService extends \App\Services\BaseService
         } catch (\Exception $e) {
             $this->db->rollBack();
             
+            $this->logger->error('ticket.reply.failed', [
+                'ticket_id' => $ticketId,
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return [
                 'success' => false,
-                'message' => 'خطا: ' . $e->getMessage()
+                'message' => 'خطایی در ارسال پاسخ رخ داد. لطفاً دوباره تلاش کنید.'
             ];
         }
     }
@@ -470,6 +483,10 @@ class TicketService extends \App\Services\BaseService
             return $ok;
         } catch (\Exception $e) {
             $this->db->rollBack();
+            $this->logger->error('ticket.status.update.failed', [
+                'ticket_id' => $ticketId,
+                'error' => $e->getMessage()
+            ]);
             return false;
         }
     }
@@ -591,36 +608,34 @@ class TicketService extends \App\Services\BaseService
     }
 
     /**
-     * تشخیص هوشمند اولویت (Ported from BugReportService)
+     * تشخیص هوشمند اولویت بدون کوئری دیتابیس جهت مقابله با SQL Injection
      */
     public function detectPriority(string $text, int $categoryId = 0): string
     {
-        $desc = \mb_strtolower($text, 'UTF-8');
-        $criticalKeywords = [
-            'هک', 'نفوذ', 'دزدی', 'سرقت', 'پول', 'پرداخت نشد', 'موجودی کم شد', 
-            'حساب خالی', 'برداشت نشد', 'کلاهبرداری', 'فیشینگ', 'واریز نشد'
-        ];
-        $highKeywords = [
-            'خطا', 'ارور', 'کار نمیکنه', 'بسته میشه', 'لود نمیشه', 'سفید', 
-            'خراب', 'مشکل جدی', 'باگ', 'باز نمیشه', 'قطعی', 'bug', 'error'
-        ];
-
-        foreach ($criticalKeywords as $kw) {
-            if (\mb_strpos($desc, $kw) !== false) {
+        $text = mb_strtolower($text, 'UTF-8');
+        
+        // Keyword-based detection
+        $urgentKeywords = ['فوری', 'اورژانس', 'بحرانی', 'خراب شد', 'کار نمیکند', 'هک', 'امنیتی', 'سرقت', 'پول', 'پرداخت نشد', 'کلاهبرداری', 'فیشینگ', 'واریز نشد'];
+        $highKeywords = ['مهم', 'سریع', 'مشکل دارد', 'خطا', 'ارور', 'کار نمیکنه', 'خراب', 'باگ', 'bug', 'error', 'قطعی'];
+        
+        foreach ($urgentKeywords as $kw) {
+            if (mb_strpos($text, $kw) !== false) {
                 return 'urgent';
             }
         }
-
+        
         foreach ($highKeywords as $kw) {
-            if (\mb_strpos($desc, $kw) !== false) {
+            if (mb_strpos($text, $kw) !== false) {
                 return 'high';
             }
         }
-
-        if ($categoryId === 4) { // Technical
-             return 'high';
+        
+        // Category-based priority (safe - no SQL)
+        $criticalCategories = [1, 2, 3, 4];
+        if (in_array($categoryId, $criticalCategories, true)) {
+            return 'high';
         }
-
+        
         return 'normal';
     }
 

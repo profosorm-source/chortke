@@ -422,7 +422,11 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             return null;
         }
 
-        if (!preg_match('/^https?:\/\//i', $normalized)) {
+        $parsed = parse_url($normalized);
+        
+        // 🛡️ NEW-04: فقط آدرس‌های نسبی (relative URLs) مجاز هستند تا از حملات Open Redirect یا XSS جلوگیری شود
+        if (isset($parsed['scheme']) || isset($parsed['host'])) {
+            $this->logger->warning('notification.invalid_url', ['url' => $normalized]);
             return null;
         }
 
