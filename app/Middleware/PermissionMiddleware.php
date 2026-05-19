@@ -184,14 +184,27 @@ class PermissionMiddleware extends BaseMiddleware
     /**
      * MEDIUM-M1 Fix: Use Redis for cache invalidation to match hasPermission logic
      */
-    public static function clearCache(int $userId): void
+    public function clearUserCache(int $userId): void
     {
-        $redis = app(Redis::class);
-        if ($redis->isAvailable()) {
+        if ($this->redis->isAvailable()) {
             try {
                 // MEDIUM-M-09 Fix: Consistent key usage for cache invalidation
-                $redis->delete("user_permissions:{$userId}");
+                $this->redis->delete("user_permissions:{$userId}");
             } catch (\Throwable) {}
         }
+    }
+
+    /**
+     * Static wrapper for backward compatibility
+     */
+    public static function clearCache(int $userId): void
+    {
+        $instance = new self(
+            app(\Core\Session::class),
+            app(\App\Models\Permission::class),
+            app(\Core\Redis::class),
+            app(\App\Contracts\LoggerInterface::class)
+        );
+        $instance->clearUserCache($userId);
     }
 }

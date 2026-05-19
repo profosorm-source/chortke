@@ -5,7 +5,7 @@ namespace App\Adapters\Notification;
 use Core\Logger;
 use Core\Cache;
 use Core\Database;
-
+use App\Contracts\MetricsCollectorInterface;
 /**
  * FcmNotificationAdapter — ارسال Push Notification با Firebase Cloud Messaging (FCM)
  *
@@ -17,7 +17,6 @@ use Core\Database;
  *  $fcm->sendToToken($fcmToken, 'عنوان', 'متن', ['key' => 'val']);
  *  $fcm->sendToTokens([$token1, $token2], 'عنوان', 'متن');
  */
-use App\Contracts\MetricsCollectorInterface;
 
 class FcmNotificationAdapter
 {
