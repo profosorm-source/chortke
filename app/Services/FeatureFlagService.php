@@ -430,9 +430,9 @@ class FeatureFlagService extends \App\Services\BaseService
         );
     }
 
-    private function makeFeatureObjectFromConfig(string $name, array $definition): object
+    private function makeFeatureObjectFromConfig(string $name, array $definition): FeatureFlag
     {
-        $feature = new \stdClass();
+        $feature = new FeatureFlag($this->db);
         $feature->name = $name;
         $feature->description = $definition['description'] ?? '';
         $feature->enabled = (bool)($definition['enabled'] ?? false);
