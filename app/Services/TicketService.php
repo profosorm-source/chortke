@@ -60,12 +60,9 @@ class TicketService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'متن پیام تیکت نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
         }
         
-        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت اتمیک ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم ربات‌ها و Race Condition)
+        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت اتمیک ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم و Race Condition)
         $rateKey = "ticket_creation_limit:{$userId}";
-        $count = (int)$this->redis->incr($rateKey);
-        if ($count === 1) {
-            $this->redis->expire($rateKey, 3600);
-        }
+        $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
         if ($count > 3) {
             $this->redis->decr($rateKey);
             $this->logger->warning('ticket.rate_limit_exceeded', ['user_id' => $userId]);
@@ -174,10 +171,7 @@ class TicketService extends \App\Services\BaseService
         // 🛡️ HIGH-14: ریت لیمیت پیش از شروع تراکنش دیتابیس جهت مقابله با فرسایش استخر اتصالات
         if (!$isAdmin) {
             $rateKey = "ticket_reply_limit:{$userId}";
-            $count = (int)$this->redis->incr($rateKey);
-            if ($count === 1) {
-                $this->redis->expire($rateKey, 3600);
-            }
+            $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
             if ($count > 5) {
                 $this->redis->decr($rateKey);
                 $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
@@ -314,6 +308,32 @@ class TicketService extends \App\Services\BaseService
     public function getUserTickets(int $userId, ?string $status = null, int $page = 1, int $perPage = 20): array
     {
         return $this->ticketModel->getUserTickets($userId, $status, $page, $perPage);
+    }
+
+    /**
+     * Increment a Redis counter and set TTL only on the first increment.
+     * This avoids the incr+expire race condition and keeps a fixed-window counter.
+     */
+    private function incrementRedisCounterWithExpire(string $rateKey, int $ttl): int
+    {
+        try {
+            $script = <<<'LUA'
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+LUA;
+            $result = $this->redis->eval($script, [$rateKey, $ttl], 1);
+            return is_int($result) ? $result : (int)$result;
+        } catch (\Throwable $e) {
+            $this->logger->warning('ticket.redis.counter.failed', [
+                'rate_key' => $rateKey,
+                'ttl' => $ttl,
+                'error' => $e->getMessage()
+            ]);
+            return 1;
+        }
     }
 
     /**

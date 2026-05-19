@@ -75,18 +75,16 @@ class DirectMessageService extends \App\Services\BaseService
                 return ['error' => 'نمی‌توانید برای خودتان پیام بفرستید'];
             }
 
-            // 🛡️ BLF-01: بررسی مسدودی دوطرفه
-            if ($this->isBlocked($senderId, $recipientId) || $this->isBlocked($recipientId, $senderId)) {
+            // 🛡️ BLF-01: بررسی وجود کاربر مقصد و مسدودی دوطرفه (به همراه خروجی یکسان جهت جلوگیری از User Enumeration)
+            $recipient = $this->directMessageModel->getUserInfo($recipientId);
+            if (!$recipient || $this->isBlocked($senderId, $recipientId) || $this->isBlocked($recipientId, $senderId)) {
                 return ['error' => 'امکان ارسال پیام بین شما و این کاربر وجود ندارد'];
             }
 
-            // 🛡️ BLF-02: بررسی محدودیت سرعت پیام‌های رمزشده (اتمیک جهت جلوگیری از Race Condition)
+            // 🛡️ BLF-02: بررسی محدودیت سرعت پیام‌های رمزشده به صورت اتمیک در Redis جهت جلوگیری از Race Condition
             if ($isEncrypted) {
                 $encKey = 'rate_limit:messages:encrypted:' . $senderId;
-                $count = (int)$this->redis->incr($encKey);
-                if ($count === 1) {
-                    $this->redis->expire($encKey, 60);
-                }
+                $count = $this->incrementRedisCounterWithExpire($encKey, 60);
                 if ($count > 3) { // حداکثر 3 پیام رمزگذاری شده در دقیقه
                     $this->redis->decr($encKey);
                     return ['error' => 'محدودیت ارسال پیام‌های رمزشده (حداکثر ۳ در دقیقه). لطفاً کمی صبر کنید'];
@@ -110,11 +108,14 @@ class DirectMessageService extends \App\Services\BaseService
 
             $this->db->beginTransaction();
 
+            // 🛡️ CRITICAL-14: فرار دادن پیام جهت مقابله با حملات Stored XSS پیش از هرگونه رمزگذاری
+            $sanitizedMessage = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+
             // ثبت پیام
             $messageId = $this->directMessageModel->createMessage(
                 $senderId,
                 $recipientId,
-                $isEncrypted ? $this->encryptMessage($message) : htmlspecialchars($message, ENT_QUOTES, 'UTF-8'),
+                $isEncrypted ? $this->encryptMessage($sanitizedMessage) : $sanitizedMessage,
                 (bool)$isEncrypted
             );
 
@@ -383,6 +384,16 @@ class DirectMessageService extends \App\Services\BaseService
             if (!$message || ((int)$message->sender_id !== $userId && (int)$message->recipient_id !== $userId)) {
                 return false;
             }
+
+            $emoji = trim($emoji);
+            if ($emoji === '' || mb_strlen($emoji, 'UTF-8') > 8) {
+                return false;
+            }
+
+            if (!preg_match('/^(?:[\x{1F300}-\x{1F6FF}\x{1F900}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F1E6}-\x{1F1FF}\x{FE0F}\x{200D}])+$/u', $emoji)) {
+                return false;
+            }
+
             return $this->directMessageModel->addReaction($messageId, $userId, $emoji);
         } catch (\Exception $e) {
             $this->logger->error('reaction.add.failed', ['error' => $e->getMessage()]);
@@ -453,10 +464,7 @@ class DirectMessageService extends \App\Services\BaseService
         $key = 'rate_limit:messages:send:' . $userId;
         
         // 🛡️ MED-14: استفاده از منطق افزایش اتمیک در ردیس جهت مسدودسازی کامل شرایط رقابتی (TOCTOU)
-        $count = (int)$this->redis->incr($key);
-        if ($count === 1) {
-            $this->redis->expire($key, 60);
-        }
+        $count = $this->incrementRedisCounterWithExpire($key, 60);
         
         // حداکثر 30 پیام در دقیقه
         if ($count > 30) {
@@ -465,6 +473,31 @@ class DirectMessageService extends \App\Services\BaseService
         }
         
         return true;
+    }
+
+    /**
+     * Increment a Redis counter and set TTL only on the first increment.
+     */
+    private function incrementRedisCounterWithExpire(string $key, int $ttl): int
+    {
+        try {
+            $script = <<<'LUA'
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+LUA;
+            $result = $this->redis->eval($script, [$key, $ttl], 1);
+            return is_int($result) ? $result : (int)$result;
+        } catch (\Throwable $e) {
+            $this->logger->warning('direct_message.redis.counter.failed', [
+                'key' => $key,
+                'ttl' => $ttl,
+                'error' => $e->getMessage()
+            ]);
+            return 1;
+        }
     }
 
     public function getUnreadCount(int $userId, ?int $fromUserId = null): int
