@@ -247,29 +247,4 @@ class TicketController extends BaseAdminController
         return $this->response->json(['success' => false, 'message' => 'خطا در تخصیص.']);
     }
 
-    /**
-     * 🛡️ NEW-12: ثبت ردپای حسابرسی تغییرات و عملیات حساس ادمین‌ها در دیتابیس
-     */
-    private function auditLog(string $action, string $entityType, int $entityId, ?array $oldValues, ?array $newValues): void
-    {
-        try {
-            db()->query(
-                "INSERT INTO admin_audit_log (admin_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, session_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    user_id(),
-                    $action,
-                    $entityType,
-                    $entityId,
-                    $oldValues !== null ? json_encode($oldValues, JSON_UNESCAPED_UNICODE) : null,
-                    $newValues !== null ? json_encode($newValues, JSON_UNESCAPED_UNICODE) : null,
-                    $this->request->ip(),
-                    $this->request->userAgent() ?: 'unknown',
-                    session_id() ?: ''
-                ]
-            );
-        } catch (\Exception $e) {
-            $this->logger->error('admin.audit_log.failed', ['error' => $e->getMessage()]);
-        }
-    }
 }
