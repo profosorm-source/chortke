@@ -75,9 +75,11 @@ class DirectMessageService extends \App\Services\BaseService
                 return ['error' => 'نمی‌توانید برای خودتان پیام بفرستید'];
             }
 
-            // 🛡️ BLF-01: بررسی وجود کاربر مقصد و مسدودی دوطرفه (به همراه خروجی یکسان جهت جلوگیری از User Enumeration)
+            // 🛡️ BLF-01: بررسی وجود کاربر مقصد و مسدودی دوطرفه با جلوگیری از User Enumeration و برابر شدن زمان پاسخ
             $recipient = $this->directMessageModel->getUserInfo($recipientId);
-            if (!$recipient || $this->isBlocked($senderId, $recipientId) || $this->isBlocked($recipientId, $senderId)) {
+            $isBlocked = $this->isBlocked($senderId, $recipientId) || $this->isBlocked($recipientId, $senderId);
+            if (!$recipient || $isBlocked) {
+                usleep(random_int(10000, 50000));
                 return ['error' => 'امکان ارسال پیام بین شما و این کاربر وجود ندارد'];
             }
 
@@ -139,6 +141,14 @@ class DirectMessageService extends \App\Services\BaseService
                 }
                 $this->directMessageModel->addAttachments($messageId, $attachments);
             }
+
+            // 🛡️ HIGH-04: Pessimistic Locking برای جلوگیری از race condition در آپدیت conversation
+            $user1 = min($senderId, $recipientId);
+            $user2 = max($senderId, $recipientId);
+            $this->db->query(
+                "SELECT id FROM user_conversations WHERE user1_id = ? AND user2_id = ? FOR UPDATE",
+                [$user1, $user2]
+            );
 
             // بروزرسانی conversation
             $this->directMessageModel->updateConversation($senderId, $recipientId, $messageId);

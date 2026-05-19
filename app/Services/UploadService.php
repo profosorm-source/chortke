@@ -229,6 +229,10 @@ class UploadService extends \App\Services\BaseService
         // ── 10. مسیر مقصد ────────────────────────────────────────────────────
         $dest = $this->buildDest($folder, $ext);
 
+        if ($this->normalizeRelativePath($dest['relativePath']) === null) {
+            return $this->fail('مسیر فایل نامعتبر است');
+        }
+
         if (!is_dir($dest['dir'])) {
             if (!mkdir($dest['dir'], 0750, true)) {
                 return $this->fail('خطا در ایجاد پوشه مقصد روی سرور');

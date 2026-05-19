@@ -64,7 +64,6 @@ class TicketService extends \App\Services\BaseService
         $rateKey = "ticket_creation_limit:{$userId}";
         $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
         if ($count > 3) {
-            $this->redis->decr($rateKey);
             $this->logger->warning('ticket.rate_limit_exceeded', ['user_id' => $userId]);
             return [
                 'success' => false,
