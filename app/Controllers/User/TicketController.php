@@ -88,7 +88,7 @@ class TicketController extends BaseUserController
         $userId = user_id();
 
         $data = $this->request->all();
-        $data['message'] = htmlspecialchars(trim($data['message'] ?? ''), ENT_QUOTES, 'UTF-8');
+        $data['message'] = trim($data['message'] ?? '');
         
         // Validation
         $validator = new Validator($data, [
@@ -104,9 +104,6 @@ class TicketController extends BaseUserController
             session()->setFlash('old', $data);
             return redirect('/tickets/create');
         }
-        
-        // 🛡️ CRITICAL-01: Sanitization is cleanly handled in TicketService to prevent double encoding
-        $data['message'] = trim($data['message'] ?? '');
         
         // آپلود فایل
         $attachments = [];

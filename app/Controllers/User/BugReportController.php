@@ -124,7 +124,7 @@ class BugReportController extends BaseUserController
             $uploadResult = $this->uploadService->upload(
                 $screenshotFile,
                 'bug-reports',
-                ['jpg', 'png', 'jpeg'],
+                ['image/jpeg', 'image/png'],
                 5 * 1024 * 1024
             );
 

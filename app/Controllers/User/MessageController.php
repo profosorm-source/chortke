@@ -335,4 +335,27 @@ class MessageController extends BaseUserController
         }
     }
 
+    /**
+     * علامت‌گذاری پیام‌ها به عنوان خوانده شده (HIGH-03)
+     */
+    public function markRead(): void
+    {
+        $this->requireAuth();
+        $this->validateCsrf();
+
+        try {
+            $otherUserId = (int)$this->request->input('user_id');
+            if ($otherUserId <= 0) {
+                $this->jsonError('شناسه کاربر نامعتبر است', [], 400);
+                return;
+            }
+
+            $this->messageService->markAsRead($this->userId(), $otherUserId);
+            $this->jsonSuccess('پیام‌ها به عنوان خوانده شده علامت‌گذاری شدند');
+        } catch (\Exception $e) {
+            $this->logger->error('mark.read.failed', ['error' => $e->getMessage()]);
+            $this->jsonError('خطا در علامت‌گذاری پیام‌ها', [], 500);
+        }
+    }
+
 }
