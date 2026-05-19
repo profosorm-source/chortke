@@ -45,6 +45,7 @@ class Router
     protected array $middlewarePriority = [
         \App\Middleware\SessionMiddleware::class,
         \App\Middleware\RequestIdMiddleware::class,
+        \App\Middleware\ConcurrentRequestMiddleware::class,
         \App\Middleware\HttpsMiddleware::class,
         \App\Middleware\SecurityHeadersMiddleware::class,
         \App\Middleware\CorsMiddleware::class,
@@ -177,6 +178,7 @@ class Router
         // این میدل‌ویرها برای تمامی درخواست‌ها (حتی صفحات ۴۰۴) اجرا می‌شوند
         $globalMiddlewares = [
             \App\Middleware\SessionMiddleware::class,
+            \App\Middleware\ConcurrentRequestMiddleware::class,
             \App\Middleware\LoggingMiddleware::class,         // رصد دقیق پرفورمنس و مدیریت آسنکرون لاگ
             \App\Middleware\CorsMiddleware::class,
             \App\Middleware\HttpsMiddleware::class,
