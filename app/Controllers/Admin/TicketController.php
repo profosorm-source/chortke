@@ -146,9 +146,12 @@ class TicketController extends BaseAdminController
                 ['ticket_id' => $ticketId, 'message_length' => mb_strlen($message)]
             );
             
-            // 🛡️ NEW-12: ثبت کامل ردپای حسابرسی ادمین
+            // 🛡️ NEW-12: ثبت کامل ردپای حسابرسی ادمین (فقط متادیتا لاگ می‌شود جهت ممانعت از نشت PII)
             $this->auditLog('ticket_admin_reply', 'ticket', $ticketId, null, [
-                'message' => $message
+                'message_length' => mb_strlen($message),
+                'has_sanitized' => true,
+                'ip_address' => $this->request->ip(),
+                'user_agent' => substr($this->request->header('User-Agent') ?? '', 0, 255)
             ]);
         }
         
