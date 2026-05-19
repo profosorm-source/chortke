@@ -85,12 +85,18 @@ class DirectMessage extends Model
                     u.full_name,
                     u.avatar,
                     dm.message as last_message,
+                    dm.is_encrypted,
                     uc.updated_at as last_message_at,
-                    (SELECT COUNT(*) FROM direct_messages 
-                     WHERE sender_id = u.id AND recipient_id = ? AND read_at IS NULL) as unread_count
+                    COALESCE(unread.cnt, 0) as unread_count
                 FROM user_conversations uc
                 JOIN users u ON u.id = CASE WHEN uc.user1_id = ? THEN uc.user2_id ELSE uc.user1_id END
                 LEFT JOIN direct_messages dm ON dm.id = uc.last_message_id
+                LEFT JOIN (
+                    SELECT sender_id, COUNT(*) as cnt 
+                    FROM direct_messages 
+                    WHERE recipient_id = ? AND read_at IS NULL 
+                    GROUP BY sender_id
+                ) unread ON unread.sender_id = u.id
                 WHERE uc.user1_id = ? OR uc.user2_id = ?
                 ORDER BY uc.updated_at DESC
                 LIMIT ? OFFSET ?";
@@ -158,6 +164,17 @@ class DirectMessage extends Model
         return (bool)$this->db->table('user_blocks')
             ->where('blocker_id', '=', $blockedUserId)
             ->where('blocked_id', '=', $userId)
+            ->first();
+    }
+
+    public function hasConversation(int $userId, int $otherUserId): bool
+    {
+        $user1 = min($userId, $otherUserId);
+        $user2 = max($userId, $otherUserId);
+        
+        return (bool)$this->db->table('user_conversations')
+            ->where('user1_id', '=', $user1)
+            ->where('user2_id', '=', $user2)
             ->first();
     }
 
