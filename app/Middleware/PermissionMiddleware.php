@@ -25,6 +25,7 @@ class PermissionMiddleware extends BaseMiddleware
     private Session $session;
     private Permission $permissionModel;
     private Redis $redis;
+    private \App\Contracts\LoggerInterface $logger;
 
     // MEDIUM-M-15 Fix: Reduced TTL from 300 to 60 seconds for non-critical permissions
     // This ensures permission changes are reflected within 1 minute (was 5 minutes)
@@ -35,11 +36,12 @@ class PermissionMiddleware extends BaseMiddleware
     /**
      * متد سازنده جهت تزریق خودکار وابستگی‌ها (DI Auto-wiring)
      */
-    public function __construct(Session $session, Permission $permissionModel, Redis $redis)
+    public function __construct(Session $session, Permission $permissionModel, Redis $redis, \App\Contracts\LoggerInterface $logger)
     {
         $this->session = $session;
         $this->permissionModel = $permissionModel;
         $this->redis = $redis;
+        $this->logger = $logger;
     }
 
     /**
@@ -161,7 +163,8 @@ class PermissionMiddleware extends BaseMiddleware
         return (new self(
             app(\Core\Session::class),
             app(\App\Models\Permission::class),
-            app(\Core\Redis::class)
+            app(\Core\Redis::class),
+            app(\App\Contracts\LoggerInterface::class)
         ))->hasPermission($permission);
     }
     
