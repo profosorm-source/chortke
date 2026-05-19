@@ -213,16 +213,15 @@ class DirectMessageService extends \App\Services\BaseService
             if ($isEncrypted) {
                 $lastMessage = '[پیام رمزشده]';
             } else {
-                if (mb_strlen($lastMessage) > 50) {
-                    $lastMessage = mb_substr($lastMessage, 0, 50) . '...';
-                }
+                $lastMessage = mb_substr($lastMessage, 0, 50) . (mb_strlen($lastMessage) > 50 ? '...' : '');
             }
 
             return [
                 'user_id' => $conv->user_id,
-                'user_name' => $conv->full_name,
-                'user_avatar' => $conv->avatar,
+                'full_name' => $conv->full_name,
+                'avatar' => $conv->avatar,
                 'last_message' => $lastMessage,
+                'is_encrypted' => $isEncrypted,
                 'last_message_at' => $conv->last_message_at,
                 'unread_count' => (int)($conv->unread_count ?? 0)
             ];
@@ -353,78 +352,47 @@ class DirectMessageService extends \App\Services\BaseService
         }
     }
 
-    private const ENCRYPTION_METHOD = 'AES-256-CBC';
-
     /**
-     * رمزنگاری پیام
+     * رمزنگاری پیام با استفاده از Sodium
      */
     private function encryptMessage(string $message): string
     {
-        $keyVersion = (int)config('app.encryption_key_version', 1);
-        $key = $this->getEncryptionKey($keyVersion);
-        
-        $iv = random_bytes(16);
-        $encrypted = openssl_encrypt($message, self::ENCRYPTION_METHOD, $key, 0, $iv);
-        
-        if ($encrypted === false) {
-            throw new \Exception('Encryption failed');
+        $encryptionKey = $this->settingService->get('dm_encryption_key');
+        if (!$encryptionKey) {
+            $encryptionKey = base64_encode('strong_message_enc_key_v1_32bytes_long');
         }
         
-        // Prepend version (1 byte) + IV (16 bytes) + encrypted data
-        $version = pack('C', $keyVersion);
-        return base64_encode($version . $iv . $encrypted);
+        $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+        $encrypted = sodium_crypto_secretbox($message, $nonce, base64_decode($encryptionKey));
+        
+        return base64_encode($nonce . $encrypted);
     }
 
     /**
-     * رفع رمزنگاری پیام
+     * رفع رمزنگاری پیام با استفاده از Sodium
      */
     private function decryptMessage(string $encrypted): string
     {
         try {
-            $data = base64_decode($encrypted, true);
-            if ($data === false) {
-                return '[پیام رمزشده - خطا در رمزگشایی]';
+            $encryptionKey = $this->settingService->get('dm_encryption_key');
+            if (!$encryptionKey) {
+                $encryptionKey = base64_encode('strong_message_enc_key_v1_32bytes_long');
             }
             
-            if (strlen($data) < 17) {
-                return '[پیام رمزشده - فرمت نامعتبر]';
+            $decoded = base64_decode($encrypted);
+            if ($decoded === false) {
+                return '[خطا در دیکریپت]';
             }
+            $nonce = mb_substr($decoded, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES, '8bit');
+            $ciphertext = mb_substr($decoded, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES, null, '8bit');
             
-            $keyVersion = unpack('C', substr($data, 0, 1))[1];
-            $key = $this->getEncryptionKey($keyVersion);
+            $decrypted = sodium_crypto_secretbox_open($ciphertext, $nonce, base64_decode($encryptionKey));
             
-            $iv = substr($data, 1, 16);
-            $ciphertext = substr($data, 17);
-            
-            $decrypted = openssl_decrypt($ciphertext, self::ENCRYPTION_METHOD, $key, 0, $iv);
-            
-            if ($decrypted === false) {
-                return '[پیام رمزشده - خطا در رمزگشایی]';
-            }
-            
-            return $decrypted;
-            
+            return $decrypted !== false ? $decrypted : '[خطا در دیکریپت]';
         } catch (\Exception $e) {
             $this->logger->error('message.decrypt.failed', ['error' => $e->getMessage()]);
-            return '[پیام رمزشده]';
+            return '[خطا در دیکریپت]';
         }
-    }
-
-    private function getEncryptionKey(int $version): string
-    {
-        $keys = config('encryption.message_keys', []);
-        if (empty($keys)) {
-            $keys = config('encryption.dm_keys', []);
-        }
-        
-        if (!isset($keys[$version])) {
-            if ($version === 1) {
-                return 'strong_message_enc_key_v1_32bytes_long';
-            }
-            throw new \Exception("Encryption key version {$version} not found");
-        }
-        
-        return base64_decode($keys[$version]);
     }
 
     /**
