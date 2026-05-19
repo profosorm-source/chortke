@@ -43,7 +43,9 @@ class ContactService extends \App\Services\BaseService
 
         // 4. Email Rate Limiting: 5 messages per day
         if (!empty($data['email'])) {
-            $emailKey = "contact_form:email:" . md5(strtolower($data['email']));
+            $email = strtolower(trim((string)$data['email']));
+            $normalizedEmail = preg_replace('/\+[^@]*@/', '@', $email);
+            $emailKey = "contact_form:email:" . hash('sha256', $normalizedEmail);
             if (!app(\Core\RateLimiter::class)->attempt($emailKey, 5, 86400)) {
                 return $this->errorResponse('این ایمیل امروز پیام‌های زیادی ارسال کرده است. لطفاً فردا تلاش کنید.', [], 429);
             }
@@ -56,18 +58,23 @@ class ContactService extends \App\Services\BaseService
         }
 
         try {
+            $name = htmlspecialchars(trim((string)$data['name']), ENT_QUOTES, 'UTF-8');
+            $email = filter_var(trim((string)$data['email']), FILTER_SANITIZE_EMAIL);
+            $subject = htmlspecialchars(trim((string)$data['subject']), ENT_QUOTES, 'UTF-8');
+            $message = htmlspecialchars(trim((string)$data['message']), ENT_QUOTES, 'UTF-8');
+
             $this->contactMessageModel->createMessage([
-                'name' => $data['name'],
-                'email' => $data['email'],
-                'subject' => $data['subject'],
-                'message' => $data['message'],
+                'name' => $name,
+                'email' => $email,
+                'subject' => $subject,
+                'message' => $message,
                 'ip_address' => $ip,
                 'created_at' => date('Y-m-d H:i:s'),
             ]);
 
             $this->logInfo('contact.message.stored', [
-                'email' => $data['email'],
-                'subject' => $data['subject']
+                'email' => $email,
+                'subject' => $subject
             ]);
 
             return $this->successResponse('پیام شما با موفقیت ارسال شد. به زودی پاسخ خواهیم داد.');

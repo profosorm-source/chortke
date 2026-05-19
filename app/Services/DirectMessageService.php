@@ -112,7 +112,7 @@ class DirectMessageService extends \App\Services\BaseService
             $messageId = $this->directMessageModel->createMessage(
                 $senderId,
                 $recipientId,
-                $isEncrypted ? $this->encryptMessage($message) : $message,
+                $isEncrypted ? $this->encryptMessage($message) : htmlspecialchars($message, ENT_QUOTES, 'UTF-8'),
                 (bool)$isEncrypted
             );
 
@@ -185,11 +185,19 @@ class DirectMessageService extends \App\Services\BaseService
         }
 
         return array_map(function($msg) {
+            $msgContent = $msg->message;
+            if ($msg->is_encrypted) {
+                try {
+                    $msgContent = $this->decryptMessage($msg->message);
+                } catch (\Throwable $e) {
+                    $msgContent = '[رمزگشایی ناموفق]';
+                }
+            }
             return [
                 'id' => $msg->id,
                 'sender_id' => $msg->sender_id,
                 'sender_name' => $msg->sender_name,
-                'message' => $msg->is_encrypted ? $this->decryptMessage($msg->message) : $msg->message,
+                'message' => $msgContent,
                 'is_encrypted' => (bool)$msg->is_encrypted,
                 'attachment_count' => $msg->attachment_count,
                 'created_at' => $msg->created_at,
@@ -345,6 +353,10 @@ class DirectMessageService extends \App\Services\BaseService
     public function addReaction(int $messageId, int $userId, string $emoji): bool
     {
         try {
+            $message = $this->directMessageModel->findMessageById($messageId);
+            if (!$message || ((int)$message->sender_id !== $userId && (int)$message->recipient_id !== $userId)) {
+                return false;
+            }
             return $this->directMessageModel->addReaction($messageId, $userId, $emoji);
         } catch (\Exception $e) {
             $this->logger->error('reaction.add.failed', ['error' => $e->getMessage()]);

@@ -75,15 +75,18 @@ extends \App\Services\BaseService
             switch ($action) {
                 case 'warn':
                     $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [(int)$report['sender_id']]);
-                    $this->warnUser((int)$report['sender_id']);
+                    $this->warnUser((int)$report['sender_id'], $adminId, $reportId);
                     break;
                 case 'delete':
-                    $this->deleteMessage((int)$report['message_id']);
+                    $this->deleteMessage((int)$report['message_id'], $adminId, $reportId);
                     break;
                 case 'ban':
                     $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [(int)$report['sender_id']]);
-                    $this->banUser((int)$report['sender_id']);
+                    $this->banUser((int)$report['sender_id'], $adminId, $reportId);
                     break;
+                default:
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'اقدام نامعتبر است'];
             }
 
             $this->moderationModel->updateReportStatus($reportId, 'resolved', $adminId);
@@ -185,18 +188,25 @@ extends \App\Services\BaseService
         return $result;
     }
 
-    private function deleteMessage(int $messageId): void
+    private function deleteMessage(int $messageId, int $adminId, int $reportId): void
     {
         $this->db->query(
             "UPDATE direct_messages
-             SET message = '[پیام حذف‌شده توسط مدیریت]', deleted_at = NOW(), deleted_by = 'admin'
+             SET message = '[پیام حذف‌شده توسط مدیریت]', deleted_at = NOW(), deleted_by = ?
              WHERE id = ?",
-            [$messageId]
+            [(string)$adminId, $messageId]
         );
+        
+        $this->logger->info('message_deleted_by_admin', [
+            'message_id' => $messageId,
+            'admin_id' => $adminId,
+            'report_id' => $reportId
+        ]);
+        
         $this->cache->forget('message_moderation_stats_v2');
     }
 
-    private function warnUser(int $userId): void
+    private function warnUser(int $userId, int $adminId, int $reportId): void
     {
         $this->db->query(
             "UPDATE users
@@ -204,10 +214,25 @@ extends \App\Services\BaseService
              WHERE id = ?",
             [$userId]
         );
+
+        $countResult = $this->db->query("SELECT warning_count FROM users WHERE id = ?", [$userId])->fetch(\PDO::FETCH_ASSOC);
+        $count = (int)($countResult['warning_count'] ?? 0);
+
+        $this->logger->info('user_warned', [
+            'user_id' => $userId,
+            'admin_id' => $adminId,
+            'report_id' => $reportId,
+            'warning_count' => $count
+        ]);
+
+        if ($count >= 3) {
+            $this->banUser($userId, $adminId, $reportId);
+        }
+
         $this->cache->forget('message_moderation_stats_v2');
     }
 
-    private function banUser(int $userId): void
+    private function banUser(int $userId, int $adminId, int $reportId): void
     {
         $this->db->query(
             "UPDATE users
@@ -215,6 +240,14 @@ extends \App\Services\BaseService
              WHERE id = ?",
             [$userId]
         );
+
+        $this->logger->info('user_banned', [
+            'user_id' => $userId,
+            'admin_id' => $adminId,
+            'report_id' => $reportId,
+            'reason' => 'Inappropriate messaging'
+        ]);
+
         $this->cache->forget('message_moderation_stats_v2');
     }
 
