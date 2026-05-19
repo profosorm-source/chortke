@@ -28,15 +28,12 @@ class BugReportController extends BaseUserController
         // CORE-036: CSRF Protection
         $this->validateCsrf();
 
-        $userId = user_id();
-        if (!$userId) {
-            $this->response->json(['success' => false, 'message' => 'لطفاً وارد حساب خود شوید'], 401);
-            return;
-        }
+        $this->requireAuth();
+        $userId = $this->userId();
 
         // H-08: Spam Flood Protection
         try {
-            rate_limit('bug_report', 'store', "user_{$userId}");
+            rate_limit('social', 'message', "bug_report_user_{$userId}");
         } catch (\Exception $e) {
             if ($e->getCode() === 429) {
                 $this->response->json(['success' => false, 'message' => $e->getMessage()], 429);
@@ -49,10 +46,11 @@ class BugReportController extends BaseUserController
             $screenRes = '';
         }
 
-        $fingerprint = $this->request->post('device_fingerprint') ?? '';
-        if (strlen($fingerprint) > 128) {
-            $fingerprint = substr($fingerprint, 0, 128);
-        }
+        // 🛡️ HIGH-10: ترکیب متغیرهای کلاینت با فاکتورهای سروری جهت جلوگیری از جعل هویت مرورگر
+        $clientFingerprint = $this->request->post('device_fingerprint') ?? '';
+        $ip = $this->request->ip();
+        $ua = $this->request->header('User-Agent') ?? '';
+        $fingerprint = hash('sha256', $clientFingerprint . '_' . $ip . '_' . $ua);
 
         // 🛡️ Item 23: Category Whitelisting
         $category = $this->request->post('category') ?: 'other';
@@ -61,16 +59,29 @@ class BugReportController extends BaseUserController
             $category = 'other';
         }
 
+        // 🛡️ HIGH-09: اعتبارسنجی سختگیرانه URL با بررسی پروتکل‌های معتبر جهت دفع حملات Phishing
+        $pageUrl = (string)$this->request->post('page_url');
+        if (!empty($pageUrl)) {
+            $sanitizedUrl = filter_var($pageUrl, FILTER_SANITIZE_URL);
+            if (!filter_var($sanitizedUrl, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $sanitizedUrl)) {
+                $this->response->json(['success' => false, 'message' => 'آدرس صفحه نامعتبر است.'], 422);
+                return;
+            }
+            $pageUrl = $sanitizedUrl;
+        } else {
+            $pageUrl = '';
+        }
+
         // C-05: Input Sanitization (XSS Protection)
         $data = [
-            'page_url'           => filter_var($this->request->post('page_url'), FILTER_SANITIZE_URL),
+            'page_url'           => $pageUrl,
             'page_title'         => htmlspecialchars($this->request->post('page_title') ?? '', ENT_QUOTES, 'UTF-8'),
             'category'           => htmlspecialchars($category, ENT_QUOTES, 'UTF-8'),
             'description'        => htmlspecialchars($this->request->post('description') ?? '', ENT_QUOTES, 'UTF-8'),
             'screen_resolution'  => htmlspecialchars($screenRes, ENT_QUOTES, 'UTF-8'),
             'device_fingerprint' => htmlspecialchars($fingerprint, ENT_QUOTES, 'UTF-8'),
-            'user_agent'         => substr($this->request->header('User-Agent') ?? '', 0, 512),
-            'ip_address'         => $this->request->ip(),
+            'user_agent'         => htmlspecialchars(substr($ua, 0, 512), ENT_QUOTES, 'UTF-8'), // 🛡️ LOW-03: فرار دادن کامل هدر User-Agent
+            'ip_address'         => $ip,
         ];
 
         // 🛡️ Item 13: Screenshot path traversal check and Request wrapper usage
@@ -95,6 +106,7 @@ class BugReportController extends BaseUserController
                 5 * 1024 * 1024
             );
 
+            // 🛡️ MED-11: بازگرداندن خطای مناسب به جای عبور بی‌صدا در زمان شکست عملیات آپلود اسکرین‌شات
             if ($uploadResult['success']) {
                 $data['screenshot'] = htmlspecialchars($uploadResult['path'], ENT_QUOTES, 'UTF-8');
             } else {
@@ -102,6 +114,11 @@ class BugReportController extends BaseUserController
                     'user_id' => $userId,
                     'error' => $uploadResult['message'] ?? 'Unknown upload error'
                 ]);
+                $this->response->json([
+                    'success' => false,
+                    'message' => 'آپلود اسکرین‌شات ناموفق بود: ' . ($uploadResult['message'] ?? 'خطای ناشناخته')
+                ], 400);
+                return;
             }
         }
 
@@ -119,15 +136,14 @@ class BugReportController extends BaseUserController
      */
     public function index()
     {
-        if (!auth()) {
-            return redirect(url('/login'));
-        }
+        $this->requireAuth();
+        $userId = $this->userId();
 
-                $page = (int)($this->request->get('page') ?: 1);
+        $page = (int)($this->request->get('page') ?: 1);
         $perPage = 15;
         $offset = ($page - 1) * $perPage;
 
-        $reports = $this->ticketService->getBugReports(user_id(), $perPage, $offset);
+        $reports = $this->ticketService->getBugReports($userId, $perPage, $offset);
 
         return view('user.bug-reports.index', [
             'reports' => $reports,
@@ -140,11 +156,13 @@ class BugReportController extends BaseUserController
      */
     public function show()
     {
+        $this->requireAuth();
+        $userId = $this->userId();
         $id = (int)$this->request->param('id');
 
         $service = $this->ticketService;
         $report  = $service->findBugReport($id);
-        if (!$report || (int)$report->user_id !== user_id()) {
+        if (!$report || (int)$report->user_id !== $userId) {
             $this->session->setFlash('error', 'گزارش یافت نشد');
             return redirect(url('/bug-reports'));
         }
@@ -162,7 +180,8 @@ class BugReportController extends BaseUserController
         // CORE-036: CSRF Protection
         $this->validateCsrf();
 
-        $userId = user_id();
+        $this->requireAuth();
+        $userId = $this->userId();
         $id = (int)$this->request->param('id');
 
         // C-03: Ownership Verification (IDOR Protection)
@@ -179,6 +198,9 @@ class BugReportController extends BaseUserController
             $this->response->json(['success' => false, 'message' => 'متن نظر نمی‌تواند خالی باشد']);
             return;
         }
+
+        // 🛡️ CRIT-05: ضدعفونی پیام نظر گزارش باگ جهت ممانعت از حملات XSS قبل از ارسال به لایه سرویس
+        $comment = htmlspecialchars($comment, ENT_QUOTES, 'UTF-8');
 
         $result = $this->ticketService->reply($id, $userId, $comment, false);
 
