@@ -89,7 +89,7 @@ class LogService extends BaseService
                       'cvv', 'ssn', 'pin', 'otp', 'authorization', 'cookie', 'password_confirmation'];
         
         array_walk_recursive($context, function(&$value, $key) use ($sensitive) {
-            if (in_array(strtolower((string)$key), $sensitive)) {
+            if ((is_string($key) || is_numeric($key)) && in_array(strtolower((string)$key), $sensitive, true)) {
                 $value = '[REDACTED]';
             }
         });

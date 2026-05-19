@@ -93,7 +93,11 @@ class BackupService extends \App\Services\BaseService
 
             // Encryption using OpenSSL CLI
             $encFilepath = $gzFilepath . '.enc';
-            $encKey = bin2hex(substr(hash('sha256', (string)config('app.key', 'fallback_secret_key_2026'), true), 0, 32));
+            $appKey = config('app.key');
+            if (empty($appKey) || strlen((string)$appKey) < 32) {
+                throw new \Exception('APP_KEY must be set and at least 32 characters for backup encryption');
+            }
+            $encKey = bin2hex(hash('sha256', (string)$appKey, true));
             $encCmd = sprintf(
                 'openssl enc -aes-256-cbc -salt -pbkdf2 -in %s -out %s -pass pass:%s 2>&1',
                 escapeshellarg($gzFilepath),
@@ -282,7 +286,11 @@ class BackupService extends \App\Services\BaseService
             $isEncrypted = (strtolower(substr($filename, -4)) === '.enc');
             if ($isEncrypted) {
                 $tempGzFile = tempnam(sys_get_temp_dir(), 'dbdec_') . '.gz';
-                $encKey = bin2hex(substr(hash('sha256', (string)config('app.key', 'fallback_secret_key_2026'), true), 0, 32));
+                $appKey = config('app.key');
+                if (empty($appKey) || strlen((string)$appKey) < 32) {
+                    throw new \Exception('APP_KEY must be set and at least 32 characters for backup decryption');
+                }
+                $encKey = bin2hex(hash('sha256', (string)$appKey, true));
                 $decCmd = sprintf(
                     'openssl enc -d -aes-256-cbc -pbkdf2 -in %s -out %s -pass pass:%s 2>&1',
                     escapeshellarg($restoreSourcePath),

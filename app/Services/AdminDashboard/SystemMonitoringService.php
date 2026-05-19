@@ -73,7 +73,7 @@ class SystemMonitoringService extends \App\Services\BaseService
             if (function_exists('sys_getloadavg')) {
                 $load = @sys_getloadavg();
                 if (is_array($load) && isset($load[0])) {
-                    $cores = $this->getCpuCoreCount();
+                    $cores = max(1, $this->getCpuCoreCount());
                     // MED-25: Scientifically determine resource load by dividing process load averages by active logical core caps
                     $cpuLoad = \min(100.0, \max(0.0, ((float)$load[0] / $cores) * 100.0));
                 }
