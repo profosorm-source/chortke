@@ -116,32 +116,47 @@ class ProfileController extends BaseUserController
     }
 
     $filename = (string) $upload['filename'];
+    $oldAvatar = null;
 
-    $oldUser = $this->userService->findById($userId);
-    if ($oldUser && !empty($oldUser->avatar) && $oldUser->avatar !== 'default-avatar.png') {
-        if (method_exists($uploadService, 'delete')) {
-            $uploadService->delete('avatars/' . $oldUser->avatar);
+    try {
+        $oldUser = $this->userService->findById($userId);
+        if ($oldUser && !empty($oldUser->avatar) && $oldUser->avatar !== 'default-avatar.png') {
+            $oldAvatar = $oldUser->avatar;
         }
-    }
 
-$result = $this->profileService->updateProfile($userId, [
-        'avatar' => $filename,
-    ]);
+        $result = $this->profileService->updateProfile($userId, [
+            'avatar' => $filename,
+        ]);
 
-    if (!$result) {
-        $this->logger->info('Avatar update failed', ['user_id' => $userId, 'filename' => $filename]);
-        $this->response->json(['success' => false, 'message' => 'خطا در ذخیره‌سازی آواتار در دیتابیس'], 500);
+        if (!$result) {
+            if (method_exists($uploadService, 'delete')) {
+                $uploadService->delete('avatars/' . $filename);
+            }
+            $this->logger->info('Avatar update failed', ['user_id' => $userId, 'filename' => $filename]);
+            $this->response->json(['success' => false, 'message' => 'خطا در ذخیره‌سازی آواتار در دیتابیس'], 500);
+            return;
+        }
+
+        if ($oldAvatar && method_exists($uploadService, 'delete')) {
+            $uploadService->delete('avatars/' . $oldAvatar);
+        }
+
+        $this->logger->info('Avatar uploaded', ['user_id' => $userId]);
+
+        $this->response->json([
+            'success' => true,
+            'message' => 'تصویر پروفایل با موفقیت بروزرسانی شد',
+            'avatar_url' => asset('uploads/' . ltrim((string)$upload['path'], '/'))
+        ]);
+        return;
+    } catch (\Throwable $e) {
+        if (method_exists($uploadService, 'delete')) {
+            $uploadService->delete('avatars/' . $filename);
+        }
+        $this->logger->error('Avatar upload failed', ['error' => $e->getMessage()]);
+        $this->response->json(['success' => false, 'message' => 'خطای سرور در آپلود آواتار'], 500);
         return;
     }
-
-    $this->logger->info('Avatar uploaded', ['user_id' => $userId]);
-
-    $this->response->json([
-        'success' => true,
-        'message' => 'تصویر پروفایل با موفقیت بروزرسانی شد',
-        'avatar_url' => asset('uploads/' . ltrim((string)$upload['path'], '/'))
-    ]);
-    return;
 }
 
     public function deleteAvatar(): void
@@ -187,6 +202,13 @@ $result = $this->profileService->updateProfile($userId, [
     public function changePassword(): void
     {
         $userId = user_id();
+
+        // ✅ CSRF Check
+        if (!csrf_verify()) {
+            $this->session->setFlash('error', 'توکن امنیتی نامعتبر');
+            redirect('profile');
+            return;
+        }
         
         $currentPassword = $this->request->input('current_password');
         $newPassword = $this->request->input('new_password');
