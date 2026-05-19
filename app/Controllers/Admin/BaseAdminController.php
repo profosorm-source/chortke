@@ -38,4 +38,19 @@ abstract class BaseAdminController extends BaseController
         $this->requireAuth();
         $this->requireAdmin();
     }
+
+    /**
+     * بررسی معتبر بودن تغییر وضعیت بر اساس ماشین وضعیت (CRIT-08)
+     */
+    protected function validateStatusTransition(string $from, string $to): bool
+    {
+        $allowedTransitions = [
+            'active' => ['suspended', 'banned'],
+            'suspended' => ['active', 'banned'],
+            'banned' => ['active'],
+            'deleted' => [],
+        ];
+        
+        return in_array($to, $allowedTransitions[$from] ?? [], true);
+    }
 }

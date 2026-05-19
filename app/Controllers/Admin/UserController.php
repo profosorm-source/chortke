@@ -402,22 +402,4 @@ public function update(int $id): void
             $this->response->json(['success' => false, 'message' => 'خطا در تغییر وضعیت'], 500);
         }
     }
-
-    /**
-     * بررسی معتبر بودن تغییر وضعیت بر اساس ماشین وضعیت (CRIT-08)
-     */
-    private function validateStatusTransition(string $currentStatus, string $newStatus): bool
-    {
-        if ($currentStatus === $newStatus) {
-            return true;
-        }
-        $transitions = [
-            'active' => ['suspended', 'banned'],
-            'suspended' => ['active', 'banned'],
-            'banned' => ['active'],
-            'deleted' => []
-        ];
-        $allowed = $transitions[$currentStatus] ?? [];
-        return in_array($newStatus, $allowed, true);
-    }
 }
