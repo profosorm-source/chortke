@@ -199,7 +199,7 @@ class AuditTrail extends \App\Services\BaseService
 
                 $deleted = 0;
                 do {
-                    $batch = $this->auditTrailModel->deleteOlderThan($cutoff, 5000);
+                    $batch = $this->auditTrailModel->deleteOlderThan($cutoff, 5000, true);
                     $deleted += $batch;
                 } while ($batch === 5000);
 
@@ -333,10 +333,10 @@ class AuditTrail extends \App\Services\BaseService
         }
     }
 
-    public function cleanup(int $days = 365): int
+    public function cleanup(int $days = 365, bool $bypassCompliance = false): int
     {
         try {
-            return $this->auditTrailModel->cleanupOlderThan($days);
+            return $this->auditTrailModel->cleanupOlderThan($days, $bypassCompliance);
         } catch (\Throwable $e) {
             $this->logger->error('audit_trail.cleanup.failed', [
                 'channel' => 'audit_trail',
