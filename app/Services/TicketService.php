@@ -60,9 +60,14 @@ class TicketService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'متن پیام تیکت نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
         }
         
-        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم ربات‌ها)
+        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت اتمیک ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم ربات‌ها و Race Condition)
         $rateKey = "ticket_creation_limit:{$userId}";
-        if (!$this->rateLimiter->attempt($rateKey, 3, 3600)) {
+        $count = (int)$this->redis->incr($rateKey);
+        if ($count === 1) {
+            $this->redis->expire($rateKey, 3600);
+        }
+        if ($count > 3) {
+            $this->redis->decr($rateKey);
             $this->logger->warning('ticket.rate_limit_exceeded', ['user_id' => $userId]);
             return [
                 'success' => false,
