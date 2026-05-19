@@ -76,17 +76,20 @@ extends \App\Services\BaseService
 
             switch ($action) {
                 case 'warn':
+                    $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [(int)$report['sender_id']]);
                     $this->warnUser((int)$report['sender_id']);
                     break;
                 case 'delete':
                     $this->deleteMessage((int)$report['message_id']);
                     break;
                 case 'ban':
+                    $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [(int)$report['sender_id']]);
                     $this->banUser((int)$report['sender_id']);
                     break;
             }
 
             $this->db->commit();
+            $this->cache->forget('message_moderation_stats_v2');
             return ['success' => true, 'message' => 'گزارش تایید شد'];
         } catch (\Throwable $e) {
             $this->db->rollBack();
@@ -110,6 +113,7 @@ extends \App\Services\BaseService
             }
             $ok = $this->moderationModel->updateReportStatus($reportId, 'dismissed', $adminId);
             $this->db->commit();
+            $this->cache->forget('message_moderation_stats_v2');
             return $ok;
         } catch (\Throwable) {
             $this->db->rollBack();

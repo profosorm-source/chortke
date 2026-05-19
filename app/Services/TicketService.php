@@ -118,7 +118,8 @@ class TicketService extends \App\Services\BaseService
             ]);
             
             // نوتیفیکیشن به ادمین
-            $this->notificationService->sendToAdmins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$subject}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
+            $escapedSubject = htmlspecialchars($subject, ENT_QUOTES, 'UTF-8');
+            $this->notificationService->sendToAdmins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$escapedSubject}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
             
             $this->db->commit();
             
@@ -165,10 +166,10 @@ class TicketService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'متن پاسخ نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
         }
         
-        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت پاسخ‌ها (حداکثر ۱۰ پاسخ در ساعت برای کاربران عادی)
+        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت پاسخ‌ها (حداکثر ۵ پاسخ در ساعت برای کاربران عادی)
         if (!$isAdmin) {
             $rateKey = "ticket_reply_limit:{$userId}";
-            if (!$this->rateLimiter->attempt($rateKey, 10, 3600)) {
+            if (!$this->rateLimiter->attempt($rateKey, 5, 3600)) {
                 $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
                 return [
                     'success' => false,
@@ -403,14 +404,31 @@ class TicketService extends \App\Services\BaseService
      */
     public function updateStatus(int $ticketId, string $status, int $adminId): bool
     {
-        $ticket = $this->ticketModel->findById($ticketId);
-        if (!$ticket) return false;
+        $this->db->beginTransaction();
 
-        $ok = $this->ticketModel->updateStatus($ticketId, $status);
-        if ($ok) {
-            $this->logger->activity('ticket_status_updated', "وضعیت تیکت #{$ticketId} به {$status} تغییر یافت", $adminId, ['status' => $status]);
+        try {
+            // ✅ قفل بدبینانه برای جلوگیری از Race Condition
+            $ticket = $this->db->query(
+                "SELECT id, status FROM tickets WHERE id = ? FOR UPDATE",
+                [$ticketId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            if (!$ticket) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            $ok = $this->ticketModel->updateStatus($ticketId, $status);
+            if ($ok) {
+                $this->logger->activity('ticket_status_updated', "وضعیت تیکت #{$ticketId} به {$status} تغییر یافت", $adminId, ['status' => $status]);
+            }
+
+            $this->db->commit();
+            return $ok;
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            return false;
         }
-        return $ok;
     }
 
     /**
@@ -461,18 +479,19 @@ class TicketService extends \App\Services\BaseService
      */
     public function detectPriority(string $text, int $categoryId = 0): string
     {
-        // تیکت‌های دسته‌بندی فنی معمولاً حساس‌ترند
-        if ($categoryId === 4) { // Technical
-             // keep normal for now, will inspect text
-        }
-
-        $desc = \mb_strtolower($text);
-        $criticalKeywords = ['هک', 'نفوذ', 'دزدی', 'سرقت', 'پول', 'پرداخت نشد', 'موجودی کم شد', 'حساب خالی', 'برداشت نشد'];
-        $highKeywords = ['خطا', 'ارور', 'کار نمیکنه', 'بسته میشه', 'لود نمیشه', 'سفید', 'خراب', 'مشکل جدی'];
+        $desc = \mb_strtolower($text, 'UTF-8');
+        $criticalKeywords = [
+            'هک', 'نفوذ', 'دزدی', 'سرقت', 'پول', 'پرداخت نشد', 'موجودی کم شد', 
+            'حساب خالی', 'برداشت نشد', 'کلاهبرداری', 'فیشینگ', 'واریز نشد'
+        ];
+        $highKeywords = [
+            'خطا', 'ارور', 'کار نمیکنه', 'بسته میشه', 'لود نمیشه', 'سفید', 
+            'خراب', 'مشکل جدی', 'باگ', 'باز نمیشه', 'قطعی', 'bug', 'error'
+        ];
 
         foreach ($criticalKeywords as $kw) {
             if (\mb_strpos($desc, $kw) !== false) {
-                return 'urgent'; // equivalent to critical in Tickets
+                return 'urgent';
             }
         }
 
@@ -480,6 +499,10 @@ class TicketService extends \App\Services\BaseService
             if (\mb_strpos($desc, $kw) !== false) {
                 return 'high';
             }
+        }
+
+        if ($categoryId === 4) { // Technical
+             return 'high';
         }
 
         return 'normal';

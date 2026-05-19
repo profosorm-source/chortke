@@ -87,7 +87,11 @@ class DirectMessageService extends \App\Services\BaseService
 
             // 🛡️ امنیت و فیلترینگ هوشمند (حذف راه‌های ارتباطی خارج سایت)
             if ($this->containsForbiddenContent($message)) {
-                $this->logger->warning('message.blocked.content', ['user_id' => $senderId, 'message' => $message]);
+                $this->logger->warning('message.blocked.content', [
+                    'user_id' => $senderId, 
+                    'message_hash' => hash('sha256', $message),
+                    'message_length' => mb_strlen($message)
+                ]);
                 return ['error' => 'ارسال هرگونه شماره تماس، آیدی شبکه‌های اجتماعی یا لینک خارجی خلاف قوانین است و مسدود شد.'];
             }
 
@@ -191,6 +195,8 @@ class DirectMessageService extends \App\Services\BaseService
     public function getUserInfo(int $userId): ?array
     {
         $user = $this->directMessageModel->getUserInfo($userId);
+
+        usleep(random_int(10000, 50000)); // 10-50ms random delay
 
         if (!$user) {
             return null;
