@@ -53,8 +53,14 @@ class SentryExceptionHandler
         };
 
         if (in_array($errno, [E_ERROR, E_WARNING, E_USER_ERROR, E_USER_WARNING])) {
-            $userId = $this->getCurrentUserId();
-            $this->errorMonitor->captureException($exception, $userId, [], $level);
+            if (!$this->isCircuitOpen()) {
+                try {
+                    $userId = $this->getCurrentUserId();
+                    $this->errorMonitor->captureException($exception, $userId, [], $level);
+                } catch (\Throwable $e) {
+                    $this->recordFailure();
+                }
+            }
         }
 
         return true;
@@ -67,9 +73,12 @@ class SentryExceptionHandler
     {
         try {
             $userId = $this->getCurrentUserId();
-            $this->errorMonitor->captureException($exception, $userId, ['http_code' => http_response_code()], 'error');
+            if (!$this->isCircuitOpen()) {
+                $this->errorMonitor->captureException($exception, $userId, ['http_code' => http_response_code()], 'error');
+            }
             $this->displayErrorPage($exception);
         } catch (\Throwable $e) {
+            $this->recordFailure();
             $this->logger->critical('sentry.exception_handler.failed', ['channel' => 'sentry', 'error' => $e->getMessage()]);
             $this->fallbackDisplay($exception);
         }
@@ -88,9 +97,12 @@ class SentryExceptionHandler
             if ($error && in_array($error['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR])) {
                 $exception = new \ErrorException($error['message'], 0, $error['type'], $error['file'], $error['line']);
                 $userId = $this->getCurrentUserId();
-                $this->errorMonitor->captureException($exception, $userId, [], 'fatal');
+                if (!$this->isCircuitOpen()) {
+                    $this->errorMonitor->captureException($exception, $userId, [], 'fatal');
+                }
             }
         } catch (\Throwable $e) {
+            $this->recordFailure();
             // Defensive logging to standard error fallback during shutdown
             @error_log('Sentry Shutdown capture failed: ' . $e->getMessage());
         }
@@ -173,6 +185,34 @@ class SentryExceptionHandler
         return $this->performanceMonitor;
     }
 
+    private function isCircuitOpen(): bool
+    {
+        $file = sys_get_temp_dir() . '/sentry_circuit_breaker.json';
+        if (file_exists($file)) {
+            $data = json_decode(file_get_contents($file), true);
+            if ($data && $data['failures'] >= 5 && (time() - $data['last_failure']) < 60) {
+                return true;
+            }
+            if ($data && (time() - $data['last_failure']) >= 60) {
+                @unlink($file); // Reset circuit after 60s
+            }
+        }
+        return false;
+    }
+
+    private function recordFailure(): void
+    {
+        $file = sys_get_temp_dir() . '/sentry_circuit_breaker.json';
+        $failures = 1;
+        if (file_exists($file)) {
+            $data = json_decode(file_get_contents($file), true);
+            if ($data) {
+                $failures = $data['failures'] + 1;
+            }
+        }
+        file_put_contents($file, json_encode(['failures' => $failures, 'last_failure' => time()]));
+    }
+
     /**
      * 🎯 Encapsulated Static Helper Interfaces for System Logging
      */
@@ -180,43 +220,82 @@ class SentryExceptionHandler
     public static function captureException(\Throwable $exception, ?int $userId = null, array $context = []): ?string
     {
         $handler = app(self::class);
-        return $handler->getErrorMonitor()->captureException($exception, $userId, $context);
+        if ($handler->isCircuitOpen()) return null;
+        try {
+            return $handler->getErrorMonitor()->captureException($exception, $userId, $context);
+        } catch (\Throwable $e) {
+            $handler->recordFailure();
+            return null;
+        }
     }
 
     public static function captureMessage(string $message, string $level = 'info', ?int $userId = null, array $context = []): ?string
     {
         $handler = app(self::class);
-        return $handler->getErrorMonitor()->captureMessage($message, $level, $userId, $context);
+        if ($handler->isCircuitOpen()) return null;
+        try {
+            return $handler->getErrorMonitor()->captureMessage($message, $level, $userId, $context);
+        } catch (\Throwable $e) {
+            $handler->recordFailure();
+            return null;
+        }
     }
 
     public static function addBreadcrumb(string $message, string $category = 'default', string $level = 'info', array $data = []): void
     {
         $handler = app(self::class);
-        $handler->getErrorMonitor()->addBreadcrumb($message, $category, $level, $data);
+        if ($handler->isCircuitOpen()) return;
+        try {
+            $handler->getErrorMonitor()->addBreadcrumb($message, $category, $level, $data);
+        } catch (\Throwable $e) {
+            $handler->recordFailure();
+        }
     }
 
     public static function startTransaction(string $name, string $op = 'http.request', array $data = []): ?string
     {
         $handler = app(self::class);
-        return $handler->getPerformanceMonitor()->startTransaction($name, $op, $data);
+        if ($handler->isCircuitOpen()) return null;
+        try {
+            return $handler->getPerformanceMonitor()->startTransaction($name, $op, $data);
+        } catch (\Throwable $e) {
+            $handler->recordFailure();
+            return null;
+        }
     }
 
     public static function startSpan(string $op, string $description, array $data = []): string
     {
         $handler = app(self::class);
-        return $handler->getPerformanceMonitor()->startSpan($op, $description, $data);
+        if ($handler->isCircuitOpen()) return '';
+        try {
+            return $handler->getPerformanceMonitor()->startSpan($op, $description, $data);
+        } catch (\Throwable $e) {
+            $handler->recordFailure();
+            return '';
+        }
     }
 
     public static function finishSpan(string $spanId, array $data = []): void
     {
         $handler = app(self::class);
-        $handler->getPerformanceMonitor()->finishSpan($spanId, $data);
+        if ($handler->isCircuitOpen()) return;
+        try {
+            $handler->getPerformanceMonitor()->finishSpan($spanId, $data);
+        } catch (\Throwable $e) {
+            $handler->recordFailure();
+        }
     }
 
     public static function trackQuery(string $query, float $duration, ?array $params = null): void
     {
         $handler = app(self::class);
-        $handler->getPerformanceMonitor()->trackQuery($query, $duration, $params);
+        if ($handler->isCircuitOpen()) return;
+        try {
+            $handler->getPerformanceMonitor()->trackQuery($query, $duration, $params);
+        } catch (\Throwable $e) {
+            $handler->recordFailure();
+        }
     }
 }
 
