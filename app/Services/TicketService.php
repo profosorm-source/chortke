@@ -79,7 +79,7 @@ class TicketService extends \App\Services\BaseService
         }
 
         // ضدعفونی موضوع جهت مقابله با حملات XSS
-        $subject = htmlspecialchars(strip_tags($data['subject']), ENT_QUOTES, 'UTF-8');
+        $subject = htmlspecialchars(strip_tags($data['subject']), ENT_QUOTES, 'UTF-8', false);
 
         // Ported smart features: Detect dynamic priority if not explicitly set to High/Urgent
         $priority = $data['priority'] ?? 'normal';
@@ -113,7 +113,7 @@ class TicketService extends \App\Services\BaseService
             $this->messageModel->create([
                 'ticket_id' => $ticketId,
                 'user_id' => $userId,
-                'message' => htmlspecialchars((string)$data['message'], ENT_QUOTES, 'UTF-8'),
+                'message' => htmlspecialchars((string)$data['message'], ENT_QUOTES, 'UTF-8', false),
                 'attachments' => $data['attachments'] ?? [],
                 'is_admin' => false
             ]);
@@ -123,9 +123,16 @@ class TicketService extends \App\Services\BaseService
                 'ticket_id' => $ticketId
             ]);
             
-            // نوتیفیکیشن به ادمین
-            $escapedSubject = htmlspecialchars($subject, ENT_QUOTES, 'UTF-8');
-            $this->notificationService->sendToAdmins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$escapedSubject}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
+            // نوتیفیکیشن به ادمین (🛡️ HIGH-13: درپوش try-catch جهت ممانعت از بازگشت تراکنش دیتابیس در صورت بروز مشکل شبکه)
+            $escapedSubject = htmlspecialchars($subject, ENT_QUOTES, 'UTF-8', false);
+            try {
+                $this->notificationService->sendToAdmins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$escapedSubject}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
+            } catch (\Throwable $nte) {
+                $this->logger->error('ticket.create.notification.failed', [
+                    'ticket_id' => $ticketId,
+                    'error' => $nte->getMessage()
+                ]);
+            }
             
             $this->db->commit();
             
@@ -156,6 +163,18 @@ class TicketService extends \App\Services\BaseService
      */
     public function reply(int $ticketId, int $userId, string $message, bool $isAdmin = false, array $attachments = []): array
     {
+        // 🛡️ HIGH-14: ریت لیمیت پیش از شروع تراکنش دیتابیس جهت مقابله با فرسایش استخر اتصالات
+        if (!$isAdmin) {
+            $rateKey = "ticket_reply_limit:{$userId}";
+            if (!$this->rateLimiter->attempt($rateKey, 5, 3600)) {
+                $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
+                return [
+                    'success' => false,
+                    'message' => 'تعداد پیام‌های ارسالی شما بیش از حد مجاز ساعتی است. لطفا کمی صبر کنید.'
+                ];
+            }
+        }
+
         // 🛡️ Item 6: Pessimistic Locking inside Transaction
         $this->db->beginTransaction();
         
@@ -185,25 +204,12 @@ class TicketService extends \App\Services\BaseService
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'متن پاسخ نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
             }
-            
-            // 🛡️ مقابله با سوءاستفاده: ریت لیمیت پاسخ‌ها (حداکثر ۵ پاسخ در ساعت برای کاربران عادی)
-            if (!$isAdmin) {
-                $rateKey = "ticket_reply_limit:{$userId}";
-                if (!$this->rateLimiter->attempt($rateKey, 5, 3600)) {
-                    $this->db->rollBack();
-                    $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
-                    return [
-                        'success' => false,
-                        'message' => 'تعداد پیام‌های ارسالی شما بیش از حد مجاز ساعتی است. لطفا کمی صبر کنید.'
-                    ];
-                }
-            }
 
             // ایجاد پیام
             $this->messageModel->create([
                 'ticket_id' => $ticketId,
                 'user_id' => $userId,
-                'message' => htmlspecialchars($message, ENT_QUOTES, 'UTF-8'),
+                'message' => htmlspecialchars($message, ENT_QUOTES, 'UTF-8', false),
                 'attachments' => $attachments,
                 'is_admin' => $isAdmin
             ]);
@@ -228,10 +234,18 @@ class TicketService extends \App\Services\BaseService
 
             if ($canSendNotification) {
                 // نوتیفیکیشن صریح از طریق وابستگی تزریق شده سازنده (Constructor DI)
-                if ($isAdmin) {
-                    $this->notificationService->send($ticket->user_id, 'info', "پاسخ جدید برای تیکت: {$ticket->subject}", "/tickets/show/{$ticketId}");
-                } else {
-                    $this->notificationService->sendToAdmins('info', 'پاسخ جدید تیکت', "پاسخ جدید از کاربر در تیکت #{$ticketId}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
+                // 🛡️ HIGH-13: درپوش try-catch جهت ممانعت از بازگشت تراکنش دیتابیس در صورت بروز مشکل شبکه
+                try {
+                    if ($isAdmin) {
+                        $this->notificationService->send($ticket->user_id, 'info', "پاسخ جدید برای تیکت: {$ticket->subject}", "/tickets/show/{$ticketId}");
+                    } else {
+                        $this->notificationService->sendToAdmins('info', 'پاسخ جدید تیکت', "پاسخ جدید از کاربر در تیکت #{$ticketId}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
+                    }
+                } catch (\Throwable $nte) {
+                    $this->logger->error('ticket.reply.notification.failed', [
+                        'ticket_id' => $ticketId,
+                        'error' => $nte->getMessage()
+                    ]);
                 }
             } else {
                 $this->logger->info('ticket.reply.notification_debounced', [
@@ -507,14 +521,45 @@ class TicketService extends \App\Services\BaseService
      */
     public function updatePriority(int $ticketId, string $priority, int $adminId): bool
     {
-        $ticket = $this->ticketModel->findById($ticketId);
-        if (!$ticket) return false;
+        $this->db->beginTransaction();
 
-        $ok = $this->ticketModel->update($ticketId, ['priority' => $priority]);
-        if ($ok) {
-            $this->logger->activity('ticket_priority_updated', "اولویت تیکت #{$ticketId} به {$priority} تغییر یافت", $adminId, ['priority' => $priority]);
+        try {
+            // ✅ قفل بدبینانه برای جلوگیری از Race Condition (TOCTOU)
+            $ticket = $this->db->query(
+                "SELECT id, priority FROM tickets WHERE id = ? FOR UPDATE",
+                [$ticketId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            if (!$ticket) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            if ($ticket->priority === $priority) {
+                $this->db->commit();
+                return true;
+            }
+
+            $oldPriority = $ticket->priority;
+
+            $ok = $this->ticketModel->update($ticketId, ['priority' => $priority]);
+            if ($ok) {
+                $this->logger->activity('ticket_priority_updated', "اولویت تیکت #{$ticketId} از {$oldPriority} به {$priority} تغییر یافت", $adminId, [
+                    'old_priority' => $oldPriority,
+                    'new_priority' => $priority
+                ]);
+            }
+
+            $this->db->commit();
+            return $ok;
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            $this->logger->error('ticket.priority.update.failed', [
+                'ticket_id' => $ticketId,
+                'error' => $e->getMessage()
+            ]);
+            return false;
         }
-        return $ok;
     }
 
     /**

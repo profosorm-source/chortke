@@ -10,11 +10,19 @@ use App\Models\ContactMessage;
 class ContactService extends \App\Services\BaseService
 {
     private ContactMessage $contactMessageModel;
+    private \Core\RateLimiter $rateLimiter;
+    private \App\Services\CaptchaService $captchaService;
 
-    public function __construct(ContactMessage $contactMessageModel, LoggerInterface $logger)
-    {
+    public function __construct(
+        ContactMessage $contactMessageModel,
+        LoggerInterface $logger,
+        \Core\RateLimiter $rateLimiter,
+        \App\Services\CaptchaService $captchaService
+    ) {
         parent::__construct($logger);
         $this->contactMessageModel = $contactMessageModel;
+        $this->rateLimiter = $rateLimiter;
+        $this->captchaService = $captchaService;
     }
 
     /**
@@ -30,14 +38,20 @@ class ContactService extends \App\Services\BaseService
         // 2. CAPTCHA Verification
         $captchaToken = $data['captcha_token'] ?? '';
         $captchaResponse = $data['captcha_response'] ?? '';
+
+        // 🛡️ HIGH-17: اعتبارسنجی قطعی فیلدهای توکن کپچا و پاسخ آن جهت ممانعت از ارسال هرزنامه توسط بات‌ها
+        if (empty($captchaToken) || empty($captchaResponse)) {
+            return $this->errorResponse('ارائه توکن و پاسخ کپچا الزامی است.', [], 422);
+        }
+
         if (!$this->verifyCaptcha($captchaToken, $captchaResponse)) {
-            return $this->errorResponse('لطفاً کپچا را تأیید کنید.', [], 422);
+            return $this->errorResponse('تأییدیه کپچا نامعتبر است.', [], 422);
         }
 
         // 3. IP Rate Limiting: 3 messages per hour per IP
         $ip = get_client_ip();
         $ipRateKey = "contact_form:ip:{$ip}";
-        if (!app(\Core\RateLimiter::class)->attempt($ipRateKey, 3, 3600)) {
+        if (!$this->rateLimiter->attempt($ipRateKey, 3, 3600)) {
             return $this->errorResponse('تعداد پیام‌های ارسالی شما بیش از حد مجاز است. لطفاً ساعتی دیگر تلاش کنید.', [], 429);
         }
 
@@ -46,7 +60,7 @@ class ContactService extends \App\Services\BaseService
             $email = strtolower(trim((string)$data['email']));
             $normalizedEmail = preg_replace('/\+[^@]*@/', '@', $email);
             $emailKey = "contact_form:email:" . hash('sha256', $normalizedEmail);
-            if (!app(\Core\RateLimiter::class)->attempt($emailKey, 5, 86400)) {
+            if (!$this->rateLimiter->attempt($emailKey, 5, 86400)) {
                 return $this->errorResponse('این ایمیل امروز پیام‌های زیادی ارسال کرده است. لطفاً فردا تلاش کنید.', [], 429);
             }
         }
@@ -90,14 +104,14 @@ class ContactService extends \App\Services\BaseService
 
     private function verifyCaptcha(?string $token, ?string $response): bool
     {
-        if (empty($token) || empty($response)) {
-            return false;
+        // 🛡️ HIGH-17: تایید نفوذناپذیر کپچا در صورت فعال بودن با ممانعت از هرگونه سناریوی دور زدن
+        if ($this->captchaService->isEnabled()) {
+            if (empty($token) || empty($response)) {
+                return false;
+            }
+            return $this->captchaService->verify($token, $response);
         }
-        $captchaService = app(\App\Services\CaptchaService::class);
-        if (!$captchaService->isEnabled()) {
-            return true;
-        }
-        return $captchaService->verify($token, $response);
+        return true;
     }
 
     /**

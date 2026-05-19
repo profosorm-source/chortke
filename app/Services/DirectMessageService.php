@@ -322,6 +322,14 @@ class DirectMessageService extends \App\Services\BaseService
     }
 
     /**
+     * بررسی وجود مکالمه فعال بین دو کاربر
+     */
+    public function hasConversation(int $userId, int $otherUserId): bool
+    {
+        return $this->directMessageModel->hasConversation($userId, $otherUserId);
+    }
+
+    /**
      * پاک کردن پیام
      */
     public function deleteMessage(int $messageId, int $userId): bool
@@ -329,7 +337,8 @@ class DirectMessageService extends \App\Services\BaseService
         try {
             $message = $this->directMessageModel->findMessageById($messageId);
 
-            if (!$message || ($message->sender_id !== $userId && $message->recipient_id !== $userId)) {
+            // 🛡️ HIGH-05: بررسی هویت فرستنده جهت ممانعت از حذف پیام‌های طرف مقابل (IDOR)
+            if (!$message || (int)$message->sender_id !== $userId) {
                 return false;
             }
 
@@ -369,9 +378,11 @@ class DirectMessageService extends \App\Services\BaseService
      */
     private function encryptMessage(string $message): string
     {
+        // 🛡️ HIGH-15: ممانعت از ذخیره‌سازی پیام‌ها با کلیدهای پیش‌فرض موقت و بازگشت خطای امنیتی صریح
         $encryptionKey = $this->settingService->get('dm_encryption_key');
         if (!$encryptionKey) {
-            $encryptionKey = base64_encode('strong_message_enc_key_v1_32bytes_long');
+            $this->logger->critical('dm.encryption.key.missing', ['error' => 'Settings key dm_encryption_key is missing']);
+            throw new \RuntimeException('تنظیمات کلید رمزنگاری پیام‌ها یافت نشد.');
         }
         
         $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
@@ -386,9 +397,11 @@ class DirectMessageService extends \App\Services\BaseService
     private function decryptMessage(string $encrypted): string
     {
         try {
+            // 🛡️ HIGH-15: ممانعت از بازگشایی پیام‌ها با کلیدهای پیش‌فرض موقت و بازگشت خطای امنیتی صریح
             $encryptionKey = $this->settingService->get('dm_encryption_key');
             if (!$encryptionKey) {
-                $encryptionKey = base64_encode('strong_message_enc_key_v1_32bytes_long');
+                $this->logger->critical('dm.encryption.key.missing', ['error' => 'Settings key dm_encryption_key is missing']);
+                throw new \RuntimeException('تنظیمات کلید رمزنگاری پیام‌ها یافت نشد.');
             }
             
             $decoded = base64_decode($encrypted);
@@ -421,15 +434,17 @@ class DirectMessageService extends \App\Services\BaseService
     private function checkRateLimit(int $userId): bool
     {
         $key = 'rate_limit:messages:send:' . $userId;
-        $currentCount = (int)($this->redis->get($key) ?? 0);
         
-        // حداکثر 30 پیام در دقیقه
-        if ($currentCount >= 30) {
-            return false;
+        // 🛡️ MED-14: استفاده از منطق افزایش اتمیک در ردیس جهت مسدودسازی کامل شرایط رقابتی (TOCTOU)
+        $count = (int)$this->redis->incr($key);
+        if ($count === 1) {
+            $this->redis->expire($key, 60);
         }
         
-        $this->redis->incr($key);
-        $this->redis->expire($key, 60);
+        // حداکثر 30 پیام در دقیقه
+        if ($count > 30) {
+            return false;
+        }
         
         return true;
     }
@@ -531,6 +546,10 @@ class DirectMessageService extends \App\Services\BaseService
 
     private function normalizeUnicode(string $text): string
     {
+        // 🛡️ HIGH-16: فیلتر کردن بای‌پس‌های هوموگرافیک و یونیکد با تجزیه نویسه‌های یونیکد به اشکال سازگار و استاندارد دکامپوز شده
+        if (class_exists('\Normalizer')) {
+            $text = \Normalizer::normalize($text, \Normalizer::FORM_KD) ?: $text;
+        }
         $text = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}]/u', '', $text);
         $text = str_replace(['＠', '．'], ['@', '.'], $text);
         return $text;
