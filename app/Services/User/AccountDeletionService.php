@@ -25,6 +25,7 @@ class AccountDeletionService extends \App\Services\BaseService
     private EventDispatcher $eventDispatcher;
     private Wallet $walletModel;
     private DistributedLockService $lockService;
+    private \App\Services\EmailService $emailService;
 
     public function __construct(
         User $userModel,
@@ -34,7 +35,8 @@ class AccountDeletionService extends \App\Services\BaseService
         CustomTaskService $customTaskService,
         EventDispatcher $eventDispatcher,
         Wallet $walletModel,
-        DistributedLockService $lockService
+        DistributedLockService $lockService,
+        \App\Services\EmailService $emailService
     ) {
         parent::__construct($logger);
         $this->userModel = $userModel;
@@ -44,6 +46,7 @@ class AccountDeletionService extends \App\Services\BaseService
         $this->eventDispatcher = $eventDispatcher;
         $this->walletModel = $walletModel;
         $this->lockService = $lockService;
+        $this->emailService = $emailService;
     }
 
     /**
@@ -166,6 +169,38 @@ class AccountDeletionService extends \App\Services\BaseService
             );
 
             $this->db->commit();
+
+            // ✅ Send confirmation email BEFORE event dispatch
+            $toEmail = is_array($user) ? ($user['email'] ?? '') : ($user->email ?? '');
+            $toName = is_array($user) ? ($user['full_name'] ?? '') : ($user->full_name ?? '');
+            if (empty($toName)) {
+                $toName = is_array($user) ? ($user['username'] ?? 'User') : ($user->username ?? 'User');
+            }
+
+            try {
+                if (!empty($toEmail) && filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+                    $subject = 'تأیید حذف حساب کاربری چرتکه';
+                    $fullName = $toName ?: 'کاربر گرامی';
+                    $delReason = $reason ?? 'درخواست شما';
+                    $delDate = date('Y-m-d H:i:s');
+                    
+                    $bodyHtml = "
+                        <p>کاربر گرامی <strong>{$fullName}</strong>،</p>
+                        <p>حساب کاربری شما در سیستم چرتکه با موفقیت و به طور کامل حذف گردید.</p>
+                        <p>علت حذف: {$delReason}</p>
+                        <p>زمان حذف: {$delDate}</p>
+                        <p>با آرزوی موفقیت،<br>تیم پشتیبانی چرتکه</p>
+                    ";
+                    
+                    $this->emailService->sendDirect($toEmail, $toName, $subject, $bodyHtml);
+                }
+            } catch (\Throwable $e) {
+                $this->logger->critical('account_deletion.email_failed', [
+                    'user_id' => $userId,
+                    'email' => $toEmail,
+                    'error' => $e->getMessage()
+                ]);
+            }
 
             // 📢 شلیک رویداد حذف حساب برای سایر بخش‌های سیستم (معماری رویداد محور)
             try {

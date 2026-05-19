@@ -213,6 +213,17 @@ class UserService extends \App\Services\BaseService
             }
 
             if (!empty($data['password'])) {
+                // ✅ Validate password strength
+                $complexityPattern = '/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/';
+                if (!preg_match($complexityPattern, (string)$data['password'])) {
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
+                    return [
+                        'success' => false,
+                        'errors' => ['password' => ['رمز عبور باید حداقل ۸ کاراکتر و شامل حروف بزرگ، کوچک، عدد و نماد باشد']]
+                    ];
+                }
                 $updateData['password'] = hash_password((string)$data['password']);
             }
 

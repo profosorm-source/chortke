@@ -61,16 +61,20 @@ class UserSettingsService extends \App\Services\BaseService
         'compact_view' => false,
     ];
 
+    private \Core\RateLimiter $rateLimiter;
+
     public function __construct(
         Database $db,
         LoggerInterface $logger,
         User $userModel,
-        Cache $cache
+        Cache $cache,
+        \Core\RateLimiter $rateLimiter
     ) {
         parent::__construct($logger);
         $this->db = $db;
         $this->cache = $cache;
         $this->userModel = $userModel;
+        $this->rateLimiter = $rateLimiter;
     }
 
     /**
@@ -121,6 +125,12 @@ class UserSettingsService extends \App\Services\BaseService
      */
     public function set(int $userId, string $key, $value): bool
     {
+        // ✅ Add rate limiting (max 20 attempts per 1 minute)
+        if (!$this->rateLimiter->attempt("user_settings:update:{$userId}", 20, 1)) {
+            $this->logger->warning('settings.rate_limit_exceeded', ['user_id' => $userId]);
+            return false;
+        }
+
         // اعتبارسنجی مقدار
         if (!$this->validateSetting($key, $value)) {
             return false;
