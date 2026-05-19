@@ -59,7 +59,8 @@ class SystemLog extends Model
         ?string $dateFrom = null,
         ?string $dateTo = null
     ): array {
-        $page = max(1, $page);
+        // C-04: Enforce hard ceiling on pagination depths to prevent unbounded pagination
+        $page = max(1, min(10000, $page));
         $perPage = max(1, min(100, $perPage));
         $offset = ($page - 1) * $perPage;
 

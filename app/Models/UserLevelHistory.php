@@ -6,25 +6,74 @@ use Core\Model;
 use Core\Database;
 
 class UserLevelHistory extends Model {
-/**
+    protected static string $table = 'user_level_history';
+    /**
+     * تولید امضای دیجیتال برای امنیت و عدم دستکاری تاریخچه تغییرات
+     */
+    public function generateSignature(int $userId, ?string $fromLevel, string $toLevel, string $changeType, ?string $reason, ?string $metadata, ?string $ipAddress): string
+    {
+        $payload = \implode('|', [
+            $userId,
+            $fromLevel ?? '',
+            $toLevel,
+            $changeType,
+            $reason ?? '',
+            $metadata ?? '',
+            $ipAddress ?? '',
+        ]);
+        return \hash_hmac('sha256', $payload, \secure_key());
+    }
+
+    /**
+     * اعتبارسنجی امضای دیجیتال تاریخچه تغییر سطح
+     */
+    public function verifySignature(object $row): bool
+    {
+        if (empty($row->signature)) {
+            return false;
+        }
+        $expected = $this->generateSignature(
+            (int)$row->user_id,
+            $row->from_level,
+            $row->to_level,
+            $row->change_type,
+            $row->reason,
+            $row->metadata,
+            $row->ip_address
+        );
+        return \hash_equals($expected, $row->signature);
+    }
+
+    /**
      * ثبت تغییر سطح
      */
     public function create(array $data): ?object
     {
+        $userId = (int)$data['user_id'];
+        $fromLevel = $data['from_level'] ?? null;
+        $toLevel = $data['to_level'];
+        $changeType = $data['change_type'];
+        $reason = $data['reason'] ?? null;
+        $metadata = isset($data['metadata']) ? \json_encode($data['metadata'], JSON_UNESCAPED_UNICODE) : null;
+        $ipAddress = $data['ip_address'] ?? get_client_ip();
+
+        $signature = $this->generateSignature($userId, $fromLevel, $toLevel, $changeType, $reason, $metadata, $ipAddress);
+
         $stmt = $this->db->prepare("
             INSERT INTO user_level_history 
-            (user_id, from_level, to_level, change_type, reason, metadata, ip_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (user_id, from_level, to_level, change_type, reason, metadata, ip_address, signature)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
         $result = $stmt->execute([
-            $data['user_id'],
-            $data['from_level'] ?? null,
-            $data['to_level'],
-            $data['change_type'],
-            $data['reason'] ?? null,
-            isset($data['metadata']) ? \json_encode($data['metadata'], JSON_UNESCAPED_UNICODE) : null,
-            $data['ip_address'] ?? get_client_ip(),
+            $userId,
+            $fromLevel,
+            $toLevel,
+            $changeType,
+            $reason,
+            $metadata,
+            $ipAddress,
+            $signature,
         ]);
 
         if (!$result) return null;
@@ -39,6 +88,9 @@ class UserLevelHistory extends Model {
         $stmt = $this->db->prepare("SELECT * FROM user_level_history WHERE id = ?");
         $stmt->execute([$id]);
         $result = $stmt->fetch(\PDO::FETCH_OBJ);
+        if ($result) {
+            $result->is_valid = $this->verifySignature($result);
+        }
         return $result ?: null;
     }
 
@@ -59,7 +111,11 @@ class UserLevelHistory extends Model {
             LIMIT ? OFFSET ?
         ");
         $stmt->execute([$userId, $limit, $offset]);
-        return $stmt->fetchAll(\PDO::FETCH_OBJ);
+        $rows = $stmt->fetchAll(\PDO::FETCH_OBJ);
+        foreach ($rows as $row) {
+            $row->is_valid = $this->verifySignature($row);
+        }
+        return $rows;
     }
 
     /**
@@ -102,7 +158,11 @@ class UserLevelHistory extends Model {
         $params[] = $limit;
         $params[] = $offset;
         $stmt->execute($params);
-        return $stmt->fetchAll(\PDO::FETCH_OBJ);
+        $rows = $stmt->fetchAll(\PDO::FETCH_OBJ);
+        foreach ($rows as $row) {
+            $row->is_valid = $this->verifySignature($row);
+        }
+        return $rows;
     }
 
     /**

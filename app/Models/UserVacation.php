@@ -11,6 +11,23 @@ use Core\Model;
  */
 class UserVacation extends Model
 {
+    protected static string $table = 'user_vacations';
+
+    /**
+     * محاسبه مجموع روزهای مرخصی کاربر در بازه زمانی گذشته
+     */
+    public function getCumulativeVacationDays(int $userId, int $daysBack = 90): int
+    {
+        $stmt = $this->db->prepare("
+            SELECT SUM(duration_days) FROM user_vacations
+            WHERE user_id = ?
+            AND status IN ('active', 'completed')
+            AND start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL ? DAY)
+        ");
+        $stmt->execute([$userId, $daysBack]);
+        return (int) $stmt->fetchColumn();
+    }
+
     /**
      * بررسی اینکه آیا کاربر در ۹۰ روز گذشته از مرخصی استفاده کرده است یا خیر
      */
@@ -54,6 +71,12 @@ class UserVacation extends Model
     {
         // مدت زمان مرخصی باید دقیقاً بین ۳ تا ۷ روز باشد
         $durationDays = \max(3, \min(7, $durationDays));
+
+        // ✅ بررسی سقف کل مرخصی در ۹۰ روز اخیر (حداکثر ۳۰ روز)
+        $cumulative = $this->getCumulativeVacationDays($userId, 90);
+        if (($cumulative + $durationDays) > 30) {
+            throw new \RuntimeException('مجموع روزهای مرخصی شما در ۹۰ روز گذشته نمی‌تواند از ۳۰ روز بیشتر شود');
+        }
 
         // شروع مرخصی از امروز یا از فردا
         $startDate = date('Y-m-d');

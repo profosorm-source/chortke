@@ -55,7 +55,8 @@ class SecurityLog extends Model
         int $page = 1,
         int $perPage = 20
     ): array {
-        $page = max(1, $page);
+        // C-04: Enforce hard ceiling on pagination depths to prevent unbounded pagination
+        $page = max(1, min(10000, $page));
         $perPage = max(1, min(100, $perPage));
         $offset = ($page - 1) * $perPage;
 
