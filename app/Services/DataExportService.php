@@ -178,14 +178,27 @@ class DataExportService extends \App\Services\BaseService
                     $realPath = realpath($export['file_path']);
                     // تایید قرار داشتن مسیر فایل در پوشه مجاز exports جهت جلوگیری از Path Traversal
                     if ($realPath !== false && $baseExportDir !== false && strpos($realPath, $baseExportDir) === 0) {
-                        if (file_exists($realPath)) {
-                            unlink($realPath);
+                        $lockFile = $realPath . '.lock';
+                        if (file_exists($lockFile)) {
+                            continue;
                         }
+                        
+                        touch($lockFile);
+                        try {
+                            if (file_exists($realPath)) {
+                                unlink($realPath);
+                            }
+                            $this->exportModel->clearFilePath((int)$export['id']);
+                            $deleted++;
+                        } finally {
+                            @unlink($lockFile);
+                        }
+                    } else {
+                        $this->exportModel->clearFilePath((int)$export['id']);
                     }
+                } else {
+                    $this->exportModel->clearFilePath((int)$export['id']);
                 }
-
-                $this->exportModel->clearFilePath((int)$export['id']);
-                $deleted++;
             }
 
             $this->logger->info('data_export.expired_deleted', ['count' => $deleted]);

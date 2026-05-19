@@ -40,6 +40,20 @@ class BackupService extends \App\Services\BaseService
     {
         $cnfFile = null;
         try {
+            // Check required tools
+            exec('mysqldump --version 2>&1', $outDump, $retDump);
+            if ($retDump !== 0) {
+                throw new \Exception('ابزار mysqldump در سرور یافت نشد. لطفاً نصب کنید.');
+            }
+            exec('gzip --version 2>&1', $outGzip, $retGzip);
+            if ($retGzip !== 0) {
+                throw new \Exception('ابزار gzip در سرور یافت نشد. لطفاً نصب کنید.');
+            }
+            exec('openssl version 2>&1', $outSsl, $retSsl);
+            if ($retSsl !== 0) {
+                throw new \Exception('ابزار openssl در سرور یافت نشد. لطفاً نصب کنید.');
+            }
+
             $timestamp = date('YmdHis');
             $filename = "backup_{$timestamp}.sql";
             $filepath = $this->backupDir . '/' . $filename;
@@ -77,13 +91,30 @@ class BackupService extends \App\Services\BaseService
             $gzFilepath = $filepath . '.gz';
             exec("gzip " . escapeshellarg($filepath), $compressOutput, $compressCode);
 
-            // Integrity Check: Calculate SHA-256 checksum
-            $checksum = hash_file('sha256', $gzFilepath ?? $filepath);
+            // Encryption using OpenSSL CLI
+            $encFilepath = $gzFilepath . '.enc';
+            $encKey = bin2hex(substr(hash('sha256', (string)config('app.key', 'fallback_secret_key_2026'), true), 0, 32));
+            $encCmd = sprintf(
+                'openssl enc -aes-256-cbc -salt -pbkdf2 -in %s -out %s -pass pass:%s 2>&1',
+                escapeshellarg($gzFilepath),
+                escapeshellarg($encFilepath),
+                escapeshellarg($encKey)
+            );
+            exec($encCmd, $encOut, $encCode);
+            
+            if ($encCode !== 0) {
+                throw new \Exception('رمزنگاری فایل پشتیبان با خطا مواجه شد: ' . implode("\n", $encOut));
+            }
+            @unlink($gzFilepath); // Remove unencrypted gz
+            
+            $finalFilepath = $encFilepath;
 
-            $fileSize = filesize($gzFilepath ?? $filepath);
+            // Integrity Check: Calculate SHA-256 checksum
+            $checksum = hash_file('sha256', $finalFilepath);
+            $fileSize = filesize($finalFilepath);
 
             $this->logger->info('backup.created', [
-                'filename' => $filename,
+                'filename' => basename($finalFilepath),
                 'size' => $fileSize,
                 'checksum' => $checksum,
                 'request_id' => $_SERVER['REQUEST_ID'] ?? null,
@@ -96,7 +127,7 @@ class BackupService extends \App\Services\BaseService
                 'request_id' => $_SERVER['REQUEST_ID'] ?? null,
                 'status' => 'completed',
                 'type' => 'manual',
-                'file_path' => basename($gzFilepath ?? $filepath),
+                'file_path' => basename($finalFilepath),
                 'size_bytes' => $fileSize,
                 'checksum' => $checksum,
                 'description' => $description,
@@ -106,14 +137,17 @@ class BackupService extends \App\Services\BaseService
 
             return [
                 'success' => true,
-                'filename' => basename($gzFilepath ?? $filepath),
+                'filename' => basename($finalFilepath),
                 'size' => $this->formatBytes($fileSize),
-                'path' => $gzFilepath ?? $filepath,
+                'path' => $finalFilepath,
                 'timestamp' => $timestamp
             ];
 
         } catch (\Exception $e) {
             $this->logger->error('backup.creation_failed', ['error' => $e->getMessage()]);
+            if (class_exists(\App\Services\Sentry\SentryExceptionHandler::class)) {
+                \App\Services\Sentry\SentryExceptionHandler::captureMessage('Backup failed: ' . $e->getMessage(), 'critical', null, ['component' => 'BackupService']);
+            }
             return [
                 'success' => false,
                 'error' => $e->getMessage()
@@ -198,14 +232,23 @@ class BackupService extends \App\Services\BaseService
     /**
      * بازیابی از پشتیبان
      */
-    public function restoreBackup(string $filename): array
+    public function restoreBackup(string $filename, bool $skipSnapshot = false): array
     {
         $cnfFile = null;
         $tempSqlFile = null;
+        $tempGzFile = null;
         try {
+            if (!$skipSnapshot) {
+                // 1. Create emergency snapshot
+                $snapshotResult = $this->createBackup('pre-restore-snapshot-' . time());
+                if (!$snapshotResult['success']) {
+                    throw new \Exception('بازیابی لغو شد: ایجاد پشتیبان اضطراری با خطا مواجه شد.');
+                }
+            }
+
             $filename = basename($filename);
             // Validate filename format strictly
-            if (!preg_match('/^[a-zA-Z0-9_\-\.]+\.(sql|gz)$/i', $filename)) {
+            if (!preg_match('/^[a-zA-Z0-9_\-\.]+\.(sql|gz|enc)$/i', $filename)) {
                 throw new \Exception('نام فایل پشتیبان نامعتبر است');
             }
 
@@ -223,9 +266,37 @@ class BackupService extends \App\Services\BaseService
             if ($fileReal === false || strpos($fileReal, $baseReal) !== 0) {
                 throw new \Exception('Path traversal detected or file is invalid');
             }
+            
+            // 2. Checksum Verification
+            $backupRecord = $this->backupLogModel->findByFilename($filename);
+            if ($backupRecord && !empty($backupRecord['checksum'])) {
+                $currentChecksum = hash_file('sha256', $fileReal);
+                if ($currentChecksum !== $backupRecord['checksum']) {
+                    throw new \Exception('Backup file integrity check failed! File may be corrupted or tampered with.');
+                }
+            }
 
-            $restoreSourcePath = $filepath;
-            $isCompressed = (strtolower(substr($filename, -3)) === '.gz');
+            $restoreSourcePath = $fileReal;
+            
+            // Decrypt if encrypted
+            $isEncrypted = (strtolower(substr($filename, -4)) === '.enc');
+            if ($isEncrypted) {
+                $tempGzFile = tempnam(sys_get_temp_dir(), 'dbdec_') . '.gz';
+                $encKey = bin2hex(substr(hash('sha256', (string)config('app.key', 'fallback_secret_key_2026'), true), 0, 32));
+                $decCmd = sprintf(
+                    'openssl enc -d -aes-256-cbc -pbkdf2 -in %s -out %s -pass pass:%s 2>&1',
+                    escapeshellarg($restoreSourcePath),
+                    escapeshellarg($tempGzFile),
+                    escapeshellarg($encKey)
+                );
+                exec($decCmd, $decOut, $decCode);
+                if ($decCode !== 0) {
+                    throw new \Exception('رمزگشایی فایل پشتیبان با خطا مواجه شد.');
+                }
+                $restoreSourcePath = $tempGzFile;
+            }
+
+            $isCompressed = (strtolower(substr($restoreSourcePath, -3)) === '.gz');
 
             // Safe non-destructive decompression using native PHP zlib streams to local temp
             if ($isCompressed) {
@@ -315,10 +386,13 @@ class BackupService extends \App\Services\BaseService
             ];
         } finally {
             if ($cnfFile && file_exists($cnfFile)) {
-                unlink($cnfFile);
+                @unlink($cnfFile);
             }
             if ($tempSqlFile && file_exists($tempSqlFile)) {
-                unlink($tempSqlFile);
+                @unlink($tempSqlFile);
+            }
+            if ($tempGzFile && file_exists($tempGzFile)) {
+                @unlink($tempGzFile);
             }
         }
     }

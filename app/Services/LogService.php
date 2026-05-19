@@ -83,6 +83,45 @@ class LogService extends BaseService
         register_shutdown_function([$this, 'flush']);
     }
 
+    private function sanitizeContext(array $context): array
+    {
+        $sensitive = ['password', 'token', 'secret', 'api_key', 'credit_card', 
+                      'cvv', 'ssn', 'pin', 'otp', 'authorization', 'cookie', 'password_confirmation'];
+        
+        array_walk_recursive($context, function(&$value, $key) use ($sensitive) {
+            if (in_array(strtolower((string)$key), $sensitive)) {
+                $value = '[REDACTED]';
+            }
+        });
+        
+        return $context;
+    }
+
+    private function getRealIp(): ?string
+    {
+        $headers = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 
+                    'HTTP_X_REAL_IP', 'REMOTE_ADDR'];
+        
+        foreach ($headers as $header) {
+            if (!empty($_SERVER[$header])) {
+                $ip = explode(',', $_SERVER[$header])[0];
+                if (filter_var(trim($ip), FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                    return trim($ip);
+                }
+            }
+        }
+        return $_SERVER['REMOTE_ADDR'] ?? null;
+    }
+
+    private function getTraceContext(): array
+    {
+        return [
+            'trace_id' => $_SERVER['HTTP_X_TRACE_ID'] ?? $this->requestId,
+            'span_id' => bin2hex(random_bytes(8)),
+            'parent_span_id' => $_SERVER['HTTP_X_PARENT_SPAN_ID'] ?? null,
+        ];
+    }
+
     public function logActivity(string $action, string $description, ?int $userId = null, array $context = [], string $channel = 'default'): void
     {
         $data = [
@@ -91,8 +130,8 @@ class LogService extends BaseService
             'channel' => $channel,
             'action' => $action,
             'description' => $description,
-            'context' => !empty($context) ? json_encode($context, JSON_UNESCAPED_UNICODE) : null,
-            'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
+            'context' => !empty($context) ? json_encode(array_merge($this->sanitizeContext($context), $this->getTraceContext()), JSON_UNESCAPED_UNICODE) : null,
+            'ip_address' => $this->getRealIp(),
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
             'created_at' => date('Y-m-d H:i:s')
         ];
@@ -101,10 +140,11 @@ class LogService extends BaseService
 
         // Record to AuditTrail lazily to break circular dependency
         try {
-            $auditTrail = Container::getInstance()->make(AuditTrail::class);
-            $auditTrail->record($action, $userId, $context);
+            $auditTrail = Container::getInstance()->make(\App\Services\AuditTrail::class);
+            $auditTrail->record($action, $userId, $this->sanitizeContext($context));
         } catch (\Throwable $e) {
-            // Silently fail to avoid breaking the request
+            // Fail gracefully but log to emergency file to prevent evasion
+            $this->robustFallbackLog('audit_trail_evasion', [['action' => $action, 'user' => $userId]], $e->getMessage());
         }
     }
 
@@ -115,9 +155,9 @@ class LogService extends BaseService
             'level' => self::LEVEL_MAP[strtolower($level)] ?? 'INFO',
             'type' => $context['type'] ?? 'system',
             'message' => $message,
-            'context' => !empty($context) ? json_encode($context, JSON_UNESCAPED_UNICODE) : null,
+            'context' => !empty($context) ? json_encode(array_merge($this->sanitizeContext($context), $this->getTraceContext()), JSON_UNESCAPED_UNICODE) : null,
             'user_id' => $this->session->get('user_id'),
-            'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
+            'ip_address' => $this->getRealIp(),
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
             'created_at' => date('Y-m-d H:i:s')
         ];
@@ -132,9 +172,9 @@ class LogService extends BaseService
             'level' => $level,
             'type' => $event,
             'message' => $message,
-            'context' => !empty($context) ? json_encode($context, JSON_UNESCAPED_UNICODE) : null,
+            'context' => !empty($context) ? json_encode(array_merge($this->sanitizeContext($context), $this->getTraceContext()), JSON_UNESCAPED_UNICODE) : null,
             'user_id' => $this->session->get('user_id'),
-            'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
+            'ip_address' => $this->getRealIp(),
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
             'created_at' => date('Y-m-d H:i:s')
         ];
@@ -148,7 +188,7 @@ class LogService extends BaseService
             'request_id' => $this->requestId,
             'metric' => $metric,
             'value' => (float)$value,
-            'context' => !empty($context) ? json_encode($context, JSON_UNESCAPED_UNICODE) : null,
+            'context' => !empty($context) ? json_encode(array_merge($this->sanitizeContext($context), $this->getTraceContext()), JSON_UNESCAPED_UNICODE) : null,
             'created_at' => date('Y-m-d H:i:s')
         ];
 
@@ -257,11 +297,46 @@ class LogService extends BaseService
 
     public function cleanup(int $days = 90): array
     {
+        $this->rotateLogFiles();
+
         return [
             'activity' => $this->activityLog->deleteOlderThanChunked($days),
             'system' => $this->systemLog->deleteOlderThanChunked($days),
             'security' => $this->securityLog->deleteOlderThanChunked($days),
             'performance' => $this->performanceLog->deleteOlderThanChunked($days),
         ];
+    }
+
+    private function rotateLogFiles(): void
+    {
+        $maxSize = 10 * 1024 * 1024; // 10MB
+        $files = glob($this->logDir . '*.log');
+        if ($files) {
+            foreach ($files as $file) {
+                if (is_file($file) && filesize($file) > $maxSize) {
+                    $info = pathinfo($file);
+                    $newName = $info['dirname'] . '/' . $info['filename'] . '_' . date('YmdHis') . '.' . $info['extension'];
+                    rename($file, $newName);
+                    
+                    // Compress in background (Windows compatible)
+                    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+                        pclose(popen('start /B gzip ' . escapeshellarg($newName), 'r'));
+                    } else {
+                        exec('gzip ' . escapeshellarg($newName) . ' > /dev/null 2>&1 &');
+                    }
+                }
+            }
+        }
+
+        // Delete old archives
+        $gzFiles = glob($this->logDir . '*.gz');
+        $cutoff = time() - ($this->retentionDays * 86400);
+        if ($gzFiles) {
+            foreach ($gzFiles as $gz) {
+                if (is_file($gz) && filemtime($gz) < $cutoff) {
+                    @unlink($gz);
+                }
+            }
+        }
     }
 }

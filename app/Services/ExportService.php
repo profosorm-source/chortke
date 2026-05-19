@@ -39,7 +39,9 @@ class ExportService extends \App\Services\BaseService
             if ($maskPii) {
                 $row = $this->maskSensitiveData($row);
             }
+            $row = $this->sanitizeRowForCsv($row);
             \fputcsv($output, \array_values($row));
+            if (\connection_aborted()) break;
         }
 
         \fclose($output);
@@ -61,6 +63,34 @@ class ExportService extends \App\Services\BaseService
             $row['mobile'] = substr((string)$row['mobile'], 0, 4) . '***' . substr((string)$row['mobile'], -2);
         }
         return $row;
+    }
+
+    private function sanitizeRowForCsv(array $row): array
+    {
+        foreach ($row as $key => $value) {
+            if (\is_string($value)) {
+                $val = \trim($value);
+                if ($val !== '' && \in_array($val[0], ['=', '+', '-', '@'], true)) {
+                    $row[$key] = "'" . $value;
+                }
+            }
+        }
+        return $row;
+    }
+
+    private function authorizeExport(string $permission): void
+    {
+        try {
+            $session = \Core\Container::getInstance()->make(\Core\Session::class);
+            $userId = $session->get('user_id');
+            $policyService = \Core\Container::getInstance()->make(\App\Services\Shared\PolicyService::class);
+            
+            if (!$userId || !$policyService->authorizeById($permission, $userId)) {
+                throw new \Exception('Unauthorized export attempt');
+            }
+        } catch (\Throwable $e) {
+            throw new \Exception('Authorization failed: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -151,6 +181,8 @@ class ExportService extends \App\Services\BaseService
      */
     public function exportUsers(array $filters = []): void
     {
+        $this->authorizeExport('admin.export.users');
+
         $dateFrom = $filters['from'] ?? null;
         $dateTo = $filters['to'] ?? null;
         $kycStatus = $filters['kyc_status'] ?? null;
@@ -168,6 +200,8 @@ class ExportService extends \App\Services\BaseService
      */
     public function exportTransactionsStream(array $filters = []): void
     {
+        $this->authorizeExport('admin.export.transactions');
+
         $dateFrom = $filters['from'] ?? null;
         $dateTo = $filters['to'] ?? null;
         $type = $filters['type'] ?? null;
@@ -185,6 +219,8 @@ class ExportService extends \App\Services\BaseService
      */
     public function exportWithdrawalsStream(array $filters = []): void
     {
+        $this->authorizeExport('admin.export.withdrawals');
+
         $dateFrom = $filters['from'] ?? null;
         $dateTo = $filters['to'] ?? null;
         $status = $filters['status'] ?? null;
@@ -202,6 +238,8 @@ class ExportService extends \App\Services\BaseService
      */
     public function exportAuditTrail(array $filters = []): void
     {
+        $this->authorizeExport('admin.export.audit');
+
         $dateFrom = $filters['from'] ?? null;
         $dateTo = $filters['to'] ?? null;
         $event = $filters['event'] ?? null;

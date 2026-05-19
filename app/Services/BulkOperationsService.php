@@ -199,13 +199,6 @@ class BulkOperationsService extends \App\Services\BaseService
         string $filename = 'export'
     ): array {
         try {
-            $stmt = $this->db->query($sql, $params);
-            $data = $stmt ? $stmt->fetchAll(\PDO::FETCH_ASSOC) : [];
-
-            if (empty($data)) {
-                return $this->errorResponse('هیچ داده‌ای برای صادرات وجود ندارد.');
-            }
-
             // ایجاد نام فایل
             $filename = $this->sanitizeFilename($filename);
             $filename .= '_' . date('Y-m-d_His') . '.csv';
@@ -218,35 +211,46 @@ class BulkOperationsService extends \App\Services\BaseService
                 mkdir($dir, 0755, true);
             }
 
+            $stmt = $this->db->query($sql, $params);
+            
             // ایجاد فایل CSV
             $file = fopen($filepath, 'w');
             
             // UTF-8 BOM برای Excel
             fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
 
-            // Headers
-            if (empty($headers)) {
-                $headers = array_keys($data[0]);
-            }
-            fputcsv($file, $headers);
+            $count = 0;
+            $firstRow = true;
 
-            // Data
-            foreach ($data as $row) {
+            while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                if ($firstRow) {
+                    if (empty($headers)) {
+                        $headers = array_keys($row);
+                    }
+                    fputcsv($file, $headers);
+                    $firstRow = false;
+                }
                 fputcsv($file, array_values($row));
+                $count++;
             }
 
             fclose($file);
 
+            if ($count === 0) {
+                @unlink($filepath);
+                return $this->errorResponse('هیچ داده‌ای برای صادرات وجود ندارد.');
+            }
+
             $this->logOperation('export_csv', $filename, [
-                'count' => count($data),
+                'count' => $count,
             ]);
 
             return $this->successResponse(
-                count($data) . ' رکورد صادر شد.',
+                $count . ' رکورد صادر شد.',
                 [
                     'file_path' => $filepath,
                     'filename' => $filename,
-                    'count' => count($data),
+                    'count' => $count,
                 ]
             );
 
@@ -270,13 +274,6 @@ class BulkOperationsService extends \App\Services\BaseService
         string $filename = 'export'
     ): array {
         try {
-            $stmt = $this->db->query($sql, $params);
-            $data = $stmt ? $stmt->fetchAll(\PDO::FETCH_ASSOC) : [];
-
-            if (empty($data)) {
-                return $this->errorResponse('هیچ داده‌ای برای صادرات وجود ندارد.');
-            }
-
             $filename = $this->sanitizeFilename($filename);
             $filename .= '_' . date('Y-m-d_His') . '.json';
             
@@ -287,21 +284,41 @@ class BulkOperationsService extends \App\Services\BaseService
                 mkdir($dir, 0755, true);
             }
 
-            file_put_contents(
-                $filepath,
-                json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)
-            );
+            $stmt = $this->db->query($sql, $params);
+            
+            $file = fopen($filepath, 'w');
+            fwrite($file, "[\n");
+            
+            $count = 0;
+            $first = true;
+            
+            while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                if (!$first) {
+                    fwrite($file, ",\n");
+                }
+                fwrite($file, json_encode($row, JSON_UNESCAPED_UNICODE));
+                $first = false;
+                $count++;
+            }
+            
+            fwrite($file, "\n]");
+            fclose($file);
+
+            if ($count === 0) {
+                @unlink($filepath);
+                return $this->errorResponse('هیچ داده‌ای برای صادرات وجود ندارد.');
+            }
 
             $this->logOperation('export_json', $filename, [
-                'count' => count($data),
+                'count' => $count,
             ]);
 
             return $this->successResponse(
-                count($data) . ' رکورد صادر شد.',
+                $count . ' رکورد صادر شد.',
                 [
                     'file_path' => $filepath,
                     'filename' => $filename,
-                    'count' => count($data),
+                    'count' => $count,
                 ]
             );
 
