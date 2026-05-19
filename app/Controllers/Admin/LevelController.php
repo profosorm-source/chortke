@@ -15,12 +15,14 @@ class LevelController extends BaseAdminController
     private \App\Services\User\UserLevelService $userLevelService;
     private \App\Models\UserLevelHistory $userLevelHistoryModel;
     private \App\Models\UserLevel $userLevelModel;
+    private \App\Services\User\UserService $userService;
     public function __construct(
         \App\Models\UserLevel $userLevelModel,
         \App\Models\UserLevelHistory $userLevelHistoryModel,
         \App\Services\User\UserLevelService $userLevelService,
         \App\Services\WalletService $walletService,
-        \App\Services\Shared\ReferralService $referralService)
+        \App\Services\Shared\ReferralService $referralService,
+        \App\Services\User\UserService $userService)
     {
         parent::__construct();
         $this->userLevelModel = $userLevelModel;
@@ -28,6 +30,7 @@ class LevelController extends BaseAdminController
         $this->userLevelService = $userLevelService;
         $this->walletService = $walletService;
         $this->referralService = $referralService;
+        $this->userService = $userService;
     }
 
     /**
@@ -141,6 +144,24 @@ class LevelController extends BaseAdminController
         if (!$userId || !$newLevel) {
             $this->response->json(['success' => false, 'message' => 'اطلاعات ناقص'], 422);
             return;
+        }
+
+        $currentAdminId = $this->userId();
+
+        // Prevent self-modification
+        if ($userId === $currentAdminId) {
+            $this->response->json(['success' => false, 'message' => 'نمیتوانید سطح خودتان را تغییر دهید'], 403);
+            return;
+        }
+
+        // Prevent modifying other admins (unless super admin / permitted)
+        $targetUser = $this->userService->find($userId);
+        if ($targetUser && in_array($targetUser->role, ['admin', 'super_admin'])) {
+            $currentAdminUser = $this->userService->find($currentAdminId);
+            if (!$currentAdminUser || !$this->policyService->can('admin.level.change_admin_level', $currentAdminUser)) {
+                $this->response->json(['success' => false, 'message' => 'شما اجازه تغییر سطح ادمینها را ندارید'], 403);
+                return;
+            }
         }
 
         $levelService = $this->userLevelService;
