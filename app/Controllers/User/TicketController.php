@@ -126,8 +126,8 @@ class TicketController extends BaseUserController
                 $uploadResult = $this->uploadService->upload(
                     $file,
                     'ticket_attachments',
-                    ['image/jpeg', 'image/png', 'application/pdf'],
-                    5 * 1024 * 1024 // 5MB
+                    ['image/jpeg', 'image/png'],
+                    3 * 1024 * 1024 // 3MB
                 );
                 
                 if ($uploadResult['success']) {
@@ -164,8 +164,13 @@ class TicketController extends BaseUserController
         
         $ticket = $this->ticketService->getById($id);
         
-        if (!$ticket || $ticket->user_id != $userId) {
+        if (!$ticket) {
             $this->session->setFlash('error', 'تیکت یافت نشد.');
+            return redirect('/tickets');
+        }
+
+        if ((int)$ticket->user_id !== $userId) {
+            $this->session->setFlash('error', 'شما به این تیکت دسترسی ندارید.');
             return redirect('/tickets');
         }
         
@@ -238,8 +243,8 @@ class TicketController extends BaseUserController
                     $uploadResult = $this->uploadService->upload(
                         $file,
                         'ticket_attachments',
-                        ['image/jpeg', 'image/png', 'application/pdf'],
-                        5 * 1024 * 1024
+                        ['image/jpeg', 'image/png'],
+                        3 * 1024 * 1024
                     );
                     if ($uploadResult['success']) {
                         $attachments[] = [

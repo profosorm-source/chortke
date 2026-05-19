@@ -115,6 +115,14 @@ class TicketController extends BaseAdminController
         if (!$ticketId || empty($message)) {
             return $this->response->json(['success' => false, 'message' => 'ارسال پیام الزامی است.']);
         }
+
+        $ticket = $this->ticketService->getById($ticketId);
+        if (!$ticket) {
+            return $this->response->json([
+                'success' => false, 
+                'message' => 'تیکت یافت نشد.'
+            ], 404);
+        }
         
         $result = $this->ticketService->reply(
             $ticketId,
@@ -178,9 +186,13 @@ class TicketController extends BaseAdminController
             return $this->response->json(['success' => false, 'message' => 'داده‌های ناقص.']);
         }
 
-        // H-03: Admin Verification
-        if ($adminId > 0 && !$this->policyService->isAdminById($adminId)) {
-            return $this->response->json(['success' => false, 'message' => 'شناسه مدیر نامعتبر است.']);
+        if ($adminId > 0) {
+            if (!$this->policyService->isAdminById($adminId)) {
+                return $this->response->json(['success' => false, 'message' => 'شناسه مدیر نامعتبر است.']);
+            }
+        } else {
+            // صریحاً unassign را مدیریت کن
+            $adminId = 0;
         }
         
         if ($this->ticketService->assignTo($ticketId, $adminId)) {

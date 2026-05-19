@@ -111,6 +111,7 @@ class MessageController extends BaseUserController
     public function send(): void
     {
         $this->requireAuth();
+        $this->validateCsrf();
 
         try {
             $userId = $this->userId();

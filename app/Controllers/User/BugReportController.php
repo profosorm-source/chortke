@@ -44,14 +44,24 @@ class BugReportController extends BaseUserController
             }
         }
 
+        $screenRes = $this->request->post('screen_resolution') ?? '';
+        if ($screenRes && !preg_match('/^\d{1,5}x\d{1,5}$/', $screenRes)) {
+            $screenRes = '';
+        }
+
+        $fingerprint = $this->request->post('device_fingerprint') ?? '';
+        if (strlen($fingerprint) > 128) {
+            $fingerprint = substr($fingerprint, 0, 128);
+        }
+
         // C-05: Input Sanitization (XSS Protection)
         $data = [
             'page_url'           => filter_var($this->request->post('page_url'), FILTER_SANITIZE_URL),
             'page_title'         => htmlspecialchars($this->request->post('page_title') ?? '', ENT_QUOTES, 'UTF-8'),
             'category'           => htmlspecialchars($this->request->post('category') ?: 'other', ENT_QUOTES, 'UTF-8'),
             'description'        => htmlspecialchars($this->request->post('description') ?? '', ENT_QUOTES, 'UTF-8'),
-            'screen_resolution'  => htmlspecialchars($this->request->post('screen_resolution') ?? '', ENT_QUOTES, 'UTF-8'),
-            'device_fingerprint' => htmlspecialchars($this->request->post('device_fingerprint') ?? '', ENT_QUOTES, 'UTF-8'),
+            'screen_resolution'  => htmlspecialchars($screenRes, ENT_QUOTES, 'UTF-8'),
+            'device_fingerprint' => htmlspecialchars($fingerprint, ENT_QUOTES, 'UTF-8'),
             'user_agent'         => substr($this->request->header('User-Agent') ?? '', 0, 512),
             'ip_address'         => $this->request->ip(),
         ];
