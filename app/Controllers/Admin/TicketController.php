@@ -91,6 +91,15 @@ class TicketController extends BaseAdminController
             $this->session->setFlash('error', 'تیکت یافت نشد.');
             return redirect('/admin/tickets');
         }
+
+        // 🛡️ HIGH-01: جلوگیری از دسترسی ادمین‌های عادی به تیکت‌های غیرمنتسب به خودشان
+        $adminId = user_id();
+        if ($ticket->assigned_to && (int)$ticket->assigned_to !== $adminId) {
+            if (!$this->policyService->authorizeById('tickets.view_all', $adminId)) {
+                $this->session->setFlash('error', 'شما دسترسی مشاهده این تیکت را ندارید.');
+                return redirect('/admin/tickets');
+            }
+        }
         
         $messages = $this->ticketService->getMessages($id);
         

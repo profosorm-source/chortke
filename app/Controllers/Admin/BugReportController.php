@@ -154,8 +154,8 @@ class BugReportController extends BaseAdminController
             $data = [];
         }
 
-        if (empty($data) && !empty($_POST)) {
-            $data = $_POST;
+        if (empty($data)) {
+            $data = $this->request->all();
         }
 
         $comment = trim((string)($data['comment'] ?? ''));

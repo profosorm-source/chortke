@@ -26,6 +26,14 @@ class MessageModerationController extends BaseAdminController
      */
     public function reports(): void
     {
+        $this->requireAuth();
+        $this->requireAdmin();
+        if (!$this->policyService->authorizeById('messages.moderate', user_id())) {
+            $this->session->setFlash('error', 'دسترسی غیرمجاز.');
+            $this->response->redirect(url('admin/dashboard'));
+            return;
+        }
+
         $status = $this->request->input('status', 'pending');
         $page   = (int) $this->request->input('page', 1);
         $limit  = 20;
@@ -52,6 +60,14 @@ class MessageModerationController extends BaseAdminController
      */
     public function show(): void
     {
+        $this->requireAuth();
+        $this->requireAdmin();
+        if (!$this->policyService->authorizeById('messages.moderate', user_id())) {
+            $this->session->setFlash('error', 'دسترسی غیرمجاز.');
+            $this->response->redirect(url('admin/dashboard'));
+            return;
+        }
+
         $id = (int) $this->request->param('id');
 
         $report = $this->moderationService->getReportDetail($id);
@@ -61,8 +77,12 @@ class MessageModerationController extends BaseAdminController
             return;
         }
 
-        // دریافت کل پیام‌های این کاربر برای تاریخچه (بدون recipient_id برای حفظ حریم خصوصی)
-        $user_messages = $this->moderationService->getUserMessages((int)$report['sender_id'], 10);
+        // دریافت فقط پیام‌های مرتبط با همان مکالمه گزارش‌شده جهت حفظ حریم خصوصی (به جای کل تاریخچه کاربر)
+        $user_messages = $this->moderationService->getReportedMessageThread(
+            (int)$report['sender_id'],
+            (int)$report['recipient_id'],
+            5
+        );
 
         $this->view('admin/messages/report-detail', [
             'report'          => $report,
@@ -76,6 +96,13 @@ class MessageModerationController extends BaseAdminController
      */
     public function approve(): void
     {
+        $this->requireAuth();
+        $this->requireAdmin();
+        if (!$this->policyService->authorizeById('messages.moderate', user_id())) {
+            $this->response->json(['error' => 'دسترسی غیرمجاز برای تعدیل پیام‌ها.'], 403);
+            return;
+        }
+
         // CORE-036: CSRF Protection
         $this->validateCsrf();
 
@@ -111,6 +138,13 @@ class MessageModerationController extends BaseAdminController
      */
     public function dismiss(): void
     {
+        $this->requireAuth();
+        $this->requireAdmin();
+        if (!$this->policyService->authorizeById('messages.moderate', user_id())) {
+            $this->response->json(['error' => 'دسترسی غیرمجاز برای تعدیل پیام‌ها.'], 403);
+            return;
+        }
+
         // CORE-036: CSRF Protection
         $this->validateCsrf();
 
@@ -142,6 +176,14 @@ class MessageModerationController extends BaseAdminController
      */
     public function blockedUsers(): void
     {
+        $this->requireAuth();
+        $this->requireAdmin();
+        if (!$this->policyService->authorizeById('messages.moderate', user_id())) {
+            $this->session->setFlash('error', 'دسترسی غیرمجاز.');
+            $this->response->redirect(url('admin/dashboard'));
+            return;
+        }
+
         $page   = (int) $this->request->input('page', 1);
         $limit  = 20;
         $offset = ($page - 1) * $limit;
@@ -175,6 +217,14 @@ class MessageModerationController extends BaseAdminController
      */
     public function stats(): void
     {
+        $this->requireAuth();
+        $this->requireAdmin();
+        if (!$this->policyService->authorizeById('messages.moderate', user_id())) {
+            $this->session->setFlash('error', 'دسترسی غیرمجاز.');
+            $this->response->redirect(url('admin/dashboard'));
+            return;
+        }
+
         $result = $this->moderationService->getStats();
         $stats = $result['stats'] ?? [];
         $top_reporters = $result['top_reporters'] ?? [];
