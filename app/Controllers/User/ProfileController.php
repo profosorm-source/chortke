@@ -229,6 +229,9 @@ $result = $this->profileService->updateProfile($userId, [
             // ✅ Invalidate other sessions after password change
             $this->sessionService->invalidateAllUserSessions($userId, session_id());
 
+            // ✅ حالا Session ID فعلی را regenerate کن
+            session_regenerate_id(true);
+
             $this->session->setFlash('success', 'رمز عبور با موفقیت تغییر یافت');
         } else {
             $this->session->setFlash('error', 'خطا در تغییر رمز عبور');
