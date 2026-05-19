@@ -140,7 +140,7 @@ use App\Enums\TicketPriority;
                                 <i class="material-icons">attach_file</i>
                                 پیوست
                                 <input type="file" id="replyFiles" name="attachments[]"
-                                       multiple accept="image/*,.pdf" class="tkt-file-input">
+                                       multiple accept="image/*" class="tkt-file-input">
                             </label>
                             <span class="tkt-file-names" id="fileNames"></span>
                             <button type="submit" class="tkt-send-btn" id="sendBtn">
