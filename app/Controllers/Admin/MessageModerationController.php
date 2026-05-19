@@ -87,9 +87,18 @@ class MessageModerationController extends BaseAdminController
         $id     = (int) $this->request->input('report_id');
         $action = $this->request->input('action', 'warn');
 
+        $allowedActions = ['warn', 'delete', 'ban'];
+        if (!in_array($action, $allowedActions, true)) {
+            $this->response->json(['error' => 'اقدام نامعتبر است'], 422);
+            return;
+        }
+
         $result = $this->moderationService->approveReport($id, $action, (int)user_id());
 
         if ($result['success']) {
+            $this->auditLog('message_report_approved', 'message_report', $id, null, [
+                'action' => $action
+            ]);
             $this->response->json(['success' => true, 'message' => $result['message']]);
         } else {
             $this->response->json(['error' => $result['message']], 500);
@@ -114,12 +123,16 @@ class MessageModerationController extends BaseAdminController
 
         $ok = $this->moderationService->dismissReport($id, (int)user_id());
 
+        if ($ok) {
+            $this->auditLog('message_report_dismissed', 'message_report', $id, ['status' => 'pending'], ['status' => 'dismissed']);
+        }
+
         $this->logger->info('Message report dismissed', [
             'report_id' => $id,
             'admin_id' => user_id()
         ]);
 
-        $this->response->json(['success' => true, 'message' => 'گزارش رد شد']);
+        $this->response->json(['success' => $ok, 'message' => $ok ? 'گزارش رد شد' : 'خطا در رد گزارش']);
     }
 
 

@@ -43,15 +43,11 @@ class BugReportController extends BaseAdminController
             }
         }
 
-        // استفاده از AdvancedSearchService برای جستجو (بعداً می‌تواند با تیکت مچ شود)
         if (!empty($search)) {
-            // Fallback direct filter loading instead of searchService which uses old model
-            $reports = $this->ticketService->getAdminBugReports($filters, $page, $perPage);
-            $total = $this->ticketService->countAdminBugReports($filters);
-        } else {
-            $reports = $this->ticketService->getAdminBugReports($filters, $page, $perPage);
-            $total = $this->ticketService->countAdminBugReports($filters);
+            $filters['search'] = $search;
         }
+        $reports = $this->ticketService->getAdminBugReports($filters, $page, $perPage);
+        $total = $this->ticketService->countAdminBugReports($filters);
 
         $totalPages = (int)\ceil($total / $perPage);
         $stats = $this->ticketService->getAdminBugStats();
@@ -95,14 +91,24 @@ class BugReportController extends BaseAdminController
      */
     public function updateStatus(): void
     {
+        $this->validateCsrf();
         $id = (int)$this->request->param('id');
         $rawData = \file_get_contents('php://input');
         $data = \json_decode($rawData, true) ?? [];
 
         $status = $data['status'] ?? '';
-        $note = $data['note'] ?? null;
+        if (!in_array($status, \App\Enums\TicketStatus::all(), true)) {
+            $this->response->json(['success' => false, 'message' => 'وضعیت نامعتبر است.'], 422);
+            return;
+        }
+
+        $oldReport = $this->ticketService->findBugReport($id);
+        $oldStatus = $oldReport ? $oldReport->status : 'unknown';
 
         $ok = $this->ticketService->updateStatus($id, $status, user_id());
+        if ($ok) {
+            $this->auditLog('bug_report_status_changed', 'bug_report', $id, ['status' => $oldStatus], ['status' => $status]);
+        }
 
         $this->response->json(['success' => $ok]);
     }
@@ -112,13 +118,24 @@ class BugReportController extends BaseAdminController
      */
     public function updatePriority(): void
     {
+        $this->validateCsrf();
         $id = (int)$this->request->param('id');
         $rawData = \file_get_contents('php://input');
         $data = \json_decode($rawData, true) ?? [];
 
         $priority = $data['priority'] ?? '';
-        
+        if (!in_array($priority, ['low', 'normal', 'high', 'urgent'], true)) {
+            $this->response->json(['success' => false, 'message' => 'اولویت نامعتبر است.'], 422);
+            return;
+        }
+
+        $oldReport = $this->ticketService->findBugReport($id);
+        $oldPriority = $oldReport ? $oldReport->priority : 'unknown';
+
         $ok = $this->ticketService->updatePriority($id, $priority, user_id());
+        if ($ok) {
+            $this->auditLog('bug_report_priority_changed', 'bug_report', $id, ['priority' => $oldPriority], ['priority' => $priority]);
+        }
 
         $this->response->json(['success' => $ok]);
     }
@@ -128,6 +145,7 @@ class BugReportController extends BaseAdminController
      */
     public function addComment(): void
     {
+        $this->validateCsrf();
         $id = (int)$this->request->param('id');
 
         $rawData = \file_get_contents('php://input');
@@ -147,6 +165,13 @@ class BugReportController extends BaseAdminController
         }
 
         $result = $this->ticketService->reply($id, user_id(), $comment, true);
+        if ($result['success'] ?? false) {
+            $this->auditLog('bug_report_admin_comment', 'bug_report', $id, null, [
+                'comment_length' => mb_strlen($comment),
+                'has_sanitized' => true
+            ]);
+        }
+
         $this->response->json($result);
     }
 
@@ -163,8 +188,17 @@ class BugReportController extends BaseAdminController
      */
     public function delete(): void
     {
+        $this->validateCsrf();
         $id = (int)$this->request->param('id');
+
+        $oldReport = $this->ticketService->findBugReport($id);
+        $oldStatus = $oldReport ? $oldReport->status : 'unknown';
+
         $result = $this->ticketService->close($id, user_id(), true);
+        if ($result['success'] ?? false) {
+            $this->auditLog('bug_report_closed', 'bug_report', $id, ['status' => $oldStatus], ['status' => 'closed']);
+        }
+
         $this->response->json($result);
     }
 }
