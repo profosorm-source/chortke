@@ -115,8 +115,9 @@ class DirectMessage extends Model
     public function getUserInfo(int $userId): ?object
     {
         return $this->db->table('users')
-            ->select('id', 'username', 'full_name', 'avatar', 'is_online')
+            ->select('id', 'username', 'full_name', 'avatar', 'is_online', 'status')
             ->where('id', '=', $userId)
+            ->where('status', '=', 'active')
             ->first();
     }
 
