@@ -97,7 +97,18 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'locked' => $irtLocked,
                 'currency' => 'IRT',
             ]);
-            $irtAvailable = '0';
+            
+            // Trigger emergency audit
+            $this->auditTrail->record('wallet.critical_inconsistency', $userId, [
+                'balance' => $irtBalance,
+                'locked' => $irtLocked,
+                'currency' => 'IRT',
+            ]);
+            
+            // Freeze wallet to prevent manual review bypass
+            $this->walletModel->freezeWallet($userId);
+            
+            throw new \RuntimeException('کیف پول شما به دلیل مشکل سیستمی موقتاً مسدود شده است');
         }
 
         $usdtBalance = (string)($wallet->balance_usdt ?? '0');
@@ -110,7 +121,18 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'locked' => $usdtLocked,
                 'currency' => 'USDT',
             ]);
-            $usdtAvailable = '0';
+            
+            // Trigger emergency audit
+            $this->auditTrail->record('wallet.critical_inconsistency', $userId, [
+                'balance' => $usdtBalance,
+                'locked' => $usdtLocked,
+                'currency' => 'USDT',
+            ]);
+            
+            // Freeze wallet to prevent manual review bypass
+            $this->walletModel->freezeWallet($userId);
+            
+            throw new \RuntimeException('کیف پول شما به دلیل مشکل سیستمی موقتاً مسدود شده است');
         }
 
         return [
@@ -149,21 +171,41 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $deviceFingerprint = $metadata['device_fingerprint'] ?? generate_device_fingerprint();
         $logId             = "DEP_{$requestId}";
 
-        $idempotencyKey = $metadata['idempotency_key'] ?? hash('sha256', implode('|', [
-            $userId, 'deposit', $amount, $currency,
+        $uniqueParts = array_filter([
+            $userId,
+            'deposit',
+            $amount,
+            $currency,
             $metadata['gateway_transaction_id'] ?? '',
             $metadata['ref_id']                 ?? '',
             $metadata['deposit_id']             ?? '',
             $metadata['tracking_code']          ?? '',
-        ]));
+            $ipAddress,
+        ], fn($v) => $v !== '');
+
+        // If no unique fields were provided, add high-entropy components to avoid collision
+        if (empty($metadata['gateway_transaction_id']) && empty($metadata['ref_id']) && empty($metadata['deposit_id']) && empty($metadata['tracking_code'])) {
+            $uniqueParts[] = uniqid('rand_', true);
+            $uniqueParts[] = (string)microtime(true);
+        }
+
+        $idempotencyKey = $metadata['idempotency_key'] ?? hash('sha256', implode('|', $uniqueParts));
 
         // Wraps existing logic inside a Distributed Lock specific to this User's Wallet
-        return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $metadata, $idempotencyKey, $requestId, $ipAddress, $deviceFingerprint, $logId) {
-            return $this->processDepositTransaction(
-                $userId, $amount, $currency, $metadata, $idempotencyKey,
-                $requestId, $ipAddress, $deviceFingerprint, $logId
-            );
-        }, 15, 10); // TTL 15s, Wait up to 10s
+        try {
+            return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $metadata, $idempotencyKey, $requestId, $ipAddress, $deviceFingerprint, $logId) {
+                return $this->processDepositTransaction(
+                    $userId, $amount, $currency, $metadata, $idempotencyKey,
+                    $requestId, $ipAddress, $deviceFingerprint, $logId
+                );
+            }, 15, 10); // TTL 15s, Wait up to 10s
+        } catch (\RuntimeException $e) {
+            if (str_contains($e->getMessage(), 'Failed to acquire lock')) {
+                $this->logger->warning('wallet.lock_timeout', ['user_id' => $userId, 'action' => 'deposit', 'error' => $e->getMessage()]);
+                return ['success' => false, 'message' => 'سیستم در حال حاضر شلوغ است، لطفاً لحظاتی بعد تلاش کنید'];
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -179,13 +221,25 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $deviceFingerprint = $metadata['device_fingerprint'] ?? generate_device_fingerprint();
         $logId             = "DEP_TX_{$requestId}";
 
-        $idempotencyKey = $metadata['idempotency_key'] ?? hash('sha256', implode('|', [
-            $userId, 'deposit_tx', $amount, $currency,
+        $uniqueParts = array_filter([
+            $userId,
+            'deposit_tx',
+            $amount,
+            $currency,
             $metadata['gateway_transaction_id'] ?? '',
             $metadata['ref_id']                 ?? '',
             $metadata['deposit_id']             ?? '',
             $metadata['tracking_code']          ?? '',
-        ]));
+            $ipAddress,
+        ], fn($v) => $v !== '');
+
+        // If no unique fields were provided, add high-entropy components to avoid collision
+        if (empty($metadata['gateway_transaction_id']) && empty($metadata['ref_id']) && empty($metadata['deposit_id']) && empty($metadata['tracking_code'])) {
+            $uniqueParts[] = uniqid('rand_', true);
+            $uniqueParts[] = (string)microtime(true);
+        }
+
+        $idempotencyKey = $metadata['idempotency_key'] ?? hash('sha256', implode('|', $uniqueParts));
 
         return $this->processDepositTransaction(
             $userId, $amount, $currency, $metadata, $idempotencyKey,
@@ -472,12 +526,20 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }
 
         // Wraps existing logic inside a Distributed Lock specific to this User's Wallet
-        return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $metadata, $idempotencyKey, $requestId, $ipAddress, $deviceFingerprint, $logId) {
-            return $this->processWithdrawTransaction(
-                $userId, $amount, $currency, $metadata, $idempotencyKey,
-                $requestId, $ipAddress, $deviceFingerprint, $logId
-            );
-        }, 15, 10); // TTL 15s, Wait up to 10s
+        try {
+            return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $metadata, $idempotencyKey, $requestId, $ipAddress, $deviceFingerprint, $logId) {
+                return $this->processWithdrawTransaction(
+                    $userId, $amount, $currency, $metadata, $idempotencyKey,
+                    $requestId, $ipAddress, $deviceFingerprint, $logId
+                );
+            }, 15, 10); // TTL 15s, Wait up to 10s
+        } catch (\RuntimeException $e) {
+            if (str_contains($e->getMessage(), 'Failed to acquire lock')) {
+                $this->logger->warning('wallet.lock_timeout', ['user_id' => $userId, 'action' => 'withdraw', 'error' => $e->getMessage()]);
+                return ['success' => false, 'message' => 'سیستم در حال حاضر شلوغ است، لطفاً لحظاتی بعد تلاش کنید'];
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -820,132 +882,140 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             return $this->standardizeResponse($check['result']);
         }
 
-        return $this->lockService->synchronized("wallet:mut:{$userId}", function() use (
-            $userId, $amount, $currency, $metadata, $idempotencyKey, 
-            $requestId, $ipAddress, $deviceFingerprint, $logId, $idempotencyService
-        ) {
-            $startedTransaction = !$this->db->inTransaction();
+        try {
+            return $this->lockService->synchronized("wallet:mut:{$userId}", function() use (
+                $userId, $amount, $currency, $metadata, $idempotencyKey, 
+                $requestId, $ipAddress, $deviceFingerprint, $logId, $idempotencyService
+            ) {
+                $startedTransaction = !$this->db->inTransaction();
 
-            try {
-                if ($startedTransaction) {
-                    $this->db->beginTransaction();
-                }
+                try {
+                    if ($startedTransaction) {
+                        $this->db->beginTransaction();
+                    }
 
-                $wallet = $this->walletModel->findByUserIdForUpdate($userId);
-                if (!$wallet) {
-                    throw new \RuntimeException('خطا در دریافت wallet');
-                }
-                if ((bool)($wallet->is_frozen ?? 0)) {
-                    throw new \RuntimeException('کیف پول شما مسدود شده و امکان انجام عملیات وجود ندارد');
-                }
+                    $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+                    if (!$wallet) {
+                        throw new \RuntimeException('خطا در دریافت wallet');
+                    }
+                    if ((bool)($wallet->is_frozen ?? 0)) {
+                        throw new \RuntimeException('کیف پول شما مسدود شده و امکان انجام عملیات وجود ندارد');
+                    }
 
-                $balanceField   = $this->balanceField($currency);
-                $currentBalance = (string)($wallet->$balanceField ?? '0');
-                $scale          = $this->getScale($currency);
+                    $balanceField   = $this->balanceField($currency);
+                    $currentBalance = (string)($wallet->$balanceField ?? '0');
+                    $scale          = $this->getScale($currency);
 
-                if (bccomp($currentBalance, $amount, $scale) < 0) {
-                    throw new \RuntimeException("موجودی کافی نیست (موجودی فعلی: {$currentBalance})");
-                }
+                    if (bccomp($currentBalance, $amount, $scale) < 0) {
+                        throw new \RuntimeException("موجودی کافی نیست (موجودی فعلی: {$currentBalance})");
+                    }
 
-                $balanceBefore = $currentBalance;
-                $balanceAfter  = bcsub($balanceBefore, $amount, $scale);
+                    $balanceBefore = $currentBalance;
+                    $balanceAfter  = bcsub($balanceBefore, $amount, $scale);
 
-                if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
-                    throw new \RuntimeException('خطا در کسر موجودی');
-                }
+                    if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
+                        throw new \RuntimeException('خطا در کسر موجودی');
+                    }
 
-                $negativeAmount = bcmul($amount, '-1', $scale);
-                $transaction = $this->transactionModel->create([
-                    'user_id'            => $userId,
-                    'type'               => $metadata['type'] ?? 'payment',
-                    'currency'           => $currency,
-                    'amount'             => $negativeAmount, // Negative for payment
-                    'balance_before'     => $balanceBefore,
-                    'balance_after'      => $balanceAfter,
-                    'status'             => 'completed',
-                    'description'        => $metadata['description'] ?? 'پرداخت هزینه',
-                    'ref_id'             => $metadata['ref_id']             ?? null,
-                    'ref_type'           => $metadata['ref_type']           ?? null,
-                    'request_id'         => $requestId,
-                    'ip_address'         => $ipAddress,
-                    'device_fingerprint' => $deviceFingerprint,
-                    'idempotency_key'    => $idempotencyKey,
-                    'metadata'           => json_encode(array_merge($metadata, [
-                        'request_id' => $requestId, 'ip'     => $ipAddress,
-                        'device'     => $deviceFingerprint,
-                        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
-                        'timestamp'  => date('Y-m-d H:i:s'),
-                    ]), JSON_UNESCAPED_UNICODE),
-                ]);
+                    $negativeAmount = bcmul($amount, '-1', $scale);
+                    $transaction = $this->transactionModel->create([
+                        'user_id'            => $userId,
+                        'type'               => $metadata['type'] ?? 'payment',
+                        'currency'           => $currency,
+                        'amount'             => $negativeAmount, // Negative for payment
+                        'balance_before'     => $balanceBefore,
+                        'balance_after'      => $balanceAfter,
+                        'status'             => 'completed',
+                        'description'        => $metadata['description'] ?? 'پرداخت هزینه',
+                        'ref_id'             => $metadata['ref_id']             ?? null,
+                        'ref_type'           => $metadata['ref_type']           ?? null,
+                        'request_id'         => $requestId,
+                        'ip_address'         => $ipAddress,
+                        'device_fingerprint' => $deviceFingerprint,
+                        'idempotency_key'    => $idempotencyKey,
+                        'metadata'           => json_encode(array_merge($metadata, [
+                            'request_id' => $requestId, 'ip'     => $ipAddress,
+                            'device'     => $deviceFingerprint,
+                            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
+                            'timestamp'  => date('Y-m-d H:i:s'),
+                        ]), JSON_UNESCAPED_UNICODE),
+                    ]);
 
-                if (!$transaction) {
-                    throw new \RuntimeException('خطا در ثبت تراکنش پرداخت');
-                }
+                    if (!$transaction) {
+                        throw new \RuntimeException('خطا در ثبت تراکنش پرداخت');
+                    }
 
-                $this->ledger()->recordDoubleEntry(
-                    $transaction->transaction_id,
-                    "platform_revenue",
-                    "wallet:{$userId}",
-                    $amount,
-                    $currency,
-                    $metadata['description'] ?? 'پرداخت هزینه',
-                    [
-                        'type' => $metadata['type'] ?? 'payment',
+                    $this->ledger()->recordDoubleEntry(
+                        $transaction->transaction_id,
+                        "platform_revenue",
+                        "wallet:{$userId}",
+                        $amount,
+                        $currency,
+                        $metadata['description'] ?? 'پرداخت هزینه',
+                        [
+                            'type' => $metadata['type'] ?? 'payment',
+                            'balance_before' => $balanceBefore,
+                            'balance_after' => $balanceAfter,
+                        ]
+                    );
+
+                    $result = $this->standardizeResponse([
+                        'success'        => true,
+                        'transaction_id' => $transaction->transaction_id,
+                        'message'        => 'پرداخت با موفقیت انجام شد',
+                        'new_balance'    => $balanceAfter,
+                        'amount'         => $amount,
+                        'currency'       => $currency,
+                        'status'         => 'completed',
                         'balance_before' => $balanceBefore,
-                        'balance_after' => $balanceAfter,
-                    ]
-                );
+                        'balance_after'  => $balanceAfter,
+                    ]);
 
-                $result = $this->standardizeResponse([
-                    'success'        => true,
-                    'transaction_id' => $transaction->transaction_id,
-                    'message'        => 'پرداخت با موفقیت انجام شد',
-                    'new_balance'    => $balanceAfter,
-                    'amount'         => $amount,
-                    'currency'       => $currency,
-                    'status'         => 'completed',
-                    'balance_before' => $balanceBefore,
-                    'balance_after'  => $balanceAfter,
-                ]);
+                    if ($startedTransaction) {
+                        $this->db->commit();
+                    }
+                    
+                    // ✅ Invalidate dashboard and wallet caches (HIGH-07)
+                    $this->cache->forget("user_dashboard_stats:{$userId}");
+                    $this->cache->forget("wallet_balance:{$userId}");
 
-                if ($startedTransaction) {
-                    $this->db->commit();
+                    $idempotencyService->complete($idempotencyKey, $result, $userId);
+
+                    $this->auditTrail->record('wallet.paid', $userId, [
+                        'amount'         => $amount,
+                        'currency'       => $currency,
+                        'balance_before' => $balanceBefore,
+                        'balance_after'  => $balanceAfter,
+                        'type'           => $metadata['type'] ?? 'payment',
+                        'transaction_id' => $transaction->transaction_id,
+                    ]);
+
+                    return $result;
+
+                } catch (\Throwable $e) {
+                    if ($startedTransaction && $this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
+
+                    $failResult = $this->standardizeResponse([
+                        'success' => false,
+                        'error' => $e->getMessage(),
+                        'type' => 'runtime_error',
+                        'message' => 'خطا در فرآیند پرداخت: ' . $e->getMessage(),
+                    ]);
+
+                    $idempotencyService->fail($idempotencyKey, $failResult, $userId);
+
+                    throw $e;
                 }
-                
-                // ✅ Invalidate dashboard and wallet caches (HIGH-07)
-                $this->cache->forget("user_dashboard_stats:{$userId}");
-                $this->cache->forget("wallet_balance:{$userId}");
-
-                $idempotencyService->complete($idempotencyKey, $result, $userId);
-
-                $this->auditTrail->record('wallet.paid', $userId, [
-                    'amount'         => $amount,
-                    'currency'       => $currency,
-                    'balance_before' => $balanceBefore,
-                    'balance_after'  => $balanceAfter,
-                    'type'           => $metadata['type'] ?? 'payment',
-                    'transaction_id' => $transaction->transaction_id,
-                ]);
-
-                return $result;
-
-            } catch (\Throwable $e) {
-                if ($startedTransaction && $this->db->inTransaction()) {
-                    $this->db->rollBack();
-                }
-
-                $failResult = $this->standardizeResponse([
-                    'success' => false,
-                    'error' => $e->getMessage(),
-                    'type' => 'runtime_error',
-                    'message' => 'خطا در فرآیند پرداخت: ' . $e->getMessage(),
-                ]);
-
-                $idempotencyService->fail($idempotencyKey, $failResult, $userId);
-
-                throw $e;
+            }, 15, 10); // TTL 15s, Wait up to 10s
+        } catch (\RuntimeException $e) {
+            if (str_contains($e->getMessage(), 'Failed to acquire lock')) {
+                $this->logger->warning('wallet.lock_timeout', ['user_id' => $userId, 'action' => 'pay', 'error' => $e->getMessage()]);
+                return ['success' => false, 'message' => 'سیستم در حال حاضر شلوغ است، لطفاً لحظاتی بعد تلاش کنید'];
             }
-        }, 15, 10); // TTL 15s, Wait up to 10s
+            throw $e;
+        } // TTL 15s, Wait up to 10s
     }
 
     public function hasBalance(int $userId, string $amount, string $currency = 'irt'): bool

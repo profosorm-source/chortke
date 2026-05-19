@@ -47,6 +47,23 @@ class SilentAntiFraudService extends \App\Services\BaseService
      */
     public function calculateRiskScore(int $userId, array $context = []): array
     {
+        $cacheKey = "risk_score:{$userId}:" . md5(json_encode($context));
+        
+        $cached = cache()->get($cacheKey);
+        if ($cached !== null) {
+            return (array)$cached;
+        }
+
+        $result = $this->_calculateRiskScore($userId, $context);
+        
+        // Cache risk score calculation for 5 minutes to prevent IP check timing attacks (HIGH-NEW-03)
+        cache()->put($cacheKey, $result, 5); // 5 minutes
+
+        return $result;
+    }
+
+    private function _calculateRiskScore(int $userId, array $context = []): array
+    {
         $ip = (string)($context['ip'] ?? '');
         $sessionId = (string)($context['session_id'] ?? '');
         $fingerprint = (string)($context['fingerprint'] ?? '');

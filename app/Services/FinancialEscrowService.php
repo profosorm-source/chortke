@@ -20,24 +20,23 @@ class FinancialEscrowService extends \App\Services\BaseService
     private User         $userModel;
     private WalletService $wallet;
     private Database     $db;
+    private SettingService $settingService;
 
     public function __construct(
         EscrowService $escrow,
         User         $userModel,
         LoggerInterface       $logger,
         WalletService $wallet,
-        Database $db
+        Database $db,
+        SettingService $settingService
     ) {
         parent::__construct($logger);
         $this->escrow = $escrow;
         $this->userModel = $userModel;
         $this->wallet = $wallet;
         $this->db = $db;
+        $this->settingService = $settingService;
     }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // SocialTask Escrow (Advertiser → Executor Payment)
-    // ──────────────────────────────────────────────────────────────────────────
 
     /**
      * درخواست نگهداری پول از تبلیغ‌دهنده برای اجرا
@@ -140,8 +139,13 @@ class FinancialEscrowService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // ✅ Get escrow info
-            $escrow = $this->escrow->getByOrder($executionId, 'social_task_execution');
+            // ✅ Lock the escrow row FOR UPDATE to resolve HIGH-NEW-02 double release race condition
+            $escrow = $this->db->query("
+                SELECT * FROM escrow_transactions 
+                WHERE order_id = ? AND order_type = ? 
+                FOR UPDATE
+            ", [$executionId, 'social_task_execution'])->fetch(\PDO::FETCH_OBJ);
+
             if (!$escrow || $escrow->status !== 'in_escrow') {
                 $this->db->rollBack();
                 return ['ok' => false, 'error' => 'Escrow not in proper state'];
@@ -190,7 +194,13 @@ class FinancialEscrowService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            $escrow = $this->escrow->getByOrder($executionId, 'social_task_execution');
+            // ✅ Lock the escrow row FOR UPDATE to prevent concurrent refund/release races
+            $escrow = $this->db->query("
+                SELECT * FROM escrow_transactions 
+                WHERE order_id = ? AND order_type = ? 
+                FOR UPDATE
+            ", [$executionId, 'social_task_execution'])->fetch(\PDO::FETCH_OBJ);
+
             if (!$escrow) {
                 $this->db->rollBack();
                 return ['ok' => false, 'error' => 'No escrow found'];
@@ -231,7 +241,9 @@ class FinancialEscrowService extends \App\Services\BaseService
             return ['ok' => true, 'refund_amount' => $escrow->amount];
 
         } catch (\Exception $e) {
-            $this->db->rollBack();
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             $this->logger->error('social_task.escrow_refund.failed', ['error' => $e->getMessage()]);
             return ['ok' => false, 'error' => $e->getMessage()];
         }
@@ -568,5 +580,33 @@ class FinancialEscrowService extends \App\Services\BaseService
             }
             return ['ok' => false, 'error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * Cron task to automatically release expired holds back to the advertiser.
+     * CRITICAL-NEW-02: Prevent funds from being locked forever if executor never submits proof.
+     */
+    public function releaseExpiredHolds(): int
+    {
+        $expiredHours = (int)$this->settingService->get('escrow_expiry_hours', 48);
+        
+        $expired = $this->db->query("
+            SELECT e.id, e.order_id, e.buyer_id, e.amount, e.currency
+            FROM escrow_transactions e
+            JOIN social_task_executions ste ON ste.id = e.order_id AND e.order_type = 'social_task_execution'
+            WHERE e.status = 'pending'
+              AND e.held_at < DATE_SUB(NOW(), INTERVAL ? HOUR)
+              AND ste.status IN ('pending', 'started')
+        ", [$expiredHours])->fetchAll(\PDO::FETCH_OBJ);
+        
+        foreach ($expired as $row) {
+            $this->refundSocialTaskFunds(
+                (int)$row->order_id,
+                (int)$row->buyer_id,
+                'auto_expired_after_' . $expiredHours . 'h'
+            );
+        }
+        
+        return count($expired);
     }
 }

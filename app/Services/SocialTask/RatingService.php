@@ -197,14 +197,12 @@ class RatingService extends \App\Services\BaseService
 
     private function updateAdvertiserRating(int $advertiserId): void
     {
-        $rating = $this->getAdvertiserRating($advertiserId);
-        $this->analyticsModel->updateUserStats($advertiserId, (float)$rating['avg_stars'], (int)$rating['total_ratings'], 'advertiser');
+        $this->analyticsModel->recalculateUserStats($advertiserId, 'advertiser');
     }
 
     private function updateExecutorRating(int $executorId): void
     {
-        $rating = $this->getExecutorRating($executorId);
-        $this->analyticsModel->updateUserStats($executorId, (float)$rating['avg_stars'], (int)$rating['total_ratings'], 'executor');
+        $this->analyticsModel->recalculateUserStats($executorId, 'executor');
     }
 }
 
