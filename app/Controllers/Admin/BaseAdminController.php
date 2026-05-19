@@ -53,4 +53,71 @@ abstract class BaseAdminController extends BaseController
         
         return in_array($to, $allowedTransitions[$from] ?? [], true);
     }
+
+    /**
+     * 🛡️ NEW-17 & NEW-12: ثبت ردپای حسابرسی تغییرات و عملیات حساس ادمین‌ها در دیتابیس
+     */
+    protected function auditLog(
+        string $action, 
+        string $entityType, 
+        int $entityId, 
+        ?array $oldValues, 
+        ?array $newValues
+    ): void {
+        try {
+            $oldValues = $this->redactPII($oldValues);
+            $newValues = $this->redactPII($newValues);
+
+            db()->query(
+                "INSERT INTO admin_audit_log (admin_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, session_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    user_id(),
+                    $action,
+                    $entityType,
+                    $entityId,
+                    $oldValues !== null ? json_encode($oldValues, JSON_UNESCAPED_UNICODE) : null,
+                    $newValues !== null ? json_encode($newValues, JSON_UNESCAPED_UNICODE) : null,
+                    $this->request->ip(),
+                    $this->request->userAgent() ?: 'unknown',
+                    session_id() ?: ''
+                ]
+            );
+        } catch (\Exception $e) {
+            if (isset($this->logger)) {
+                $this->logger->error('admin.audit_log.failed', ['error' => $e->getMessage()]);
+            }
+        }
+    }
+
+    /**
+     * 🛡️ Redact sensitive PII/credential fields from log payload
+     */
+    private function redactPII(?array $data): ?array
+    {
+        if ($data === null) {
+            return null;
+        }
+
+        $piiKeys = [
+            'password', 'passwd', 'password_confirmation',
+            'token', 'access_token', 'refresh_token', 'csrf_token', 'csrf',
+            'card', 'card_number', 'card_num', 'cvv', 'cvv2',
+            'pin', 'otp', 'secret', 'key', 'private_key', 'encryption_key',
+            'national_code', 'ssn', 'phone', 'mobile'
+        ];
+
+        $redacted = [];
+        foreach ($data as $key => $value) {
+            if (is_array($value)) {
+                $redacted[$key] = $this->redactPII($value);
+            } elseif (in_array(strtolower((string)$key), $piiKeys, true)) {
+                $redacted[$key] = '[REDACTED_PII]';
+            } else {
+                $redacted[$key] = $value;
+            }
+        }
+        return $redacted;
+    }
 }
+

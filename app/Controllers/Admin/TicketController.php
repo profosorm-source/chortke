@@ -116,8 +116,7 @@ class TicketController extends BaseAdminController
             return $this->response->json(['success' => false, 'message' => 'ارسال پیام الزامی است.']);
         }
 
-        // 🛡️ NEW-13: جلوگیری از حملات Stored XSS و کنترل طول داده ورودی
-        $message = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+        // 🛡️ NEW-13: کنترل طول داده ورودی (پاکسازی نهایی XSS در TicketService انجام می‌شود)
         if (mb_strlen($message) > 5000) {
             return $this->response->json([
                 'success' => false, 
@@ -170,8 +169,7 @@ class TicketController extends BaseAdminController
         }
 
         // H-02: Status Whitelist Validation
-        $allowedStatuses = ['open', 'answered', 'in_progress', 'on_hold', 'closed'];
-        if (!in_array($status, $allowedStatuses, true)) {
+        if (!in_array($status, \App\Enums\TicketStatus::all(), true)) {
             return $this->response->json(['success' => false, 'message' => 'وضعیت نامعتبر است.']);
         }
 
@@ -204,6 +202,14 @@ class TicketController extends BaseAdminController
     {
         // CORE-036: CSRF Protection
         $this->validateCsrf();
+
+        // 🛡️ Item 9: بررسی اجازه کاربر جاری برای تخصیص تیکت
+        if (!$this->policyService->authorizeById('tickets.assign', user_id())) {
+            return $this->response->json([
+                'success' => false, 
+                'message' => 'دسترسی غیرمجاز برای تغییر تخصیص تیکت.'
+            ], 403);
+        }
 
         $data = $this->request->json();
         $ticketId = (int) ($data['ticket_id'] ?? 0);
