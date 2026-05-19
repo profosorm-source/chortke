@@ -137,6 +137,8 @@ return;
     public function verify(): void
 {
     try {
+        $this->validateCsrf();
+
         $adminId = (int) user_id();
 
         $depositId = (int) ($this->request->input('deposit_id') ?? 0);
@@ -178,6 +180,8 @@ return;
    public function reject(): void
 {
     try {
+        $this->validateCsrf();
+
         $adminId = (int) user_id();
 
         $depositId = (int) ($this->request->input('deposit_id') ?? 0);
