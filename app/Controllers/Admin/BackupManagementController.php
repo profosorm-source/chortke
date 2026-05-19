@@ -9,13 +9,14 @@ use Core\Logger;
  * Controller: BackupManagementController
  * مدیریت پشتیبان‌گیری و بازیابی دیتابیس
  */
-class BackupManagementController
+class BackupManagementController extends BaseAdminController
 {
     private BackupService $backupService;
     private Logger $logger;
 
     public function __construct(BackupService $backupService, Logger $logger)
     {
+        parent::__construct();
         $this->backupService = $backupService;
         $this->logger = $logger;
     }
@@ -76,6 +77,7 @@ class BackupManagementController
      */
     public function restoreBackup()
     {
+        $this->requirePermission('super_admin');
         try {
             $backupId = $_POST['backup_id'] ?? null;
 

@@ -19,6 +19,7 @@ class AdminExportController extends BaseAdminController
    public function __construct(ExportService $exportService, AuditTrail $auditTrail)
 {
     parent::__construct();
+    $this->requirePermission('super_admin');
     $this->exportService = $exportService;
     $this->auditTrail = $auditTrail;
 }
