@@ -78,6 +78,25 @@ class UserController extends BaseAdminController
         // ✅ استفاده از validateRequest برای اعتبارسنجی یکپارچه
         $validated = $this->validateRequest(\App\Validators\Requests\UserCreateRequest::class);
 
+        $currentAdmin = $this->userService->find($this->userId());
+        if (!$currentAdmin) {
+            $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز'], 403);
+            return;
+        }
+
+        $hierarchy = ['user' => 0, 'admin' => 1, 'super_admin' => 2];
+        $adminRoleLevel = $hierarchy[$currentAdmin->role ?? 'user'] ?? 0;
+        $newRole = $validated->role ?? 'user';
+        $newRoleLevel = $hierarchy[$newRole] ?? 0;
+
+        if ($newRoleLevel > $adminRoleLevel) {
+            $this->response->json([
+                'success' => false,
+                'message' => 'شما نمی‌توانید کاربر با سطحی بالاتر از خود ایجاد کنید.'
+            ], 403);
+            return;
+        }
+
         $existingUser = $this->userService->findByEmail($validated->email);
         if ($existingUser) {
             $this->response->json([
@@ -159,6 +178,48 @@ public function update(int $id): void
     // ✅ اعتبارسنجی متمرکز با استفاده از FormRequest
     $validated = $this->validateRequest(\App\Validators\Requests\UserUpdateRequest::class, $data);
 
+    // Role Hierarchy and Self-Escalation Check (CRIT-05)
+    $currentAdmin = $this->userService->find($this->userId());
+    if (!$currentAdmin) {
+        $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز'], 403);
+        return;
+    }
+
+    $hierarchy = ['user' => 0, 'admin' => 1, 'super_admin' => 2];
+    $adminRoleLevel = $hierarchy[$currentAdmin->role ?? 'user'] ?? 0;
+    $targetUserRoleLevel = $hierarchy[$user->role ?? 'user'] ?? 0;
+
+    // Non-super_admins cannot edit other admins
+    if ($adminRoleLevel < 2 && $targetUserRoleLevel >= 1 && $user->id !== $currentAdmin->id) {
+        $this->response->json([
+            'success' => false,
+            'message' => 'شما مجاز به ویرایش سایر مدیران نیستید.'
+        ], 403);
+        return;
+    }
+
+    // Cannot assign a role higher than the admin's current role
+    $newRole = $validated->role ?? $user->role;
+    $newRoleLevel = $hierarchy[$newRole] ?? 0;
+    if ($newRoleLevel > $adminRoleLevel) {
+        $this->response->json([
+            'success' => false,
+            'message' => 'شما نمی‌توانید سطحی بالاتر از سطح خود تخصیص دهید.'
+        ], 403);
+        return;
+    }
+
+    // State Machine validation for status transitions (CRIT-08)
+    if (isset($validated->status)) {
+        if (!$this->validateStatusTransition($user->status ?? 'active', $validated->status)) {
+            $this->response->json([
+                'success' => false,
+                'message' => 'تغییر وضعیت غیرمجاز است.'
+            ], 400);
+            return;
+        }
+    }
+
     // استفاده از متد جامع سرویس برای مدیریت ایمیل تکراری و هش کردن پسورد
     $result = $this->userService->updateUser($id, $validated);
 
@@ -196,6 +257,15 @@ public function update(int $id): void
             return;
         }
 
+        // Prevent non-super_admins from deleting other admins
+        $currentAdmin = $this->userService->find($this->userId());
+        $adminRoleLevel = ['user' => 0, 'admin' => 1, 'super_admin' => 2][$currentAdmin->role ?? 'user'] ?? 0;
+        $targetUserRoleLevel = ['user' => 0, 'admin' => 1, 'super_admin' => 2][$user->role ?? 'user'] ?? 0;
+        if ($adminRoleLevel < 2 && $targetUserRoleLevel >= 1) {
+            $this->response->json(['success' => false, 'message' => 'شما مجاز به حذف سایر مدیران نیستید.'], 403);
+            return;
+        }
+
         // ✅ Use AccountDeletionService for consistent deletion
         $result = $this->deletionService->deleteUserAccount($id, 'Deleted by Admin');
 
@@ -216,44 +286,63 @@ public function update(int $id): void
             return;
         }
 
-    $user = $this->userService->find($id);
-    if (!$user) {
-        $this->response->json(['success' => false, 'message' => 'کاربر یافت نشد'], 404);
-        return;
-    }
+        $user = $this->userService->find($id);
+        if (!$user) {
+            $this->response->json(['success' => false, 'message' => 'کاربر یافت نشد'], 404);
+            return;
+        }
 
-    // اگر حذف نرم شده باشد، اجازه تغییر وضعیت نده
-    if (!empty($user->deleted_at)) {
-        $this->response->json(['success' => false, 'message' => 'این کاربر حذف شده است'], 400);
-        return;
-    }
+        // اگر حذف نرم شده باشد، اجازه تغییر وضعیت نده
+        if (!empty($user->deleted_at)) {
+            $this->response->json(['success' => false, 'message' => 'این کاربر حذف شده است'], 400);
+            return;
+        }
 
-    if ($user->status === 'banned') {
-        $ok = $this->userService->unbanUser($id);
-        $newStatus = 'active';
-    } else {
-        $ok = $this->userService->banUser($id, 'Suspended by Admin');
-        $newStatus = 'banned';
-    }
+        // Prevent non-super_admins from banning other admins
+        $currentAdmin = $this->userService->find($currentAdminId);
+        $adminRoleLevel = ['user' => 0, 'admin' => 1, 'super_admin' => 2][$currentAdmin->role ?? 'user'] ?? 0;
+        $targetUserRoleLevel = ['user' => 0, 'admin' => 1, 'super_admin' => 2][$user->role ?? 'user'] ?? 0;
+        if ($adminRoleLevel < 2 && $targetUserRoleLevel >= 1) {
+            $this->response->json(['success' => false, 'message' => 'شما مجاز به تغییر وضعیت سایر مدیران نیستید.'], 403);
+            return;
+        }
 
-    if ($ok) {
-        // لاگ امنیتی (اختیاری)
-        $this->logger->activity(
-    'user.ban.toggle',
-    'تغییر وضعیت بن کاربر',
-    $currentAdminId,
-    ['target_user_id' => $id, 'new_status' => $newStatus]
-);
+        if ($user->status === 'banned') {
+            $newStatus = 'active';
+        } else {
+            $newStatus = 'banned';
+        }
 
-        $this->response->json([
-            'success' => true,
-            'message' => $newStatus === 'banned' ? 'کاربر با موفقیت بن شد' : 'کاربر از حالت بن خارج شد',
-            'newStatus' => $newStatus
-        ]);
-    } else {
-        $this->response->json(['success' => false, 'message' => 'خطا در تغییر وضعیت کاربر'], 500);
+        // State Machine transition check
+        if (!$this->validateStatusTransition($user->status ?? 'active', $newStatus)) {
+            $this->response->json(['success' => false, 'message' => 'تغییر وضعیت به مسدود غیرمجاز است.'], 400);
+            return;
+        }
+
+        if ($newStatus === 'active') {
+            $ok = $this->userService->unbanUser($id);
+        } else {
+            $ok = $this->userService->banUser($id, 'Suspended by Admin');
+        }
+
+        if ($ok) {
+            // لاگ امنیتی (اختیاری)
+            $this->logger->activity(
+                'user.ban.toggle',
+                'تغییر وضعیت بن کاربر',
+                $currentAdminId,
+                ['target_user_id' => $id, 'new_status' => $newStatus]
+            );
+
+            $this->response->json([
+                'success' => true,
+                'message' => $newStatus === 'banned' ? 'کاربر با موفقیت بن شد' : 'کاربر از حالت بن خارج شد',
+                'newStatus' => $newStatus
+            ]);
+        } else {
+            $this->response->json(['success' => false, 'message' => 'خطا در تغییر وضعیت کاربر'], 500);
+        }
     }
-}
 
     /**
      * تعلیق کاربر
@@ -265,37 +354,70 @@ public function update(int $id): void
             return;
         }
 
-    $user = $this->userService->find($id);
-    if (!$user) {
-        $this->response->json(['success' => false, 'message' => 'کاربر یافت نشد'], 404);
-        return;
-    }
+        $user = $this->userService->find($id);
+        if (!$user) {
+            $this->response->json(['success' => false, 'message' => 'کاربر یافت نشد'], 404);
+            return;
+        }
 
-    if (!empty($user->deleted_at)) {
-        $this->response->json(['success' => false, 'message' => 'این کاربر حذف شده است'], 400);
-        return;
-    }
+        if (!empty($user->deleted_at)) {
+            $this->response->json(['success' => false, 'message' => 'این کاربر حذف شده است'], 400);
+            return;
+        }
 
-    if ($user->status === 'banned') {
-        $this->response->json(['success' => false, 'message' => 'کاربر بن است؛ ابتدا از بن خارج کنید'], 400);
-        return;
-    }
+        if ($user->status === 'banned') {
+            $this->response->json(['success' => false, 'message' => 'کاربر بن است؛ ابتدا از بن خارج کنید'], 400);
+            return;
+        }
 
-    $newStatus = ($user->status === 'suspended') ? 'active' : 'suspended';
+        // Prevent non-super_admins from suspending other admins
+        $currentAdmin = $this->userService->find($this->userId());
+        $adminRoleLevel = ['user' => 0, 'admin' => 1, 'super_admin' => 2][$currentAdmin->role ?? 'user'] ?? 0;
+        $targetUserRoleLevel = ['user' => 0, 'admin' => 1, 'super_admin' => 2][$user->role ?? 'user'] ?? 0;
+        if ($adminRoleLevel < 2 && $targetUserRoleLevel >= 1) {
+            $this->response->json(['success' => false, 'message' => 'شما مجاز به تعلیق سایر مدیران نیستید.'], 403);
+            return;
+        }
 
-    $ok = $this->userService->update($id, [
-        'status' => $newStatus,
-        'updated_at' => \date('Y-m-d H:i:s')
-    ]);
+        $newStatus = ($user->status === 'suspended') ? 'active' : 'suspended';
 
-    if ($ok) {
-        $this->response->json([
-            'success' => true,
-            'message' => $newStatus === 'suspended' ? 'کاربر تعلیق شد' : 'تعلیق برداشته شد',
-            'newStatus' => $newStatus
+        // State Machine transition check
+        if (!$this->validateStatusTransition($user->status ?? 'active', $newStatus)) {
+            $this->response->json(['success' => false, 'message' => 'تغییر وضعیت به تعلیق غیرمجاز است.'], 400);
+            return;
+        }
+
+        $ok = $this->userService->update($id, [
+            'status' => $newStatus,
+            'updated_at' => \date('Y-m-d H:i:s')
         ]);
-    } else {
-        $this->response->json(['success' => false, 'message' => 'خطا در تغییر وضعیت'], 500);
+
+        if ($ok) {
+            $this->response->json([
+                'success' => true,
+                'message' => $newStatus === 'suspended' ? 'کاربر تعلیق شد' : 'تعلیق برداشته شد',
+                'newStatus' => $newStatus
+            ]);
+        } else {
+            $this->response->json(['success' => false, 'message' => 'خطا در تغییر وضعیت'], 500);
+        }
     }
-}
+
+    /**
+     * بررسی معتبر بودن تغییر وضعیت بر اساس ماشین وضعیت (CRIT-08)
+     */
+    private function validateStatusTransition(string $currentStatus, string $newStatus): bool
+    {
+        if ($currentStatus === $newStatus) {
+            return true;
+        }
+        $transitions = [
+            'active' => ['suspended', 'banned'],
+            'suspended' => ['active', 'banned'],
+            'banned' => ['active'],
+            'deleted' => []
+        ];
+        $allowed = $transitions[$currentStatus] ?? [];
+        return in_array($newStatus, $allowed, true);
+    }
 }
