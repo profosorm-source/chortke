@@ -29,6 +29,12 @@ class BugReportController extends BaseAdminController
      */
     public function index()
     {
+        // 🛡️ CRIT-02: بررسی دسترسی مشاهده گزارش‌های باگ
+        if (!$this->policyService->authorizeById('bug_reports.view', user_id())) {
+            $this->session->setFlash('error', 'دسترسی غیرمجاز.');
+            return redirect(url('/admin'));
+        }
+
         $page = (int)($this->request->get('page') ?: 1);
         $perPage = 20;
         $offset = ($page - 1) * $perPage;
@@ -70,6 +76,12 @@ class BugReportController extends BaseAdminController
      */
     public function show()
     {
+        // 🛡️ CRIT-02: بررسی دسترسی مشاهده گزارش‌های باگ
+        if (!$this->policyService->authorizeById('bug_reports.view', user_id())) {
+            $this->session->setFlash('error', 'دسترسی غیرمجاز.');
+            return redirect(url('/admin'));
+        }
+
         $id = (int)$this->request->param('id');
 
         $report = $this->ticketService->findBugReport($id);
@@ -92,6 +104,13 @@ class BugReportController extends BaseAdminController
     public function updateStatus(): void
     {
         $this->validateCsrf();
+
+        // 🛡️ CRIT-02: بررسی دسترسی ادمین
+        if (!$this->policyService->authorizeById('bug_reports.view', user_id())) {
+            $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز.'], 403);
+            return;
+        }
+
         $id = (int)$this->request->param('id');
         $rawData = \file_get_contents('php://input');
         $data = \json_decode($rawData, true) ?? [];
@@ -102,8 +121,13 @@ class BugReportController extends BaseAdminController
             return;
         }
 
+        // 🛡️ MED-06: تایید اصالت گزارش باگ قبل از هرگونه تغییر
         $oldReport = $this->ticketService->findBugReport($id);
-        $oldStatus = $oldReport ? $oldReport->status : 'unknown';
+        if (!$oldReport) {
+            $this->response->json(['success' => false, 'message' => 'گزارش یافت نشد.'], 404);
+            return;
+        }
+        $oldStatus = $oldReport->status;
 
         $ok = $this->ticketService->updateStatus($id, $status, user_id());
         if ($ok) {
@@ -119,6 +143,13 @@ class BugReportController extends BaseAdminController
     public function updatePriority(): void
     {
         $this->validateCsrf();
+
+        // 🛡️ CRIT-02: بررسی دسترسی ادمین
+        if (!$this->policyService->authorizeById('bug_reports.view', user_id())) {
+            $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز.'], 403);
+            return;
+        }
+
         $id = (int)$this->request->param('id');
         $rawData = \file_get_contents('php://input');
         $data = \json_decode($rawData, true) ?? [];
@@ -129,8 +160,13 @@ class BugReportController extends BaseAdminController
             return;
         }
 
+        // 🛡️ MED-06: تایید اصالت گزارش باگ قبل از هرگونه تغییر
         $oldReport = $this->ticketService->findBugReport($id);
-        $oldPriority = $oldReport ? $oldReport->priority : 'unknown';
+        if (!$oldReport) {
+            $this->response->json(['success' => false, 'message' => 'گزارش یافت نشد.'], 404);
+            return;
+        }
+        $oldPriority = $oldReport->priority;
 
         $ok = $this->ticketService->updatePriority($id, $priority, user_id());
         if ($ok) {
@@ -146,7 +182,27 @@ class BugReportController extends BaseAdminController
     public function addComment(): void
     {
         $this->validateCsrf();
+
+        // 🛡️ CRIT-02: بررسی دسترسی ادمین
+        if (!$this->policyService->authorizeById('bug_reports.view', user_id())) {
+            $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز.'], 403);
+            return;
+        }
+
         $id = (int)$this->request->param('id');
+
+        // 🛡️ MED-06: تایید وجود و اصالت گزارش باگ
+        $report = $this->ticketService->findBugReport($id);
+        if (!$report) {
+            $this->response->json(['success' => false, 'message' => 'گزارش یافت نشد.'], 404);
+            return;
+        }
+
+        // 🛡️ MED-06: ممانعت از ثبت کامنت جدید و بازگشایی خودکار تیکت در صورت بسته بودن گزارش
+        if ($report->status === 'closed') {
+            $this->response->json(['success' => false, 'message' => 'امکان ثبت کامنت روی گزارش بسته شده وجود ندارد.'], 400);
+            return;
+        }
 
         $rawData = \file_get_contents('php://input');
         $data = \json_decode($rawData, true);
@@ -158,7 +214,8 @@ class BugReportController extends BaseAdminController
             $data = $this->request->all();
         }
 
-        $comment = trim((string)($data['comment'] ?? ''));
+        // 🛡️ CRIT-03: ضدعفونی صریح کامنت ادمین جهت مقابله با حملات Stored XSS
+        $comment = htmlspecialchars(trim((string)($data['comment'] ?? '')), ENT_QUOTES, 'UTF-8', false);
         if ($comment === '') {
             $this->response->json(['success' => false, 'message' => 'متن کامنت الزامی است'], 422);
             return;
@@ -189,10 +246,22 @@ class BugReportController extends BaseAdminController
     public function delete(): void
     {
         $this->validateCsrf();
+
+        // 🛡️ CRIT-02: بررسی دسترسی ادمین
+        if (!$this->policyService->authorizeById('bug_reports.view', user_id())) {
+            $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز.'], 403);
+            return;
+        }
+
         $id = (int)$this->request->param('id');
 
+        // 🛡️ MED-06: تایید اصالت گزارش باگ
         $oldReport = $this->ticketService->findBugReport($id);
-        $oldStatus = $oldReport ? $oldReport->status : 'unknown';
+        if (!$oldReport) {
+            $this->response->json(['success' => false, 'message' => 'گزارش یافت نشد.'], 404);
+            return;
+        }
+        $oldStatus = $oldReport->status;
 
         $result = $this->ticketService->close($id, user_id(), true);
         if ($result['success'] ?? false) {

@@ -92,9 +92,9 @@ class TicketController extends BaseAdminController
             return redirect('/admin/tickets');
         }
 
-        // 🛡️ HIGH-01: جلوگیری از دسترسی ادمین‌های عادی به تیکت‌های غیرمنتسب به خودشان
+        // 🛡️ HIGH-01: جلوگیری از دسترسی ادمین‌های عادی به تیکت‌های غیرمنتسب به خودشان یا فاقد انتساب
         $adminId = user_id();
-        if ($ticket->assigned_to && (int)$ticket->assigned_to !== $adminId) {
+        if ((int)$ticket->assigned_to !== $adminId) {
             if (!$this->policyService->authorizeById('tickets.view_all', $adminId)) {
                 $this->session->setFlash('error', 'شما دسترسی مشاهده این تیکت را ندارید.');
                 return redirect('/admin/tickets');
@@ -119,13 +119,15 @@ class TicketController extends BaseAdminController
 
         $data = $this->request->json();
         $ticketId = (int) ($data['ticket_id'] ?? 0);
-        $message = trim($data['message'] ?? '');
+        
+        // 🛡️ HIGH-08: ضدعفونی صریح پیام پاسخ ادمین جهت مقابله با حملات Stored XSS
+        $message = htmlspecialchars(trim($data['message'] ?? ''), ENT_QUOTES, 'UTF-8', false);
 
         if (!$ticketId || empty($message)) {
             return $this->response->json(['success' => false, 'message' => 'ارسال پیام الزامی است.']);
         }
 
-        // 🛡️ NEW-13: کنترل طول داده ورودی (پاکسازی نهایی XSS در TicketService انجام می‌شود)
+        // 🛡️ NEW-13: کنترل طول داده ورودی
         if (mb_strlen($message) > 5000) {
             return $this->response->json([
                 'success' => false, 
@@ -227,8 +229,9 @@ class TicketController extends BaseAdminController
         $ticketId = (int) ($data['ticket_id'] ?? 0);
         $adminId = (int) ($data['admin_id'] ?? 0);
         
-        if (!$ticketId) {
-            return $this->response->json(['success' => false, 'message' => 'داده‌های ناقص.']);
+        // 🛡️ LOW-05: اعتبارسنجی دقیق شناسه مدیر و ممانعت از ارجاعات نامعتبر
+        if (!$ticketId || $adminId <= 0) {
+            return $this->response->json(['success' => false, 'message' => 'شناسه تیکت یا شناسه مدیر نامعتبر است.']);
         }
 
         $ticket = $this->ticketService->getById($ticketId);
@@ -238,13 +241,8 @@ class TicketController extends BaseAdminController
 
         $oldAdminId = (int)($ticket->assigned_to ?? 0);
 
-        if ($adminId > 0) {
-            if (!$this->policyService->isAdminById($adminId)) {
-                return $this->response->json(['success' => false, 'message' => 'شناسه مدیر نامعتبر است.']);
-            }
-        } else {
-            // صریحاً unassign را مدیریت کن
-            $adminId = 0;
+        if (!$this->policyService->isAdminById($adminId)) {
+            return $this->response->json(['success' => false, 'message' => 'شناسه مدیر نامعتبر است.']);
         }
         
         if ($this->ticketService->assignTo($ticketId, $adminId)) {
