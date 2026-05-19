@@ -272,13 +272,19 @@ class Ticket extends Model {
     {
         if (empty($data)) return false;
 
+        $allowedColumns = ['category_id', 'subject', 'priority', 'status', 'metadata', 'assigned_to', 'closed_at'];
         $fields = [];
         $params = [];
 
         foreach ($data as $key => $value) {
+            if (!in_array($key, $allowedColumns, true)) {
+                continue;
+            }
             $fields[] = "{$key} = ?";
             $params[] = $value;
         }
+
+        if (empty($fields)) return false;
 
         // همیشه updated_at را بروز کن
         $fields[] = "updated_at = NOW()";

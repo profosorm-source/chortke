@@ -131,10 +131,7 @@ class DirectMessage extends Model
     {
         return (bool)$this->db->table(static::$table)
             ->where('id', '=', $messageId)
-            ->where(function($q) use ($userId) {
-                $q->where('sender_id', '=', $userId)
-                  ->orWhere('recipient_id', '=', $userId);
-            })
+            ->where('sender_id', '=', $userId)
             ->update([
                 'deleted_by' => $userId,
                 'deleted_at' => date('Y-m-d H:i:s')
