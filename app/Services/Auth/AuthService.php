@@ -337,6 +337,7 @@ class AuthService extends \App\Services\BaseService
         $this->session->set('login_ip', $this->clientIp());
         $this->session->set('login_time', time());
         $this->session->set('user_verify_time', time());
+        $this->session->set('last_auth_time', time());
 
         if ($remember) {
             $this->createRememberToken((int)$user->id);

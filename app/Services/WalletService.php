@@ -28,6 +28,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     private DistributedLockService $lockService;
     private SettingService $settingService;
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
+    private \Core\Cache $cache;
 
     public function __construct(
         Database $db,
@@ -39,7 +40,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         LedgerService $ledgerService,
         DistributedLockService $lockService,
         SettingService $settingService,
-        \App\Services\AntiFraud\FraudGuardService $fraudGuard
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        \Core\Cache $cache
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -51,6 +53,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $this->lockService = $lockService;
         $this->settingService = $settingService;
         $this->fraudGuard = $fraudGuard;
+        $this->cache = $cache;
 
         // Load supported currencies from config
         $configuredCurrencies = $settingService->get('wallet_supported_currencies');
@@ -352,6 +355,11 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             if ($startedTransaction) {
                 $this->db->commit();
             }
+            
+            // ✅ Invalidate dashboard and wallet caches (HIGH-07)
+            $this->cache->forget("user_dashboard_stats:{$userId}");
+            $this->cache->forget("wallet_balance:{$userId}");
+
             $idempotencyService->complete($idempotencyKey, $result, $userId);
 
             $this->auditTrail->record('wallet.credited', $userId, [
@@ -579,6 +587,10 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'context'        => $metadata['ref_type'] ?? 'unknown',
             ]);
 
+            // ✅ Invalidate dashboard and wallet caches (HIGH-07)
+            $this->cache->forget("user_dashboard_stats:{$userId}");
+            $this->cache->forget("wallet_balance:{$userId}");
+
             return [
                 'success'        => true,
                 'transaction_id' => $transaction->transaction_id,
@@ -703,6 +715,11 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             if ($startedTransaction) {
                 $this->db->commit();
             }
+            
+            // ✅ Invalidate dashboard and wallet caches (HIGH-07)
+            $this->cache->forget("user_dashboard_stats:{$userId}");
+            $this->cache->forget("wallet_balance:{$userId}");
+
             $idempotencyService->complete($idempotencyKey, $result, $userId);
 
             $this->auditTrail->record('wallet.debited', $userId, [
@@ -894,6 +911,11 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 if ($startedTransaction) {
                     $this->db->commit();
                 }
+                
+                // ✅ Invalidate dashboard and wallet caches (HIGH-07)
+                $this->cache->forget("user_dashboard_stats:{$userId}");
+                $this->cache->forget("wallet_balance:{$userId}");
+
                 $idempotencyService->complete($idempotencyKey, $result, $userId);
 
                 $this->auditTrail->record('wallet.paid', $userId, [

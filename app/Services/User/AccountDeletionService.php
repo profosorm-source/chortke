@@ -183,16 +183,17 @@ class AccountDeletionService extends \App\Services\BaseService
             // ۱۱. حذف کاربر (soft delete یا hard delete)
             // استفاده از UNIX_TIMESTAMP و LEFT برای جلوگیری از collision در ستون‌های Unique (Issue #22)
             // به همراه پاکسازی کد ملی و تغییر شماره موبایل جهت جلوگیری از برخورد با مقادیر Unique
+            $uniqueSuffix = \bin2hex(\random_bytes(6));
             $this->db->query(
                 "UPDATE users SET 
                     deleted_at = NOW(),
-                    email = LEFT(CONCAT(email, '_del_', UNIX_TIMESTAMP()), 100),
-                    username = LEFT(CONCAT(username, '_del_', UNIX_TIMESTAMP()), 50),
-                    mobile = LEFT(CONCAT(mobile, '_del_', UNIX_TIMESTAMP()), 20),
+                    email = CONCAT(SUBSTRING(email, 1, 80), '_del_', ?),
+                    username = CONCAT(SUBSTRING(username, 1, 30), '_del_', ?),
+                    mobile = CONCAT(SUBSTRING(mobile, 1, 3), '_del_', ?),
                     national_id = NULL,
                     status = 'deleted'
                 WHERE id = ?",
-                [$userId]
+                [$uniqueSuffix, $uniqueSuffix, $uniqueSuffix, $userId]
             );
 
             $this->db->commit();

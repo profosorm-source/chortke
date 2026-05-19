@@ -20,14 +20,16 @@ class XPEngine extends BaseService
     private Score $scoreModel;
     private UserVacation $vacationModel;
     private SettingService $settingService;
+    private \Core\Cache $cache;
 
-    public function __construct(Database $db, Score $scoreModel, UserVacation $vacationModel, LoggerInterface $logger, SettingService $settingService)
+    public function __construct(Database $db, Score $scoreModel, UserVacation $vacationModel, LoggerInterface $logger, SettingService $settingService, \Core\Cache $cache)
     {
         parent::__construct($logger);
         $this->db = $db;
         $this->scoreModel = $scoreModel;
         $this->vacationModel = $vacationModel;
         $this->settingService = $settingService;
+        $this->cache = $cache;
     }
 
     /**
@@ -185,7 +187,18 @@ class XPEngine extends BaseService
             4 => 1.40,
         ]);
 
-        return (float)($multiplierMap[$activeDomains] ?? $multiplierMap[max(array_keys($multiplierMap))] ?? 1.40);
+        $rawMultiplier = (float)($multiplierMap[$activeDomains] ?? $multiplierMap[max(array_keys($multiplierMap))] ?? 1.40);
+
+        // ✅ Limit increase rate to max 15% increase per day (HIGH-06)
+        $yesterday = $this->cache->get("synergy:{$userId}:" . \date('Y-m-d', \strtotime('-1 day')));
+        $yesterday = $yesterday !== null ? (float)$yesterday : 1.0;
+
+        $maxAllowed = $yesterday + 0.15;
+        $finalMultiplier = \min($rawMultiplier, $maxAllowed);
+
+        $this->cache->set("synergy:{$userId}:" . \date('Y-m-d'), $finalMultiplier, 86400);
+
+        return $finalMultiplier;
     }
 
     /**
