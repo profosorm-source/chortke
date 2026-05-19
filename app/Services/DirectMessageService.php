@@ -75,6 +75,14 @@ class DirectMessageService extends \App\Services\BaseService
                 return ['error' => 'نمی‌توانید برای خودتان پیام بفرستید'];
             }
 
+            // 🛡️ CRIT-12: بررسی تنظیمات حریم خصوصی
+            $userSettingsService = app(\App\Services\User\UserSettingsService::class);
+            $allowMessages = $userSettingsService->get($recipientId, 'allow_messages', true);
+            if (!$allowMessages) {
+                usleep(random_int(10000, 50000));
+                return ['error' => 'امکان ارسال پیام بین شما و این کاربر وجود ندارد'];
+            }
+
             // 🛡️ BLF-01: بررسی وجود کاربر مقصد و مسدودی دوطرفه با جلوگیری از User Enumeration و برابر شدن زمان پاسخ
             $recipient = $this->directMessageModel->getUserInfo($recipientId);
             $isBlocked = $this->isBlocked($senderId, $recipientId) || $this->isBlocked($recipientId, $senderId);
@@ -137,6 +145,18 @@ class DirectMessageService extends \App\Services\BaseService
                     }
                     if (empty($attachment['name']) || empty($attachment['path'])) {
                         return ['error' => 'ساختار پیوست نامعتبر است'];
+                    }
+                    
+                    // 🛡️ HIGH-06: بررسی Magic Bytes
+                    $filePath = \function_exists('storage_path') ? storage_path($attachment['path']) : base_path('storage/' . $attachment['path']);
+                    if (file_exists($filePath)) {
+                        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                        $mimeType = finfo_file($finfo, $filePath);
+                        finfo_close($finfo);
+                        
+                        if (!in_array($mimeType, ['image/jpeg', 'image/png', 'application/pdf'], true)) {
+                            return ['error' => 'نوع فایل پیوست نامعتبر است'];
+                        }
                     }
                 }
                 $this->directMessageModel->addAttachments($messageId, $attachments);
@@ -598,6 +618,14 @@ LUA;
         
         foreach ($patternsWithoutBoundaries as $pattern) {
             if (preg_match($pattern, $cleanedEng)) {
+                return true;
+            }
+        }
+        
+        // ✅ بررسی کلمات ممنوعه
+        $bannedWords = ['viagra', 'casino', 'porn', 'bet', 'قمار', 'شرط‌بندی', 'کازینو'];
+        foreach ($bannedWords as $word) {
+            if (stripos($message, $word) !== false) {
                 return true;
             }
         }

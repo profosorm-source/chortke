@@ -56,7 +56,18 @@ extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // H13 Fix: قفل بدبینانه روی سطر گزارش و استخراج مستقیم داده‌ها جهت ممانعت از Double Warning و تداخل شناسه
+            // 🛡️ CRIT-06: ترتیب قفل‌گذاری ثابت جهت جلوگیری از Deadlock
+            // ابتدا دریافت مشخصات پایه‌ای گزارش بدون قفل برای پیدا کردن فرستنده
+            $baseReport = $this->db->query(
+                "SELECT dm.sender_id FROM message_reports mr JOIN direct_messages dm ON mr.message_id = dm.id WHERE mr.id = ?",
+                [$reportId]
+            )->fetch(\PDO::FETCH_ASSOC);
+
+            if ($baseReport && in_array($action, ['warn', 'ban'], true)) {
+                $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [(int)$baseReport['sender_id']]);
+            }
+
+            // H13 Fix: قفل بدبینانه روی سطر گزارش
             $report = $this->db->query(
                 "SELECT mr.status as report_status, dm.sender_id, dm.id as message_id 
                  FROM message_reports mr
@@ -77,14 +88,12 @@ extends \App\Services\BaseService
 
             switch ($action) {
                 case 'warn':
-                    $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [(int)$report['sender_id']]);
                     $this->warnUser((int)$report['sender_id'], $adminId, $reportId);
                     break;
                 case 'delete':
                     $this->deleteMessage((int)$report['message_id'], $adminId, $reportId);
                     break;
                 case 'ban':
-                    $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [(int)$report['sender_id']]);
                     $this->banUser((int)$report['sender_id'], $adminId, $reportId);
                     break;
                 default:
@@ -92,7 +101,11 @@ extends \App\Services\BaseService
                     return ['success' => false, 'message' => 'اقدام نامعتبر است'];
             }
 
-            $this->moderationModel->updateReportStatus($reportId, 'resolved', $adminId);
+            // 🛡️ FAIL-03: بررسی موفقیت آپدیت وضعیت
+            $ok = $this->moderationModel->updateReportStatus($reportId, 'resolved', $adminId);
+            if (!$ok) {
+                throw new \Exception('Failed to update report status');
+            }
 
             $this->db->commit();
             $this->cache->forget('message_moderation_stats_v2');
@@ -139,6 +152,15 @@ extends \App\Services\BaseService
                 if (count($parts) === 2) {
                     $user['blocked_email'] = substr($parts[0], 0, 2) . '***@' . $parts[1];
                 }
+            }
+            if (!empty($user['phone'])) {
+                $user['phone'] = substr($user['phone'], 0, 3) . '***' . substr($user['phone'], -2);
+            }
+            if (!empty($user['national_id'])) {
+                $user['national_id'] = '***' . substr($user['national_id'], -3);
+            }
+            if (!empty($user['ip_address'])) {
+                $user['ip_address'] = preg_replace('/\d+$/', '***', $user['ip_address']);
             }
         }
         

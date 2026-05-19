@@ -62,7 +62,17 @@ class TicketService extends \App\Services\BaseService
         
         // 🛡️ مقابله با سوءاستفاده: ریت لیمیت اتمیک ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم و Race Condition)
         $rateKey = "ticket_creation_limit:{$userId}";
-        $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
+        try {
+            $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
+        } catch (\Throwable $e) {
+            $this->logger->critical('redis_down_fallback_to_db', ['user_id' => $userId, 'action' => 'ticket_create']);
+            $count = (int)$this->db->query(
+                "SELECT COUNT(*) FROM tickets WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)",
+                [$userId]
+            )->fetchColumn();
+            $count++; // شبیه‌سازی increment
+        }
+        
         if ($count > 3) {
             $this->logger->warning('ticket.rate_limit_exceeded', ['user_id' => $userId]);
             return [
@@ -170,9 +180,23 @@ class TicketService extends \App\Services\BaseService
         // 🛡️ HIGH-14: ریت لیمیت پیش از شروع تراکنش دیتابیس جهت مقابله با فرسایش استخر اتصالات
         if (!$isAdmin) {
             $rateKey = "ticket_reply_limit:{$userId}";
-            $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
+            try {
+                $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
+            } catch (\Throwable $e) {
+                $this->logger->critical('redis_down_fallback_to_db', ['user_id' => $userId, 'action' => 'ticket_reply']);
+                $count = (int)$this->db->query(
+                    "SELECT COUNT(*) FROM ticket_messages WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)",
+                    [$userId]
+                )->fetchColumn();
+                $count++;
+            }
+            
             if ($count > 5) {
-                $this->redis->decr($rateKey);
+                try {
+                    $this->redis->decr($rateKey);
+                } catch (\Throwable $e) {
+                    // Ignore if redis is down
+                }
                 $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
                 return [
                     'success' => false,
@@ -315,24 +339,15 @@ class TicketService extends \App\Services\BaseService
      */
     private function incrementRedisCounterWithExpire(string $rateKey, int $ttl): int
     {
-        try {
-            $script = <<<'LUA'
+        $script = <<<'LUA'
 local count = redis.call('INCR', KEYS[1])
 if count == 1 then
     redis.call('EXPIRE', KEYS[1], ARGV[1])
 end
 return count
 LUA;
-            $result = $this->redis->eval($script, [$rateKey, $ttl], 1);
-            return is_int($result) ? $result : (int)$result;
-        } catch (\Throwable $e) {
-            $this->logger->warning('ticket.redis.counter.failed', [
-                'rate_key' => $rateKey,
-                'ttl' => $ttl,
-                'error' => $e->getMessage()
-            ]);
-            return 1;
-        }
+        $result = $this->redis->eval($script, [$rateKey, $ttl], 1);
+        return is_int($result) ? $result : (int)$result;
     }
 
     /**
