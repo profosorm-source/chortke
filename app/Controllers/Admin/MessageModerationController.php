@@ -80,11 +80,12 @@ class MessageModerationController extends BaseAdminController
             return;
         }
 
-        // دریافت فقط پیام‌های مرتبط با همان مکالمه گزارش‌شده جهت حفظ حریم خصوصی (به جای کل تاریخچه کاربر)
+        // 🛡️ HIGH-05: کنترل دقیق limit برای مشاهده تاریخچه پیام به منظور جلوگیری از نشت اطلاعات (حداکثر ۱۰ پیام)
+        $limit = min(max((int)$this->request->input('limit', 5), 5), 10);
         $user_messages = $this->moderationService->getReportedMessageThread(
             (int)$report['sender_id'],
             (int)$report['recipient_id'],
-            5
+            $limit
         );
 
         $this->view('admin/messages/report-detail', [

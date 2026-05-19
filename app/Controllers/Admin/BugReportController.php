@@ -202,6 +202,16 @@ class BugReportController extends BaseAdminController
             return;
         }
 
+        // 🛡️ HIGH-01: Rate limiting سبک برای ادمین در پاسخ به گزارش باگ
+        $adminId = user_id();
+        $rateLimiter = app(\Core\RateLimiter::class);
+        $rateKey = "admin_bugreport_reply:{$adminId}";
+        if (!$rateLimiter->attempt($rateKey, 100, 3600)) {
+            $this->logger->critical('admin_rate_limit_exceeded', ['admin_id' => $adminId]);
+            $this->response->json(['success' => false, 'message' => 'تعداد پاسخ‌های شما غیرعادی است'], 429);
+            return;
+        }
+
         $data = $this->request->json() ?? [];
         if (empty($data)) {
             $data = $this->request->all();
