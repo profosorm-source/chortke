@@ -225,14 +225,33 @@ class AccountDeletionManagementController extends BaseAdminController
 
             $deletion = $this->deletionLogModel->getUserDeletionRequest($userId);
 
+            $uEmail = is_array($user) ? ($user['email'] ?? '') : ($user->email ?? '');
+            $uMobile = is_array($user) ? ($user['mobile'] ?? '') : ($user->mobile ?? '');
+            $uNationalId = is_array($user) ? ($user['national_id'] ?? '') : ($user->national_id ?? '');
+            $uFullName = is_array($user) ? ($user['full_name'] ?? '') : ($user->full_name ?? '');
+            $uUsername = is_array($user) ? ($user['username'] ?? '') : ($user->username ?? '');
+            $uId = is_array($user) ? ($user['id'] ?? 0) : ($user->id ?? 0);
+            $uCreatedAt = is_array($user) ? ($user['created_at'] ?? '') : ($user->created_at ?? '');
+            $uLastActivity = is_array($user) ? ($user['last_activity_at'] ?? '') : ($user->last_activity_at ?? '');
+
             // ✅ Mask Email PII
-            $email = $user['email'] ?? '';
-            if (strpos($email, '@') !== false) {
-                [$name, $domain] = explode('@', $email);
+            $maskedEmail = $uEmail;
+            if (strpos($uEmail, '@') !== false) {
+                [$name, $domain] = explode('@', $uEmail);
                 $maskedEmail = substr($name, 0, 1) . '***@' . $domain;
             } else {
                 $maskedEmail = '***';
             }
+
+            // ✅ Mask Mobile PII
+            $maskedMobile = !empty($uMobile) 
+                ? substr($uMobile, 0, 4) . '***' . substr($uMobile, -2)
+                : null;
+
+            // ✅ Mask National ID PII
+            $maskedNationalId = !empty($uNationalId)
+                ? substr($uNationalId, 0, 3) . '****' . substr($uNationalId, -1)
+                : null;
 
             // ✅ Access Control for Deletion Reason
             $showReason = false;
@@ -244,11 +263,14 @@ class AccountDeletionManagementController extends BaseAdminController
             return $this->response->json([
                 'success' => true,
                 'user' => [
-                    'id' => $user['id'],
-                    'username' => $user['username'] ?? $maskedEmail,
+                    'id' => $uId,
+                    'username' => $uUsername ?? $maskedEmail,
                     'email' => $maskedEmail,
-                    'created_at' => $user['created_at'],
-                    'last_activity' => $user['last_activity_at'] ?? 'N/A'
+                    'mobile' => $maskedMobile,
+                    'national_id' => $maskedNationalId,
+                    'full_name' => $uFullName ?? null,
+                    'created_at' => $uCreatedAt,
+                    'last_activity' => $uLastActivity ?? 'N/A'
                 ],
                 'deletion' => $deletion ? [
                     'requested_at' => $deletion['requested_at'],
