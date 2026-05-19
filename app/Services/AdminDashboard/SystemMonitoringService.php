@@ -137,6 +137,40 @@ class SystemMonitoringService extends \App\Services\BaseService
     }
 
     /**
+     * بررسی وضعیت سیستم و ارسال هشدار در صورت عبور از آستانه مجاز
+     */
+    public function checkAndAlert(): void
+    {
+        try {
+            $status = $this->getSystemStatus();
+            
+            if (isset($status['disk']['percentage']) && $status['disk']['percentage'] >= 90) {
+                if (class_exists(\App\Services\Sentry\SentryExceptionHandler::class)) {
+                    \App\Services\Sentry\SentryExceptionHandler::captureMessage(
+                        'CRITICAL: Disk usage exceeded 90%', 
+                        'critical', 
+                        null, 
+                        ['usage' => $status['disk']['percentage']]
+                    );
+                }
+            }
+            
+            if (isset($status['memory']['percentage']) && $status['memory']['percentage'] >= 95) {
+                if (class_exists(\App\Services\Sentry\SentryExceptionHandler::class)) {
+                    \App\Services\Sentry\SentryExceptionHandler::captureMessage(
+                        'WARNING: Memory usage exceeded 95%', 
+                        'warning', 
+                        null, 
+                        ['usage' => $status['memory']['percentage']]
+                    );
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('monitoring.alert_check_failed', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
      * محاسبه زمان گذشته
      */
     public function timeAgo(string $datetime): string
