@@ -87,5 +87,36 @@ abstract class BaseUserController extends BaseController
             $this->response->redirect(url('login'));
             exit;
         }
+
+        $this->checkSessionTimeout();
+    }
+
+    /**
+     * 🛡️ NEW-07: بررسی مهلت زمان غیرفعالی نشست کاربر (Session Inactivity Timeout)
+     */
+    protected function checkSessionTimeout(): void
+    {
+        $lastActivity = $this->session->get('last_activity');
+        $timeout = 7200; // ۲ ساعت مهلت غیرفعالی به ثانیه
+        
+        if ($lastActivity && (time() - (int)$lastActivity > $timeout)) {
+            $userId = $this->userId();
+            $this->logger->info('session.timeout', ['user_id' => $userId]);
+            
+            // خروج ایمن و تخریب نشست
+            $this->authService->logout();
+            $this->session->destroy();
+            
+            if (function_exists('is_ajax') && is_ajax()) {
+                $this->response->error('نشست شما به دلیل عدم فعالیت منقضی شده است.', [], 401);
+                exit;
+            }
+            
+            $this->session->setFlash('error', 'نشست شما به دلیل عدم فعالیت منقضی شده است. لطفاً مجدداً وارد شوید.');
+            $this->response->redirect(url('login'));
+            exit;
+        }
+        
+        $this->session->set('last_activity', time());
     }
 }

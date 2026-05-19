@@ -171,6 +171,14 @@ class MessageController extends BaseUserController
             $recipientId = (int)$this->request->input('recipient_id');
             $isTyping = (bool)$this->request->input('is_typing', true);
 
+            // 🛡️ NEW-15: اعمال محدودیت نرخ بروزرسانی وضعیت تایپ (محدودیت ۵ درخواست در دقیقه)
+            $rateLimiter = app(\Core\RateLimiter::class);
+            $rateLimitId = "typing_limit:" . $userId;
+            if (!$rateLimiter->attempt($rateLimitId, 5, 60, true)) {
+                $this->jsonError('تعداد درخواست‌های تایپ بیش از حد مجاز است.', [], 429);
+                return;
+            }
+
             $this->messageService->setTyping($userId, $recipientId, $isTyping);
 
             $this->jsonSuccess('', ['ok' => true]);
@@ -240,7 +248,14 @@ class MessageController extends BaseUserController
         try {
             $userId = $this->userId();
             $messageId = (int)$this->request->param('id');
-            $emoji = $this->request->input('emoji');
+            $emoji = trim((string)$this->request->input('emoji'));
+
+            // 🛡️ NEW-14: اعتبارسنجی ورودی واکنش‌ها بر اساس لیست سفید اموجی‌های مجاز
+            $allowedEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '🎉'];
+            if (!in_array($emoji, $allowedEmojis, true)) {
+                $this->jsonError('واکنش نامعتبر است.', [], 422);
+                return;
+            }
 
             $success = $this->messageService->addReaction($messageId, $userId, $emoji);
 

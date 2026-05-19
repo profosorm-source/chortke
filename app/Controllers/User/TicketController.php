@@ -99,8 +99,8 @@ class TicketController extends BaseUserController
         // Validation
         $validator = new Validator($data, [
             'category_id' => 'required|integer',
-            'subject' => 'required|min:5|max:255',
-            'message' => 'required|min:10',
+            'subject' => 'required|min:5|max:150',
+            'message' => 'required|min:10|max:5000',
             'priority' => 'required|in:low,normal,high,urgent'
         ]);
         
@@ -283,5 +283,62 @@ class TicketController extends BaseUserController
         $result = $this->ticketService->close($ticketId, user_id(), false);
 
         $this->response->json($result);
+    }
+
+    /**
+     * دانلود پیوست تیکت با بررسی دسترسی و احراز هویت (مبارزه با IDOR)
+     */
+    public function downloadAttachment(string $filename): void
+    {
+        $this->requireAuth();
+        
+        // ۱. ضدعفونی نام فایل پیوست
+        $filename = basename($filename);
+        
+        // ۲. پیدا کردن پیام مرتبط با فایل پیوست در دیتابیس
+        $attachment = db()->query(
+            "SELECT tm.ticket_id, tm.user_id, tm.is_admin
+             FROM ticket_messages tm
+             WHERE JSON_CONTAINS(tm.attachments, JSON_QUOTE(?), '$[*].path')",
+            [$filename]
+        )->fetch(\PDO::FETCH_OBJ);
+        
+        if (!$attachment) {
+            $this->response->json(['success' => false, 'message' => 'فایل یافت نشد.'], 404);
+            return;
+        }
+        
+        $ticket = $this->ticketService->getById((int)$attachment->ticket_id);
+        if (!$ticket) {
+            $this->response->json(['success' => false, 'message' => 'تیکت یافت نشد.'], 404);
+            return;
+        }
+        
+        // ۳. بررسی دسترسی کاربر
+        $userId = user_id();
+        $isAdmin = function_exists('is_admin') ? is_admin() : false;
+        
+        if (!$isAdmin && (int)$ticket->user_id !== $userId) {
+            $this->response->json(['success' => false, 'message' => 'دسترسی غیرمجاز.'], 403);
+            return;
+        }
+        
+        // ۴. خواندن و سرو فایل به صورت ایمن
+        $path = base_path("storage/uploads/ticket_attachments/{$filename}");
+        if (!file_exists($path)) {
+            $this->response->json(['success' => false, 'message' => 'فایل در سرور یافت نشد.'], 404);
+            return;
+        }
+        
+        // پاک کردن هرگونه بافر خروجی
+        if (ob_get_level()) {
+            ob_end_clean();
+        }
+        
+        header('Content-Type: ' . mime_content_type($path));
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . filesize($path));
+        readfile($path);
+        exit;
     }
 }
