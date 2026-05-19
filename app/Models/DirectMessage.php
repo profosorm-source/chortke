@@ -74,6 +74,9 @@ class DirectMessage extends Model
 
     public function getConversations(int $userId, int $limit = 20, int $offset = 0): array
     {
+        $limit = max(1, min((int)$limit, 100));
+        $offset = max(0, (int)$offset);
+
         $sql = "SELECT 
                     CASE 
                         WHEN uc.user1_id = ? THEN uc.user2_id 
@@ -111,10 +114,21 @@ class DirectMessage extends Model
             ->first();
     }
 
+    public function findMessageById(int $messageId): ?object
+    {
+        return $this->db->table(static::$table)
+            ->where('id', '=', $messageId)
+            ->first();
+    }
+
     public function softDeleteMessage(int $messageId, int $userId): bool
     {
         return (bool)$this->db->table(static::$table)
             ->where('id', '=', $messageId)
+            ->where(function($q) use ($userId) {
+                $q->where('sender_id', '=', $userId)
+                  ->orWhere('recipient_id', '=', $userId);
+            })
             ->update([
                 'deleted_by' => $userId,
                 'deleted_at' => date('Y-m-d H:i:s')
