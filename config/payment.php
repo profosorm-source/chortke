@@ -13,6 +13,7 @@ return [
         'merchant_id' => env('ZARINPAL_MERCHANT_ID', ''),   // الزامی — UUID فارسی
         'sandbox'     => env('ZARINPAL_SANDBOX', false),
         'callback_secret' => env('ZARINPAL_CALLBACK_SECRET', null),
+        'callback_ips' => explode(',', env('ZARINPAL_CALLBACK_IPS', '91.99.101.139,91.99.101.140')),
         
         // Endpoints
         'api_url'         => env('ZARINPAL_API_URL', 'https://api.zarinpal.com/pg/v4/payment'),
@@ -25,6 +26,7 @@ return [
     'nextpay' => [
         'api_key' => env('NEXTPAY_API_KEY', ''),            // الزامی
         'callback_secret' => env('NEXTPAY_CALLBACK_SECRET', null),
+        'callback_ips' => explode(',', env('NEXTPAY_CALLBACK_IPS', '5.200.203.243')),
     ],
 
     // IDPay
@@ -32,11 +34,13 @@ return [
         'api_key' => env('IDPAY_API_KEY', ''),              // الزامی
         'sandbox' => env('IDPAY_SANDBOX', false),
         'callback_secret' => env('IDPAY_CALLBACK_SECRET', null),
+        'callback_ips' => explode(',', env('IDPAY_CALLBACK_IPS', '185.97.64.*')),
     ],
 
     // DgPay (اضافه خواهد شد)
     'dgpay' => [
         'api_key' => env('DGPAY_API_KEY', ''),
         'callback_secret' => env('DGPAY_CALLBACK_SECRET', null),
+        'callback_ips' => explode(',', env('DGPAY_CALLBACK_IPS', '185.228.163.*')),
     ],
 ];

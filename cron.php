@@ -322,6 +322,13 @@ $scheduler->everyMinute(function () {
     return ['triggered_rules' => $triggered];
 }, 'alert_rule_engine');
 
+// بررسی وضعیت دیسک و حافظه (مانیتورینگ پیشگیرانه)
+$scheduler->everyMinutes(5, function () {
+    $monitoring = \Core\Container::getInstance()->make(\App\Services\AdminDashboard\SystemMonitoringService::class);
+    $monitoring->checkAndAlert();
+    return ['checked' => true];
+}, 'system_monitoring_alert');
+
 
 // پاک‌سازی کش منقضی‌شده
 $scheduler->everyMinutes(feature_config('cron_scheduler_interval', 'rollout_percentage', 5), function () {
