@@ -88,6 +88,7 @@ class TicketController extends BaseUserController
         $userId = user_id();
 
         $data = $this->request->all();
+        $data['message'] = htmlspecialchars(trim($data['message'] ?? ''), ENT_QUOTES, 'UTF-8');
         
         // Validation
         $validator = new Validator($data, [
@@ -131,7 +132,8 @@ class TicketController extends BaseUserController
                 
                 if (!in_array($mimeType, ['image/jpeg', 'image/png'], true)) {
                     $this->logger->warning('ticket.attachment.invalid_magic_bytes', ['user_id' => $userId, 'mime' => $mimeType]);
-                    continue;
+                    session()->setFlash('error', 'فایل ' . htmlspecialchars($file['name'] ?? 'نامعتبر', ENT_QUOTES, 'UTF-8') . ' نوع یا محتوای نامعتبری دارد.');
+                    return redirect('/tickets/create');
                 }
 
                 $uploadResult = $this->uploadService->upload(
@@ -146,7 +148,14 @@ class TicketController extends BaseUserController
                         'user_id' => $userId,
                         'error' => $uploadResult['message'] ?? 'Unknown upload error'
                     ]);
-                    continue;
+                    session()->setFlash('error', 'خطا در آپلود فایل پیوست. لطفاً دوباره امتحان کنید.');
+                    return redirect('/tickets/create');
+                }
+
+                if (!$this->uploadService->getPath($uploadResult['path'])) {
+                    $this->logger->warning('ticket.attachment.invalid_path', ['user_id' => $userId, 'path' => $uploadResult['path']]);
+                    session()->setFlash('error', 'مسیر فایل پیوست نامعتبر است.');
+                    return redirect('/tickets/create');
                 }
                 
                 // 🛡️ MEDIUM-02: فیلتر کاراکترهای نام پیوست با Regex و basename جهت ارتقای امنیت نام فایل
@@ -216,8 +225,14 @@ class TicketController extends BaseUserController
         $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
         if (str_contains($contentType, 'application/json')) {
             $data = $this->request->json();
-        } else {
+        } elseif (str_contains($contentType, 'multipart/form-data') || str_contains($contentType, 'application/x-www-form-urlencoded')) {
             $data = $this->request->all();
+        } else {
+            $this->response->json([
+                'success' => false,
+                'message' => 'نوع محتوا پشتیبانی نمی‌شود.'
+            ], 415);
+            return;
         }
 
         $validator = new Validator($data, [
