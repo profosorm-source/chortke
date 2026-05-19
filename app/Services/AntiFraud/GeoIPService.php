@@ -335,7 +335,12 @@ private function isPrivateIP(string $ip): bool
             }
             
             // دانلود فایل
-            $fileContent = @file_get_contents($url);
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 5.0, // 5 seconds
+                ]
+            ]);
+            $fileContent = @file_get_contents($url, false, $context);
             
             if ($fileContent === false) {
                 throw new \Exception('Failed to download GeoIP database');

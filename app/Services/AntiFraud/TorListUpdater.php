@@ -30,7 +30,12 @@ class TorListUpdater extends \App\Services\BaseService
         $url = 'https://check.torproject.org/torbulkexitlist';
         
         try {
-            $content = @file_get_contents($url);
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 5.0, // 5 seconds
+                ]
+            ]);
+            $content = @file_get_contents($url, false, $context);
             
             if ($content === false) {
                 return [
