@@ -21,6 +21,7 @@ class ContactController extends BaseController
      */
     public function send()
     {
+        $this->validateCsrf();
         $data = [
             'name' => $this->request->input('name'),
             'email' => $this->request->input('email'),
