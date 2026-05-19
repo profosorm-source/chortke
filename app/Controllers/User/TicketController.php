@@ -122,6 +122,11 @@ class TicketController extends BaseUserController
                 $files = [$files];
             }
             
+            if (count($files) > 5) {
+                session()->setFlash('error', 'حداکثر ۵ فایل مجاز است.');
+                return redirect('/tickets/create');
+            }
+            
             foreach ($files as $file) {
                 $uploadResult = $this->uploadService->upload(
                     $file,
@@ -130,12 +135,18 @@ class TicketController extends BaseUserController
                     3 * 1024 * 1024 // 3MB
                 );
                 
-                if ($uploadResult['success']) {
-                    $attachments[] = [
-                        'name' => $file['name'] ?? 'attachment',
-                        'path' => $uploadResult['path']
-                    ];
+                if (!$uploadResult['success']) {
+                    $this->logger->warning('ticket.attachment.failed', [
+                        'user_id' => $userId,
+                        'error' => $uploadResult['message'] ?? 'Unknown upload error'
+                    ]);
+                    continue;
                 }
+                
+                $attachments[] = [
+                    'name' => htmlspecialchars(basename($file['name'] ?? 'attachment'), ENT_QUOTES, 'UTF-8'),
+                    'path' => $uploadResult['path']
+                ];
             }
         }
         
@@ -143,7 +154,6 @@ class TicketController extends BaseUserController
         
         // ایجاد تیکت
         $result = $this->ticketService->create(user_id(), $data);
-        ApiRateLimiter::enforce('ticket_create', (int)user_id(), true);
         
         if ($result['success']) {
             session()->setFlash('success', $result['message']);
@@ -228,17 +238,37 @@ class TicketController extends BaseUserController
             return;
         }
 
-        // پردازش فایل‌های پیوست
+        // 🛡️ IDOR Check: بررسی مالکیت تیکت قبل از پاسخ
+        $ticketId = (int)($data['ticket_id'] ?? 0);
+        $ticket = $this->ticketService->getById($ticketId);
+        if (!$ticket || (int)$ticket->user_id !== $userId) {
+            $this->response->json([
+                'success' => false, 
+                'message' => 'دسترسی غیرمجاز.'
+            ], 403);
+            return;
+        }
+
+        // پردازش فایل‌های پیوست با استفاده از Request Wrapper
         $attachments = [];
-        if (!empty($_FILES['attachments']['name'][0])) {
-            foreach ($_FILES['attachments']['name'] as $key => $name) {
-                if ($_FILES['attachments']['error'][$key] === UPLOAD_ERR_OK) {
+        $attachmentsFile = $this->request->file('attachments');
+        if ($attachmentsFile && !empty($attachmentsFile['name'][0])) {
+            if (is_array($attachmentsFile['name']) && count($attachmentsFile['name']) > 5) {
+                $this->response->json([
+                    'success' => false,
+                    'message' => 'حداکثر ۵ فایل مجاز است.'
+                ], 400);
+                return;
+            }
+
+            foreach ($attachmentsFile['name'] as $key => $name) {
+                if ($attachmentsFile['error'][$key] === UPLOAD_ERR_OK) {
                     $file = [
-                        'name'     => $_FILES['attachments']['name'][$key],
-                        'type'     => $_FILES['attachments']['type'][$key],
-                        'tmp_name' => $_FILES['attachments']['tmp_name'][$key],
-                        'error'    => $_FILES['attachments']['error'][$key],
-                        'size'     => $_FILES['attachments']['size'][$key],
+                        'name'     => $attachmentsFile['name'][$key],
+                        'type'     => $attachmentsFile['type'][$key],
+                        'tmp_name' => $attachmentsFile['tmp_name'][$key],
+                        'error'    => $attachmentsFile['error'][$key],
+                        'size'     => $attachmentsFile['size'][$key],
                     ];
                     $uploadResult = $this->uploadService->upload(
                         $file,
@@ -246,12 +276,17 @@ class TicketController extends BaseUserController
                         ['image/jpeg', 'image/png'],
                         3 * 1024 * 1024
                     );
-                    if ($uploadResult['success']) {
-                        $attachments[] = [
-                            'name' => $name,
-                            'path' => $uploadResult['path'],
-                        ];
+                    if (!$uploadResult['success']) {
+                        $this->logger->warning('ticket.reply.attachment.failed', [
+                            'user_id' => $userId,
+                            'error' => $uploadResult['message'] ?? 'Unknown upload error'
+                        ]);
+                        continue;
                     }
+                    $attachments[] = [
+                        'name' => htmlspecialchars(basename($name), ENT_QUOTES, 'UTF-8'),
+                        'path' => $uploadResult['path'],
+                    ];
                 }
             }
         }

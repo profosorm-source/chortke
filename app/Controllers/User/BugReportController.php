@@ -54,11 +54,18 @@ class BugReportController extends BaseUserController
             $fingerprint = substr($fingerprint, 0, 128);
         }
 
+        // 🛡️ Item 23: Category Whitelisting
+        $category = $this->request->post('category') ?: 'other';
+        $allowedCategories = ['ui', 'functional', 'performance', 'security', 'other'];
+        if (!in_array($category, $allowedCategories, true)) {
+            $category = 'other';
+        }
+
         // C-05: Input Sanitization (XSS Protection)
         $data = [
             'page_url'           => filter_var($this->request->post('page_url'), FILTER_SANITIZE_URL),
             'page_title'         => htmlspecialchars($this->request->post('page_title') ?? '', ENT_QUOTES, 'UTF-8'),
-            'category'           => htmlspecialchars($this->request->post('category') ?: 'other', ENT_QUOTES, 'UTF-8'),
+            'category'           => htmlspecialchars($category, ENT_QUOTES, 'UTF-8'),
             'description'        => htmlspecialchars($this->request->post('description') ?? '', ENT_QUOTES, 'UTF-8'),
             'screen_resolution'  => htmlspecialchars($screenRes, ENT_QUOTES, 'UTF-8'),
             'device_fingerprint' => htmlspecialchars($fingerprint, ENT_QUOTES, 'UTF-8'),
@@ -66,16 +73,35 @@ class BugReportController extends BaseUserController
             'ip_address'         => $this->request->ip(),
         ];
 
-        if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] !== UPLOAD_ERR_NO_FILE) {
+        // 🛡️ Item 13: Screenshot path traversal check and Request wrapper usage
+        $screenshotFile = $this->request->file('screenshot');
+        if ($screenshotFile && $screenshotFile['error'] !== UPLOAD_ERR_NO_FILE) {
+            $filename = basename($screenshotFile['name']);
+            if (str_contains($filename, '..') || str_contains($filename, '/') || str_contains($filename, '\\')) {
+                $this->response->json(['success' => false, 'message' => 'نام فایل نامعتبر است.'], 400);
+                return;
+            }
+
+            $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+            if (!in_array($ext, ['jpg', 'png', 'jpeg'], true)) {
+                $this->response->json(['success' => false, 'message' => 'نوع فایل مجاز نیست.'], 400);
+                return;
+            }
+
             $uploadResult = $this->uploadService->upload(
-                $_FILES['screenshot'],
+                $screenshotFile,
                 'bug-reports',
                 ['jpg', 'png', 'jpeg'],
                 5 * 1024 * 1024
             );
 
             if ($uploadResult['success']) {
-                $data['screenshot'] = $uploadResult['path'];
+                $data['screenshot'] = htmlspecialchars($uploadResult['path'], ENT_QUOTES, 'UTF-8');
+            } else {
+                $this->logger->warning('bug_report.screenshot.failed', [
+                    'user_id' => $userId,
+                    'error' => $uploadResult['message'] ?? 'Unknown upload error'
+                ]);
             }
         }
 
