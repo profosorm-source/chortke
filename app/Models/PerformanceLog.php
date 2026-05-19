@@ -15,6 +15,20 @@ use Core\Model;
 class PerformanceLog extends Model
 {
     protected static string $table = 'performance_logs';
+    private static ?bool $hasExtendedSchema = null;
+
+    private function checkExtendedSchema(): bool
+    {
+        if (self::$hasExtendedSchema === null) {
+            try {
+                $stmt = $this->db->query("SHOW COLUMNS FROM performance_logs LIKE 'user_id'");
+                self::$hasExtendedSchema = ($stmt && $stmt->rowCount() > 0);
+            } catch (\Throwable $e) {
+                self::$hasExtendedSchema = false;
+            }
+        }
+        return self::$hasExtendedSchema;
+    }
 
     /**
      * درج رکورد جدید
@@ -22,18 +36,39 @@ class PerformanceLog extends Model
     public function insert(array $data): bool
     {
         try {
-            $stmt = $this->db->prepare(
-                "INSERT INTO performance_logs 
-                (request_id, metric, value, context, created_at)
-                VALUES (?, ?, ?, ?, NOW())"
-            );
-
-            return $stmt->execute([
-                $data['request_id'] ?? null,
-                $data['metric'] ?? 'unknown',
-                $data['value'] ?? 0,
-                $data['context'] ?? null,
-            ]);
+            if ($this->checkExtendedSchema()) {
+                $stmt = $this->db->prepare(
+                    "INSERT INTO performance_logs 
+                    (request_id, metric, value, context, created_at, user_id, endpoint, method, status_code, db_queries, cache_hits, cache_misses, memory_peak)
+                    VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)"
+                );
+                return $stmt->execute([
+                    $data['request_id'] ?? null,
+                    $data['metric'] ?? 'unknown',
+                    $data['value'] ?? 0,
+                    $data['context'] ?? null,
+                    $data['user_id'] ?? null,
+                    $data['endpoint'] ?? null,
+                    $data['method'] ?? null,
+                    $data['status_code'] ?? null,
+                    $data['db_queries'] ?? 0,
+                    $data['cache_hits'] ?? 0,
+                    $data['cache_misses'] ?? 0,
+                    $data['memory_peak'] ?? null,
+                ]);
+            } else {
+                $stmt = $this->db->prepare(
+                    "INSERT INTO performance_logs 
+                    (request_id, metric, value, context, created_at)
+                    VALUES (?, ?, ?, ?, NOW())"
+                );
+                return $stmt->execute([
+                    $data['request_id'] ?? null,
+                    $data['metric'] ?? 'unknown',
+                    $data['value'] ?? 0,
+                    $data['context'] ?? null,
+                ]);
+            }
         } catch (\Throwable $e) {
             $this->logger->error('model.performance_log.insert.failed', [
                 'channel' => 'model',
