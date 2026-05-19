@@ -75,12 +75,23 @@ class DirectMessageService extends \App\Services\BaseService
                 return ['error' => 'نمی‌توانید برای خودتان پیام بفرستید'];
             }
 
-            // بررسی مسدودی
-            if ($this->isBlocked($senderId, $recipientId)) {
-                return ['error' => 'این کاربر شما را مسدود کرده است'];
+            // 🛡️ BLF-01: بررسی مسدودی دوطرفه
+            if ($this->isBlocked($senderId, $recipientId) || $this->isBlocked($recipientId, $senderId)) {
+                return ['error' => 'امکان ارسال پیام بین شما و این کاربر وجود ندارد'];
             }
 
-            // بررسی محدودیت سرعت (rate limiting)
+            // 🛡️ BLF-02: بررسی محدودیت سرعت پیام‌های رمزشده
+            if ($isEncrypted) {
+                $encKey = 'rate_limit:messages:encrypted:' . $senderId;
+                $currentEncCount = (int)($this->redis->get($encKey) ?? 0);
+                if ($currentEncCount >= 3) { // حداکثر 3 پیام رمزگذاری شده در دقیقه
+                    return ['error' => 'محدودیت ارسال پیام‌های رمزشده (حداکثر ۳ در دقیقه). لطفاً کمی صبر کنید'];
+                }
+                $this->redis->incr($encKey);
+                $this->redis->expire($encKey, 60);
+            }
+
+            // بررسی محدودیت سرعت (rate limiting) معمولی
             if (!$this->checkRateLimit($senderId)) {
                 return ['error' => 'خیلی سریع پیام فرستادید. لطفاً یکی دو ثانیه صبر کنید'];
             }
@@ -117,10 +128,18 @@ class DirectMessageService extends \App\Services\BaseService
             // بروزرسانی conversation
             $this->directMessageModel->updateConversation($senderId, $recipientId, $messageId);
 
-            // شمارشگر پیام‌های خوانده نشده
-            $this->redis->incr(self::UNREAD_PREFIX . $recipientId . ':' . $senderId);
-
             $this->db->commit();
+
+            // 🛡️ RC-01: عملیات Redis خارج از بلاک تراکنش دیتابیس اجرا شود
+            try {
+                // شمارشگر پیام‌های خوانده نشده
+                $this->redis->incr(self::UNREAD_PREFIX . $recipientId . ':' . $senderId);
+            } catch (\Exception $redisEx) {
+                $this->logger->warning('message.sent.redis_failed', [
+                    'message_id' => $messageId,
+                    'error' => $redisEx->getMessage()
+                ]);
+            }
 
             $this->logger->info('message.sent', [
                 'message_id' => $messageId,
@@ -152,9 +171,18 @@ class DirectMessageService extends \App\Services\BaseService
     ): array {
         $messages = $this->directMessageModel->getConversation($userId, $otherUserId, $limit, $offset);
 
-        // mark as read
-        $this->directMessageModel->markAsRead($userId, $otherUserId);
-        $this->redis->del(self::UNREAD_PREFIX . $userId . ':' . $otherUserId);
+        // 🛡️ RC-02 & BLF-03: بررسی خوانده شدن پیام‌ها به صورت Idempotent
+        $lastSeenKey = "last_seen:{$userId}:{$otherUserId}";
+        $lastSeen = (int)($this->redis->get($lastSeenKey) ?? 0);
+        $currentTime = time();
+        $unreadCountKey = self::UNREAD_PREFIX . $userId . ':' . $otherUserId;
+        $unreadCount = (int)($this->redis->get($unreadCountKey) ?? 0);
+
+        if ($unreadCount > 0 || ($currentTime - $lastSeen > 5)) {
+            $this->directMessageModel->markAsRead($userId, $otherUserId);
+            $this->redis->del($unreadCountKey);
+            $this->redis->setex($lastSeenKey, 60, (string)$currentTime);
+        }
 
         return array_map(function($msg) {
             return [
@@ -178,11 +206,23 @@ class DirectMessageService extends \App\Services\BaseService
         $conversations = $this->directMessageModel->getConversations($userId, $limit, $offset);
 
         return array_map(function($conv) {
+            // 🛡️ PRIV-01: مخفی کردن متن پیام‌های رمزنگاری شده و محدود کردن طول متن
+            $lastMessage = $conv->last_message ?? '';
+            $isEncrypted = (bool)($conv->is_encrypted ?? false);
+
+            if ($isEncrypted) {
+                $lastMessage = '🔒 پیام رمزشده';
+            } else {
+                if (mb_strlen($lastMessage) > 50) {
+                    $lastMessage = mb_substr($lastMessage, 0, 47) . '...';
+                }
+            }
+
             return [
                 'user_id' => $conv->user_id,
                 'user_name' => $conv->full_name,
                 'user_avatar' => $conv->avatar,
-                'last_message' => $conv->last_message,
+                'last_message' => $lastMessage,
                 'last_message_at' => $conv->last_message_at,
                 'unread_count' => (int)($conv->unread_count ?? 0)
             ];
@@ -192,7 +232,7 @@ class DirectMessageService extends \App\Services\BaseService
     /**
      * دریافت اطلاعات کاربر
      */
-    public function getUserInfo(int $userId): ?array
+    public function getUserInfo(int $userId, ?int $requesterId = null): ?array
     {
         $user = $this->directMessageModel->getUserInfo($userId);
 
@@ -202,12 +242,22 @@ class DirectMessageService extends \App\Services\BaseService
             return null;
         }
 
+        // 🛡️ PRIV-02: ممانعت از افشای آنلاین بودن کاربر مگر اینکه مکالمه قبلی بین آن‌ها وجود داشته باشد
+        $isOnline = false;
+        if ($requesterId && $requesterId !== $userId) {
+            if ($this->directMessageModel->hasConversation($requesterId, $userId)) {
+                $isOnline = (bool) $user->is_online;
+            }
+        } elseif ($requesterId === $userId) {
+            $isOnline = (bool) $user->is_online;
+        }
+
         return [
             'id' => $user->id,
             'username' => $user->username,
             'full_name' => $user->full_name,
             'avatar' => $user->avatar,
-            'is_online' => (bool) $user->is_online
+            'is_online' => $isOnline
         ];
     }
 
@@ -216,6 +266,12 @@ class DirectMessageService extends \App\Services\BaseService
      */
     public function setTyping(int $userId, int $recipientId, bool $isTyping = true): void
     {
+        // 🛡️ بررسی اینکه آیا مکالمه فعال مجاز است قبل از ثبت
+        $hasConversation = $this->directMessageModel->hasConversation($userId, $recipientId);
+        if (!$hasConversation) {
+            return;
+        }
+
         $key = self::TYPING_PREFIX . $recipientId . ':' . $userId;
 
         if ($isTyping) {
@@ -231,13 +287,21 @@ class DirectMessageService extends \App\Services\BaseService
     public function getTypingUsers(int $userId): array
     {
         $pattern = self::TYPING_PREFIX . $userId . ':*';
-        // ✅ Using scanKeys() instead of keys() for performance
-        $keys = $this->redis->scanKeys($pattern);
+        
+        // 🛡️ PERF-03: محدود کردن تعداد اسکن در ردیس جهت پیشگیری از حملات منع سرویس
+        $keys = $this->redis->scanKeys($pattern, 10, 10);
 
         $typingUsers = [];
         foreach ($keys as $key) {
-            $userId = explode(':', $key)[2];
-            $typingUsers[] = (int)$userId;
+            $otherUserId = (int)explode(':', $key)[2];
+            
+            if ($this->redis->get($key) === '1') {
+                // 🛡️ BLF-05: بررسی کنید که مکالمه فعال بین دو کاربر واقعاً وجود داشته باشد
+                $hasConversation = $this->directMessageModel->hasConversation($userId, $otherUserId);
+                if ($hasConversation) {
+                    $typingUsers[] = $otherUserId;
+                }
+            }
         }
 
         return $typingUsers;
@@ -349,21 +413,34 @@ class DirectMessageService extends \App\Services\BaseService
      */
     private function containsForbiddenContent(string $msg): bool
     {
+        // 🛡️ BLF-06: جلوگیری از دور زدن فیلترینگ کلمات ممنوعه با استفاده از کاراکترهای یونیکد خاص، فواصل، تب‌ها یا اعداد مختلف
         $msg = mb_strtolower($msg, 'UTF-8');
-        // تبدیل اعداد فارسی و عربی به انگلیسی برای تشخیص دقیق‌تر
+
+        // حذف کاراکترهای Zero-width
+        $msg = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}]/u', '', $msg);
+
+        // نرمال‌سازی کاراکترهای Fullwidth/Homoglyph رایج
+        $msg = str_replace('＠', '@', $msg);
+
+        // تبدیل تمام اعداد فارسی و عربی به انگلیسی
         $persian = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
         $arabic  = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
         $english = ['0','1','2','3','4','5','6','7','8','9'];
         $msg = str_replace($persian, $english, $msg);
         $msg = str_replace($arabic, $english, $msg);
 
+        // ایجاد نسخه کاملاً فشرده (بدون فاصله، خط تیره، نقطه و آندرلاین) برای بررسی الگوهای دور زدن
+        $cleaned = preg_replace('/[\s\-\._]+/', '', $msg);
+
         // Whitelist internal domain to avoid false positives
         $appUrl = config('app.url', '');
         $host = parse_url($appUrl, PHP_URL_HOST) ?: '';
         if ($host !== '') {
             $msg = str_replace(mb_strtolower($host, 'UTF-8'), 'whitelisted_domain', $msg);
+            $cleaned = str_replace(mb_strtolower($host, 'UTF-8'), 'whitelisted_domain', $cleaned);
         }
 
+        // الگوهای تشخیص روی متن خام نرمال‌شده
         $patterns = [
             'url'    => '/https?:\/\/[^\s]+|\b[a-z0-9.-]+\.(ir|com|org|net|biz|info|me|online|tk)\b/i', // آدرس‌های وب
             'phone'  => '/(\+?98|0)?9\d{9}/', // شماره موبایل ایران
@@ -378,6 +455,21 @@ class DirectMessageService extends \App\Services\BaseService
                 return true;
             }
         }
+
+        // الگوهای تشخیص روی متن کاملاً فشرده‌شده برای مقابله با فاصله‌گذاری و تزریق کاراکتر (مانند ۰ ۹ ۱ ۲ یا 0-9-1-2)
+        $cleanedPatterns = [
+            'phone_clean'   => '/0?9\d{9}/',
+            'generic_clean' => '/\d{10,12}/',
+            'id_clean'      => '/@[a-z0-9_]{4,}/i',
+            'email_clean'   => '/[a-z0-9]+@[a-z0-9]+\.[a-z]{2,}/i',
+        ];
+
+        foreach ($cleanedPatterns as $pattern) {
+            if (preg_match($pattern, $cleaned)) {
+                return true;
+            }
+        }
+
         return false;
     }
 }

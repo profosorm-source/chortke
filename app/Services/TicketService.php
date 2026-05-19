@@ -17,6 +17,7 @@ class TicketService extends \App\Services\BaseService
     private TicketMessage $messageModel;
     private NotificationService $notificationService;
     private \Core\RateLimiter $rateLimiter; // 🛡️ مقابله با سوءاستفاده
+    private \Core\Redis $redis;
     
     public function __construct(
         Ticket $ticketModel,
@@ -24,7 +25,8 @@ class TicketService extends \App\Services\BaseService
         Database $db,
         LoggerInterface $logger,
         NotificationService $notificationService,
-        \Core\RateLimiter $rateLimiter // 🛡️
+        \Core\RateLimiter $rateLimiter, // 🛡️
+        \Core\Redis $redis
     ) {
         parent::__construct($logger);
         $this->ticketModel = $ticketModel;
@@ -32,6 +34,7 @@ class TicketService extends \App\Services\BaseService
         $this->db = $db;
         $this->notificationService = $notificationService;
         $this->rateLimiter = $rateLimiter;
+        $this->redis = $redis;
     }
     
     /**
@@ -193,11 +196,31 @@ class TicketService extends \App\Services\BaseService
             // بروزرسانی تیکت
             $this->ticketModel->updateLastReply($ticketId, $isAdmin ? 'admin' : 'user');
             
-            // نوتیفیکیشن صریح از طریق وابستگی تزریق شده سازنده (Constructor DI)
-            if ($isAdmin) {
-                $this->notificationService->send($ticket->user_id, 'info', "پاسخ جدید برای تیکت: {$ticket->subject}", "/tickets/show/{$ticketId}");
+            // 🛡️ RC-03: دیبانس نوتیفیکیشن‌ها با استفاده از قفل ردیس ۶۰ ثانیه‌ای به ازای هر تیکت جهت جلوگیری از اسپم
+            $notifLockKey = "ticket_notification_lock:{$ticketId}:" . ($isAdmin ? 'to_user' : 'to_admins');
+            $canSendNotification = true;
+            try {
+                if ($this->redis->get($notifLockKey)) {
+                    $canSendNotification = false;
+                } else {
+                    $this->redis->setex($notifLockKey, 60, '1');
+                }
+            } catch (\Exception $redisEx) {
+                $this->logger->warning('ticket.reply.redis_failed_lock', ['error' => $redisEx->getMessage()]);
+            }
+
+            if ($canSendNotification) {
+                // نوتیفیکیشن صریح از طریق وابستگی تزریق شده سازنده (Constructor DI)
+                if ($isAdmin) {
+                    $this->notificationService->send($ticket->user_id, 'info', "پاسخ جدید برای تیکت: {$ticket->subject}", "/tickets/show/{$ticketId}");
+                } else {
+                    $this->notificationService->sendToAdmins('info', 'پاسخ جدید تیکت', "پاسخ جدید از کاربر در تیکت #{$ticketId}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
+                }
             } else {
-                $this->notificationService->sendToAdmins('info', 'پاسخ جدید تیکت', "پاسخ جدید از کاربر در تیکت #{$ticketId}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
+                $this->logger->info('ticket.reply.notification_debounced', [
+                    'ticket_id' => $ticketId,
+                    'is_admin' => $isAdmin
+                ]);
             }
             
             $this->db->commit();
@@ -418,9 +441,29 @@ class TicketService extends \App\Services\BaseService
                 return false;
             }
 
+            // 🛡️ RC-05: بررسی کنید که آیا وضعیت واقعاً تغییر کرده است تا از ثبت تاریخچه تکراری جلوگیری شود
+            if ($ticket->status === $status) {
+                $this->db->commit();
+                return true;
+            }
+
+            $oldStatus = $ticket->status;
+
             $ok = $this->ticketModel->updateStatus($ticketId, $status);
             if ($ok) {
-                $this->logger->activity('ticket_status_updated', "وضعیت تیکت #{$ticketId} به {$status} تغییر یافت", $adminId, ['status' => $status]);
+                // ثبت در تاریخچه تغییرات وضعیت تیکت
+                $this->db->table('ticket_status_history')->insert([
+                    'ticket_id' => $ticketId,
+                    'old_status' => $oldStatus,
+                    'new_status' => $status,
+                    'changed_by' => $adminId,
+                    'changed_at' => date('Y-m-d H:i:s')
+                ]);
+
+                $this->logger->activity('ticket_status_updated', "وضعیت تیکت #{$ticketId} از {$oldStatus} به {$status} تغییر یافت", $adminId, [
+                    'old_status' => $oldStatus,
+                    'new_status' => $status
+                ]);
             }
 
             $this->db->commit();
@@ -444,6 +487,79 @@ class TicketService extends \App\Services\BaseService
             $this->logger->activity('ticket_priority_updated', "اولویت تیکت #{$ticketId} به {$priority} تغییر یافت", $adminId, ['priority' => $priority]);
         }
         return $ok;
+    }
+
+    /**
+     * 🛡️ BLF-07: تخصیص تیکت به ادمین به همراه ثبت تاریخچه تغییرات و ارسال نوتیفیکیشن
+     */
+    public function assignTo(int $ticketId, int $newAdminId): bool
+    {
+        $this->db->beginTransaction();
+        
+        try {
+            // دریافت تیکت جهت بررسی تخصیص قبلی
+            $ticket = $this->ticketModel->findById($ticketId);
+            if (!$ticket) {
+                $this->db->rollBack();
+                return false;
+            }
+            
+            $oldAdminId = $ticket->assigned_to ? (int)$ticket->assigned_to : null;
+            
+            // تخصیص تیکت به ادمین جدید
+            $ok = $this->ticketModel->assign($ticketId, $newAdminId);
+            if (!$ok) {
+                $this->db->rollBack();
+                return false;
+            }
+            
+            // ثبت در جدول تاریخچه تغییر تخصیص
+            $this->db->table('ticket_assignment_history')->insert([
+                'ticket_id' => $ticketId,
+                'old_admin_id' => $oldAdminId,
+                'new_admin_id' => $newAdminId > 0 ? $newAdminId : null,
+                'changed_by' => user_id() > 0 ? user_id() : 1,
+                'changed_at' => date('Y-m-d H:i:s')
+            ]);
+            
+            // اطلاع‌رسانی به ادمین قبلی در صورت انتقال تیکت
+            if ($oldAdminId && $oldAdminId !== $newAdminId) {
+                $this->notificationService->send(
+                    $oldAdminId,
+                    \App\Models\Notification::TYPE_SECURITY ?? 'system',
+                    'تغییر تخصیص تیکت',
+                    "تیکت #{$ticketId} از کارتابل شما برداشته و به مدیر دیگری واگذار شد.",
+                    ['ticket_id' => $ticketId]
+                );
+            }
+            
+            // اطلاع‌رسانی به ادمین جدید
+            if ($newAdminId > 0 && $newAdminId !== $oldAdminId) {
+                $this->notificationService->send(
+                    $newAdminId,
+                    \App\Models\Notification::TYPE_INFO ?? 'info',
+                    'تیکت جدید اختصاص داده شد',
+                    "تیکت #{$ticketId} با عنوان \"" . $ticket->subject . "\" به شما محول گردید.",
+                    ['action_url' => "/admin/tickets/show/{$ticketId}", 'ticket_id' => $ticketId]
+                );
+            }
+            
+            $this->db->commit();
+            
+            // ثبت در لاگ فعالیت سیستم
+            $this->logger->activity('ticket_assigned', "تیکت #{$ticketId} به مدیر #{$newAdminId} تخصیص یافت", user_id() ?: 1, [
+                'ticket_id' => $ticketId,
+                'old_admin_id' => $oldAdminId,
+                'new_admin_id' => $newAdminId
+            ]);
+            
+            return true;
+            
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            $this->logger->error('ticket.assign.failed', ['error' => $e->getMessage()]);
+            return false;
+        }
     }
 
     /**
