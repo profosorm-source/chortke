@@ -34,6 +34,8 @@ class ContactController extends BaseController
 
         $name = (string)$this->request->input('name');
         $subject = (string)$this->request->input('subject');
+        $email = trim((string)$this->request->input('email'));
+        $message = (string)$this->request->input('message');
 
         // 🛡️ MED-09: اعتبارسنجی طول فیلدهای نام و موضوع جهت مقابله با سرریز حافظه
         if (mb_strlen($name) > 100) {
@@ -48,12 +50,24 @@ class ContactController extends BaseController
                 'message' => 'موضوع نامعتبر است (حداکثر ۲۰۰ کاراکتر مجاز است).'
             ], 422);
         }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return $this->response->json([
+                'success' => false,
+                'message' => 'ایمیل معتبر الزامی است.'
+            ], 422);
+        }
+        if (mb_strlen($message) < 10 || mb_strlen($message) > 5000) {
+            return $this->response->json([
+                'success' => false,
+                'message' => 'متن پیام باید بین ۱۰ تا ۵۰۰۰ کاراکتر باشد.'
+            ], 422);
+        }
 
         $data = [
             'name' => $name,
-            'email' => $this->request->input('email'),
+            'email' => $email,
             'subject' => $subject,
-            'message' => $this->request->input('message'),
+            'message' => $message,
             'website' => $this->request->input('website'),
             'captcha_token' => $this->request->input('captcha_token'),
             'captcha_response' => $this->request->input('captcha_response'),
