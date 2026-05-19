@@ -203,6 +203,45 @@ class UserService extends \App\Services\BaseService
                 }
             }
 
+            // ✅ Enforce Role Hierarchy inside service layer (Defense-in-Depth against privilege escalation)
+            if (isset($data['role']) || isset($data['status'])) {
+                $actorId = function_exists('user_id') ? user_id() : null;
+                if ($actorId) {
+                    $actor = $this->model->findById($actorId);
+                    $target = $this->model->findById($id);
+                    if ($actor && $target) {
+                        $hierarchy = ['user' => 0, 'admin' => 1, 'super_admin' => 2];
+                        $actorLevel = $hierarchy[$actor->role ?? 'user'] ?? 0;
+                        $targetLevel = $hierarchy[$target->role ?? 'user'] ?? 0;
+                        
+                        // Non-super_admins cannot edit other admins
+                        if ($actorLevel < 2 && $targetLevel >= 1 && $id !== $actorId) {
+                            if ($startedTransaction && $this->db->inTransaction()) {
+                                $this->db->rollBack();
+                            }
+                            return [
+                                'success' => false,
+                                'message' => 'شما مجاز به ویرایش سایر مدیران نیستید.'
+                            ];
+                        }
+                        
+                        // Cannot assign a role higher than the actor's current role
+                        if (isset($data['role'])) {
+                            $newRoleLevel = $hierarchy[$data['role']] ?? 0;
+                            if ($newRoleLevel > $actorLevel) {
+                                if ($startedTransaction && $this->db->inTransaction()) {
+                                    $this->db->rollBack();
+                                }
+                                return [
+                                    'success' => false,
+                                    'message' => 'شما نمی‌توانید سطحی بالاتر از سطح خود تخصیص دهید.'
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+
             $updateData = [];
             $updatableFields = ['full_name', 'email', 'role', 'status'];
             

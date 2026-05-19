@@ -103,39 +103,9 @@ class AccountDeletionService extends \App\Services\BaseService
      */
     public function deleteUserAccount(int $userId, ?string $reason = null, ?int $deletedBy = null): bool
     {
-        // MED-01: Stop and assert user does not have any remaining positive wallet balances
-        // 🛡️ MED-13 Fix: Check must be INSIDE transaction with pessimistic lock
         $this->db->beginTransaction();
 
         try {
-            // Acquire pessimistic lock on wallet to prevent TOCTOU
-            $stmt = $this->db->prepare("
-                SELECT balance_irt, balance_usdt FROM wallets 
-                WHERE user_id = ? 
-                FOR UPDATE
-            ");
-            $stmt->execute([$userId]);
-            $wallet = $stmt->fetch(\PDO::FETCH_OBJ);
-            
-            if (!$wallet) {
-                // Wallet doesn't exist, safe to delete
-                $balanceIrt = 0;
-                $balanceUsdt = 0;
-            } else {
-                $balanceIrt = (float)$wallet->balance_irt;
-                $balanceUsdt = (float)$wallet->balance_usdt;
-            }
-            
-            if ($balanceIrt > 0 || $balanceUsdt > 0) {
-                $this->db->rollback();
-                $this->logger->critical('account_deletion.blocked_positive_balance', [
-                    'user_id' => $userId,
-                    'balance_irt' => $balanceIrt,
-                    'balance_usdt' => $balanceUsdt
-                ]);
-                return false; // Cannot delete accounts that still hold customer funds
-            }
-
             $user = $this->userModel->findById($userId);
             if (!$user) {
                 $this->db->rollback();
@@ -143,44 +113,83 @@ class AccountDeletionService extends \App\Services\BaseService
                 return false;
             }
 
-            // ۰. لغو تسک‌های فعال قبل از حذف مستقیم (Issue #23)
+            // Acquire pessimistic lock on wallet to prevent TOCTOU during escrow cancellation
+            $stmt = $this->db->prepare("
+                SELECT balance_irt, balance_usdt FROM wallets 
+                WHERE user_id = ? 
+                FOR UPDATE
+            ");
+            $stmt->execute([$userId]);
+            $wallet = $stmt->fetch(\PDO::FETCH_OBJ);
+
+            // ۰. لغو تسک‌های فعال و برگشت اسکروها به کیف پول قبل از حذف مستقیم (Issue #23)
             $this->customTaskService->cancelActiveTasksForUser($userId);
 
-            // ۱. حذف تراکنش‌های کاربر (ثبت شامل)
+            // ۱. مجدداً کیف پول قفل شده را برای بررسی بالانس نهایی واکشی می‌کنیم تا مطمئن شویم هیچگونه پولی در حساب مسدود نیست
+            $stmtCheck = $this->db->prepare("
+                SELECT balance_irt, balance_usdt FROM wallets 
+                WHERE user_id = ? 
+                FOR UPDATE
+            ");
+            $stmtCheck->execute([$userId]);
+            $walletCheck = $stmtCheck->fetch(\PDO::FETCH_OBJ);
+
+            if (!$walletCheck) {
+                $balanceIrt = 0;
+                $balanceUsdt = 0;
+            } else {
+                $balanceIrt = (float)$walletCheck->balance_irt;
+                $balanceUsdt = (float)$walletCheck->balance_usdt;
+            }
+
+            if ($balanceIrt > 0 || $balanceUsdt > 0) {
+                $this->db->rollback();
+                $this->logger->critical('account_deletion.blocked_positive_balance', [
+                    'user_id' => $userId,
+                    'balance_irt' => $balanceIrt,
+                    'balance_usdt' => $balanceUsdt
+                ]);
+                return false; // Cannot delete accounts that still hold customer funds (including refunded escrows)
+            }
+
+            // ۲. حذف تراکنش‌های کاربر (ثبت شامل)
             $this->db->query("UPDATE transactions SET user_id = NULL, deleted_user_id = ? WHERE user_id = ?", [$userId, $userId]);
 
-            // ۲. حذف وظایف کاربر
+            // ۳. حذف وظایف کاربر
             $this->db->query("DELETE FROM custom_task_submissions WHERE user_id = ?", [$userId]);
             $this->db->query("DELETE FROM custom_tasks WHERE user_id = ?", [$userId]);
 
-            // ۳. حذف اعلان‌ها
+            // ۴. حذف اعلان‌ها
             $this->db->query("DELETE FROM notifications WHERE user_id = ?", [$userId]);
 
-            // ۴. حذف تنظیمات
+            // ۵. حذف تنظیمات
             $this->db->query("DELETE FROM user_settings WHERE user_id = ?", [$userId]);
 
-            // ۵. حذف KYC
+            // ۶. حذف KYC
             $this->db->query("DELETE FROM kyc_verifications WHERE user_id = ?", [$userId]);
 
-            // ۶. حذف کارت‌های بانکی
+            // ۷. حذف کارت‌های بانکی
             $this->db->query("DELETE FROM bank_cards WHERE user_id = ?", [$userId]);
 
-            // ۷. حذف سشن‌ها
+            // ۸. حذف سشن‌ها
             $this->db->query("DELETE FROM user_sessions WHERE user_id = ?", [$userId]);
 
-            // ۸. حذف تنظیمات دو فاکتور
+            // ۹. حذف تنظیمات دو فاکتور
             $this->db->query("DELETE FROM two_factor_codes WHERE user_id = ?", [$userId]);
 
-            // ۹. ثبت در account_deletion_logs
+            // ۱۰. ثبت در account_deletion_logs
             $this->deletionLogModel->recordDeletion($userId, $deletedBy, $reason);
 
-            // ۱۰. حذف کاربر (soft delete یا hard delete)
+            // ۱۱. حذف کاربر (soft delete یا hard delete)
             // استفاده از UNIX_TIMESTAMP و LEFT برای جلوگیری از collision در ستون‌های Unique (Issue #22)
+            // به همراه پاکسازی کد ملی و تغییر شماره موبایل جهت جلوگیری از برخورد با مقادیر Unique
             $this->db->query(
                 "UPDATE users SET 
                     deleted_at = NOW(),
                     email = LEFT(CONCAT(email, '_del_', UNIX_TIMESTAMP()), 100),
                     username = LEFT(CONCAT(username, '_del_', UNIX_TIMESTAMP()), 50),
+                    mobile = LEFT(CONCAT(mobile, '_del_', UNIX_TIMESTAMP()), 20),
+                    national_id = NULL,
                     status = 'deleted'
                 WHERE id = ?",
                 [$userId]
