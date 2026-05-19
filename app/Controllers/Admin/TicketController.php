@@ -102,6 +102,11 @@ class TicketController extends BaseAdminController
                 $hasPermission = false; // Fail-Closed
             }
             if (!$hasPermission) {
+                $this->logger->warning('unauthorized_ticket_access_attempt', [
+                    'admin_id' => $adminId,
+                    'ticket_id' => $id,
+                    'ip' => $this->request->ip()
+                ]);
                 $this->session->setFlash('error', 'شما دسترسی مشاهده این تیکت را ندارید.');
                 return redirect('/admin/tickets');
             }
@@ -139,6 +144,16 @@ class TicketController extends BaseAdminController
             ], 422);
         }
 
+        $adminId = user_id();
+        
+        // 🛡️ HIGH-02: Rate limiting سبک برای ادمین (مثلاً 100 پاسخ در ساعت)
+        $rateLimiter = app(\Core\RateLimiter::class);
+        $rateKey = "admin_ticket_reply:{$adminId}";
+        if (!$rateLimiter->attempt($rateKey, 100, 3600)) {
+            $this->logger->critical('admin_rate_limit_exceeded', ['admin_id' => $adminId]);
+            return $this->response->json(['success' => false, 'message' => 'تعداد پاسخ‌های شما غیرعادی است'], 429);
+        }
+
         // 🛡️ HIGH-08: ضدعفونی صریح پیام پاسخ ادمین جهت مقابله با حملات Stored XSS پس از ولیدیشن طول
         $message = htmlspecialchars($rawMessage, ENT_QUOTES, 'UTF-8', false);
 
@@ -151,7 +166,6 @@ class TicketController extends BaseAdminController
         }
         
         // 🛡️ HIGH-03: Prevent admin IDOR by ensuring they own the ticket or have global permissions
-        $adminId = user_id();
         $isAssignedToMe = ($ticket->assigned_to !== null && (int)$ticket->assigned_to === $adminId);
         if (!$isAssignedToMe) {
             try {
