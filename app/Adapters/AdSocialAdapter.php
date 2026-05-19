@@ -117,6 +117,14 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
         
         if (empty($data['platform'])) {
             $errors[] = 'تعیین پلتفرم (اینستاگرام، تلگرام و...) الزامی است';
+        } elseif (!in_array($data['platform'], ['instagram', 'telegram', 'twitter', 'youtube', 'facebook', 'other'], true)) {
+            $errors[] = 'پلتفرم نامعتبر است';
+        }
+
+        if (empty($data['task_type'])) {
+            $errors[] = 'نوع تسک الزامی است';
+        } elseif (!in_array($data['task_type'], ['follow', 'like', 'comment', 'view', 'join', 'subscribe', 'retweet', 'other'], true)) {
+            $errors[] = 'نوع تسک نامعتبر است';
         }
 
         if (empty($data['title'])) {

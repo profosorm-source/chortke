@@ -66,12 +66,12 @@ abstract class AdapterBase
     /**
      * Response shape استاندارد برای خطا
      */
-    protected function errorResponse(string $message, array $errors = []): array
+    protected function errorResponse(string $message, mixed $errors = []): array
     {
         return [
             'success' => false,
             'message' => $message,
-            'errors' => $errors,
+            'errors' => is_array($errors) ? $errors : [$errors],
         ];
     }
 
