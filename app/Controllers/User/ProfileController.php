@@ -201,6 +201,8 @@ class ProfileController extends BaseUserController
 
     public function changePassword(): void
     {
+        $this->validateCsrf();
+        
         $lastAuthTime = $this->session->get('last_auth_time');
         if (!$lastAuthTime || (\time() - $lastAuthTime > 300)) {
             $this->session->setFlash('error', 'جهت حفظ امنیت حساب کاربری خود، برای تغییر رمز عبور باید در ۵ دقیقه گذشته وارد سیستم شده باشید. لطفاً مجدداً وارد شوید.');
@@ -253,6 +255,9 @@ class ProfileController extends BaseUserController
 
             // ✅ حالا Session ID فعلی را regenerate کن
             session_regenerate_id(true);
+
+            // ✅ Regenerate CSRF after sensitive action
+            $this->csrf->regenerate();
 
             $this->session->setFlash('success', 'رمز عبور با موفقیت تغییر یافت');
         } else {
