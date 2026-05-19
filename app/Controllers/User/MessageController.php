@@ -86,7 +86,7 @@ class MessageController extends BaseUserController
                 $offset
             );
 
-            $otherUser = $this->messageService->getUserInfo($otherUserId);
+            $otherUser = $this->messageService->getUserInfo($otherUserId, $userId);
 
             if (!$otherUser) {
                 $this->response->error('کاربر یافت نشد');
