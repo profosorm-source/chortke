@@ -201,6 +201,13 @@ class ProfileController extends BaseUserController
 
     public function changePassword(): void
     {
+        $lastAuthTime = $this->session->get('last_auth_time');
+        if (!$lastAuthTime || (\time() - $lastAuthTime > 300)) {
+            $this->session->setFlash('error', 'جهت حفظ امنیت حساب کاربری خود، برای تغییر رمز عبور باید در ۵ دقیقه گذشته وارد سیستم شده باشید. لطفاً مجدداً وارد شوید.');
+            \redirect('login');
+            return;
+        }
+
         $userId = user_id();
         
         $currentPassword = $this->request->input('current_password');
