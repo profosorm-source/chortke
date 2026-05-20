@@ -98,6 +98,33 @@ abstract class BaseService
     }
 
     /**
+     * Standardized use-case result helpers for new code paths.
+     * Legacy successResponse/errorResponse remain for backward compatibility.
+     */
+    protected function ok(array $data = [], string $message = ''): array
+    {
+        return [
+            'ok' => true,
+            'success' => true,
+            'data' => $data,
+            'message' => $message,
+            'error' => null,
+        ];
+    }
+
+    protected function fail(string $message = '', array $errors = [], int $statusCode = 400): array
+    {
+        return [
+            'ok' => false,
+            'success' => false,
+            'data' => null,
+            'message' => $message,
+            'errors' => $errors,
+            'status_code' => $statusCode,
+        ];
+    }
+
+    /**
      * 🚀 UPG-02: اجرای توابع با منطق تلاش مجدد (Retry Logic) جهت مواجهه با خطاهای لحظه‌ای
      * MED-02 Fix: ممانعت از تکرار بیهوده خطاهای منطقی غیرقابل جبران با فیلتر کردن کلاس‌های هدف
      */

@@ -388,6 +388,119 @@ class ReconciliationService extends \App\Services\BaseService
         }
     }
 
+
+    /**
+     * Passive financial integrity audit. Does not mutate balances; only reports drift.
+     */
+    public function auditLedgerIntegrity(int $walletLimit = 500): array
+    {
+        $walletLimit = max(1, min(5000, $walletLimit));
+        $result = [
+            'ledger_imbalances' => [],
+            'wallet_mismatches' => [],
+            'checked_wallets' => 0,
+            'ok' => true,
+        ];
+
+        try {
+            $imbalances = $this->ledgerService->findImbalancedTransactions(100);
+            foreach ($imbalances as $row) {
+                $result['ledger_imbalances'][] = [
+                    'transaction_id' => (string)($row->transaction_id ?? ''),
+                    'currency' => (string)($row->currency ?? ''),
+                    'debit' => (string)($row->total_debit ?? '0'),
+                    'credit' => (string)($row->total_credit ?? '0'),
+                    'legs' => (int)($row->legs ?? 0),
+                ];
+            }
+
+            $wallets = $this->db->fetchAll(
+                "SELECT user_id, balance_irt, balance_usdt
+                 FROM wallets
+                 ORDER BY updated_at DESC
+                 LIMIT {$walletLimit}"
+            );
+
+            foreach ($wallets as $wallet) {
+                $userId = (int)($wallet->user_id ?? 0);
+                if ($userId <= 0) {
+                    continue;
+                }
+                $result['checked_wallets']++;
+                foreach (['irt' => 4, 'usdt' => 8] as $currency => $scale) {
+                    $field = $currency === 'usdt' ? 'balance_usdt' : 'balance_irt';
+                    $walletBalance = (string)($wallet->{$field} ?? '0');
+                    $ledgerBalance = $this->ledgerService->getAccountBalance("wallet:{$userId}", $currency);
+                    $diff = bcsub($walletBalance, $ledgerBalance, $scale);
+                    $absDiff = bccomp($diff, '0', $scale) < 0 ? bcmul($diff, '-1', $scale) : $diff;
+                    $tolerance = $currency === 'usdt' ? '0.0001' : '1.0000';
+
+                    if (bccomp($absDiff, $tolerance, $scale) > 0) {
+                        $result['wallet_mismatches'][] = [
+                            'user_id' => $userId,
+                            'currency' => $currency,
+                            'wallet_balance' => $walletBalance,
+                            'ledger_balance' => $ledgerBalance,
+                            'diff' => $absDiff,
+                        ];
+                    }
+                }
+            }
+
+            $result['ok'] = empty($result['ledger_imbalances']) && empty($result['wallet_mismatches']);
+            if (!$result['ok']) {
+                $this->logger->critical('reconciliation.ledger_integrity_drift', [
+                    'ledger_imbalances' => count($result['ledger_imbalances']),
+                    'wallet_mismatches' => count($result['wallet_mismatches']),
+                ]);
+            }
+
+            return $result;
+        } catch (\Throwable $e) {
+            $this->logger->error('reconciliation.ledger_integrity_audit_failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return array_merge($result, ['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Detect withdrawals stuck in pending/processing state.
+     * Passive by default: records alerts and returns rows for admin review.
+     */
+    public function detectStuckWithdrawals(int $olderThanMinutes = 120, int $limit = 100): array
+    {
+        $olderThanMinutes = max(15, min(10080, $olderThanMinutes));
+        $limit = max(1, min(500, $limit));
+
+        try {
+            $rows = $this->db->fetchAll(
+                "SELECT w.id, w.user_id, w.amount, w.currency, w.status, w.transaction_id, w.created_at, t.status AS transaction_status
+                 FROM withdrawals w
+                 LEFT JOIN transactions t ON t.transaction_id = w.transaction_id
+                 WHERE w.status IN ('pending', 'processing')
+                   AND w.created_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)
+                 ORDER BY w.created_at ASC
+                 LIMIT ?",
+                [$olderThanMinutes, $limit]
+            );
+
+            if (!empty($rows)) {
+                $this->logger->warning('reconciliation.stuck_withdrawals_detected', [
+                    'count' => count($rows),
+                    'older_than_minutes' => $olderThanMinutes,
+                ]);
+            }
+
+            return $rows;
+        } catch (\Throwable $e) {
+            $this->logger->error('reconciliation.stuck_withdrawals_detection_failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+    }
+
     /**
      * Hourly audit for pending orphan/abandoned transactions
      */

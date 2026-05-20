@@ -83,11 +83,11 @@ class LedgerService extends \App\Services\BaseService
     {
         $stmt = $this->db->prepare("SELECT SUM(debit) as total_debit, SUM(credit) as total_credit FROM ledger_entries WHERE transaction_id = ?");
         $stmt->execute([$transactionId]);
-        $row = $stmt->fetch();
+        $row = $stmt->fetch(\PDO::FETCH_OBJ);
         if (!$row) return true;
 
-        $debit = (string) ($row['total_debit'] ?? '0');
-        $credit = (string) ($row['total_credit'] ?? '0');
+        $debit = (string) ($row->total_debit ?? '0');
+        $credit = (string) ($row->total_credit ?? '0');
 
         return bccomp($debit, $credit, 8) === 0;
     }
@@ -95,13 +95,36 @@ class LedgerService extends \App\Services\BaseService
     public function isLedgerBalanced(): bool
     {
         $stmt = $this->db->query("SELECT SUM(debit) as total_debit, SUM(credit) as total_credit FROM ledger_entries");
-        $row = $stmt->fetch();
+        $row = $stmt->fetch(\PDO::FETCH_OBJ);
         if (!$row) return true;
 
-        $debit = (string) ($row['total_debit'] ?? '0');
-        $credit = (string) ($row['total_credit'] ?? '0');
+        $debit = (string) ($row->total_debit ?? '0');
+        $credit = (string) ($row->total_credit ?? '0');
 
         return bccomp($debit, $credit, 8) === 0;
+    }
+
+    public function getAccountBalance(string $account, string $currency = 'irt'): string
+    {
+        $currency = strtolower($currency);
+        $stmt = $this->db->prepare("SELECT COALESCE(SUM(debit), 0) AS total_debit, COALESCE(SUM(credit), 0) AS total_credit FROM ledger_entries WHERE account = ? AND currency = ?");
+        $stmt->execute([$account, $currency]);
+        $row = $stmt->fetch(\PDO::FETCH_OBJ);
+        $scale = $currency === 'usdt' ? 8 : 4;
+        return bcsub((string)($row->total_debit ?? '0'), (string)($row->total_credit ?? '0'), $scale);
+    }
+
+    public function findImbalancedTransactions(int $limit = 100): array
+    {
+        $limit = max(1, min(1000, $limit));
+        return $this->db->fetchAll(
+            "SELECT transaction_id, currency, COALESCE(SUM(debit), 0) AS total_debit, COALESCE(SUM(credit), 0) AS total_credit, COUNT(*) AS legs
+             FROM ledger_entries
+             GROUP BY transaction_id, currency
+             HAVING ABS(total_debit - total_credit) > 0.00000001
+             ORDER BY MAX(created_at) DESC
+             LIMIT {$limit}"
+        );
     }
 
     public function findByTransactionId(string $transactionId): array

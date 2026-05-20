@@ -9,6 +9,7 @@ use App\Services\Search\SearchOrchestrator;
 use App\Services\Search\AdminSearchProvider;
 use App\Services\Search\UserSearchProvider;
 use App\Services\Search\ModuleSearchProvider;
+use Core\RateLimiter;
 
 /**
  * 🚀 UPG-01: AdvancedSearchService - نسخه ارتقایافته و سبک شده
@@ -22,8 +23,9 @@ class AdvancedSearchService extends SearchOrchestrator
         AdminSearchProvider $adminProvider,
         UserSearchProvider $userProvider,
         ModuleSearchProvider $moduleProvider,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        ?RateLimiter $rateLimiter = null
     ) {
-        parent::__construct($adminProvider, $userProvider, $moduleProvider, $logger);
+        parent::__construct($adminProvider, $userProvider, $moduleProvider, $logger, $rateLimiter);
     }
 }

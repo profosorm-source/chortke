@@ -12,6 +12,7 @@ use App\Services\AuditTrail;
 use App\Services\LedgerService;
 use App\Services\SettingService;
 use App\Contracts\WalletServiceInterface;
+use App\Services\Cache\CacheInvalidationService;
 
 class WalletService extends \App\Services\BaseService implements WalletServiceInterface
 {
@@ -29,6 +30,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     private SettingService $settingService;
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
     private \Core\Cache $cache;
+    private ?CacheInvalidationService $cacheInvalidation;
+    private ?OutboxService $outbox;
 
     public function __construct(
         Database $db,
@@ -41,7 +44,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         DistributedLockService $lockService,
         SettingService $settingService,
         \App\Services\AntiFraud\FraudGuardService $fraudGuard,
-        \Core\Cache $cache
+        \Core\Cache $cache,
+        ?CacheInvalidationService $cacheInvalidation = null,
+        ?OutboxService $outbox = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -54,6 +59,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         $this->settingService = $settingService;
         $this->fraudGuard = $fraudGuard;
         $this->cache = $cache;
+        $this->cacheInvalidation = $cacheInvalidation;
+        $this->outbox = $outbox;
 
         // Load supported currencies from config
         $configuredCurrencies = $settingService->get('wallet_supported_currencies');
@@ -73,7 +80,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
     public function getOrCreateWallet(int $userId): ?object
     {
-        $sql = "INSERT IGNORE INTO wallets (user_id, created_at, updated_at) 
+        $sql = "INSERT IGNORE INTO wallets (user_id, created_at, updated_at)
                 VALUES (:user_id, NOW(), NOW())";
         $stmt = $this->db->prepare($sql);
         $stmt->execute(['user_id' => $userId]);
@@ -97,17 +104,17 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'locked' => $irtLocked,
                 'currency' => 'IRT',
             ]);
-            
+
             // Trigger emergency audit
             $this->auditTrail->record('wallet.critical_inconsistency', $userId, [
                 'balance' => $irtBalance,
                 'locked' => $irtLocked,
                 'currency' => 'IRT',
             ]);
-            
+
             // Freeze wallet to prevent manual review bypass
             $this->walletModel->freezeWallet($userId);
-            
+
             throw new \RuntimeException('کیف پول شما به دلیل مشکل سیستمی موقتاً مسدود شده است');
         }
 
@@ -121,17 +128,17 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'locked' => $usdtLocked,
                 'currency' => 'USDT',
             ]);
-            
+
             // Trigger emergency audit
             $this->auditTrail->record('wallet.critical_inconsistency', $userId, [
                 'balance' => $usdtBalance,
                 'locked' => $usdtLocked,
                 'currency' => 'USDT',
             ]);
-            
+
             // Freeze wallet to prevent manual review bypass
             $this->walletModel->freezeWallet($userId);
-            
+
             throw new \RuntimeException('کیف پول شما به دلیل مشکل سیستمی موقتاً مسدود شده است');
         }
 
@@ -289,8 +296,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         ];
 
         if (!in_array($type, $bypassMinDepositTypes, true)) {
-            $minAmount = ($currency === 'usdt') 
-                ? (string)$this->settingService->get('min_deposit_usdt', '1.0') 
+            $minAmount = ($currency === 'usdt')
+                ? (string)$this->settingService->get('min_deposit_usdt', '1.0')
                 : (string)$this->settingService->get('min_deposit_irt', '1000.0');
             if (bccomp($amount, $minAmount, $this->getScale($currency)) < 0) {
                 throw new \InvalidArgumentException("حداقل مبلغ واریز {$minAmount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " است");
@@ -406,13 +413,14 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'balance_after'  => $balanceAfter,
             ]);
 
+            $this->recordWalletOutbox('wallet.deposit.completed', $userId, $transaction->transaction_id ?? ($transaction->id ?? null), $result);
+
             if ($startedTransaction) {
                 $this->db->commit();
             }
-            
+
             // ✅ Invalidate dashboard and wallet caches (HIGH-07)
-            $this->cache->forget("user_dashboard_stats:{$userId}");
-            $this->cache->forget("wallet_balance:{$userId}");
+            $this->invalidateWalletCaches($userId);
 
             $idempotencyService->complete($idempotencyKey, $result, $userId);
 
@@ -434,7 +442,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     'transaction_id' => $transaction->transaction_id,
                 ]
             );
-            
+
             $this->logger->info('wallet.deposit.success', [
                 'channel' => 'wallet',
                 'log_id' => $logId,
@@ -442,7 +450,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'amount' => $amount,
                 'currency' => $currency,
             ]);
-            
+
             return $result;
 
         } catch (\InvalidArgumentException $e) {
@@ -638,6 +646,12 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 ]
             );
 
+            $this->recordWalletOutbox('wallet.withdraw.internal_completed', $userId, $transaction->transaction_id ?? ($transaction->id ?? null), [
+                'amount' => $amount,
+                'currency' => $currency,
+                'status' => 'completed',
+            ]);
+
             // Record audit trail
             $this->auditTrail->record('wallet.internal_debited', $userId, [
                 'amount'         => $amount,
@@ -650,8 +664,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             ]);
 
             // ✅ Invalidate dashboard and wallet caches (HIGH-07)
-            $this->cache->forget("user_dashboard_stats:{$userId}");
-            $this->cache->forget("wallet_balance:{$userId}");
+            $this->invalidateWalletCaches($userId);
 
             return [
                 'success'        => true,
@@ -685,8 +698,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             throw new \InvalidArgumentException('مبلغ باید بیشتر از صفر باشد');
         }
 
-        $minAmount = ($currency === 'usdt') 
-            ? (string)$this->settingService->get('min_withdraw_usdt', '5.0') 
+        $minAmount = ($currency === 'usdt')
+            ? (string)$this->settingService->get('min_withdraw_usdt', '5.0')
             : (string)$this->settingService->get('min_withdraw_irt', '10000.0');
         if (bccomp($amount, $minAmount, $this->getScale($currency)) < 0) {
             throw new \InvalidArgumentException("حداقل مبلغ برداشت {$minAmount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " است");
@@ -774,13 +787,14 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'balance_after'  => $balanceAfter,
             ]);
 
+            $this->recordWalletOutbox('wallet.withdraw.requested', $userId, $transaction->transaction_id ?? ($transaction->id ?? null), $result);
+
             if ($startedTransaction) {
                 $this->db->commit();
             }
-            
+
             // ✅ Invalidate dashboard and wallet caches (HIGH-07)
-            $this->cache->forget("user_dashboard_stats:{$userId}");
-            $this->cache->forget("wallet_balance:{$userId}");
+            $this->invalidateWalletCaches($userId);
 
             $idempotencyService->complete($idempotencyKey, $result, $userId);
 
@@ -807,7 +821,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 'amount' => $amount,
                 'currency' => $currency,
             ]);
-            
+
             return $result;
 
         } catch (\InvalidArgumentException $e) {
@@ -854,7 +868,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     {
         $currency = strtolower($currency);
         $this->validateCurrency($currency);
-        
+
         $this->assertWalletActive($userId);
 
         if (!is_numeric($amount) || bccomp($amount, '0', 8) <= 0) {
@@ -884,7 +898,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
 
         try {
             return $this->lockService->synchronized("wallet:mut:{$userId}", function() use (
-                $userId, $amount, $currency, $metadata, $idempotencyKey, 
+                $userId, $amount, $currency, $metadata, $idempotencyKey,
                 $requestId, $ipAddress, $deviceFingerprint, $logId, $idempotencyService
             ) {
                 $startedTransaction = !$this->db->inTransaction();
@@ -971,13 +985,14 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                         'balance_after'  => $balanceAfter,
                     ]);
 
+                    $this->recordWalletOutbox('wallet.payment.completed', $userId, $transaction->transaction_id ?? ($transaction->id ?? null), $result);
+
                     if ($startedTransaction) {
                         $this->db->commit();
                     }
-                    
+
                     // ✅ Invalidate dashboard and wallet caches (HIGH-07)
-                    $this->cache->forget("user_dashboard_stats:{$userId}");
-                    $this->cache->forget("wallet_balance:{$userId}");
+                    $this->invalidateWalletCaches($userId);
 
                     $idempotencyService->complete($idempotencyKey, $result, $userId);
 
@@ -1033,7 +1048,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         try {
             return $this->lockService->synchronized("wallet:mut:{$userId}", function() use ($userId, $amount, $currency, $transactionId) {
                 $this->assertWalletActive($userId);
-                
+
                 $startedTransaction = !$this->db->inTransaction();
                 try {
                     if ($startedTransaction) {
@@ -1045,7 +1060,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     if (!$wallet) {
                         throw new \RuntimeException("کیف پول کاربر یافت نشد.");
                     }
-                    
+
                     if ($transactionId) {
                         $transaction = $this->transactionModel->findByTransactionId($transactionId);
                         if ($transaction) {
@@ -1138,7 +1153,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     if ($transaction && $transaction->type === 'withdraw') {
                         $balanceField  = $this->balanceField($currency);
                         $balanceBefore = (string)($wallet->$balanceField ?? '0');
-                        
+
                         // آنلاک اتمیک روی دیتابیس (ردیف قفل شده است)
                         $unlockResult  = $this->walletModel->unlockBalance($userId, $amount, $currency);
                         if ($unlockResult) {
@@ -1250,8 +1265,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             return $result;
         }
 
-        $minWithdrawal = ($currency === 'usdt') 
-            ? (string)$this->settingService->get('min_withdraw_usdt', '5.0') 
+        $minWithdrawal = ($currency === 'usdt')
+            ? (string)$this->settingService->get('min_withdraw_usdt', '5.0')
             : (string)$this->settingService->get('min_withdraw_irt', '10000.0');
         if (bccomp($amount, $minWithdrawal, $scale) < 0) {
             $result['message'] = 'حداقل مبلغ برداشت ' . number_format((float)$minWithdrawal) . ' ' . ($currency === 'usdt' ? 'USDT' : 'تومان') . ' است';
@@ -1402,12 +1417,12 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             }
 
             $this->logger->warning(
-                'wallet_transfer', 
-                "انتقال {$amount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " به کاربر {$toUserId}", 
-                $fromUserId, 
+                'wallet_transfer',
+                "انتقال {$amount} " . ($currency === 'usdt' ? 'USDT' : 'تومان') . " به کاربر {$toUserId}",
+                $fromUserId,
                 ['to_user_id' => $toUserId]
             );
-            
+
             $this->auditTrail->record('wallet.transfer', $fromUserId, [
                 'to_user_id' => $toUserId,
                 'amount' => $amount,
@@ -1647,13 +1662,36 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }
 
         $res = $this->transactionModel->searchNative($term, $filters, $limit, 0);
-        
+
         return $res['items'] ?? [];
     }
 
     // ─────────────────────────────────────────────────────────────
     // Private Helpers
     // ─────────────────────────────────────────────────────────────
+
+    private function recordWalletOutbox(string $eventType, int $userId, mixed $transactionId, array $payload): void
+    {
+        if (!$this->outbox) {
+            return;
+        }
+
+        $this->outbox->record('wallet', (string)($transactionId ?: $userId), $eventType, array_merge($payload, [
+            'user_id' => $userId,
+            'transaction_id' => $transactionId,
+        ]));
+    }
+
+    private function invalidateWalletCaches(int $userId): void
+    {
+        if ($this->cacheInvalidation) {
+            $this->cacheInvalidation->invalidateWallet($userId);
+            return;
+        }
+
+        $this->cache->forget("user_dashboard_stats:{$userId}");
+        $this->cache->forget("wallet_balance:{$userId}");
+    }
 
     private function validateCurrency(string $currency): void
     {

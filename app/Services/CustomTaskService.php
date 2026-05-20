@@ -21,6 +21,7 @@ use App\Contracts\NotificationServiceInterface;
 use Core\Database;
 use Core\Logger;
 use App\Models\User;
+use App\Services\OutboxService;
 
 /**
  * Ø³Ø±ÙˆÛŒØ³ Ù…Ø¯ÛŒØ±ÛŒØª Custom Tasks
@@ -49,6 +50,7 @@ class CustomTaskService extends \App\Services\BaseService
     private \Core\RateLimiter $rateLimiter;
     private User $userModel;
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
+    private ?OutboxService $outbox;
 
     public function __construct(
         Logger $logger,
@@ -70,7 +72,8 @@ class CustomTaskService extends \App\Services\BaseService
         \App\Services\XPEngine $xpEngine,
         \Core\RateLimiter $rateLimiter,
         User $userModel,
-        \App\Services\AntiFraud\FraudGuardService $fraudGuard
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        ?OutboxService $outbox = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -92,6 +95,47 @@ class CustomTaskService extends \App\Services\BaseService
         $this->xpEngine = $xpEngine;
         $this->rateLimiter = $rateLimiter;
         $this->fraudGuard = $fraudGuard;
+        $this->outbox = $outbox;
+    }
+
+    private function validateCreateTaskPayload(int $creatorId, array $data): array
+    {
+        if ($creatorId <= 0) {
+            return ['valid' => false, 'message' => 'کاربر سازنده نامعتبر است'];
+        }
+
+        $title = trim((string)($data['title'] ?? ''));
+        $description = trim((string)($data['description'] ?? ''));
+        $link = trim((string)($data['link'] ?? ''));
+
+        if ($title === '' || mb_strlen($title) > 255) {
+            return ['valid' => false, 'message' => 'عنوان وظیفه الزامی و حداکثر ۲۵۵ کاراکتر است'];
+        }
+        if ($description === '' || mb_strlen($description) > 3000) {
+            return ['valid' => false, 'message' => 'توضیحات وظیفه الزامی و حداکثر ۳۰۰۰ کاراکتر است'];
+        }
+        if ($link !== '' && (!filter_var($link, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $link))) {
+            return ['valid' => false, 'message' => 'لینک وظیفه معتبر نیست'];
+        }
+
+        foreach (['price_per_task', 'total_quantity'] as $field) {
+            if (!isset($data[$field]) || !is_numeric($data[$field]) || (float)$data[$field] <= 0) {
+                return ['valid' => false, 'message' => 'قیمت و تعداد وظیفه باید معتبر باشند'];
+            }
+        }
+
+        $currency = strtolower((string)($data['currency'] ?? 'irt'));
+        if (!in_array($currency, ['irt', 'usdt'], true)) {
+            return ['valid' => false, 'message' => 'ارز وظیفه معتبر نیست'];
+        }
+
+        $data['title'] = strip_tags($title);
+        $data['description'] = strip_tags($description);
+        $data['link'] = $link !== '' ? $link : null;
+        $data['currency'] = $currency;
+        $data['total_quantity'] = max(1, min(100000, (int)$data['total_quantity']));
+
+        return ['valid' => true, 'payload' => $data];
     }
 
     /**
@@ -99,6 +143,12 @@ class CustomTaskService extends \App\Services\BaseService
      */
     public function createTask(int $creatorId, array $data): array
     {
+        $createValidation = $this->validateCreateTaskPayload($creatorId, $data);
+        if (empty($createValidation['valid'])) {
+            return ['success' => false, 'message' => $createValidation['message'] ?? 'اطلاعات وظیفه معتبر نیست'];
+        }
+        $data = $createValidation['payload'];
+
         // Ù…Ø­Ø¯ÙˆÛŒØª Ù†Ø±Ø® Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø§ÛŒØ¬Ø§Ø¯ ØªØ³Ú© (Ù…Ø«Ù„Ø§ Ø­Ø¯Ø§Ú©Ø«Ø± Ûµ ØªØ³Ú© Ø¯Ø± Ù‡Ø± ÛŒÚ© Ø³Ø§Ø¹Øª)
         if (!$this->rateLimiter->attempt('custom_task:create:' . $creatorId, 5, 60)) {
             $wait = ceil($this->rateLimiter->availableIn('custom_task:create:' . $creatorId) / 60);
@@ -292,6 +342,12 @@ class CustomTaskService extends \App\Services\BaseService
      */
     public function submitProof(int $submissionId, int $workerId, array $proofData): array
     {
+        $validatedProof = $this->validateProofPayload($submissionId, $workerId, $proofData);
+        if (empty($validatedProof['valid'])) {
+            return ['success' => false, 'message' => $validatedProof['message'] ?? 'مدرک ارسال شده معتبر نیست'];
+        }
+        $proofData = $validatedProof['payload'];
+
         // محدودیت دفعات سابمیت مدرک (مثلا ۱۰ تلاش در ۱۰ دقیقه)
         if (!$this->rateLimiter->attempt('custom_task:submit:' . $workerId, 10, 10)) {
             $wait = ceil($this->rateLimiter->availableIn('custom_task:submit:' . $workerId) / 60);
@@ -384,6 +440,36 @@ class CustomTaskService extends \App\Services\BaseService
 }
     }
 
+    private function validateProofPayload(int $submissionId, int $workerId, array $proofData): array
+    {
+        if ($submissionId <= 0 || $workerId <= 0) {
+            return ['valid' => false, 'message' => 'شناسه درخواست یا کاربر نامعتبر است'];
+        }
+
+        $proofText = trim((string)($proofData['proof_text'] ?? ''));
+        $proofFile = trim((string)($proofData['proof_file'] ?? ''));
+        $proofHash = trim((string)($proofData['proof_file_hash'] ?? ''));
+
+        if ($proofText === '' && $proofFile === '') {
+            return ['valid' => false, 'message' => 'متن یا فایل مدرک الزامی است'];
+        }
+        if ($proofText !== '' && mb_strlen($proofText) > 3000) {
+            return ['valid' => false, 'message' => 'متن مدرک بیش از حد طولانی است'];
+        }
+        if ($proofFile !== '' && (mb_strlen($proofFile) > 500 || str_contains($proofFile, '..'))) {
+            return ['valid' => false, 'message' => 'مسیر فایل مدرک معتبر نیست'];
+        }
+        if ($proofHash !== '' && !preg_match('/^[A-Fa-f0-9]{32,128}$/', $proofHash)) {
+            return ['valid' => false, 'message' => 'هش فایل مدرک معتبر نیست'];
+        }
+
+        $proofData['proof_text'] = $proofText !== '' ? $proofText : null;
+        $proofData['proof_file'] = $proofFile !== '' ? $proofFile : null;
+        $proofData['proof_file_hash'] = $proofHash !== '' ? $proofHash : null;
+
+        return ['valid' => true, 'payload' => $proofData];
+    }
+
     /**
      * Ø¨Ø±Ø±Ø³ÛŒ Ùˆ ØªØ§ÛŒÛŒØ¯/Ø±Ø¯
      */
@@ -451,6 +537,8 @@ class CustomTaskService extends \App\Services\BaseService
             // Ø¨Ù‡â€ŒØ±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø¢Ù…Ø§Ø± ØªØ³Ú© - Ø§ØªÙ…ÛŒÚ© Ùˆ Ø§Ù…Ù†
             $this->taskModel->incrementCustomTaskCompletion($submission->task_id, (float)$submission->reward_amount);
 
+            $this->recordCustomTaskPayoutOutbox($submission, 'custom_task.submission.approved');
+
             $this->db->commit();
 
             $this->logger->info('Submission approved', [
@@ -459,7 +547,8 @@ class CustomTaskService extends \App\Services\BaseService
             ]);
 
             // Ø§Ø±Ø³Ø§Ù„ Ù†ÙˆØªÛŒÙÛŒÚ©ÛŒØ´Ù† Ø¨Ù‡ Ø§Ù†Ø¬Ø§Ù…â€ŒØ¯Ù‡Ù†Ø¯Ù‡
-            $this->notificationService->send(
+            if (!$this->outbox) {
+                $this->notificationService->send(
                 $submission->worker_id,
                 'task_submission_approved',
                 'Ù…Ø¯Ø±Ú© Ø´Ù…Ø§ ØªØ§ÛŒÛŒØ¯ Ø´Ø¯',
@@ -471,7 +560,8 @@ class CustomTaskService extends \App\Services\BaseService
                     'currency' => $submission->reward_currency,
                     'url' => "/user/custom-tasks/my-submissions/{$submission->id}"
                 ]
-            );
+                );
+            }
 
             return ['success' => true, 'message' => 'Ø¯Ø±Ø®ÙˆØ§Ø³Øª ØªØ§ÛŒÛŒØ¯ Ø´Ø¯.'];
 
@@ -637,6 +727,55 @@ class CustomTaskService extends \App\Services\BaseService
         }
     }
 
+    private function recordCustomTaskPayoutOutbox(object $submission, string $eventType): void
+    {
+        if (!$this->outbox) {
+            return;
+        }
+
+        $this->outbox->record('custom_task_submission', (string)$submission->id, $eventType, [
+            'submission_id' => (int)$submission->id,
+            'task_id' => (int)$submission->task_id,
+            'worker_id' => (int)$submission->worker_id,
+            'reward_amount' => (float)$submission->reward_amount,
+            'currency' => (string)$submission->reward_currency,
+        ]);
+
+        $this->outbox->record('custom_task_submission', (string)$submission->id, 'score.task_completed', [
+            'job' => \App\Jobs\UpdateFraudScoreJob::class,
+            'data' => [
+                'user_id' => (int)$submission->worker_id,
+                'delta' => 1.0,
+                'domain' => 'task',
+                'source' => 'custom_task_submission',
+                'meta' => [
+                    'submission_id' => (int)$submission->id,
+                    'task_id' => (int)$submission->task_id,
+                    'reward_amount' => (float)$submission->reward_amount,
+                    'currency' => (string)$submission->reward_currency,
+                ],
+            ],
+        ]);
+
+        $this->outbox->record('custom_task_submission', (string)$submission->id, 'notification.custom_task_submission_approved', [
+            'notification' => [
+                'method' => 'send',
+                'args' => [
+                    (int)$submission->worker_id,
+                    'task_submission_approved',
+                    'مدرک شما تأیید شد',
+                    "مدرک شما برای وظیفه #{$submission->task_id} تأیید شد و پاداش پرداخت گردید.",
+                    [
+                        'submission_id' => (int)$submission->id,
+                        'task_id' => (int)$submission->task_id,
+                        'reward' => (float)$submission->reward_amount,
+                        'currency' => (string)$submission->reward_currency,
+                    ],
+                ],
+            ],
+        ]);
+    }
+
     private function payWorkerReward(object $submission): void
     {
         // Stable idempotency key without time() to prevent duplicate payouts across multiple attempts
@@ -725,6 +864,8 @@ class CustomTaskService extends \App\Services\BaseService
             // Ø¨Ù‡â€ŒØ±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø¢Ù…Ø§Ø± ØªØ³Ú© - Ø§ØªÙ…ÛŒÚ© Ø¨Ø§ Ø¨Ø±Ø±Ø³ÛŒ Ø´Ø±Ø·ÛŒ Ú©Ø§Ù‡Ø´ Ø¸Ø±ÙÛŒØª
             $pendingDecrease = in_array($submission->status, ['submitted']) ? true : false;
             $this->taskModel->incrementCustomTaskCompletion($submission->task_id, (float)$submission->reward_amount, $pendingDecrease);
+
+            $this->recordCustomTaskPayoutOutbox($submission, 'custom_task.submission.force_approved');
 
             $this->db->commit();
 
