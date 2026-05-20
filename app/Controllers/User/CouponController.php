@@ -60,7 +60,8 @@ class CouponController extends BaseUserController
                     'coupon_code' => $result['coupon_code'],
                     'original_amount' => $result['original_amount'],
                     'discount_amount' => $result['discount_amount'],
-                    'final_amount' => $result['final_amount']
+                    'final_amount' => $result['final_amount'],
+                    'validation_token' => $result['validation_token']
                 ],
                 'message' => sprintf('کد تخفیف با موفقیت اعمال شد. تخفیف: %s', number_format($result['discount_amount']))
             ]);
