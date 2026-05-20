@@ -13,16 +13,19 @@ class CouponController extends BaseAdminController
     private Coupon $couponModel;
     private CouponRedemption $redemptionModel;
     private CouponService $couponService;
+    private \App\Services\AuditTrail $auditTrail;
 
     public function __construct(
         Coupon $couponModel,
         CouponRedemption $redemptionModel,
-        CouponService $couponService
+        CouponService $couponService,
+        \App\Services\AuditTrail $auditTrail
     ) {
         parent::__construct();
         $this->couponModel     = $couponModel;
         $this->redemptionModel = $redemptionModel;
         $this->couponService   = $couponService;
+        $this->auditTrail      = $auditTrail;
     }
 
     /**
@@ -100,6 +103,12 @@ class CouponController extends BaseAdminController
                 'coupon_id' => $couponId,
                 'code' => $data['code'],
                 'admin_id' => user_id()
+            ]);
+
+            $this->auditTrail->record('coupon.created', null, [
+                'coupon_id' => $couponId,
+                'code' => $data['code'],
+                'data' => $data
             ]);
 
             $this->response->json([
@@ -187,6 +196,9 @@ class CouponController extends BaseAdminController
                 'admin_id' => user_id()
             ]);
 
+            $before = (array)$coupon;
+            $this->auditTrail->diff('coupon.updated', null, $before, $data);
+
             $this->response->json([
                 'success'  => true,
                 'message'  => 'کوپن با موفقیت بروزرسانی شد',
@@ -208,11 +220,17 @@ class CouponController extends BaseAdminController
     {
         $id = (int)$this->request->input('id');
         if (!$id) $id = (int)($this->request->body()['id'] ?? 0);
+        $coupon = $this->couponService->find($id);
 
         if ($this->couponService->delete($id)) {
             $this->logger->info('coupon_deleted', [
                 'coupon_id' => $id,
                 'admin_id' => user_id()
+            ]);
+
+            $this->auditTrail->record('coupon.deleted', null, [
+                'coupon_id' => $id,
+                'code' => $coupon ? $coupon->code : 'unknown'
             ]);
 
             $this->response->json(['success' => true, 'message' => 'کد تخفیف حذف شد']);
@@ -240,6 +258,12 @@ class CouponController extends BaseAdminController
             $this->logger->info('coupon_toggled', [
                 'coupon_id' => $id,
                 'admin_id' => user_id()
+            ]);
+
+            $this->auditTrail->record('coupon.toggled', null, [
+                'coupon_id' => $id,
+                'code' => $coupon->code,
+                'active' => $coupon->active ? 0 : 1
             ]);
 
             $this->response->json(['success' => true,  'message' => 'وضعیت کوپن تغییر کرد']);

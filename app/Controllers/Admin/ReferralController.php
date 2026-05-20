@@ -187,8 +187,6 @@ class ReferralController extends BaseAdminController
      */
     public function batchPay()
     {
-
-                
         $body = \json_decode(\file_get_contents('php://input'), true) ?? [];
         $currency = $body['currency'] ?? 'irt';
 
@@ -199,6 +197,14 @@ class ReferralController extends BaseAdminController
 
         $service = $this->referralService;
         $results = $service->batchPay($currency);
+
+        if (!empty($results['locked'])) {
+            $this->response->json([
+                'success' => false,
+                'message' => 'پرداخت دسته‌ای برای این ارز در حال حاضر در حال اجراست. لطفا چند لحظه دیگر دوباره تلاش کنید.'
+            ], 409);
+            return;
+        }
 
         $this->logger->activity('referrals.batch_pay', 'پرداخت دسته‌ای کمیسیون', $results, []);
 
