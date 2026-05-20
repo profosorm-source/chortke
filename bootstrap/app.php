@@ -1322,7 +1322,9 @@ $container->singleton(\App\Services\Shared\ReferralService::class, function($c) 
 $container->singleton(\App\Services\Shared\CouponService::class, function($c) {
     return new \App\Services\Shared\CouponService(
         $c->make(\App\Models\Coupon::class),
-        $c->make(\App\Models\CouponRedemption::class)
+        $c->make(\App\Models\CouponRedemption::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -1475,7 +1477,9 @@ $container->singleton(\App\Services\LotteryService::class, function($c) {
         $c->make(\App\Models\LotteryVote::class),
         $c->make(\App\Models\LotteryChanceLog::class),
         $c->make(\App\Services\FeatureFlagService::class),
-        $c->make(\App\Contracts\LoggerInterface::class)
+        \Core\Cache::getInstance(),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\AuditTrail::class)
     );
 });
 
