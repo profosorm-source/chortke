@@ -8,7 +8,6 @@ use Core\Logger;
 use App\Models\User;
 use App\Models\KpiStatistics;
 use App\Models\ExportData;
-use App\Services\AuthService;
 use App\Services\CaptchaService;
 use App\Models\SecurityModel;
 use App\Services\AuditTrail;
@@ -17,7 +16,6 @@ use App\Services\Notification\NotificationService;
 use App\Services\UploadService;
 use App\Services\FileAccessService;
 use App\Services\WithdrawalService;
-use App\Services\UserLevelService;
 use App\Services\ContentService;
 use App\Services\InvestmentService;
 use App\Services\LotteryService;
@@ -29,12 +27,10 @@ use App\Adapters\BankInquiryAdapter;
 use App\Adapters\JibitInquiryAdapter;
 use App\Adapters\KycFaceVerificationAdapter;
 use App\Adapters\DeepFaceKycAdapter;
-use App\Services\PaymentService;
 use App\Services\InfluencerService;
 use App\Services\KYCService;
 use App\Services\BannerService;
 use App\Services\Auth\TwoFactorService;
-use App\Models\TaskExecution;
 use App\Models\Transaction;
 use App\Models\ReferralCommission;
 use App\Models\Notification;
@@ -278,7 +274,6 @@ $container->singleton(\App\Services\Auth\TwoFactorService::class);
 $container->singleton(\App\Services\Auth\AuthService::class);
 
 
-$container->singleton(CaptchaService::class);
 
 // User Model is already registered above as \App\Models\User::class
 
@@ -396,8 +391,6 @@ $container->singleton(\App\Services\Notification\FcmService::class, function($c)
 
 
 
-$container->singleton(UploadService::class);
-$container->singleton(FileAccessService::class);
 
 
 $container->singleton(\App\Models\SystemLog::class, function($c) {
@@ -496,17 +489,12 @@ $container->singleton(App\Services\CustomTaskService::class);
 $container->singleton(App\Services\UnifiedTaskService::class);
 
 $container->singleton(\App\Services\XPEngine::class);
-$container->singleton(App\Services\UserLevelService::class, \App\Services\User\UserLevelService::class);
 $container->singleton(\App\Services\User\UserLevelService::class);
 
 $container->singleton(\App\Services\CronService::class);
 
 // Controllers
 
-$container->singleton(ContentService::class);
-$container->singleton(\App\Services\InvestmentService::class);
-$container->singleton(LotteryService::class);
-$container->singleton(ManualDepositService::class);
 
 // CryptoDepositService singleton is already registered above with full dependencies
 
@@ -533,7 +521,6 @@ $container->singleton(\App\Services\Payment\PaymentService::class);
 
 
 
-$container->singleton(InfluencerService::class);
 
 $container->singleton(\App\Services\InfluencerReputationService::class);
 
@@ -541,14 +528,11 @@ $container->singleton(\App\Services\InfluencerReputationService::class);
 
 
 
-$container->singleton(KYCService::class);
-$container->singleton(BannerService::class);
 
 
-$container->singleton(TwoFactorService::class);
 
 
-$container->singleton(SEOTaskService::class);
+// Legacy SEOTaskService binding removed: class does not exist; use App\Services\SeoService instead.
 
 
 $container->singleton(\App\Services\User\UserDashboardService::class);
@@ -611,15 +595,48 @@ $container->singleton(App\Services\BankCardService::class);
 
 $container->singleton(App\Services\ExportService::class, function($c) {
     return new App\Services\ExportService(
-        $c->make(\App\Models\ExportData::class)
+        $c->make(\App\Models\ExportData::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Search\AdminSearchGateway::class);
+$container->singleton(\App\Services\Search\UserSearchGateway::class);
+$container->singleton(\App\Services\Search\ModuleSearchGateway::class);
+
+$container->singleton(\App\Services\Search\AdminSearchProvider::class, function($c) {
+    return new \App\Services\Search\AdminSearchProvider(
+        $c->make(\App\Models\AdvancedSearch::class),
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\Search\AdminSearchGateway::class)
+    );
+});
+
+$container->singleton(\App\Services\Search\UserSearchProvider::class, function($c) {
+    return new \App\Services\Search\UserSearchProvider(
+        $c->make(\App\Models\AdvancedSearch::class),
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\Search\UserSearchGateway::class)
+    );
+});
+
+$container->singleton(\App\Services\Search\ModuleSearchProvider::class, function($c) {
+    return new \App\Services\Search\ModuleSearchProvider(
+        $c->make(\App\Models\AdvancedSearch::class),
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\Search\ModuleSearchGateway::class)
     );
 });
 
 $container->singleton(\App\Services\AdvancedSearchService::class, function($c) {
     return new \App\Services\AdvancedSearchService(
-        $c->make(\App\Models\AdvancedSearch::class),
-        $c->make(\Core\Logger::class),
-        $c->make(\Core\Cache::class)
+        $c->make(\App\Services\Search\AdminSearchProvider::class),
+        $c->make(\App\Services\Search\UserSearchProvider::class),
+        $c->make(\App\Services\Search\ModuleSearchProvider::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -639,8 +656,10 @@ $container->singleton(\App\Services\AntiFraud\FraudDetectionService::class, func
 $container->singleton(\App\Services\DirectMessageService::class, function($c) {
     return new \App\Services\DirectMessageService(
         $c->make(\App\Models\DirectMessage::class),
-        $c->make(\Core\Logger::class),
-        $c->make(\Core\Redis::class)
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Redis::class),
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\Core\Database::class)
     );
 });
 
@@ -655,7 +674,9 @@ $container->singleton(\App\Services\Auth\SessionService::class, function($c) {
         $c->make(\App\Models\SecurityModel::class),
         $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
         $c->make(\App\Services\DistributedLockService::class),
-        $c->make(\Core\Logger::class)
+        $c->make(\Core\Database::class),
+        $c->make(\Core\Redis::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -680,7 +701,9 @@ $container->singleton(App\Services\SocialAccountService::class, function($c) {
 $container->singleton(\App\Services\User\UserService::class, function($c) {
     return new \App\Services\User\UserService(
         $c->make(\App\Models\User::class),
-        $c->make(\Core\Logger::class)
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\AntiFraud\GeoIPService::class)
     );
 });
 
@@ -958,7 +981,7 @@ $container->singleton(\App\Services\BulkOperationsService::class, function($c) {
         $c->make(Database::class),
         $c->make(\App\Models\BulkOperation::class),
         $c->make(\App\Contracts\CacheInterface::class),
-        $c->make(NotificationService::class)
+        $c->make(\App\Contracts\NotificationServiceInterface::class)
     );
 });
 
@@ -1015,7 +1038,7 @@ $container->singleton(\App\Services\ApiRateLimiter::class, function($c) {
 
 $container->singleton(\App\Services\SocialTask\TrustScoreService::class, function($c) {
     return new \App\Services\SocialTask\TrustScoreService(
-        $c->make(\App\Services\Shared\ScoreService::class),
+        $c->make(\App\Services\Shared\TrustScoreService::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -1029,7 +1052,7 @@ $container->singleton(\App\Services\SocialTask\SilentAntiFraudService::class, fu
         $c->make(\App\Services\SocialTask\TrustScoreService::class),
         $c->make(\App\Services\SocialTask\SocialTaskScoringService::class),
         $c->make(\App\Services\AuditTrail::class),
-        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Contracts\NotificationServiceInterface::class),
         $c->make(\App\Services\SettingService::class),
         $c->make(\App\Contracts\LoggerInterface::class)  // ✅ Logger اضافه شد
     );
@@ -1040,8 +1063,10 @@ $container->singleton(\App\Services\SocialTask\SilentAntiFraudService::class, fu
 $container->singleton(\App\Services\SocialTask\RatingService::class, function($c) {
     return new \App\Services\SocialTask\RatingService(
         $c->make(\App\Services\Shared\RatingService::class),
-        $c->make(\App\Models\SocialTaskModel::class),
-        $c->make(\App\Services\Shared\ScoreService::class)
+        $c->make(\App\Models\SocialTaskExecutionModel::class),
+        $c->make(\App\Models\SocialTaskAnalyticsModel::class),
+        $c->make(\App\Services\Shared\TrustScoreService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
  
@@ -1135,6 +1160,16 @@ $container->singleton(\App\Contracts\CacheInterface::class, function($c) {
     );
 });
 
+// Metrics Collector Interface
+$container->singleton(\App\Contracts\MetricsCollectorInterface::class, function($c) {
+    return $c->make(\App\Services\Metrics\MetricsCollector::class);
+});
+
+// Currency Service Interface
+$container->singleton(\App\Contracts\CurrencyServiceInterface::class, function($c) {
+    return $c->make(\App\Services\CurrencyService::class);
+});
+
 // Rate Limiter Interface
 $container->singleton(\App\Contracts\RateLimiterInterface::class, function($c) {
     return $c->make(\Core\RateLimiter::class);
@@ -1142,7 +1177,7 @@ $container->singleton(\App\Contracts\RateLimiterInterface::class, function($c) {
 
 // Feature Flag Repository Interface
 $container->singleton(\App\Contracts\FeatureFlagRepositoryInterface::class, function($c) {
-    return $c->make(\App\Models\FeatureFlagUltimate::class);
+    return $c->make(\App\Services\FeatureFlagService::class);
 });
 
 // Search Service Interface
@@ -1164,7 +1199,7 @@ $container->singleton(\App\Policies\FeatureFlagPolicy::class, function($c) {
 $container->singleton(\App\Adapters\CustomTaskAdapter::class, function($c) {
     return new \App\Adapters\CustomTaskAdapter(
         $c->make(\App\Models\Ads::class),
-        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
         $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Services\SettingService::class)
@@ -1191,13 +1226,7 @@ $container->singleton(\App\Adapters\BannerAdapter::class, function($c) {
     );
 });
 
-$container->singleton(\App\Adapters\VitrineAdapter::class, function($c) {
-    return new \App\Adapters\VitrineAdapter(
-        $c->make(\App\Models\VitrineListing::class),
-        $c->make(\App\Services\WalletService::class),
-        $c->make(\Core\Database::class)
-    );
-});
+// Vitrine adapter binding removed: Vitrine has its own bounded context via VitrineService.
 
 
 
@@ -1237,8 +1266,6 @@ $container->singleton(\App\Services\AdSystemManager::class, function($c) {
         'custom_task' => $c->make(\App\Adapters\CustomTaskAdapter::class),
         'seo' => $c->make(\App\Adapters\SeoAdAdapter::class),
         'banner' => $c->make(\App\Adapters\BannerAdapter::class),
-        'vitrine' => $c->make(\App\Adapters\VitrineAdapter::class),
-
         'adtube' => $c->make(\App\Adapters\AdTubeAdapter::class),
         'social_task' => $c->make(\App\Adapters\AdSocialAdapter::class),
         'notification' => $c->make(\App\Adapters\NotificationAdAdapter::class),
@@ -1281,10 +1308,11 @@ $container->singleton(\App\Services\Shared\DisputeService::class, function($c) {
     return new \App\Services\Shared\DisputeService(
         $c->make(Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Contracts\NotificationServiceInterface::class),
         $c->make(\App\Models\Dispute::class),
         $c->make(\App\Contracts\WalletServiceInterface::class),
-        $c->make(\App\Services\ReconciliationService::class)
+        $c->make(\App\Services\ReconciliationService::class),
+        $c->make(\App\Models\Transaction::class)
     );
 });
 
@@ -1303,7 +1331,6 @@ $container->singleton(\App\Services\Shared\AnalyticsService::class, function($c)
         $c->make(Database::class),
         $c->make(\Core\Logger::class),
         $c->make(\Core\Cache::class),
-        $c->make(\App\Services\ReferralAnalyticsService::class),
         $c->make(\App\Services\Notification\NotificationService::class),
         $c->make(\App\Models\AdvancedAnalytics::class),
         $c->make(\App\Services\Analytics\AnalyticsService::class)
@@ -1363,7 +1390,8 @@ $container->singleton(\App\Services\ApiTokenService::class, function($c) {
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Models\ApiToken::class),
         $c->make(\App\Models\User::class),
-        $c->make(\Core\RateLimiter::class)
+        $c->make(\Core\RateLimiter::class),
+        $c->make(\App\Services\Auth\TwoFactorService::class)
     );
 });
 
@@ -1371,9 +1399,10 @@ $container->singleton(\App\Services\BannerService::class, function($c) {
     return new \App\Services\BannerService(
         $c->make(\App\Models\Ads::class),
         $c->make(\App\Models\BannerPlacement::class),
-        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
         $c->make(\App\Services\UploadService::class),
         $c->make(\Core\Database::class),
+        $c->make(\Core\Cache::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -1397,14 +1426,16 @@ $container->singleton(\App\Services\CaptchaService::class, function($c) {
 $container->singleton(\App\Services\ContactService::class, function($c) {
     return new \App\Services\ContactService(
         $c->make(\App\Models\ContactMessage::class),
-        $c->make(\App\Contracts\LoggerInterface::class)
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\RateLimiter::class),
+        $c->make(\App\Services\CaptchaService::class)
     );
 });
 
 $container->singleton(\App\Services\ContentService::class, function($c) {
     return new \App\Services\ContentService(
-        $c->make(\App\Services\WalletService::class),
-        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
+        $c->make(\App\Contracts\NotificationServiceInterface::class),
         $c->make(\App\Services\User\UserService::class),
         $c->make(\App\Services\Shared\ReferralService::class),
         $c->make(\App\Models\ContentSubmission::class),
@@ -1436,9 +1467,9 @@ $container->singleton(\App\Services\FileAccessService::class, function($c) {
 $container->singleton(\App\Services\InfluencerService::class, function($c) {
     return new \App\Services\InfluencerService(
         $c->make(\Core\Database::class),
-        $c->make(\App\Services\WalletService::class),
-        $c->make(\App\Services\Notification\NotificationService::class),
-        $c->make(\App\Services\ReferralCommissionService::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
+        $c->make(\App\Contracts\NotificationServiceInterface::class),
+        $c->make(\App\Services\Shared\ReferralService::class),
         $c->make(\App\Services\AuditTrail::class),
         $c->make(\App\Models\InfluencerModel::class),
         $c->make(\App\Models\StoryOrder::class),
@@ -1459,6 +1490,7 @@ $container->singleton(\App\Services\KYCService::class, function($c) {
         $c->make(\App\Services\AuditTrail::class),
         $c->make(\App\Adapters\KycFaceVerificationAdapter::class),
         $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Encryption::class),
         $c->make(\App\Services\Notification\NotificationService::class)
     );
 });
@@ -1471,11 +1503,31 @@ $container->singleton(\App\Services\LedgerService::class, function($c) {
     );
 });
 
+$container->singleton(\App\Services\InvestmentService::class, function($c) {
+    return new \App\Services\InvestmentService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
+        $c->make(\App\Contracts\NotificationServiceInterface::class),
+        $c->make(\App\Services\User\UserService::class),
+        $c->make(\App\Services\Shared\ReferralService::class),
+        $c->make(\App\Models\Investment::class),
+        $c->make(\App\Models\TradingRecord::class),
+        $c->make(\App\Models\InvestmentProfit::class),
+        $c->make(\App\Models\InvestmentWithdrawal::class),
+        $c->make(\App\Services\AuditTrail::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Queue::class),
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\App\Services\PerformanceOptimizationService::class),
+        $c->make(\App\Contracts\CurrencyServiceInterface::class)
+    );
+});
+
 $container->singleton(\App\Services\LotteryService::class, function($c) {
     return new \App\Services\LotteryService(
         $c->make(\Core\Database::class),
-        $c->make(\App\Services\WalletService::class),
-        $c->make(\App\Services\Notification\NotificationService::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
+        $c->make(\App\Contracts\NotificationServiceInterface::class),
         $c->make(\App\Models\LotteryRound::class),
         $c->make(\App\Models\LotteryParticipation::class),
         $c->make(\App\Models\LotteryDailyNumber::class),
@@ -1525,7 +1577,7 @@ $container->singleton(\App\Services\PredictionService::class, function($c) {
         $c->make(\Core\Database::class),
         $c->make(\App\Models\PredictionGame::class),
         $c->make(\App\Models\PredictionBet::class),
-        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Services\AuditTrail::class)
     );
@@ -1549,7 +1601,7 @@ $container->singleton(\App\Policies\RolePolicy::class, function($c) {
 $container->singleton(\App\Services\ScheduledPaymentService::class, function($c) {
     return new \App\Services\ScheduledPaymentService(
         $c->make(\App\Models\ScheduledPayment::class),
-        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
         $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Services\ReconciliationService::class)
@@ -1558,7 +1610,8 @@ $container->singleton(\App\Services\ScheduledPaymentService::class, function($c)
 
 $container->singleton(\App\Services\SeoPayoutService::class, function($c) {
     return new \App\Services\SeoPayoutService(
-        $c->make(\App\Models\Ads::class)
+        $c->make(\App\Models\Ads::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -1569,13 +1622,14 @@ $container->singleton(\App\Services\SeoService::class, function($c) {
         $c->make(\App\Services\User\UserScoreService::class),
         $c->make(\App\Services\SeoPayoutService::class),
         $c->make(\App\Services\AntiFraud\SeoFraudDetector::class),
-        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Contracts\WalletServiceInterface::class),
         $c->make(\App\Services\Shared\ReferralService::class),
         $c->make(\Core\Database::class),
         $c->make(\App\Services\Shared\RatingService::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Models\User::class),
-        $c->make(\App\Services\SettingService::class)
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\App\Services\AntiFraud\FraudGuardService::class)
     );
 });
 
@@ -1585,15 +1639,17 @@ $container->singleton(\App\Services\TicketService::class, function($c) {
         $c->make(\App\Models\TicketMessage::class),
         $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Services\Notification\NotificationService::class),
-        $c->make(\Core\RateLimiter::class) // 🛡️ مهار مقابله با سوءاستفاده: تزریق محدودیت نرخ ریکوئست
+        $c->make(\App\Contracts\NotificationServiceInterface::class),
+        $c->make(\Core\RateLimiter::class), // 🛡️ مهار مقابله با سوءاستفاده: تزریق محدودیت نرخ ریکوئست
+        $c->make(\Core\Redis::class)
     );
 });
 
 $container->singleton(\App\Services\UploadService::class, function($c) {
     return new \App\Services\UploadService(
         $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\App\Services\SettingService::class)
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\Core\Database::class)
     );
 });
 
@@ -1625,7 +1681,9 @@ $container->singleton(\App\Services\WithdrawalService::class, function($c) {
         $c->make(\App\Services\PerformanceOptimizationService::class),
         $c->make(\App\Services\StateMachineService::class),
         $c->make(\App\Services\ReconciliationService::class),
-        $c->make(\App\Contracts\CurrencyServiceInterface::class)
+        $c->make(\App\Contracts\CurrencyServiceInterface::class),
+        $c->make(\App\Services\AntiFraud\FraudGuardService::class),
+        $c->make(\Core\Encryption::class)
     );
 });
 
@@ -1694,7 +1752,9 @@ $container->singleton(\App\Services\AntiFraud\RateLimitingService::class, functi
 $container->singleton(\App\Services\Auth\LoginRiskService::class, function($c) {
     return new \App\Services\Auth\LoginRiskService(
         $c->make(\Core\Cache::class),
-        $c->make(\App\Contracts\LoggerInterface::class)
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\Redis::class)
     );
 });
 
@@ -1794,7 +1854,8 @@ $container->singleton(\App\Services\Sentry\Alerting\EscalationManager::class, fu
 $container->singleton(\App\Services\Sentry\Analytics\DashboardService::class, function($c) {
     return new \App\Services\Sentry\Analytics\DashboardService(
         $c->make(\App\Models\SentryModel::class),
-        $c->make(\App\Contracts\CacheInterface::class)
+        $c->make(\App\Contracts\CacheInterface::class),
+        $c->make(\Core\Database::class)
     );
 });
 
@@ -1864,7 +1925,10 @@ $container->singleton(\App\Services\User\AccountDeletionService::class, function
         $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Services\CustomTaskService::class),
-        $c->make(\Core\EventDispatcher::class)
+        $c->make(\Core\EventDispatcher::class),
+        $c->make(\App\Models\Wallet::class),
+        $c->make(\App\Services\DistributedLockService::class),
+        $c->make(\App\Services\EmailService::class)
     );
 });
 
@@ -1873,7 +1937,8 @@ $container->singleton(\App\Services\User\UserSettingsService::class, function($c
         $c->make(\Core\Database::class),
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Models\User::class),
-        $c->make(\Core\Cache::class)
+        $c->make(\Core\Cache::class),
+        $c->make(\Core\RateLimiter::class)
     );
 });
 

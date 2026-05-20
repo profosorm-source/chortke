@@ -26,7 +26,7 @@ use Core\Scheduler;
 use Core\Container;
 use App\Services\EmailService;
 use App\Services\CryptoDeposit\CryptoDepositService;
-use App\Services\UserLevelService;
+use App\Services\User\UserLevelService;
 use App\Services\LotteryService;
 use App\Services\BannerService;
 use App\Services\WithdrawalService;
@@ -146,18 +146,19 @@ $scheduler->everyMinute(function () {
                 $processed++;
                 continue;
             } catch (\Throwable $e) {
-                $attempts = (int)($job['attempts'] ?? 0) + 1;
+                $attempts = (int)($job['attempts'] ?? 0);
                 logger()->error('queue_async_event_failed', [
                     'job_id' => $job['id'],
                     'attempts' => $attempts,
                     'error' => $e->getMessage()
                 ]);
                 
-                if ($attempts >= 3) {
-                    // ارسال به DLQ
-                    $queue->markAsFailed($job['id'], $e->getMessage());
+                if ($attempts >= $queue->getMaxAttempts()) {
+                    // ارسال به DLQ با API واقعی Core\Queue
+                    $queue->fail((int)$job['id'], $e);
                 } else {
-                    $queue->incrementAttempts($job['id']);
+                    // تلاش مجدد با backoff استاندارد Queue
+                    $queue->release((int)$job['id']);
                 }
                 continue;
             }
@@ -838,7 +839,7 @@ $scheduler->daily('05:00', function () use ($container) {
  */
 $scheduler->daily('04:00', function () use ($container) {
     try {
-        $accountDeletionService = $container->make(\App\Services\AccountDeletionService::class);
+        $accountDeletionService = $container->make(\App\Services\User\AccountDeletionService::class);
         $dataExportService = $container->make(\App\Services\DataExportService::class);
 
         // حذف حساب‌های منقضی

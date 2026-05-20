@@ -44,7 +44,6 @@ class Router
     // CORE-027: Middleware Priority Registry
     protected array $middlewarePriority = [
         \App\Middleware\SessionMiddleware::class,
-        \App\Middleware\RequestIdMiddleware::class,
         \App\Middleware\ConcurrentRequestMiddleware::class,
         \App\Middleware\HttpsMiddleware::class,
         \App\Middleware\SecurityHeadersMiddleware::class,

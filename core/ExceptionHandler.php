@@ -342,31 +342,27 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 return; // جدول نیست، بی‌خیال
             }
 
-            // استفاده از سرویس
-            $errorService = app(\App\Services\ErrorLogService::class);
-
-            // تعیین سطح
+            // ثبت مستقیم؛ وابستگی به ErrorLogService حذف شده تا سرویس حذف‌شده برنگردد.
             $level = self::determineErrorLevel($exception);
-
-            // دریافت user_id
             $userId = null;
             try {
                 $session = Session::getInstance();
                 $userId = $session->get('user_id');
-            } catch (\Throwable $e) {
-                // بی‌خیال
-            }
+            } catch (\Throwable $e) {}
 
-            $errorService->logError(
-                $level,
-                $exception->getMessage(),
-                $exception,
-                $userId,
-                [
+            $db->table('error_logs')->insert([
+                'level' => $level,
+                'message' => mb_substr($exception->getMessage(), 0, 2000),
+                'exception_class' => get_class($exception),
+                'file' => $exception->getFile(),
+                'line' => $exception->getLine(),
+                'user_id' => $userId,
+                'context' => json_encode([
                     'url' => $_SERVER['REQUEST_URI'] ?? '',
                     'method' => $_SERVER['REQUEST_METHOD'] ?? ''
-                ]
-            );
+                ], JSON_UNESCAPED_UNICODE),
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
 
         } catch (\Throwable $e) {
             // اگر سیستم لاگ پیشرفته خراب بود، بی‌خیال
@@ -506,19 +502,20 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
             $tableExists = $db->query("SHOW TABLES LIKE 'error_logs'")->fetch();
             if (!$tableExists) return;
 
-            $errorService = app(\App\Services\ErrorLogService::class);
-
-            $errorService->logError(
-                'FATAL',
-                $error['message'],
-                null,
-                null,
-                [
-                    'file' => $error['file'],
-                    'line' => $error['line'],
-                    'type' => $error['type']
-                ]
-            );
+            $db->table('error_logs')->insert([
+                'level' => 'FATAL',
+                'message' => mb_substr((string)$error['message'], 0, 2000),
+                'exception_class' => null,
+                'file' => $error['file'] ?? null,
+                'line' => $error['line'] ?? null,
+                'user_id' => null,
+                'context' => json_encode([
+                    'file' => $error['file'] ?? null,
+                    'line' => $error['line'] ?? null,
+                    'type' => $error['type'] ?? null,
+                ], JSON_UNESCAPED_UNICODE),
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
         } catch (\Throwable $e) {
             // خطا در دیتابیس اهمیتی ندارد چون نسخه فیزیکی در jsonl بالاتر ذخیره شد و در داشبورد بازیابی می‌شود
         }
@@ -535,8 +532,6 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
             $tableExists = $db->query("SHOW TABLES LIKE 'performance_logs'")->fetch();
             if (!$tableExists) return;
 
-            $perfService = app(\App\Services\PerformanceMonitorService::class);
-
             $endpoint = $_SERVER['REQUEST_URI'] ?? '/';
             $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
             $statusCode = http_response_code() ?: 200;
@@ -545,11 +540,22 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
             try {
                 $session = Session::getInstance();
                 $userId = $session->get('user_id');
-            } catch (\Throwable $e) {
-                // بی‌خیال
-            }
+            } catch (\Throwable $e) {}
 
-            $perfService->logRequest($endpoint, $method, $statusCode, $userId);
+            $durationMs = isset($_SERVER['REQUEST_TIME_FLOAT'])
+                ? (int)round((microtime(true) - (float)$_SERVER['REQUEST_TIME_FLOAT']) * 1000)
+                : null;
+
+            $db->table('performance_logs')->insert([
+                'endpoint' => mb_substr($endpoint, 0, 500),
+                'method' => $method,
+                'status_code' => $statusCode,
+                'user_id' => $userId,
+                'duration_ms' => $durationMs,
+                'memory_peak' => memory_get_peak_usage(true),
+                'request_id' => $_SERVER['REQUEST_ID'] ?? null,
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
 
         } catch (\Throwable $e) {
             // Silent
