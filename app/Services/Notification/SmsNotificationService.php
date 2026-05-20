@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Notification;
 
-use App\Adapters\Notification\SmsNotificationAdapter;
+use App\Adapters\SmsNotificationAdapter;
 use App\Contracts\LoggerInterface;
 
 class SmsNotificationService extends \App\Services\BaseService

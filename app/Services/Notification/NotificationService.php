@@ -75,13 +75,13 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
         // 3. Persist Database record
         $notifId = $this->persistInAppNotification(
-            $userId, $type, $title, $message, $data, 
+            $userId, $type, $title, $message, $data,
             $actionUrl, $actionText, $priority, $expiresAt, $imageUrl, $groupKey, $scheduledAt
         );
 
         // 4. Dispatch External Push Channels (FCM)
         $this->dispatchPushNotification(
-            $userId, $type, $title, $message, $data, 
+            $userId, $type, $title, $message, $data,
             $actionUrl, $imageUrl, $scheduledAt, $notifId
         );
 
@@ -159,7 +159,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
         try {
             // 🚀 UPG: استفاده از صف سیستم جهت پردازش کاملاً ناهمگام و جلوگیری از مسدودسازی پاسخ HTTP
-            $this->queue->push(\App\Jobs\SendBulkNotificationJob::class, [
+            $payload = [
                 'channel' => 'fcm',
                 'user_ids' => [$userId],
                 'title' => $title,
@@ -172,10 +172,19 @@ class NotificationService extends \App\Services\BaseService implements Notificat
                 'image_url' => $imageUrl,
                 'action_url' => $actionUrl,
                 'message_id' => $messageId,
-            ]);
+            ];
+
+            $this->queue->pushUnique(
+                \App\Jobs\SendBulkNotificationJob::class,
+                $payload,
+                'notif:fcm:' . $messageId . ':' . $userId,
+                null,
+                0,
+                86400
+            );
         } catch (\Throwable $e) {
             $this->logger->warning('notif.push_queue_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
-            
+
             // Fallback to sync dispatch in case queue manager crashes to ensure delivery resilience
             try {
                 $this->dispatcher->dispatch(
@@ -193,7 +202,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
                 );
             } catch (\Throwable $syncError) {
                 $this->logger->error('notif.push_fallback_sync_failed', ['user_id' => $userId, 'error' => $syncError->getMessage()]);
-                
+
                 // 🚀 DLQ Fallback: Save failed payload to failed_jobs table
                 try {
                     $db = $this->model->getDb();
@@ -205,7 +214,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
                             'title' => $title,
                             'message' => $message,
                             'data' => array_merge($data ?? [], [
-                                'type' => $type, 
+                                'type' => $type,
                                 'notif_id' => (string)($notifId ?? ''),
                                 'idempotency_key' => $idempotencyKey
                             ]),
@@ -231,7 +240,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         $key = "notif_rl_user_{$userId}";
         $max = (int)$this->settingService->get('notif_rate_max_hour', self::RATE_MAX_PER_USER_PER_HOUR);
         $window = (int)$this->settingService->get('notif_rate_window_minutes', self::RATE_WINDOW_MINUTES);
-        
+
         return $this->rateLimiter->attempt($key, $max, $window);
     }
 
@@ -348,7 +357,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
     }
 
     private function sendBulkToUsers(
-        array $userIds, string $type, string $title, string $message, 
+        array $userIds, string $type, string $title, string $message,
         ?array $data, ?string $actionUrl, ?string $actionText, string $priority, ?string $scheduledAt
     ): array {
         if (empty($userIds)) {
@@ -372,21 +381,28 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
         foreach ($chunks as $chunk) {
             try {
-                $this->queue->push(
+                $payload = [
+                    'user_ids' => $chunk,
+                    'type' => $type,
+                    'title' => $title,
+                    'message' => $message,
+                    'data' => $data,
+                    'action_url' => $actionUrl,
+                    'action_text' => $actionText,
+                    'priority' => $priority,
+                    'scheduled_at' => $scheduledAt,
+                ];
+
+                if ($this->queue->pushUnique(
                     \App\Jobs\PersistBulkInAppNotificationJob::class,
-                    [
-                        'user_ids' => $chunk,
-                        'type' => $type,
-                        'title' => $title,
-                        'message' => $message,
-                        'data' => $data,
-                        'action_url' => $actionUrl,
-                        'action_text' => $actionText,
-                        'priority' => $priority,
-                        'scheduled_at' => $scheduledAt,
-                    ]
-                );
-                $pushedChunks++;
+                    $payload,
+                    'persist_bulk_notif:' . md5(json_encode($payload, JSON_UNESCAPED_UNICODE)),
+                    null,
+                    0,
+                    86400
+                )) {
+                    $pushedChunks++;
+                }
             } catch (\Throwable $e) {
                 $this->logger->error('notif.bulk_db_queue_failed', [
                     'error' => $e->getMessage(),
@@ -423,7 +439,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         }
 
         $parsed = parse_url($normalized);
-        
+
         // 🛡️ NEW-04: فقط آدرس‌های نسبی (relative URLs) مجاز هستند تا از حملات Open Redirect یا XSS جلوگیری شود
         if (isset($parsed['scheme']) || isset($parsed['host'])) {
             $this->logger->warning('notification.invalid_url', ['url' => $normalized]);
@@ -444,10 +460,10 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         if (!$this->checkRateLimit($uid)) {
             return false;
         }
-        
+
         // ۲. ارزیابی و حل زمان ارسال زمان‌بندی شده
         $resTime = $this->resolveScheduledTime($uid, $priority, $scheduledAt);
-        
+
         // ۳. ثبت فیزیکی در دیتابیس
         return (bool)$this->persistInAppNotification(
             $uid, $type, $title, $message, $data,
@@ -705,7 +721,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
         $adminIds = $this->model->getAdminUsersIds();
         $sentCount = 0;
-        
+
         $actionUrl = $data['action_url'] ?? null;
         $actionText = $data['action_text'] ?? null;
 
@@ -759,7 +775,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         try {
             $prefs = $this->preferenceService->getPreferences($userId);
             if (isset($prefs->sms_notifications) && !$prefs->sms_notifications) return;
-            
+
             if ($this->smsService) {
                 $this->smsService->sendSecurityAlertToUser($userId, $message);
             } else {
@@ -775,7 +791,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         try {
             $prefs = $this->preferenceService->getPreferences($userId);
             if (isset($prefs->sms_notifications) && !$prefs->sms_notifications) return;
-            
+
             if ($this->smsService) {
                 $this->smsService->sendWithdrawalAlertToUser($userId, $amount, $currency);
             } else {

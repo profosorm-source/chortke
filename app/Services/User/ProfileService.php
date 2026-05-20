@@ -60,7 +60,7 @@ class ProfileService extends \App\Services\BaseService
     {
         $allowedFields = ['full_name', 'bio', 'avatar', 'website', 'location', 'mobile', 'national_id', 'birth_date', 'gender', 'address'];
         $updateData = array_intersect_key($data, array_flip($allowedFields));
-        
+
         if (empty($updateData)) return false;
 
         $this->model->beginTransaction();
@@ -70,7 +70,7 @@ class ProfileService extends \App\Services\BaseService
                 "SELECT id, mobile, national_id FROM users WHERE id = ? FOR UPDATE",
                 [$userId]
             );
-            
+
             if (!$current) {
                 $this->model->rollback();
                 return false;
@@ -101,7 +101,7 @@ class ProfileService extends \App\Services\BaseService
 
             if ($success) {
                 $this->model->commit();
-                
+
                 $maskedData = [];
                 foreach ($updateData as $k => $v) {
                     $maskedData[$k] = $this->maskPII($k, $v);
@@ -138,7 +138,7 @@ class ProfileService extends \App\Services\BaseService
         }
 
         if ($this->cache) {
-            $this->cache->set($cacheKey, $settings, 3600);
+            $this->cache->setSeconds($cacheKey, $settings, 3600);
         }
 
         return $settings;
@@ -194,7 +194,7 @@ class ProfileService extends \App\Services\BaseService
         // Mobile validation
         if (isset($data['mobile']) && $data['mobile'] !== '') {
             $mobile = trim($data['mobile']);
-            
+
             $validPrefixes = [
                 '0910', '0911', '0912', '0913', '0914', '0915', '0916', '0917', '0918', '0919',  // Hamrah-e-aval
                 '0901', '0902', '0903',  // Irancell
@@ -222,8 +222,8 @@ class ProfileService extends \App\Services\BaseService
         // National ID validation
         if (isset($data['national_id']) && $data['national_id'] !== '') {
             $nationalId = trim($data['national_id']);
-            
-            $blacklist = ['0000000000', '1111111111', '2222222222', '3333333333', 
+
+            $blacklist = ['0000000000', '1111111111', '2222222222', '3333333333',
                           '4444444444', '5555555555', '6666666666', '7777777777',
                           '8888888888', '9999999999'];
 

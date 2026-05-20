@@ -27,7 +27,8 @@ class UserSearchProvider extends BaseSearchProvider
         $this->logSearch('user', $query, $userId);
 
         $cacheKey = "global_search_user:{$userId}:" . md5($query . ':' . $limit);
-        $cached = $this->cache->get($cacheKey);
+        $tags = $this->searchTags('search:user', "search:user:{$userId}");
+        $cached = $this->cacheGet($cacheKey, $tags);
         if ($cached !== null) {
             return $cached;
         }
@@ -47,7 +48,7 @@ class UserSearchProvider extends BaseSearchProvider
         $total = array_sum(array_map('count', $results));
         $results['total'] = $total;
 
-        $this->cache->set($cacheKey, $results, self::CACHE_TTL_SECONDS);
+        $this->cacheSetSeconds($cacheKey, $results, self::CACHE_TTL_SECONDS, $tags);
 
         return $results;
     }

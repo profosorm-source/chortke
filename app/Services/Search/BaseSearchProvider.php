@@ -40,13 +40,35 @@ abstract class BaseSearchProvider extends \App\Services\BaseService
 
     protected function sanitize(string $q): string
     {
-        return trim(preg_replace('/[%_\\\\]/', '\\\\$0', $q));
+        $q = trim(mb_substr($q, 0, 100));
+        return trim(preg_replace('/[%_\\]/', '\\$0', $q));
     }
 
     protected function generateCacheKey(string $module, array $filters, int $limit, int $offset): string
     {
         $filterHash = md5(json_encode($filters));
         return "search:{$module}:{$filterHash}:{$limit}:{$offset}";
+    }
+
+    protected function cacheGet(string $key, array $tags = []): mixed
+    {
+        return empty($tags)
+            ? $this->cache->get($key)
+            : $this->cache->tags($tags)->get($key);
+    }
+
+    protected function cacheSetSeconds(string $key, mixed $value, int $seconds, array $tags = []): bool
+    {
+        if (empty($tags)) {
+            return $this->cache->setSeconds($key, $value, $seconds);
+        }
+
+        return $this->cache->tags($tags)->put($key, $value, max(1, (int) ceil($seconds / 60)));
+    }
+
+    protected function searchTags(string ...$tags): array
+    {
+        return array_values(array_unique(array_filter(array_merge(['search'], $tags))));
     }
 
     protected function logSearch(string $type, string $query, ?int $userId): void

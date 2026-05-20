@@ -6,6 +6,7 @@ namespace App\Services\Shared;
 
 use Core\Database;
 use App\Models\Rating;
+use Core\Validator;
 
 use App\Contracts\LoggerInterface;
 /**
@@ -35,17 +36,9 @@ class RatingService extends \App\Services\BaseService
         ?string $review = null,
         string $ratedType = 'user'
     ): bool {
-        // Guard: Block duplicate multi-rating attempts
-        if ($this->ratingModel->hasRated($raterId, $refType, $refId)) {
-            $this->logWarning('rating.duplicate_attempted', [
-                'rater_id' => $raterId,
-                'ref_type' => $refType,
-                'ref_id' => $refId
-            ]);
-            return false;
-        }
+        $this->validateRatingInput($raterId, $ratedId, $refType, $refId, $rating, $review, $ratedType);
 
-        $ok = $this->ratingModel->create([
+        $ok = $this->ratingModel->createOnce([
             'rater_id' => $raterId,
             'rated_id' => $ratedId,
             'rated_type' => $ratedType, // Support dynamic injection
@@ -61,9 +54,65 @@ class RatingService extends \App\Services\BaseService
                 'ref_id' => $refId,
                 'rating' => $rating
             ]);
+        } else {
+            $this->logWarning('rating.duplicate_or_lock_failed', [
+                'rater_id' => $raterId,
+                'ref_type' => $refType,
+                'ref_id' => $refId,
+            ]);
         }
 
         return (bool)$ok;
+    }
+
+    private function validateRatingInput(
+        int $raterId,
+        int $ratedId,
+        string $refType,
+        int $refId,
+        int $rating,
+        ?string $review,
+        string $ratedType
+    ): void {
+        if ($raterId <= 0 || $ratedId <= 0 || $refId <= 0) {
+            throw new \InvalidArgumentException('Invalid rating identifiers.');
+        }
+        if ($rating < 1 || $rating > 5) {
+            throw new \InvalidArgumentException('Rating must be between 1 and 5.');
+        }
+        if (!$this->isSafeReference($refType) || !$this->isSafeReference($ratedType)) {
+            throw new \InvalidArgumentException('Invalid rating reference type.');
+        }
+        if ($review !== null && mb_strlen($review) > 2000) {
+            throw new \InvalidArgumentException('Review text is too long.');
+        }
+    }
+
+    private function validateReportInput(array $data): void
+    {
+        $validator = new Validator($data, [
+            'reporter_id' => 'required|integer|min:1',
+            'ref_type' => 'required|max:50',
+            'ref_id' => 'required|integer|min:1',
+            'reason' => 'required|max:100',
+        ], $this->db);
+
+        if ($validator->fails()) {
+            throw new \InvalidArgumentException('Invalid report payload: ' . json_encode($validator->errors(), JSON_UNESCAPED_UNICODE));
+        }
+
+        if (!$this->isSafeReference((string)$data['ref_type'])) {
+            throw new \InvalidArgumentException('Invalid report reference type.');
+        }
+
+        if (isset($data['description']) && mb_strlen((string)$data['description']) > 2000) {
+            throw new \InvalidArgumentException('Report description is too long.');
+        }
+    }
+
+    private function isSafeReference(string $value): bool
+    {
+        return (bool)preg_match('/^[a-z][a-z0-9_:-]{1,49}$/i', $value);
     }
 
     /**
@@ -99,13 +148,7 @@ class RatingService extends \App\Services\BaseService
      */
     public function report(array $data): bool
     {
-        // Schema Guard Validation: Protect data structure and domain safety.
-        $this->guardValidation($data, [
-            'reporter_id' => 'required|numeric',
-            'ref_type' => 'required|string',
-            'ref_id' => 'required|numeric',
-            'reason' => 'required|string'
-        ]);
+        $this->validateReportInput($data);
 
         try {
             $stmt = $this->db->prepare("

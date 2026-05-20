@@ -13,9 +13,12 @@ use App\Models\CryptoDepositIntent;
 use App\Models\CryptoDeposit;
 use Core\Database;
 use App\Contracts\LoggerInterface;
+use App\Services\OutboxService;
 
 class CryptoDepositService extends \App\Services\BaseService
 {
+    private const ALLOWED_NETWORKS = ['TRC20', 'BNB20', 'ERC20', 'TON', 'SOL'];
+
     private Database $db;
     private CryptoDepositIntent $intentModel;
     private CryptoDeposit $depositModel;
@@ -25,6 +28,7 @@ class CryptoDepositService extends \App\Services\BaseService
     private SettingService $settingService;
     private ReconciliationService $reconciliationService;
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
+    private ?OutboxService $outbox;
 
     public function __construct(
         Database $db,
@@ -36,7 +40,8 @@ class CryptoDepositService extends \App\Services\BaseService
         CryptoVerificationAdapter $verifier,
         SettingService $settingService,
         ReconciliationService $reconciliationService,
-        \App\Services\AntiFraud\FraudGuardService $fraudGuard
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        ?OutboxService $outbox = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -48,6 +53,7 @@ class CryptoDepositService extends \App\Services\BaseService
         $this->settingService = $settingService;
         $this->reconciliationService = $reconciliationService;
         $this->fraudGuard = $fraudGuard;
+        $this->outbox = $outbox;
     }
 
     /**
@@ -60,6 +66,12 @@ class CryptoDepositService extends \App\Services\BaseService
         ?string $ipAddress = null,
         ?string $userAgent = null
     ): array {
+        $network = strtoupper(trim($network));
+        $intentValidation = $this->validateCryptoIntentInput($userId, $network, $requestedAmount);
+        if ($intentValidation !== null) {
+            return $intentValidation;
+        }
+
         // LOW-09: Defensively sanitize raw user-supplied IP addresses to safeguard system telemetry
         $cleanIp = null;
         if ($ipAddress !== null) {
@@ -213,6 +225,10 @@ class CryptoDepositService extends \App\Services\BaseService
      */
     public function approve(int $adminId, int $depositId): array
     {
+        if ($adminId <= 0 || $depositId <= 0) {
+            return ['success' => false, 'message' => 'شناسه نامعتبر است'];
+        }
+
         try {
             $this->db->beginTransaction();
 
@@ -278,11 +294,24 @@ class CryptoDepositService extends \App\Services\BaseService
                 'triggered_by' => 'admin_approve',
             ]);
 
+            $this->recordNotificationOutbox($depositId, 'notification.crypto_deposit_approved', 'send', [
+                (int)$deposit->user_id,
+                'deposit',
+                'واریز کریپتو تأیید شد',
+                'تراکنش واریز شما در شبکه ' . strtoupper((string)$deposit->network) . ' به مبلغ ' . $deposit->amount . ' USDT تأیید شد.',
+                [
+                    'amount' => $deposit->amount,
+                    'network' => $deposit->network,
+                    'tx_hash' => $deposit->tx_hash,
+                ]
+            ]);
+
             $this->db->commit();
 
             // MED-27: Fix severe application crash (TypeError) by ensuring correct string inputs to notification engines
-            try {
-                $this->notifier->send(
+            if (!$this->outbox) {
+                try {
+                    $this->notifier->send(
                     (int)$deposit->user_id,
                     'deposit', // Valid mapping
                     'واریز کریپتو تأیید شد',
@@ -293,11 +322,12 @@ class CryptoDepositService extends \App\Services\BaseService
                         'tx_hash' => $deposit->tx_hash,
                     ]
                 );
-            } catch (\Throwable $notifErr) {
-                $this->logger->error('crypto.deposit.approve.notification_failed', [
-                    'deposit_id' => $depositId,
-                    'error' => $notifErr->getMessage()
-                ]);
+                } catch (\Throwable $notifErr) {
+                    $this->logger->error('crypto.deposit.approve.notification_failed', [
+                        'deposit_id' => $depositId,
+                        'error' => $notifErr->getMessage()
+                    ]);
+                }
             }
 
             $this->logger->info('crypto.deposit.approved', [
@@ -327,6 +357,11 @@ class CryptoDepositService extends \App\Services\BaseService
      */
     public function reject(int $adminId, int $depositId, string $reason): array
     {
+        $reason = trim(mb_substr($reason, 0, 500));
+        if ($adminId <= 0 || $depositId <= 0 || $reason === '') {
+            return ['success' => false, 'message' => 'شناسه یا دلیل رد نامعتبر است'];
+        }
+
         $this->db->beginTransaction();
         try {
             $deposit = $this->depositModel->find($depositId);
@@ -384,11 +419,25 @@ class CryptoDepositService extends \App\Services\BaseService
                 'reason' => $reason,
             ]);
 
+            $this->recordNotificationOutbox($depositId, 'notification.crypto_deposit_rejected', 'send', [
+                (int)$deposit->user_id,
+                'deposit',
+                'واریز کریپتو رد شد',
+                'درخواست واریز کریپتو شما به مبلغ ' . $deposit->amount . ' USDT رد شد. دلیل: ' . $reason,
+                [
+                    'amount' => $deposit->amount,
+                    'network' => $deposit->network,
+                    'tx_hash' => $deposit->tx_hash,
+                    'reason' => $reason,
+                ]
+            ]);
+
             $this->db->commit();
 
             // Notify user (M-11)
-            try {
-                $this->notifier->send(
+            if (!$this->outbox) {
+                try {
+                    $this->notifier->send(
                     (int)$deposit->user_id,
                     'deposit',
                     'واریز کریپتو رد شد',
@@ -400,11 +449,12 @@ class CryptoDepositService extends \App\Services\BaseService
                         'reason' => $reason,
                     ]
                 );
-            } catch (\Throwable $notifErr) {
-                $this->logger->error('crypto.deposit.reject.notification_failed', [
-                    'deposit_id' => $depositId,
-                    'error' => $notifErr->getMessage()
-                ]);
+                } catch (\Throwable $notifErr) {
+                    $this->logger->error('crypto.deposit.reject.notification_failed', [
+                        'deposit_id' => $depositId,
+                        'error' => $notifErr->getMessage()
+                    ]);
+                }
             }
 
             return ['success' => true, 'message' => 'واریز رد شد'];
@@ -427,12 +477,25 @@ class CryptoDepositService extends \App\Services\BaseService
      */
     public function tryAutoVerify(int $depositId): array
     {
+        if ($depositId <= 0) {
+            return ['auto' => false, 'message' => 'شناسه واریز نامعتبر است'];
+        }
+
         $d = $this->depositModel->find($depositId);
         if (!$d) {
             $this->logger->error('crypto.verify.deposit_not_found', [
                 'deposit_id' => $depositId
             ]);
             return ['auto' => false, 'message' => 'واریز یافت نشد'];
+        }
+
+        if (!$this->isAllowedNetwork((string)$d->network) || !$this->isValidTxHash((string)$d->tx_hash)) {
+            $this->logger->warning('crypto.verify.invalid_payload', [
+                'deposit_id' => $depositId,
+                'network' => $d->network ?? null,
+                'tx_hash' => $d->tx_hash ?? null,
+            ]);
+            return $this->moveToManualReview($depositId, 'داده‌های تراکنش برای بررسی خودکار معتبر نیست');
         }
 
         // Limit the number of auto check attempts to 10 (M-08)
@@ -616,11 +679,24 @@ class CryptoDepositService extends \App\Services\BaseService
                         throw new \RuntimeException('خطا در تطبیق مالی تراکنش: ' . ($reconciliation['message'] ?? 'Unknown error'));
                     }
 
+                    $this->recordNotificationOutbox($depositId, 'notification.crypto_deposit_auto_verified', 'send', [
+                        (int)$d->user_id,
+                        'deposit',
+                        'واریز خودکار کریپتو تأیید شد',
+                        'تراکنش واریز خودکار شما در شبکه ' . strtoupper((string)$d->network) . ' به مبلغ ' . $d->amount . ' USDT با موفقیت تأیید و به کیف پول شما واریز شد.',
+                        [
+                            'amount' => $d->amount,
+                            'network' => $d->network,
+                            'tx_hash' => $d->tx_hash,
+                        ]
+                    ]);
+
                     $this->db->commit();
 
                     // Notify user on auto-verify success (H-03/H-06)
-                    try {
-                        $this->notifier->send(
+                    if (!$this->outbox) {
+                        try {
+                            $this->notifier->send(
                             (int)$d->user_id,
                             'deposit',
                             'واریز خودکار کریپتو تأیید شد',
@@ -631,11 +707,12 @@ class CryptoDepositService extends \App\Services\BaseService
                                 'tx_hash' => $d->tx_hash,
                             ]
                         );
-                    } catch (\Throwable $notifErr) {
-                        $this->logger->error('crypto.verify.auto_success.notification_failed', [
-                            'deposit_id' => $depositId,
-                            'error' => $notifErr->getMessage()
-                        ]);
+                        } catch (\Throwable $notifErr) {
+                            $this->logger->error('crypto.verify.auto_success.notification_failed', [
+                                'deposit_id' => $depositId,
+                                'error' => $notifErr->getMessage()
+                            ]);
+                        }
                     }
 
                     if (!$reconciliation['success']) {
@@ -746,6 +823,48 @@ class CryptoDepositService extends \App\Services\BaseService
         }
 
         return ['auto' => false, 'message' => 'ارسال به بررسی دستی: ' . $reason];
+    }
+
+    private function validateCryptoIntentInput(int $userId, string $network, float $requestedAmount): ?array
+    {
+        if ($userId <= 0) {
+            return ['success' => false, 'message' => 'کاربر نامعتبر است'];
+        }
+        if (!$this->isAllowedNetwork($network)) {
+            return ['success' => false, 'message' => 'شبکه رمزارز پشتیبانی نمی‌شود'];
+        }
+        if (!is_finite($requestedAmount) || $requestedAmount <= 0) {
+            return ['success' => false, 'message' => 'مبلغ درخواست نامعتبر است'];
+        }
+        if ($requestedAmount > 1000000) {
+            return ['success' => false, 'message' => 'مبلغ درخواست بیش از حد مجاز است'];
+        }
+        return null;
+    }
+
+    private function isAllowedNetwork(string $network): bool
+    {
+        return in_array(strtoupper(trim($network)), self::ALLOWED_NETWORKS, true);
+    }
+
+    private function isValidTxHash(string $txHash): bool
+    {
+        $txHash = trim($txHash);
+        return $txHash !== '' && strlen($txHash) <= 128 && (bool)preg_match('/^[A-Za-z0-9_-]+$/', $txHash);
+    }
+
+    private function recordNotificationOutbox(int $depositId, string $eventType, string $method, array $args): void
+    {
+        if (!$this->outbox) {
+            return;
+        }
+
+        $this->outbox->record('crypto_deposit', (string)$depositId, $eventType, [
+            'notification' => [
+                'method' => $method,
+                'args' => $args,
+            ],
+        ]);
     }
 
     /**

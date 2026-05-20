@@ -42,7 +42,8 @@ class ModuleSearchProvider extends BaseSearchProvider
             }
 
             $cacheKey = $this->generateCacheKey($module, $filters, $limit, $offset);
-            $cached = $this->cache->tags([$module])->get($cacheKey);
+            $tags = $this->searchTags('search:module', "search:module:{$module}", $module);
+            $cached = $this->cacheGet($cacheKey, $tags);
 
             if ($cached !== null) {
                 $results[$module] = $cached;
@@ -56,7 +57,7 @@ class ModuleSearchProvider extends BaseSearchProvider
                 default       => []
             };
 
-            $this->cache->tags([$module])->put($cacheKey, $searchResult, self::CACHE_TTL_MINUTES);
+            $this->cacheSetSeconds($cacheKey, $searchResult, self::CACHE_TTL_SECONDS, $tags);
             $results[$module] = $searchResult;
         }
 

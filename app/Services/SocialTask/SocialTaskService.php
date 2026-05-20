@@ -16,6 +16,7 @@ use App\Services\SettingService;
 use App\Services\Shared\ReferralService;
 use App\Services\SocialTask\CameraVerificationService;
 use App\Services\User\UserService;
+use App\Services\OutboxService;
 
 /**
  * SocialTaskService
@@ -55,7 +56,8 @@ class SocialTaskService extends \App\Services\BaseService
         private UserService $userService,
         private SettingService $settingService,
         private ?CameraVerificationService $cameraVerification = null,
-        private ?\App\Services\AntiFraud\FraudGuardService $fraudGuard = null
+        private ?\App\Services\AntiFraud\FraudGuardService $fraudGuard = null,
+        private ?OutboxService $outbox = null
     ) {
         // 🛡️ H11 Fix: Pass logger to parent constructor instead of using uninitialized $this->logger
         parent::__construct($logger);
@@ -377,6 +379,12 @@ class SocialTaskService extends \App\Services\BaseService
 
     public function submitExecution(int $userId, int $executionId, array $payload = []): array
     {
+        $validatedPayload = $this->validateExecutionSubmissionPayload($userId, $executionId, $payload);
+        if (empty($validatedPayload['valid'])) {
+            return ['success' => false, 'message' => $validatedPayload['message'] ?? 'داده‌های ارسال تسک نامعتبر است'];
+        }
+        $payload = $validatedPayload['payload'];
+
         try {
             $this->model->beginTransaction();
             $exec = $this->model->getExecutionWithAd($executionId, $userId, true);
@@ -472,8 +480,8 @@ class SocialTaskService extends \App\Services\BaseService
                 $currency = (string)($exec->currency ?? 'irt');
 
                 if ($rewardAmount > 0) {
-                    $pay = $this->wallet->deposit($userId, $rewardAmount, $currency, [
-                        'source' => 'social_task_reward',
+                    $pay = $this->wallet->deposit($userId, (string)$rewardAmount, $currency, [
+                        'type' => 'social_task_reward',
                         'execution_id' => $executionId,
                         'ad_id' => (int)$exec->ad_id,
                         'task_type' => $exec->task_type ?? null,
@@ -509,6 +517,8 @@ class SocialTaskService extends \App\Services\BaseService
                 'reward_paid' => $rewardPaid,
                 'reward_amount' => $rewardAmount
             ]);
+
+            $this->recordExecutionOutbox($executionId, $userId, $finalStatus, $rewardPaid, $rewardAmount, $currency ?? (string)($exec->currency ?? 'irt'), $score, $decision);
 
             $this->model->commit();
             
@@ -607,6 +617,90 @@ class SocialTaskService extends \App\Services\BaseService
     public function getExecutorHistory(int $userId, int $limit = 20, int $offset = 0): array
     {
         return $this->model->getExecutorHistory($userId, $limit, $offset);
+    }
+
+    private function validateExecutionSubmissionPayload(int $userId, int $executionId, array $payload): array
+    {
+        if ($userId <= 0 || $executionId <= 0) {
+            return ['valid' => false, 'message' => 'شناسه کاربر یا اجرا نامعتبر است'];
+        }
+
+        $proofUrl = trim((string)($payload['proof_url'] ?? ''));
+        $proofText = trim((string)($payload['proof_text'] ?? ''));
+
+        if ($proofUrl !== '' && mb_strlen($proofUrl) > 500) {
+            return ['valid' => false, 'message' => 'آدرس مدرک بیش از حد طولانی است'];
+        }
+        if ($proofUrl !== '' && !filter_var($proofUrl, FILTER_VALIDATE_URL) && !str_starts_with($proofUrl, '/')) {
+            return ['valid' => false, 'message' => 'آدرس مدرک معتبر نیست'];
+        }
+        if ($proofText !== '' && mb_strlen($proofText) > 2000) {
+            return ['valid' => false, 'message' => 'متن مدرک بیش از حد طولانی است'];
+        }
+
+        foreach (['active_time', 'expected_time'] as $numericField) {
+            if (isset($payload[$numericField]) && (!is_numeric($payload[$numericField]) || (int)$payload[$numericField] < 0 || (int)$payload[$numericField] > 86400)) {
+                return ['valid' => false, 'message' => 'زمان‌های ارسالی معتبر نیستند'];
+            }
+        }
+
+        foreach (['interactions', 'behavior_signals'] as $arrayField) {
+            if (isset($payload[$arrayField]) && !is_array($payload[$arrayField])) {
+                return ['valid' => false, 'message' => 'داده‌های رفتاری معتبر نیستند'];
+            }
+        }
+
+        if (isset($payload['video_hash']) && !preg_match('/^[A-Fa-f0-9]{16,128}$/', (string)$payload['video_hash'])) {
+            return ['valid' => false, 'message' => 'اثر انگشت ویدئو معتبر نیست'];
+        }
+
+        $payload['proof_url'] = $proofUrl;
+        $payload['proof_text'] = $proofText;
+        return ['valid' => true, 'payload' => $payload];
+    }
+
+    private function recordExecutionOutbox(
+        int $executionId,
+        int $userId,
+        string $status,
+        int $rewardPaid,
+        float $rewardAmount,
+        string $currency,
+        array $score,
+        array $decision
+    ): void {
+        if (!$this->outbox) {
+            return;
+        }
+
+        $this->outbox->record('social_task_execution', (string)$executionId, 'social_task.execution.completed', [
+            'execution_id' => $executionId,
+            'user_id' => $userId,
+            'status' => $status,
+            'reward_paid' => $rewardPaid,
+            'reward_amount' => $rewardAmount,
+            'currency' => $currency,
+            'score' => $score,
+            'decision' => $decision,
+        ]);
+
+        if ($status === 'approved' && $rewardPaid === 1) {
+            $this->outbox->record('social_task_execution', (string)$executionId, 'score.task_completed', [
+                'job' => \App\Jobs\UpdateFraudScoreJob::class,
+                'data' => [
+                    'user_id' => $userId,
+                    'delta' => 1.0,
+                    'domain' => 'task',
+                    'source' => 'social_task_execution',
+                    'meta' => [
+                        'execution_id' => $executionId,
+                        'task_score' => $score['task_score'] ?? ($score['score'] ?? null),
+                        'reward_amount' => $rewardAmount,
+                        'currency' => $currency,
+                    ],
+                ],
+            ]);
+        }
     }
 
     private function sanitizeSearch(string $str): string

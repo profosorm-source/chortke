@@ -30,7 +30,7 @@ class MetricsCollector implements MetricsCollectorInterface
             try {
                 $key = "metrics:count:{$metric}";
                 $current = (int)$this->cache->get($key);
-                $this->cache->put($key, $current + 1, 86400 * 30);
+                $this->cache->putSeconds($key, $current + 1, 86400 * 30);
             } catch (\Throwable $e) {
             }
         }
@@ -43,7 +43,7 @@ class MetricsCollector implements MetricsCollectorInterface
         if ($this->cache) {
             try {
                 $key = "metrics:gauge:{$metric}";
-                $this->cache->put($key, $value, 86400 * 30);
+                $this->cache->putSeconds($key, $value, 86400 * 30);
             } catch (\Throwable $e) {
             }
         }
@@ -65,7 +65,7 @@ class MetricsCollector implements MetricsCollectorInterface
                 if (count($list) > 100) {
                     array_shift($list);
                 }
-                $this->cache->put($key, json_encode($list), 86400 * 30);
+                $this->cache->putSeconds($key, json_encode($list), 86400 * 30);
             } catch (\Throwable $e) {
             }
         }

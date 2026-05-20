@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Notification;
 
-use App\Adapters\Notification\FcmNotificationAdapter;
+use App\Adapters\FcmNotificationAdapter;
 use App\Contracts\LoggerInterface;
 
 class FcmService extends \App\Services\BaseService

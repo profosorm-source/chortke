@@ -6,6 +6,7 @@ namespace App\Services\Shared;
 
 use App\Models\Score;
 use App\Contracts\LoggerInterface;
+use App\Enums\ScoreDomain;
 
 class ScoreEventService extends \App\Services\BaseService
 {
@@ -18,6 +19,7 @@ class ScoreEventService extends \App\Services\BaseService
 
     public function addEvent(int $entityId, string $entityType, string $domain, float $delta, string $source, array $meta = []): bool
     {
+        $domain = ScoreDomain::normalize($domain);
         $ok = $this->scoreModel->addEvent([
             'entity_id' => $entityId,
             'entity_type' => $entityType,
@@ -45,6 +47,7 @@ class ScoreEventService extends \App\Services\BaseService
      */
     public function recordEvent(int $userId, string $domain, string $source, float $delta, array $meta = []): bool
     {
+        $domain = ScoreDomain::normalize($domain);
         $ok = $this->scoreModel->createEvent($userId, $domain, $source, $delta, $meta);
 
         if ($ok) {

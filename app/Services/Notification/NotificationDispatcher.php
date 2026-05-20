@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Services\Notification;
 
-use App\Adapters\Notification\PushNotificationAdapter;
-use App\Adapters\Notification\SmsNotificationAdapter;
-use App\Adapters\Notification\FcmNotificationAdapter;
-use App\Adapters\Notification\LogNotificationAdapter;
+use App\Adapters\PushNotificationAdapter;
+use App\Adapters\SmsNotificationAdapter;
+use App\Adapters\FcmNotificationAdapter;
+use App\Adapters\LogNotificationAdapter;
 use App\Contracts\LoggerInterface;
 use Core\Queue;
 use App\Jobs\SendBulkNotificationJob;
@@ -25,7 +25,8 @@ class NotificationDispatcher extends \App\Services\BaseService
         private FcmNotificationAdapter $fcmAdapter,
         private LogNotificationAdapter $logAdapter,
         protected LoggerInterface $logger,
-        private Queue $queue
+        private Queue $queue,
+        private NotificationRetryPolicy $retryPolicy
     ) {
         parent::__construct($logger);
         $this->initializeDefaultChannels();
@@ -81,9 +82,19 @@ class NotificationDispatcher extends \App\Services\BaseService
         }
 
         try {
-            // Execute standard strategy routine
+            // Execute standard strategy routine with channel-specific retry/circuit policy
             $handler = $this->channelHandlers[$channelName];
-            return (bool)$handler($userId, $title, $message, $data, $imageUrl, $actionUrl);
+            return $this->retryPolicy->execute($channelName, function () use (
+                $handler,
+                $userId,
+                $title,
+                $message,
+                $data,
+                $imageUrl,
+                $actionUrl
+            ) {
+                return (bool) $handler($userId, $title, $message, $data, $imageUrl, $actionUrl);
+            });
         } catch (\Throwable $e) {
             $this->logger->error('notif.dispatch_failed', [
                 'channel' => $channel,
@@ -112,22 +123,29 @@ class NotificationDispatcher extends \App\Services\BaseService
 
         foreach ($chunks as $chunk) {
             $msgId = $data['notif_id'] ?? uniqid('msg_', true);
-            $this->queue->push(
+            $payload = [
+                'channel' => $channel,
+                'user_ids' => $chunk,
+                'title' => $title,
+                'message' => $message,
+                'data' => array_merge($data ?? [], [
+                    'idempotency_key' => $msgId
+                ]),
+                'image_url' => $imageUrl,
+                'action_url' => $actionUrl,
+                'message_id' => $msgId
+            ];
+
+            if ($this->queue->pushUnique(
                 SendBulkNotificationJob::class,
-                [
-                    'channel' => $channel,
-                    'user_ids' => $chunk,
-                    'title' => $title,
-                    'message' => $message,
-                    'data' => array_merge($data ?? [], [
-                        'idempotency_key' => $msgId
-                    ]),
-                    'image_url' => $imageUrl,
-                    'action_url' => $actionUrl,
-                    'message_id' => $msgId
-                ]
-            );
-            $pushed++;
+                $payload,
+                'bulk_notif:' . $channel . ':' . $msgId . ':' . md5(implode(',', $chunk)),
+                null,
+                0,
+                86400
+            )) {
+                $pushed++;
+            }
         }
 
         $this->logger->info('notif.bulk_queued', [

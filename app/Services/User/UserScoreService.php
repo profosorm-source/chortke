@@ -10,13 +10,14 @@ use App\Contracts\LoggerInterface;
 use Core\Cache;
 use Core\Queue;
 use App\Jobs\UpdateFraudScoreJob;
+use App\Enums\ScoreDomain;
 
 use App\Models\Score as ScoreModel;
 
 class UserScoreService extends \App\Services\BaseService
 {
     // HIGH-05: Strict Scoring Domain Whitelist prevents logic injections into scoring buckets
-    private const ALLOWED_DOMAINS = ['fraud', 'task', 'trust', 'social_trust', 'referral', 'activity', 'loyalty'];
+    private const ALLOWED_DOMAINS = []; // kept for BC; canonical list is ScoreDomain::values()
 
     public function __construct(
         private Database $db,
@@ -31,14 +32,12 @@ class UserScoreService extends \App\Services\BaseService
 
     private function normalizeDomain(string $domain): string
     {
-        // Do not collapse module-specific domains here.
-        // "trust" and "social_trust" may represent different score buckets.
-        return strtolower(trim($domain));
+        return ScoreDomain::normalize($domain);
     }
 
     private function validateDomain(string $domain): void
     {
-        if (!\in_array($this->normalizeDomain($domain), self::ALLOWED_DOMAINS, true)) {
+        if (!ScoreDomain::isValid($domain)) {
             throw new \InvalidArgumentException("Unsupported or unauthorized score domain: {$domain}");
         }
     }
@@ -48,19 +47,9 @@ class UserScoreService extends \App\Services\BaseService
         $this->validateDomain($domain);
         $domain = $this->normalizeDomain($domain);
 
-        // MED-06: Offload physical database persistence for ALL score domains to background workers for high responsiveness
-        // 1. Pre-register in consistent cache block
-        $cacheKey = "temp_{$domain}_score:{$userId}";
-        $this->cache->incrementFloat($cacheKey, $delta);
-
-        // 2. Dispatch physical async execution to safe queue worker
-        return $this->queue->push(UpdateFraudScoreJob::class, [
-            'user_id' => $userId,
-            'delta'   => $delta,
-            'domain'  => $domain,
-            'source'  => $source,
-            'meta'    => $meta
-        ]);
+        // Source of truth must be database-backed: score_events is immutable ledger,
+        // user_scores is the current projection. Cache is invalidated only after commit.
+        return $this->commitDeltaToDatabase($userId, $domain, $delta, $source, $meta);
     }
 
     /**
@@ -68,9 +57,27 @@ class UserScoreService extends \App\Services\BaseService
      */
     public function commitDeltaToDatabase(int $userId, string $domain, float $delta, string $source, array $meta = []): bool
     {
+        $started = false;
         try {
             $this->validateDomain($domain);
             $domain = $this->normalizeDomain($domain);
+
+            $started = !$this->db->inTransaction();
+            if ($started) {
+                $this->db->beginTransaction();
+            }
+
+            $event = $this->db->prepare("
+                INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at)
+                VALUES ('user', ?, ?, ?, ?, ?, NOW())
+            ");
+            $event->execute([
+                $userId,
+                $domain,
+                $delta,
+                $source,
+                !empty($meta) ? json_encode($meta, JSON_UNESCAPED_UNICODE) : null,
+            ]);
 
             $stmt = $this->db->prepare("
                 INSERT INTO user_scores (user_id, domain, score, updated_at)
@@ -78,41 +85,86 @@ class UserScoreService extends \App\Services\BaseService
                 ON DUPLICATE KEY UPDATE score = score + VALUES(score), updated_at = NOW()
             ");
             $ok = $stmt->execute([$userId, $domain, $delta]);
-            
-            // Clean/deduct cache buffer upon backend persistence to prevent double counts during get() execution
-            if ($ok) {
-                $this->cache->incrementFloat("temp_{$domain}_score:{$userId}", -$delta);
+
+            if ($started) {
+                $this->db->commit();
             }
-            
+
+            if ($ok) {
+                // Cache is not source of truth. Cleanup must never make the DB write look failed.
+                try {
+                    // Compatibility cleanup for deltas buffered by the old async implementation.
+                    $tempKey = "temp_{$domain}_score:{$userId}";
+                    $buffer = (float)$this->cache->get($tempKey, 0.0);
+                    if ($buffer !== 0.0 && abs($buffer) >= abs($delta)) {
+                        $this->cache->incrementFloat($tempKey, -$delta);
+                    }
+                    $this->cache->forget("user_score:{$userId}:{$domain}");
+                } catch (\Throwable $cacheError) {
+                    $this->logger->warning('user_score.cache_cleanup_failed', [
+                        'user_id' => $userId,
+                        'domain' => $domain,
+                        'error' => $cacheError->getMessage(),
+                    ]);
+                }
+            }
+
             return $ok;
         } catch (\Throwable $e) {
+            if ($started && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             $this->logger->error('user_score.commit_db.failed', [
                 'user_id' => $userId,
                 'domain' => $domain,
                 'error' => $e->getMessage()
             ]);
-            throw $e; // Propagate up to let Queue handle retries with DLQ safety
+            throw $e;
         }
     }
 
     /**
-     * Unifies database tracking and real-time cache buffers to represent real-time scoring totals
+     * Read the persisted score projection.
+     * Cache is only a projection cache and never a source-of-truth delta buffer.
      */
     public function getScore(int $userId, string $domain): float
     {
         $this->validateDomain($domain);
         $domain = $this->normalizeDomain($domain);
 
+        $cacheKey = "user_score:{$userId}:{$domain}";
+        try {
+            $cached = $this->cache->get($cacheKey, null);
+            if ($cached !== null) {
+                return (float)$cached;
+            }
+        } catch (\Throwable) {
+        }
+
         try {
             $stmt = $this->db->prepare("SELECT score FROM user_scores WHERE user_id = ? AND domain = ? LIMIT 1");
             $stmt->execute([$userId, $domain]);
-            $dbScore = (float)$stmt->fetchColumn();
+            $value = $stmt->fetchColumn();
 
-            $cachedDelta = (float)$this->cache->get("temp_{$domain}_score:{$userId}", 0.0);
+            $score = $value !== false ? (float)$value : $this->scoreModel->getDomainScore($userId, $domain);
 
-            return $dbScore + $cachedDelta;
-        } catch (\Throwable $ignore) {
-            return (float)$this->cache->get("temp_{$domain}_score:{$userId}", 0.0);
+            try {
+                $this->cache->putSeconds($cacheKey, $score, 300);
+            } catch (\Throwable) {
+            }
+
+            return $score;
+        } catch (\Throwable $e) {
+            $this->logger->warning('user_score.read_projection_failed', [
+                'user_id' => $userId,
+                'domain' => $domain,
+                'error' => $e->getMessage(),
+            ]);
+            try {
+                return $this->scoreModel->getDomainScore($userId, $domain);
+            } catch (\Throwable) {
+                return 0.0;
+            }
         }
     }
 
@@ -146,6 +198,8 @@ class UserScoreService extends \App\Services\BaseService
                 return $val; // Absolute priority override
             } elseif ($op === 'add') {
                 $effective += $val;
+            } elseif ($op === 'subtract') {
+                $effective -= $val;
             } elseif ($op === 'multiply') {
                 $effective *= $val;
             }

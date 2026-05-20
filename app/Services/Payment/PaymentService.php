@@ -18,6 +18,8 @@ use App\Contracts\CurrencyServiceInterface;
 use App\Contracts\WalletServiceInterface;
 use App\Contracts\NotificationServiceInterface;
 use Core\EventDispatcher;
+use App\Services\OutboxService;
+use Core\RateLimiter;
 
 class PaymentService extends PaymentBaseService
 {
@@ -32,6 +34,8 @@ class PaymentService extends PaymentBaseService
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
     private EventDispatcher $eventDispatcher;
     private \Core\Database $db;
+    private ?OutboxService $outbox;
+    private ?RateLimiter $rateLimiter;
 
     public function __construct(
         WalletServiceInterface $walletService,
@@ -45,7 +49,9 @@ class PaymentService extends PaymentBaseService
         ReconciliationService $reconciliationService,
         \App\Services\AntiFraud\FraudGuardService $fraudGuard,
         EventDispatcher $eventDispatcher,
-        \Core\Database $db
+        \Core\Database $db,
+        ?OutboxService $outbox = null,
+        ?RateLimiter $rateLimiter = null
     ) {
         parent::__construct($logger);
         $this->log = $log;
@@ -59,6 +65,8 @@ class PaymentService extends PaymentBaseService
         $this->fraudGuard = $fraudGuard;
         $this->eventDispatcher = $eventDispatcher;
         $this->db = $db;
+        $this->outbox = $outbox;
+        $this->rateLimiter = $rateLimiter;
     }
 
     private function gateway(string $name): ?PaymentGatewayInterface
@@ -272,6 +280,24 @@ class PaymentService extends PaymentBaseService
  */
 public function callback(string $gatewayName, array $callbackData, ?int $sessionUserId = null): array
 {
+    $gatewayName = strtolower(trim($gatewayName));
+    if (!preg_match('/^[a-z0-9_-]{2,30}$/', $gatewayName)) {
+        $this->logger->critical('payment.callback.invalid_gateway_name', ['gateway' => $gatewayName]);
+        return ['success' => false, 'message' => 'درگاه پرداخت نامعتبر است'];
+    }
+    $callbackData = $this->sanitizeCallbackPayload($callbackData);
+
+    if ($this->rateLimiter) {
+        $ip = function_exists('get_client_ip') ? get_client_ip() : 'unknown';
+        if (!$this->rateLimiter->attempt('payment_callback:' . $gatewayName . ':' . $ip, 20, 1, true)) {
+            $this->logger->critical('payment.callback.rate_limited', [
+                'gateway' => $gatewayName,
+                'ip' => $ip,
+            ]);
+            return ['success' => false, 'message' => 'تعداد درخواست‌های بازگشت پرداخت بیش از حد مجاز است'];
+        }
+    }
+
     // 1️⃣ IP Whitelist Check (Security Hardening)
     $allowedIPs = [];
     try {
@@ -697,9 +723,24 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
                 throw new \RuntimeException('Internal payment reconciliation failed');
             }
 
-            // 📢 شلیک رویداد تکمیل پرداخت به صورت ناهمگام (Async Event Queue) داخل تراکنش دیتابیس
-            // جهت تضمین عدم از دست رفتن رویداد در صورت بروز کرش سرور (Transactional Outbox Pattern)
-            try {
+            if ($this->outbox) {
+                $paymentPayload = [
+                    'user_id' => (int)$pay->user_id,
+                    'ref_id' => (string)($verify['ref_id'] ?? $authority),
+                    'amount' => (float)$pay->amount,
+                    'currency' => 'IRT',
+                    'gateway' => $gatewayName,
+                    'authority' => $authority,
+                ];
+                $this->outbox->record('payment', (string)$pay->id, 'payment.completed', $paymentPayload);
+                $this->outbox->record('payment', (string)$pay->id, 'notification.deposit_success', [
+                    'notification' => [
+                        'method' => 'depositSuccess',
+                        'args' => [(int)$pay->user_id, (float)$pay->amount, 'IRT'],
+                    ],
+                ]);
+            } else {
+                // Backward-compatible fallback if outbox is not wired in older test containers.
                 $this->eventDispatcher->dispatchAsync('payment.completed', new \App\Events\PaymentCompletedEvent(
                     (int)$pay->user_id,
                     (string)($verify['ref_id'] ?? $authority),
@@ -707,18 +748,17 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
                     'IRT',
                     $gatewayName
                 ));
-            } catch (\Throwable $e) {
-                $this->logger->error('payment.event_dispatch_failed', ['error' => $e->getMessage()]);
             }
 
             // commit تراکنش
             $this->db->commit();
 
-            // نوتیفیکیشن موفقیت پرداخت
-            try {
-                $this->notifier->depositSuccess((int)$pay->user_id, (float)$pay->amount, 'IRT');
-            } catch (\Throwable $e) {
-                $this->logger->error('payment.notification_failed', ['error' => $e->getMessage()]);
+            if (!$this->outbox) {
+                try {
+                    $this->notifier->depositSuccess((int)$pay->user_id, (float)$pay->amount, 'IRT');
+                } catch (\Throwable $e) {
+                    $this->logger->error('payment.notification_failed', ['error' => $e->getMessage()]);
+                }
             }
 
             $this->logger->info('payment.callback.completed', [
@@ -756,6 +796,21 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
         return IdempotencyKey::wrap($idemKey, $userId, 'payment_callback', $callback, $callbackData);
     }
     return $this->idempotencyKey->wrapInstance($idemKey, $userId, 'payment_callback', $callback, $callbackData);
+}
+
+private function sanitizeCallbackPayload(array $payload): array
+{
+    $allowedScalar = [];
+    foreach ($payload as $key => $value) {
+        $key = preg_replace('/[^A-Za-z0-9_:-]/', '', (string)$key);
+        if ($key === '') {
+            continue;
+        }
+        if (is_scalar($value) || $value === null) {
+            $allowedScalar[$key] = is_string($value) ? mb_substr(trim($value), 0, 500) : $value;
+        }
+    }
+    return $allowedScalar;
 }
 
 private function createPendingVerificationReview(object $pay, array $verify): void

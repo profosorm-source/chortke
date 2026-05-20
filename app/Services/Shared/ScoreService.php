@@ -11,10 +11,12 @@ use App\Services\User\UserScoreService;
 use App\Services\InfluencerReputationService;
 use Core\Cache;
 use App\Contracts\LoggerInterface;
+use App\Services\Cache\CacheInvalidationService;
+use App\Enums\ScoreDomain;
 
 /**
  * ScoreService - اورکستریتور اصلی مدیریت امتیازات
- * 
+ *
  * این سرویس ورودی واحد برای تمام سیستم‌های امتیازدهی است و وظایف را به سرویس‌های تخصصی هدایت می‌کند.
  */
 class ScoreService extends \App\Services\BaseService
@@ -23,13 +25,13 @@ class ScoreService extends \App\Services\BaseService
     private const DOMAIN_TASK = 'task';
     private const DOMAIN_SOCIAL_TRUST = 'social_trust';
 
-    private const DOMAIN_TRUST = 'trust';
-
     private const ALLOWED_ADJUSTMENT_DOMAINS = [
         self::DOMAIN_FRAUD,
         self::DOMAIN_TASK,
-        self::DOMAIN_TRUST,
         self::DOMAIN_SOCIAL_TRUST,
+        'referral',
+        'activity',
+        'loyalty',
     ];
 
     public function __construct(
@@ -41,7 +43,8 @@ class ScoreService extends \App\Services\BaseService
         private InfluencerReputationService $influencerReputationService,
         private TrustScoreService $trustScoreService,
         private ScoreEventService $scoreEventService,
-        private Cache $cache
+        private Cache $cache,
+        private ?CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
     }
@@ -275,7 +278,7 @@ class ScoreService extends \App\Services\BaseService
         }
 
         $ok = $this->scoreModel->revokeAdjustment($adjustmentId, $adminId, $reason);
-        
+
         if ($ok) {
             $userId = (int)$adjustment->user_id;
             $domain = (string)$adjustment->domain;
@@ -325,9 +328,7 @@ class ScoreService extends \App\Services\BaseService
 
     private function normalizeDomain(string $domain): string
     {
-        // Keep module score domains isolated. Do not globally map "trust" to
-        // "social_trust" because other modules may define their own trust semantics.
-        return strtolower(trim($domain));
+        return ScoreDomain::normalize($domain);
     }
 
     private function assertAdminCanAdjust(int $adminId, string $action): void
@@ -342,6 +343,12 @@ class ScoreService extends \App\Services\BaseService
     private function invalidateUserScoreCaches(int $userId, string $domain): void
     {
         $domain = $this->normalizeDomain($domain);
+        if ($this->cacheInvalidation) {
+            $this->cacheInvalidation->invalidateUser($userId);
+            $this->cacheInvalidation->invalidateScore($userId, $domain);
+            return;
+        }
+
         $this->cache->forget("user_dashboard_stats:{$userId}");
         $this->cache->forget("user_score:{$userId}:{$domain}");
         $this->cache->forget("temp_{$domain}_score:{$userId}");
