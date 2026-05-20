@@ -869,6 +869,9 @@ $container->singleton(\Core\Console\CliDispatcher::class, function($c) {
     // Register scheduled tasks processing command
     $dispatcher->register('process:scheduled-tasks', \App\Commands\ProcessScheduledTasksCommand::class, 'Run all system scheduled tasks including expired escrow cleanups');
 
+    // Automatically cleanup and refund expired escrows
+    $dispatcher->register('escrow:cleanup-expired', \App\Commands\EscrowCleanupCommand::class, 'Automatically cleanup and refund expired escrows');
+
     return $dispatcher;
 });
 
