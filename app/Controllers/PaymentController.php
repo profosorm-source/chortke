@@ -173,25 +173,25 @@ class PaymentController extends BaseController
             'user_agent' => get_user_agent(),
             'referer' => $_SERVER['HTTP_REFERER'] ?? 'none',
         ]);
-        
+
         // Block IP after 3 attempts in 1 hour (3600 seconds)
         $ipKey = "callback_get_abuse:" . get_client_ip();
         $attempts = (int)$this->cache->get($ipKey, 0);
-        $this->cache->set($ipKey, $attempts + 1, 3600);
-        
+        $this->cache->setSeconds($ipKey, $attempts + 1, 3600);
+
         if ($attempts >= 3) {
             $this->logger->critical('payment.callback.get_abuse_detected', [
                 'ip' => get_client_ip(),
                 'attempts' => $attempts + 1
             ]);
-            
+
             $this->response->status(403)->json([
                 'success' => false,
                 'message' => 'Access forbidden due to suspicious activity'
             ]);
             return;
         }
-        
+
         $this->response->status(405)->json([
             'success' => false,
             'message' => 'Method not allowed. Callbacks must use POST.'
