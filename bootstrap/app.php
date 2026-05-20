@@ -373,7 +373,8 @@ $container->singleton(\App\Adapters\Notification\FcmNotificationAdapter::class, 
     return new \App\Adapters\Notification\FcmNotificationAdapter(
         $c->make(\Core\Logger::class),
         $c->make(\Core\Cache::class),
-        $c->make(\Core\Database::class)
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\MetricsCollectorInterface::class)
     );
 });
 
@@ -1000,7 +1001,8 @@ $container->singleton(\App\Services\AntiFraud\SessionAnomalyService::class, func
 $container->singleton(\App\Services\AntiFraud\VideoFingerprintService::class, function($c) {
     return new \App\Services\AntiFraud\VideoFingerprintService(
         $c->make(\Core\Database::class),
-        $c->make(\Core\Cache::class)
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -1012,7 +1014,10 @@ $container->singleton(\App\Services\ApiRateLimiter::class, function($c) {
 });
 
 $container->singleton(\App\Services\SocialTask\TrustScoreService::class, function($c) {
-    return new \App\Services\SocialTask\TrustScoreService($c->make(\App\Services\Shared\ScoreService::class));
+    return new \App\Services\SocialTask\TrustScoreService(
+        $c->make(\App\Services\Shared\ScoreService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
 });
 
 $container->singleton(\App\Services\SocialTask\SilentAntiFraudService::class, function($c) {
