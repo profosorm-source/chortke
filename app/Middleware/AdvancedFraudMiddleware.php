@@ -10,7 +10,7 @@ use App\Services\AntiFraud\BrowserFingerprintService;
 use App\Services\AntiFraud\GeoIPService;
 use App\Services\Auth\SessionService;
 use App\Services\AntiFraud\RiskDecisionService;
-use App\Services\Shared\ScoreService;
+use App\Services\User\UserScoreService;
 use Core\Request;
 use Core\Response;
 use Core\Session;
@@ -25,7 +25,7 @@ class AdvancedFraudMiddleware extends BaseMiddleware
     private GeoIPService $ipQualityService;
     private SessionService $sessionService;
     private AccountTakeoverService $accountTakeoverService;
-    private ScoreService $scoreService;
+    private UserScoreService $scoreService;
     private RiskDecisionService $decisionService;
     private LoggerInterface $logger;
     private Session $session;
@@ -35,7 +35,7 @@ class AdvancedFraudMiddleware extends BaseMiddleware
         GeoIPService $ipQualityService,
         SessionService $sessionService,
         AccountTakeoverService $accountTakeoverService,
-        ScoreService $scoreService,
+        UserScoreService $scoreService,
         RiskDecisionService $decisionService,
         LoggerInterface $logger,
         Session $session
