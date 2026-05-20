@@ -75,8 +75,20 @@ class UserController extends BaseAdminController
 
     public function store(): void
     {
-        // ✅ استفاده از validateRequest برای اعتبارسنجی یکپارچه
-        $validated = $this->validateRequest(\App\Validators\Requests\UserCreateRequest::class);
+        // Create validation is kept local to avoid depending on removed/legacy FormRequest classes.
+        $data = $this->request->body() ?? [];
+        $validator = new \Core\Validator($data, [
+            'full_name' => 'required|min:3|max:100',
+            'email'     => 'required|email',
+            'password'  => 'required|min:8',
+            'role'      => 'required|in:user,admin,support,super_admin',
+            'status'    => 'required|in:active,inactive,suspended,banned',
+        ]);
+        if ($validator->fails()) {
+            $this->response->json(['success' => false, 'errors' => $validator->errors()], 422);
+            return;
+        }
+        $validated = (object)$validator->data();
 
         $currentAdmin = $this->userService->find($this->userId());
         if (!$currentAdmin) {

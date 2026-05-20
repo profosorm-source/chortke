@@ -6,7 +6,7 @@ namespace App\Controllers\Admin;
 
 use Core\Request;
 use Core\Response;
-use App\Services\FraudDetectionService;
+use App\Services\AntiFraud\FraudDetectionService;
 
 /**
  * FraudController - مدیریت سیستم تشخیص تقلب
