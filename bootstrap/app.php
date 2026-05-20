@@ -724,7 +724,8 @@ $container->singleton(\App\Services\AntiFraud\MLFraudDetectionService::class, fu
 $container->singleton(\App\Services\AntiFraud\BrowserFingerprintService::class, function($c) {
     return new \App\Services\AntiFraud\BrowserFingerprintService(
         $c->make(\App\Models\IpAndDeviceModel::class),
-        $c->make(\Core\Logger::class)
+        $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -732,7 +733,8 @@ $container->singleton(\App\Services\AntiFraud\BrowserFingerprintService::class, 
 $container->singleton(\App\Services\AntiFraud\BehavioralBiometricsService::class, function($c) {
     return new \App\Services\AntiFraud\BehavioralBiometricsService(
         $c->make(\App\Models\VelocityAndScoreModel::class),
-        $c->make(\Core\Logger::class)
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -864,6 +866,9 @@ $container->singleton(\Core\Console\CliDispatcher::class, function($c) {
     // Tor update exit nodes list command registration
     $dispatcher->register('tor:update-exit-nodes', \App\Commands\UpdateTorExitNodesCommand::class, 'Update the Tor Exit Nodes database list');
 
+    // Register scheduled tasks processing command
+    $dispatcher->register('process:scheduled-tasks', \App\Commands\ProcessScheduledTasksCommand::class, 'Run all system scheduled tasks including expired escrow cleanups');
+
     return $dispatcher;
 });
 
@@ -982,7 +987,8 @@ $container->singleton(\App\Services\AntiFraud\TorListUpdater::class, function($c
 $container->singleton(\App\Services\AntiFraud\SessionAnomalyService::class, function($c) {
     return new \App\Services\AntiFraud\SessionAnomalyService(
         $c->make(\App\Models\SecurityModel::class),
-        $c->make(\App\Services\AntiFraud\RiskPolicyService::class)
+        $c->make(\App\Services\AntiFraud\RiskPolicyService::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -1831,6 +1837,9 @@ $container->singleton(\App\Services\Shared\TrustScoreService::class, function($c
         $c->make(\App\Models\Score::class),
         $c->make(\App\Models\SocialTaskAnalyticsModel::class),
         $c->make(\App\Services\Shared\ScoreEventService::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Models\User::class),
+        $c->make(\App\Services\SettingService::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });

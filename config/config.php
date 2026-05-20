@@ -17,6 +17,7 @@ return [
         'safe_mode' => env('APP_SAFE_MODE', false),
         'version' => env('APP_VERSION', '2.4.0-hardened'),
         'release' => env('APP_RELEASE', '1.0.0'),
+        'encryption_key_version' => env('APP_ENCRYPTION_KEY_VERSION', 1),
         // Fix L4: لیست سفید مسیرهایی که در Safe Mode مجاز برای تغییر هستند
         'safe_mode_whitelist' => env('SAFE_MODE_WHITELIST', '/login,/logout,/verify-2fa')
             ? array_filter(array_map('trim', explode(',', (string)env('SAFE_MODE_WHITELIST', '/login,/logout,/verify-2fa'))))
@@ -117,6 +118,12 @@ return [
                 'v2' => env('SECURITY_API_TOKEN_SECRET_V2', env('SECURITY_API_TOKEN_SECRET', 'default_api_secret_v2_must_be_strong_32_chars')),
             ],
             'current_secret_version' => env('SECURITY_API_TOKEN_CURRENT_VERSION', 'v2'),
+        ]
+    ],
+    
+    'encryption' => [
+        'message_keys' => [
+            1 => env('MESSAGE_ENCRYPTION_KEY_V1', base64_encode('strong_message_enc_key_v1_32bytes_long')),
         ]
     ],
 ];

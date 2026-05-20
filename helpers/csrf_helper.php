@@ -38,10 +38,3 @@ if (!function_exists('csrf_field_for')) {
         return '<input type="hidden" name="_csrf_token_action" value="' . e(csrf_token_for($action)) . '">';
     }
 }
-
-if (!function_exists('verify_csrf_token')) {
-    function verify_csrf_token(?string $token): bool
-    {
-        return app(\Core\CSRF::class)->verify($token);
-    }
-}
