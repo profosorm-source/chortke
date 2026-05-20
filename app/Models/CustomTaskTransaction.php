@@ -18,6 +18,26 @@ class CustomTaskTransaction extends Model
 
     public function create(array $data): object
     {
+        // Validation
+        $allowedTypes = ['budget_allocation', 'reward_payout', 'refund', 'penalty'];
+        if (!isset($data['type']) || !in_array($data['type'], $allowedTypes, true)) {
+            throw new \InvalidArgumentException('Invalid transaction type');
+        }
+        
+        if (!isset($data['amount']) || !is_numeric($data['amount']) || (float)$data['amount'] < 0) {
+            throw new \InvalidArgumentException('Invalid amount');
+        }
+        
+        if (empty($data['idempotency_key'])) {
+            throw new \InvalidArgumentException('Idempotency key is required');
+        }
+        
+        // Check duplicate
+        $existing = $this->findByIdempotencyKey($data['idempotency_key']);
+        if ($existing) {
+            return $existing;
+        }
+
         $stmt = $this->db->prepare("
             INSERT INTO " . static::$table . "
             (task_id, submission_id, actor_id, type, amount, currency, idempotency_key, meta_json, created_at)

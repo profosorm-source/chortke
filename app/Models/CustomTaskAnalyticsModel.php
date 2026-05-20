@@ -41,6 +41,11 @@ class CustomTaskAnalyticsModel extends Model
 
     private function analytics_incrementDailyMetric(int $taskId, string $metric): void
     {
+        $allowedMetrics = ['views', 'starts', 'submissions', 'approvals', 'rejections'];
+        if (!in_array($metric, $allowedMetrics, true)) {
+            throw new \InvalidArgumentException("Invalid metric: {$metric}");
+        }
+
         $stmt = $this->db->prepare("
             INSERT INTO task_analytics (task_id, date, {$metric})
             VALUES (?, CURDATE(), 1)
