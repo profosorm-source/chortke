@@ -20,7 +20,7 @@ class UserSearchProvider extends BaseSearchProvider
     {
         $this->logSearch('user', $query, $userId);
 
-        $cacheKey = "global_search_user:{$userId}:" . md5($query . $limit);
+        $cacheKey = "global_search_user:{$userId}:" . md5($query . ':' . $limit);
         $cached = $this->cache->get($cacheKey);
         if ($cached !== null) {
             return $cached;

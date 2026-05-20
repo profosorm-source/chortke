@@ -62,8 +62,12 @@ class BannerService extends \App\Services\BaseService
                 $redis->hIncrBy($this->cache->redisKey('banner_impressions_buffer'), (string)$id, 1);
             }
         } elseif (!empty($bannerIds)) {
-            // Fallback به آپدیت مستقیم اگر Redis در دسترس نباشد
-            $this->bannerModel->bulkIncrementImpressions($bannerIds);
+            // Probabilistic fallback: update DB once out of 25 views (sample rate) but increment by 25.
+            // This reduces DB lock contention by 96% and resolves deadlocks/contention.
+            $sampleRate = 25;
+            if (\mt_rand(1, $sampleRate) === 1) {
+                $this->bannerModel->bulkIncrementImpressions($bannerIds, $sampleRate);
+            }
         }
 
         return [
@@ -397,8 +401,30 @@ class BannerService extends \App\Services\BaseService
         }
 
         $parsed = parse_url($url);
-        // فقط اجازه استفاده از پروتکل‌های وب استاندارد
-        return in_array(strtolower($parsed['scheme'] ?? ''), ['http', 'https'], true);
+        if (!isset($parsed['scheme']) || !in_array(strtolower($parsed['scheme']), ['http', 'https'], true)) {
+            return false;
+        }
+
+        $host = strtolower($parsed['host'] ?? '');
+        if (empty($host)) {
+            return false;
+        }
+
+        // Whitelist domains
+        $allowedDomains = ['chortke.com', 'trusted-partner.com', 'example.com'];
+        $currentHost = strtolower($_SERVER['HTTP_HOST'] ?? '');
+        if ($currentHost !== '') {
+            $allowedDomains[] = $currentHost;
+        }
+
+        // To prevent sub-domain spoofing or @ bypass, check that the host matches or ends with one of the allowed domains
+        foreach ($allowedDomains as $allowed) {
+            if ($host === $allowed || str_ends_with($host, '.' . $allowed)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function deactivateExpired(): int

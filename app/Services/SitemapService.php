@@ -83,17 +83,15 @@ class SitemapService extends \App\Services\BaseService
 
     public function getXml(): string
     {
-        // H-05 Fix: پیاده‌سازی Mutex Lock اختصاصی برای جلوگیری از Cache Stampede
-        // برخلاف remember پیش‌فرض، اینجا در صورت قفل بودن منتظر می‌مانیم یا کش قدیمی را برمی‌گردانیم
-        
+        // H-05 Fix: Stale-While-Revalidate cache stampede mitigation
         $xml = $this->cache->get(self::CACHE_KEY);
         if ($xml !== null) {
             return $xml;
         }
 
-        // تلاش برای گرفتن قفل به مدت ۱۰ ثانیه
+        // Attempt to lock with 180s TTL, waiting up to 5s
         $lockKey = 'sitemap_gen_mutex';
-        if ($this->cache->lock($lockKey, 60, 10)) {
+        if ($this->cache->lock($lockKey, 180, 5)) {
             try {
                 // Double check
                 $xml = $this->cache->get(self::CACHE_KEY);
@@ -102,15 +100,16 @@ class SitemapService extends \App\Services\BaseService
                 }
 
                 $xml = $this->generate();
-                $this->cache->put(self::CACHE_KEY, $xml, 30); // ۳۰ دقیقه کش
+                $this->cache->put(self::CACHE_KEY, $xml, 30); // 30 minutes cache
+                $this->cache->forever(self::CACHE_KEY . '_stale', $xml); // Stale version
                 return $xml;
             } finally {
                 $this->cache->unlock($lockKey);
             }
         }
 
-        // اگر بعد از ۱۰ ثانیه قفل آزاد نشد، آخرین مقدار موجود را برگردان (حتی اگر خالی باشد)
-        return (string)($this->cache->get(self::CACHE_KEY) ?? '');
+        // Return stale version to avoid waiting/DB overload if lock cannot be acquired
+        return (string)($this->cache->get(self::CACHE_KEY . '_stale') ?? '');
     }
     
     /**

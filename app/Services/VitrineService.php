@@ -102,6 +102,13 @@ class VitrineService extends \App\Services\BaseService
         $listing = $this->listing->find($id);
         if (!$listing) return null;
 
+        // Check ownership and admin privileges for non-active listings to prevent IDOR
+        if ($listing->status !== 'active' && 
+            (int)$listing->seller_id !== $userId && 
+            !is_admin()) {
+            return null;
+        }
+
         $isSeller = (int) $listing->seller_id === $userId;
         
         return [
@@ -178,7 +185,8 @@ public function adminApproveListing(int $listingId, int $adminId): array
         return ['success' => true, 'message' => 'آگهی تایید شد'];
     } catch (\Throwable $e) {
         $this->db->rollBack();
-        return ['success' => false, 'message' => 'خطا در تایید: ' . $e->getMessage()];
+        $this->logger->error('vitrine.approve.failed', ['error' => $e->getMessage()]);
+        return ['success' => false, 'message' => config('app.debug') ? 'خطا در تایید: ' . $e->getMessage() : 'خطای سیستمی در تایید رخ داده است.'];
     }
 }
 
@@ -215,7 +223,8 @@ public function adminRejectListing(int $listingId, string $reason, int $adminId)
         return ['success' => true, 'message' => 'آگهی رد شد'];
     } catch (\Throwable $e) {
         $this->db->rollBack();
-        return ['success' => false, 'message' => 'خطا در رد: ' . $e->getMessage()];
+        $this->logger->error('vitrine.reject.failed', ['error' => $e->getMessage()]);
+        return ['success' => false, 'message' => config('app.debug') ? 'خطا در رد: ' . $e->getMessage() : 'خطای سیستمی در رد رخ داده است.'];
     }
 }
 
@@ -251,7 +260,8 @@ public function adminRefundListing(int $listingId, int $adminId): array
         return ['success' => true, 'message' => 'ریفاند با موفقیت انجام شد'];
     } catch (\Throwable $e) {
         $this->db->rollBack();
-        return ['success' => false, 'message' => 'خطا در ریفاند: ' . $e->getMessage()];
+        $this->logger->error('vitrine.refund.failed', ['error' => $e->getMessage()]);
+        return ['success' => false, 'message' => config('app.debug') ? 'خطا در ریفاند: ' . $e->getMessage() : 'خطای سیستمی در ریفاند رخ داده است.'];
     }
 }
 
@@ -764,7 +774,8 @@ public function adminRefundListing(int $listingId, int $adminId): array
 
             return ['success' => true, 'message' => 'امتیاز با موفقیت ثبت شد'];
         } catch (\Throwable $e) {
-            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+            $this->logger->error('vitrine.rate.failed', ['error' => $e->getMessage()]);
+            return ['success' => false, 'message' => config('app.debug') ? 'خطای سیستمی: ' . $e->getMessage() : 'خطای سیستمی رخ داده است.'];
         }
     }
 
@@ -793,7 +804,8 @@ public function adminRefundListing(int $listingId, int $adminId): array
 
             return ['success' => true, 'message' => 'گزارش تخلف با موفقیت ثبت شد'];
         } catch (\Throwable $e) {
-            return ['success' => false, 'message' => 'خطای سیستمی: ' . $e->getMessage()];
+            $this->logger->error('vitrine.report.failed', ['error' => $e->getMessage()]);
+            return ['success' => false, 'message' => config('app.debug') ? 'خطای سیستمی: ' . $e->getMessage() : 'خطای سیستمی رخ داده است.'];
         }
     }
 

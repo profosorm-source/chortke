@@ -430,10 +430,9 @@ class UploadService extends \App\Services\BaseService
     private function isSafeFilename(string $name): bool
     {
         $parts = explode('.', strtolower(basename($name)));
-        array_shift($parts); // بخش اول (نام بدون پسوند)
 
         foreach ($parts as $part) {
-            if (in_array($part, self::DANGEROUS_EXT, true)) {
+            if (in_array(trim($part), self::DANGEROUS_EXT, true)) {
                 return false;
             }
         }

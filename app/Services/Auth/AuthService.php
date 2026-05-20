@@ -217,9 +217,9 @@ class AuthService extends \App\Services\BaseService
             if ($user) {
                 // HIGH-H-21 Fix: Use atomic lockout to prevent race conditions
                 $attemptsKey = 'login_attempts:' . hash('sha256', $identifier);
-                $attempts = $this->rateLimiter->attempts($attemptsKey);
+                $attempts = \Core\Cache::getInstance()->increment($attemptsKey, 1, 900); // 15-minute window
                 
-                if ($attempts >= 10) {
+                if ($attempts !== false && $attempts >= 10) {
                     if ($this->userModel->lockIfExceededAttempts((int)$user->id)) {
                         $this->logger->critical('auth.account_locked', ['user_id' => $user->id, 'identifier' => $identifier]);
                         if ($this->emailService) {
@@ -242,9 +242,10 @@ class AuthService extends \App\Services\BaseService
 
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
         if (!$requires2FA) {
-            // Clear rate limit counters on successful login (only after full auth)
+            // Clear rate limit and lockout counters on successful login (only after full auth)
             $this->rateLimiter->clearLoginAttempts($idKey);
             $this->rateLimiter->clearLoginAttempts($ipKey);
+            \Core\Cache::getInstance()->forget('login_attempts:' . hash('sha256', $identifier));
             $this->createSession($user, $remember);
         } else {
             $this->createPending2FASession($user);
@@ -409,6 +410,7 @@ class AuthService extends \App\Services\BaseService
         
         $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $identifier));
         $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $this->clientIp()));
+        \Core\Cache::getInstance()->forget('login_attempts:' . hash('sha256', $identifier));
         
         // Record final login event after 2FA
         $this->auditTrail->record('auth.login.2fa_completed', (int)$user->id, [

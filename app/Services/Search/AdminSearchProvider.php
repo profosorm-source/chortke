@@ -30,7 +30,7 @@ class AdminSearchProvider extends BaseSearchProvider
     {
         $this->logSearch('admin', $query, null);
 
-        $cacheKey = "global_search_admin:" . md5($query . $limit);
+        $cacheKey = "global_search_admin:" . md5($query . ':' . $limit);
         $cached = $this->cache->get($cacheKey);
         if ($cached !== null) {
             return $cached;

@@ -72,12 +72,18 @@ class FileAccessService extends \App\Services\BaseService
 
     public function logDeniedAccess(string $folder, string $filename, ?int $userId, string $ip): void
     {
-        if ($userId === null) {
-            return;
-        }
+        $logUserId = $userId ?? 0;
+
+        // H-09 Fix: Log security warnings to system logs for brute force detection
+        $this->logger->warning('file.access.denied', [
+            'folder' => $folder,
+            'filename' => $filename,
+            'user_id' => $logUserId,
+            'ip' => $ip
+        ]);
 
         try {
-            $this->fileModel->logDeniedFileAccess($folder, $filename, $userId, $ip);
+            $this->fileModel->logDeniedFileAccess($folder, $filename, $logUserId, $ip);
         } catch (\Throwable) {
             // silent
         }
@@ -186,4 +192,3 @@ class FileAccessService extends \App\Services\BaseService
         return $this->allow();
     }
 }
-

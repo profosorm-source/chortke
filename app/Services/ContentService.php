@@ -674,13 +674,20 @@ EOT;
     private function sanitizeUrl(string $url): string
     {
         $url = trim($url);
-        // H-04 Fix: FILTER_SANITIZE_URL is not enough. We must ensure protocol safety.
         $url = filter_var($url, FILTER_SANITIZE_URL) ?: '';
-        if (empty($url)) return '';
+        if (empty($url)) {
+            throw new \InvalidArgumentException('Empty URL');
+        }
 
         $parsed = parse_url($url);
-        if (!in_array(strtolower($parsed['scheme'] ?? ''), ['http', 'https'], true)) {
-            return ''; // Reject javascript:, data: and other unsafe schemes
+        if (!$parsed || !in_array(strtolower($parsed['scheme'] ?? ''), ['http', 'https'], true)) {
+            throw new \InvalidArgumentException('Invalid URL scheme');
+        }
+        
+        $host = strtolower($parsed['host'] ?? '');
+        $blockedHosts = ['localhost', '127.0.0.1', '0.0.0.0', '::1'];
+        if (in_array($host, $blockedHosts, true) || empty($host)) {
+            throw new \InvalidArgumentException('Blocked host');
         }
         
         return $url;
