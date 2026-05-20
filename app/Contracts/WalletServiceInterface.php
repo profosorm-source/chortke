@@ -13,7 +13,11 @@ interface WalletServiceInterface
     public function depositInTransaction(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array;
     
     public function withdraw(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array;
+
+    public function withdrawInTransaction(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array;
     
+    public function pay(int $userId, string $amount, string $currency = 'irt', array $metadata = []): array;
+
     public function hasBalance(int $userId, string $amount, string $currency = 'irt'): bool;
     
     public function completeWithdrawal(int $userId, string $amount, string $currency, ?string $transactionId): bool;
@@ -29,4 +33,6 @@ interface WalletServiceInterface
     public function getBalance(int $userId, string $currency = 'irt'): string;
 
     public function getBalanceForUpdate(int $userId, string $currency = 'irt'): string;
+
+    public function isWalletFrozen(int $userId): bool;
 }

@@ -36,7 +36,7 @@ abstract class BaseFormRequest
             return false;
         }
 
-        $validator = new Validator($this->data, $this->rules(), $this->messages());
+        $validator = new Validator($this->data, $this->rules());
         if ($validator->fails()) {
             $this->errors = $validator->errors();
             return false;
