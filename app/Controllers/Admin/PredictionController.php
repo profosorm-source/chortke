@@ -185,6 +185,48 @@ class PredictionController extends BaseAdminController
         ]);
     }
 
+    // ─── ویرایش بازی ──────────────────────────────────────────────────
+    public function update(): void
+    {
+        $id = (int)$this->request->param('id');
+        $game = $this->gameModel->find($id);
+
+        if (!$game) {
+            $this->response->json(['success' => false, 'message' => 'بازی یافت نشد.']);
+            return;
+        }
+
+        $data = $this->request->body() ?? [];
+
+        $betCount = $this->betModel->countByGame($id);
+        if ($betCount > 0) {
+            // P-1: Only allow updating specific fields if bets exist to prevent changing names/bet limits mid-game
+            $allowedFields = ['description', 'status'];
+            $data = array_intersect_key($data, array_flip($allowedFields));
+        }
+
+        if (empty($data)) {
+            $this->response->json(['success' => false, 'message' => 'هیچ فیلد معتبری برای بروزرسانی ارسال نشده است یا بازی دارای شرط فعال است.']);
+            return;
+        }
+
+        // Validate only if there are fields requiring validation
+        if (isset($data['title']) || isset($data['team_home']) || isset($data['team_away']) || isset($data['match_date']) || isset($data['bet_deadline'])) {
+            $errors = $this->validateGameData(array_merge((array)$game, $data));
+            if (!empty($errors)) {
+                $this->response->json(['success' => false, 'errors' => $errors]);
+                return;
+            }
+        }
+
+        $ok = $this->gameModel->update($id, $data);
+
+        $this->response->json([
+            'success' => $ok,
+            'message' => $ok ? 'بازی با موفقیت بروزرسانی شد.' : 'تغییری اعمال نشد یا خطایی رخ داد.',
+        ]);
+    }
+
     // ─── validation ───────────────────────────────────────────────────
     private function validateGameData(array $d): array
     {
