@@ -162,4 +162,59 @@ abstract class BaseService
         }
         return null;
     }
+
+    // =========================================================================
+    // Section 8.2 — Unified idempotency wrapper
+    // =========================================================================
+    //
+    // یک thin wrapper روی Core\IdempotencyKey::run() که در همه‌ی سرویس‌های
+    // فرزند BaseService در دسترس است. هدف: استفاده‌ی یکپارچه و خوانا، بدون
+    // ساخت سرویس جدید.
+    //
+    // اگر $key داده نشود، به‌صورت deterministic از scope + actorId + payload
+    // ساخته می‌شود.
+    //
+    // نمونه:
+    //   return $this->idempotent('rating.submit', $raterId, [
+    //       'ref' => $refType . ':' . $refId,
+    //   ], function () use (...) {
+    //       // business logic
+    //       return $this->ok(['rating_id' => $id]);
+    //   });
+
+    /**
+     * @template T
+     * @param string         $scope
+     * @param int            $actorId
+     * @param array          $payload    داده‌هایی که عمل را منحصربه‌فرد می‌کنند
+     * @param callable():T   $callback
+     * @param string|null    $explicitKey  در صورت ارسال، جایگزین payload-based key می‌شود
+     * @return T
+     */
+    protected function idempotent(
+        string $scope,
+        int $actorId,
+        array $payload,
+        callable $callback,
+        ?string $explicitKey = null
+    ): mixed {
+        try {
+            $service = \Core\Container::getInstance()->make(\Core\IdempotencyKey::class);
+        } catch (\Throwable $e) {
+            $this->logger->warning('idempotency.unavailable_fallback', [
+                'scope' => $scope,
+                'actor_id' => $actorId,
+                'error' => $e->getMessage(),
+            ]);
+            return $callback();
+        }
+
+        if ($explicitKey !== null && $explicitKey !== '') {
+            $key = $explicitKey;
+        } else {
+            $key = $service->keyFromPayload($scope, $payload);
+        }
+
+        return $service->run($scope, $actorId, $key, $callback, $payload);
+    }
 }

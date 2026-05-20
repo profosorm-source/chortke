@@ -18,6 +18,10 @@ class ReconciliationService extends \App\Services\BaseService
 {
     private const RECONCILIATION_TIMEOUT = 3600; // 1 Hour
 
+    /** Section 8.5 / 8.7 — Stuck Withdrawal Review thresholds. */
+    public const DEFAULT_STUCK_MINUTES = 120;
+    public const STUCK_SCAN_BATCH      = 200;
+
     public function __construct(
         private Transaction $transactionModel,
         private LedgerEntry $ledgerModel,
@@ -26,7 +30,8 @@ class ReconciliationService extends \App\Services\BaseService
         protected LoggerInterface $logger,
         private WalletService $walletService,
         private LedgerService $ledgerService,
-        private AuditTrail $auditTrail
+        private AuditTrail $auditTrail,
+        private ?OutboxService $outbox = null
     ) {
         parent::__construct($logger);
     }
@@ -464,34 +469,407 @@ class ReconciliationService extends \App\Services\BaseService
         }
     }
 
+    // =========================================================================
+    // Section 8.5 / 8.7 — Safe Stuck Withdrawal Review Workflow
+    // =========================================================================
+    //
+    // اصول طراحی:
+    //   - هرگز یک برداشت را خودسرانه completed نمی‌کنیم.
+    //   - Detect → Flag → Notify-admin-via-Outbox.
+    //   - Auto-fix (refund) متعلق به WithdrawalService::autoResolveStuck() است
+    //     چون قفل wallet + قفل withdrawal و state-machine آنجا متمرکز است.
+    //
+    // این متدها فقط روی جدول withdrawal_reviews کار می‌کنند و یک admin
+    // notification از طریق Outbox (durable, retryable) صادر می‌کنند.
+
     /**
-     * Detect withdrawals stuck in pending/processing state.
-     * Passive by default: records alerts and returns rows for admin review.
+     * شناسایی برداشت‌های گیرکرده و ثبت در withdrawal_reviews (idempotent).
+     *
+     * @return array{scanned:int, flagged:int, skipped:int, notified:int}
      */
-    public function detectStuckWithdrawals(int $olderThanMinutes = 120, int $limit = 100): array
-    {
+    public function flagStuckWithdrawals(
+        int $olderThanMinutes = self::DEFAULT_STUCK_MINUTES,
+        int $limit = self::STUCK_SCAN_BATCH
+    ): array {
         $olderThanMinutes = max(15, min(10080, $olderThanMinutes));
         $limit = max(1, min(500, $limit));
 
+        $result = ['scanned' => 0, 'flagged' => 0, 'skipped' => 0, 'notified' => 0];
+
+        if (!$this->stuckReviewTablesExist()) {
+            $this->logger->warning('reconciliation.stuck_review.skipped', [
+                'reason' => 'required tables (withdrawals/withdrawal_reviews) missing',
+            ]);
+            return $result;
+        }
+
         try {
             $rows = $this->db->fetchAll(
-                "SELECT w.id, w.user_id, w.amount, w.currency, w.status, w.transaction_id, w.created_at, t.status AS transaction_status
+                "SELECT w.id, w.user_id, w.amount, w.currency, w.status,
+                        w.transaction_id, w.created_at, w.updated_at,
+                        t.status AS transaction_status, t.updated_at AS transaction_updated_at
                  FROM withdrawals w
                  LEFT JOIN transactions t ON t.transaction_id = w.transaction_id
-                 WHERE w.status IN ('pending', 'processing')
+                 WHERE w.status IN ('pending','processing')
                    AND w.created_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)
                  ORDER BY w.created_at ASC
                  LIMIT ?",
                 [$olderThanMinutes, $limit]
             );
+        } catch (\Throwable $e) {
+            $this->logger->error('reconciliation.stuck_review.detect_failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return $result;
+        }
 
+        foreach ($rows as $row) {
+            $result['scanned']++;
+            try {
+                $flag = $this->flagOneStuckWithdrawal($row);
+                if ($flag['flagged']) {
+                    $result['flagged']++;
+                    if ($flag['notified']) {
+                        $result['notified']++;
+                    }
+                } else {
+                    $result['skipped']++;
+                }
+            } catch (\Throwable $e) {
+                $result['skipped']++;
+                $this->logger->error('reconciliation.stuck_review.flag_failed', [
+                    'withdrawal_id' => $row->id ?? null,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($result['flagged'] > 0) {
+            $this->logger->warning('reconciliation.stuck_review.flagged_batch', $result);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array{flagged:bool, notified:bool, review_id:?int}
+     */
+    private function flagOneStuckWithdrawal(object $row): array
+    {
+        $withdrawalId = (int)$row->id;
+        $userId       = (int)$row->user_id;
+        $detected     = (string)$row->status;
+        $txStatus     = $row->transaction_status !== null ? (string)$row->transaction_status : null;
+        $stuckMinutes = $this->stuckMinutesSince((string)$row->created_at);
+        $severity     = $this->classifyStuckSeverity($stuckMinutes, $txStatus);
+        $reasonCode   = $this->classifyStuckReason($detected, $txStatus);
+
+        $startedTx = !$this->db->inTransaction();
+        if ($startedTx) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $existing = $this->db->selectOne(
+                "SELECT id FROM withdrawal_reviews
+                 WHERE withdrawal_id = :wid
+                   AND review_status IN ('open','in_progress')
+                 LIMIT 1 FOR UPDATE",
+                ['wid' => $withdrawalId]
+            );
+
+            if ($existing) {
+                if ($startedTx) { $this->db->commit(); }
+                return ['flagged' => false, 'notified' => false, 'review_id' => (int)$existing->id];
+            }
+
+            $stmt = $this->db->prepare(
+                "INSERT INTO withdrawal_reviews
+                    (withdrawal_id, user_id, detected_status, transaction_status,
+                     stuck_minutes, review_status, severity, reason_code,
+                     details, created_at, updated_at)
+                 VALUES
+                    (?, ?, ?, ?, ?, 'open', ?, ?, ?, NOW(), NOW())"
+            );
+
+            $details = json_encode([
+                'amount'                 => (string)($row->amount ?? '0'),
+                'currency'               => (string)($row->currency ?? ''),
+                'transaction_id'         => $row->transaction_id ?? null,
+                'created_at'             => $row->created_at ?? null,
+                'transaction_updated_at' => $row->transaction_updated_at ?? null,
+            ], JSON_UNESCAPED_UNICODE);
+
+            $stmt->execute([
+                $withdrawalId, $userId, $detected, $txStatus,
+                $stuckMinutes, $severity, $reasonCode, $details,
+            ]);
+
+            $reviewId = (int)$this->db->getPdo()->lastInsertId();
+
+            $notified = $this->recordStuckAdminOutbox(
+                $reviewId, $withdrawalId, $userId, $stuckMinutes,
+                $severity, $reasonCode,
+                (string)($row->amount ?? '0'), (string)($row->currency ?? '')
+            );
+
+            if ($notified) {
+                $this->db->execute(
+                    "UPDATE withdrawal_reviews
+                     SET notified_admin_at = NOW(), updated_at = NOW()
+                     WHERE id = ?",
+                    [$reviewId]
+                );
+            }
+
+            if ($startedTx) { $this->db->commit(); }
+
+            $this->auditTrail->record('withdrawal.review.opened', $userId, [
+                'review_id'     => $reviewId,
+                'withdrawal_id' => $withdrawalId,
+                'stuck_minutes' => $stuckMinutes,
+                'severity'      => $severity,
+                'reason_code'   => $reasonCode,
+            ]);
+
+            return ['flagged' => true, 'notified' => $notified, 'review_id' => $reviewId];
+        } catch (\Throwable $e) {
+            if ($startedTx && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    private function recordStuckAdminOutbox(
+        int $reviewId, int $withdrawalId, int $userId, int $stuckMinutes,
+        string $severity, string $reasonCode, string $amount, string $currency
+    ): bool {
+        if (!$this->outbox) {
+            return false;
+        }
+
+        $title   = 'برداشت گیرکرده — بررسی نیاز است';
+        $message = sprintf(
+            'برداشت #%d مربوط به کاربر #%d بیش از %d دقیقه در وضعیت مانده است. (severity=%s, reason=%s)',
+            $withdrawalId, $userId, $stuckMinutes, $severity, $reasonCode
+        );
+        $priority = match ($severity) {
+            'critical' => 'urgent',
+            'high'     => 'high',
+            'medium'   => 'normal',
+            default    => 'low',
+        };
+
+        try {
+            return (bool)$this->outbox->record(
+                'withdrawal_review',
+                (string)$reviewId,
+                'notification.stuck_withdrawal_detected',
+                [
+                    'notification' => [
+                        'method' => 'sendToAdmins',
+                        'args'   => [
+                            'withdrawal_review',
+                            $title,
+                            $message,
+                            [
+                                'review_id'     => $reviewId,
+                                'withdrawal_id' => $withdrawalId,
+                                'user_id'       => $userId,
+                                'stuck_minutes' => $stuckMinutes,
+                                'severity'      => $severity,
+                                'reason_code'   => $reasonCode,
+                                'amount'        => $amount,
+                                'currency'      => $currency,
+                                'action_url'    => '/admin/withdrawals/review?id=' . $withdrawalId,
+                                'action_text'   => 'بررسی درخواست',
+                            ],
+                            $priority,
+                        ],
+                    ],
+                ]
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('reconciliation.stuck_review.outbox_failed', [
+                'review_id' => $reviewId,
+                'error'     => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Candidates eligible for safe auto-resolution. Only deterministic cases:
+     *   processing withdrawal whose linked transaction has been
+     *   failed/cancelled for at least $stableMinutes minutes.
+     *
+     * Used by WithdrawalService::autoResolveStuck() — kept here because the
+     * query touches the reconciliation domain (withdrawals + transactions + reviews).
+     */
+    public function findAutoFixCandidates(int $stableMinutes, int $limit): array
+    {
+        $stableMinutes = max(5, min(1440, $stableMinutes));
+        $limit         = max(1, min(200, $limit));
+
+        if (!$this->stuckReviewTablesExist()) {
+            return [];
+        }
+
+        try {
+            return $this->db->fetchAll(
+                "SELECT r.id AS review_id, w.id AS withdrawal_id, w.user_id, w.amount,
+                        w.currency, w.status AS withdrawal_status, w.transaction_id,
+                        t.status AS transaction_status, t.updated_at AS tx_updated_at
+                 FROM withdrawal_reviews r
+                 JOIN withdrawals w ON w.id = r.withdrawal_id
+                 LEFT JOIN transactions t ON t.transaction_id = w.transaction_id
+                 WHERE r.review_status = 'open'
+                   AND w.status = 'processing'
+                   AND t.status IN ('failed','cancelled')
+                   AND t.updated_at IS NOT NULL
+                   AND t.updated_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)
+                 ORDER BY r.created_at ASC
+                 LIMIT ?",
+                [$stableMinutes, $limit]
+            );
+        } catch (\Throwable $e) {
+            $this->logger->error('reconciliation.stuck_review.candidates_query_failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+    }
+
+    /** @return array<int,object> */
+    public function listOpenReviews(int $limit = 50, int $offset = 0): array
+    {
+        $limit  = max(1, min(500, $limit));
+        $offset = max(0, $offset);
+        if (!$this->stuckReviewTablesExist()) {
+            return [];
+        }
+        return $this->db->fetchAll(
+            "SELECT r.*, w.amount AS withdrawal_amount, w.currency AS withdrawal_currency,
+                    w.status AS current_withdrawal_status
+             FROM withdrawal_reviews r
+             JOIN withdrawals w ON w.id = r.withdrawal_id
+             WHERE r.review_status IN ('open','in_progress')
+             ORDER BY FIELD(r.severity,'critical','high','medium','low'), r.created_at ASC
+             LIMIT ? OFFSET ?",
+            [$limit, $offset]
+        );
+    }
+
+    public function adminResolveReview(int $reviewId, int $adminId, string $note): bool
+    {
+        $note = mb_substr(trim($note), 0, 1000);
+        if ($note === '') {
+            throw new \InvalidArgumentException('Resolution note is required.');
+        }
+        $affected = (int)$this->db->execute(
+            "UPDATE withdrawal_reviews
+             SET review_status = 'admin_resolved',
+                 resolved_at = NOW(), resolved_by = ?,
+                 resolution_note = ?, updated_at = NOW()
+             WHERE id = ? AND review_status IN ('open','in_progress')",
+            [$adminId, $note, $reviewId]
+        );
+        if ($affected > 0) {
+            $this->auditTrail->record('withdrawal.review.admin_resolved', null, [
+                'review_id' => $reviewId, 'note' => $note,
+            ], $adminId);
+        }
+        return $affected > 0;
+    }
+
+    public function dismissReview(int $reviewId, int $adminId, string $note): bool
+    {
+        $note = mb_substr(trim($note), 0, 1000);
+        $affected = (int)$this->db->execute(
+            "UPDATE withdrawal_reviews
+             SET review_status = 'dismissed',
+                 resolved_at = NOW(), resolved_by = ?,
+                 resolution_note = ?, updated_at = NOW()
+             WHERE id = ? AND review_status IN ('open','in_progress')",
+            [$adminId, $note, $reviewId]
+        );
+        if ($affected > 0) {
+            $this->auditTrail->record('withdrawal.review.dismissed', null, [
+                'review_id' => $reviewId, 'note' => $note,
+            ], $adminId);
+        }
+        return $affected > 0;
+    }
+
+    /**
+     * Used internally by WithdrawalService::autoResolveStuck() to mark the
+     * review row as in_progress / auto_resolved without breaking the
+     * single-source-of-truth principle. Returns affected row count.
+     */
+    public function markReviewInProgress(int $reviewId, ?int $adminBotId): int
+    {
+        return (int)$this->db->execute(
+            "UPDATE withdrawal_reviews
+             SET review_status = 'in_progress', updated_at = NOW(),
+                 assigned_admin_id = COALESCE(assigned_admin_id, ?)
+             WHERE id = ? AND review_status = 'open'",
+            [$adminBotId, $reviewId]
+        );
+    }
+
+    public function markReviewAutoResolved(int $reviewId, ?int $adminBotId, string $note): int
+    {
+        return (int)$this->db->execute(
+            "UPDATE withdrawal_reviews
+             SET review_status = 'auto_resolved',
+                 resolved_at = NOW(),
+                 resolved_by = ?,
+                 resolution_note = CONCAT_WS(' | ', resolution_note, ?),
+                 updated_at = NOW()
+             WHERE id = ?",
+            [$adminBotId, mb_substr($note, 0, 500), $reviewId]
+        );
+    }
+
+    public function markReviewOpenAgain(int $reviewId, string $note): int
+    {
+        return (int)$this->db->execute(
+            "UPDATE withdrawal_reviews
+             SET review_status = 'open',
+                 resolution_note = CONCAT_WS(' | ', resolution_note, ?),
+                 updated_at = NOW()
+             WHERE id = ?",
+            [mb_substr($note, 0, 500), $reviewId]
+        );
+    }
+
+    /**
+     * Backward-compatible alias: the previous passive detector returned raw rows.
+     * Kept for any external caller; new code should use flagStuckWithdrawals().
+     */
+    public function detectStuckWithdrawals(int $olderThanMinutes = 120, int $limit = 100): array
+    {
+        $olderThanMinutes = max(15, min(10080, $olderThanMinutes));
+        $limit            = max(1, min(500, $limit));
+        try {
+            $rows = $this->db->fetchAll(
+                "SELECT w.id, w.user_id, w.amount, w.currency, w.status,
+                        w.transaction_id, w.created_at, t.status AS transaction_status
+                 FROM withdrawals w
+                 LEFT JOIN transactions t ON t.transaction_id = w.transaction_id
+                 WHERE w.status IN ('pending','processing')
+                   AND w.created_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)
+                 ORDER BY w.created_at ASC
+                 LIMIT ?",
+                [$olderThanMinutes, $limit]
+            );
             if (!empty($rows)) {
                 $this->logger->warning('reconciliation.stuck_withdrawals_detected', [
                     'count' => count($rows),
                     'older_than_minutes' => $olderThanMinutes,
                 ]);
             }
-
             return $rows;
         } catch (\Throwable $e) {
             $this->logger->error('reconciliation.stuck_withdrawals_detection_failed', [
@@ -500,6 +878,53 @@ class ReconciliationService extends \App\Services\BaseService
             return [];
         }
     }
+
+    private function stuckReviewTablesExist(): bool
+    {
+        try {
+            $a = $this->db->fetchColumn('SHOW TABLES LIKE ?', ['withdrawals']);
+            $b = $this->db->fetchColumn('SHOW TABLES LIKE ?', ['withdrawal_reviews']);
+            return (bool)$a && (bool)$b;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function stuckMinutesSince(string $datetime): int
+    {
+        $ts = strtotime($datetime);
+        if (!$ts) { return 0; }
+        return max(0, (int)floor((time() - $ts) / 60));
+    }
+
+    private function classifyStuckSeverity(int $stuckMinutes, ?string $txStatus): string
+    {
+        if ($txStatus !== null && in_array($txStatus, ['failed', 'cancelled'], true)) {
+            return 'critical';
+        }
+        if ($stuckMinutes >= 24 * 60) return 'critical';
+        if ($stuckMinutes >= 6  * 60) return 'high';
+        if ($stuckMinutes >= 2  * 60) return 'medium';
+        return 'low';
+    }
+
+    private function classifyStuckReason(string $detected, ?string $txStatus): string
+    {
+        if ($detected === 'processing' && $txStatus !== null && in_array($txStatus, ['failed','cancelled'], true)) {
+            return 'orphan_processing';
+        }
+        if ($detected === 'processing' && $txStatus === 'pending') {
+            return 'processing_tx_pending';
+        }
+        if ($detected === 'pending' && $txStatus === null) {
+            return 'pending_no_tx';
+        }
+        if ($detected === 'pending') {
+            return 'pending_too_long';
+        }
+        return 'unknown';
+    }
+
 
     /**
      * Hourly audit for pending orphan/abandoned transactions

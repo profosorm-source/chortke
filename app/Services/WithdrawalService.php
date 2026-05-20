@@ -18,6 +18,7 @@ use App\Services\KYCService;
 use App\Services\AntiFraud\RiskDecisionService;
 use App\Services\PerformanceOptimizationService;
 use App\Services\ReconciliationService;
+use App\Services\OutboxService;
 use App\Contracts\CurrencyServiceInterface;
 
 class WithdrawalService extends PaymentBaseService
@@ -1128,5 +1129,261 @@ class WithdrawalService extends PaymentBaseService
         return $query->orderBy('withdrawals.created_at', 'DESC')
                      ->limit($limit)
                      ->get() ?? [];
+    }
+
+    // =========================================================================
+    // Section 8.5 / 8.7 — Safe auto-resolution of stuck withdrawals
+    // =========================================================================
+    //
+    // فقط کیس‌های قطعی را اتوماتیک می‌بندد:
+    //   - withdrawal در 'processing' است و transaction مرتبط در وضعیت
+    //     'failed' یا 'cancelled' برای حداقل $stableMinutes دقیقه پایدار است.
+    //
+    // مسیر عملیات (همان pattern adminReject — قفل wallet → قفل withdrawal):
+    //   1) ReconciliationService::markReviewInProgress() — جلوگیری از تکراری شدن
+    //   2) WalletService::cancelWithdrawal() — idempotent refund
+    //   3) UPDATE withdrawals SET status='rejected' (state-machine check)
+    //   4) ReconciliationService::markReviewAutoResolved()
+    //   5) Outbox: ثبت رویداد + notification.withdrawalRejected برای کاربر
+    //
+    // هرگز چیزی به completed تبدیل نمی‌شود.
+    //
+    // @return array{scanned:int, fixed:int, escalated:int, errors:int}
+    public function autoResolveStuck(
+        ?int $adminBotId = null,
+        int $stableMinutes = 30,
+        int $limit = 50
+    ): array {
+        $stableMinutes = max(5, min(1440, $stableMinutes));
+        $limit         = max(1, min(200, $limit));
+        $stats = ['scanned' => 0, 'fixed' => 0, 'escalated' => 0, 'errors' => 0];
+
+        $candidates = $this->reconciliation->findAutoFixCandidates($stableMinutes, $limit);
+        if (empty($candidates)) {
+            return $stats;
+        }
+
+        foreach ($candidates as $row) {
+            $stats['scanned']++;
+            try {
+                $ok = $this->autoResolveOne($row, $adminBotId);
+                $ok ? $stats['fixed']++ : $stats['escalated']++;
+            } catch (\Throwable $e) {
+                $stats['errors']++;
+                $this->logger->error('withdrawal.auto_resolve.one_failed', [
+                    'withdrawal_id' => $row->withdrawal_id ?? null,
+                    'review_id'     => $row->review_id ?? null,
+                    'error'         => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($stats['fixed'] > 0 || $stats['errors'] > 0) {
+            $this->logger->warning('withdrawal.auto_resolve.batch', $stats);
+        }
+        return $stats;
+    }
+
+    private function autoResolveOne(object $row, ?int $adminBotId): bool
+    {
+        $withdrawalId  = (int)$row->withdrawal_id;
+        $reviewId      = (int)$row->review_id;
+        $userId        = (int)$row->user_id;
+        $amount        = (string)$row->amount;
+        $currency      = strtolower((string)$row->currency);
+        $transactionId = $row->transaction_id !== null ? (string)$row->transaction_id : null;
+
+        $startedTx = !$this->db->inTransaction();
+        if ($startedTx) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            // 1) Reserve the review — only one worker may proceed.
+            $reserved = $this->reconciliation->markReviewInProgress($reviewId, $adminBotId);
+            if ($reserved === 0) {
+                if ($startedTx) { $this->db->commit(); }
+                return false; // قبلا کسی برداشته یا review بسته شده
+            }
+
+            // 2) Lock wallet then withdrawal (same order as adminReject — deadlock-safe).
+            $this->db->query(
+                "SELECT id FROM wallets WHERE user_id = :user_id FOR UPDATE",
+                ['user_id' => $userId]
+            )->fetch();
+
+            $w = $this->db->query(
+                "SELECT * FROM withdrawals WHERE id = :id FOR UPDATE",
+                ['id' => $withdrawalId]
+            )->fetch(\PDO::FETCH_OBJ);
+
+            if (!$w || $w->status !== 'processing') {
+                $this->reconciliation->markReviewOpenAgain(
+                    $reviewId,
+                    'auto-resolve aborted: withdrawal state changed'
+                );
+                if ($startedTx) { $this->db->commit(); }
+                return false;
+            }
+
+            if (!$this->stateMachine->canTransition('withdrawal', (string)$w->status, 'rejected')) {
+                $this->reconciliation->markReviewOpenAgain(
+                    $reviewId,
+                    'auto-resolve aborted: state-machine refused processing→rejected'
+                );
+                if ($startedTx) { $this->db->commit(); }
+                return false;
+            }
+
+            // 3) Idempotent refund.
+            $refunded = $this->wallet->cancelWithdrawal($userId, $amount, $currency, $transactionId);
+            if (!$refunded) {
+                $this->reconciliation->markReviewOpenAgain($reviewId, 'auto-resolve: refund failed');
+                if ($startedTx) { $this->db->commit(); }
+                return false;
+            }
+
+            // 4) Mark withdrawal as rejected by the system bot.
+            $this->model->update($withdrawalId, [
+                'status'       => 'rejected',
+                'admin_note'   => 'auto-resolved by stuck-withdrawal review (tx terminal & stable)',
+                'processed_by' => $adminBotId,
+                'processed_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            if (method_exists($this, 'recordTransactionStatusChange') && $transactionId !== null) {
+                $this->recordTransactionStatusChange(
+                    $transactionId,
+                    'cancelled',
+                    'auto-resolved by stuck-withdrawal review',
+                    $adminBotId,
+                    [
+                        'withdrawal_id' => $withdrawalId,
+                        'review_id'     => $reviewId,
+                        'auto'          => true,
+                    ]
+                );
+            }
+
+            // 5) Close the review row.
+            $this->reconciliation->markReviewAutoResolved(
+                $reviewId,
+                $adminBotId,
+                'auto-resolved: tx status terminal & stable'
+            );
+
+            if ($startedTx) { $this->db->commit(); }
+
+            // 6) Audit + outbox notifications (outside the financial transaction).
+            $this->auditTrail->record('withdrawal.auto_resolved', $userId, [
+                'review_id'      => $reviewId,
+                'withdrawal_id'  => $withdrawalId,
+                'amount'         => $amount,
+                'currency'       => $currency,
+                'transaction_id' => $transactionId,
+            ], $adminBotId);
+
+            $this->dispatchAutoResolveOutboxEvents(
+                $reviewId, $withdrawalId, $userId, $amount, $currency, $transactionId
+            );
+
+            return true;
+        } catch (\Throwable $e) {
+            if ($startedTx && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            // best-effort: re-open the review so the next pass retries
+            try {
+                $this->reconciliation->markReviewOpenAgain(
+                    $reviewId,
+                    'auto-resolve exception: ' . substr($e->getMessage(), 0, 200)
+                );
+            } catch (\Throwable) {
+                // ignore — main exception will be logged by caller
+            }
+            throw $e;
+        }
+    }
+
+    private function dispatchAutoResolveOutboxEvents(
+        int $reviewId,
+        int $withdrawalId,
+        int $userId,
+        string $amount,
+        string $currency,
+        ?string $transactionId
+    ): void {
+        // 1) Domain event for downstream listeners / analytics.
+        $outbox = $this->resolveOutbox();
+        if (!$outbox) {
+            // Fallback: keep the user informed synchronously if outbox isn't wired.
+            try {
+                $this->notifier->withdrawalRejected(
+                    $userId,
+                    (float)$amount,
+                    'سیستم: تراکنش بانکی متناظر ناموفق بود و وجه به کیف پول شما بازگشت داده شد.'
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('withdrawal.auto_resolve.sync_notify_failed', [
+                    'user_id' => $userId,
+                    'error'   => $e->getMessage(),
+                ]);
+            }
+            return;
+        }
+
+        try {
+            $outbox->record(
+                'withdrawal_review',
+                (string)$reviewId,
+                'withdrawal.review.auto_resolved',
+                [
+                    'withdrawal_id'  => $withdrawalId,
+                    'user_id'        => $userId,
+                    'amount'         => $amount,
+                    'currency'       => $currency,
+                    'transaction_id' => $transactionId,
+                ]
+            );
+
+            $outbox->record(
+                'withdrawal_review',
+                (string)$reviewId,
+                'notification.withdrawal_auto_rejected',
+                [
+                    'notification' => [
+                        'method' => 'withdrawalRejected',
+                        'args'   => [
+                            $userId,
+                            (float)$amount,
+                            'سیستم: تراکنش بانکی متناظر ناموفق بود و وجه به کیف پول شما بازگشت داده شد.',
+                        ],
+                    ],
+                ]
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('withdrawal.auto_resolve.outbox_failed', [
+                'review_id' => $reviewId,
+                'error'     => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * OutboxService از طریق container resolve می‌شود تا constructor این سرویس
+     * سنگین‌تر نشود (و backward-compatible باشد). اگر در test container ثبت
+     * نشده باشد null برمی‌گردد و مسیر fallback همگام اجرا می‌شود.
+     */
+    private function resolveOutbox(): ?OutboxService
+    {
+        try {
+            $container = \Core\Container::getInstance();
+            if (method_exists($container, 'has') && !$container->has(OutboxService::class)) {
+                return null;
+            }
+            return $container->make(OutboxService::class);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }
