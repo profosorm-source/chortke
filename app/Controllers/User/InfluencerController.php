@@ -137,7 +137,12 @@ class InfluencerController extends BaseUserController
 
         $existing = $this->profileModel->findByUserId($userId);
         $platform = $data['platform'] ?? 'instagram';
-        $merged   = array_merge($data, $this->extractPrices($data, $platform), ['user_id' => $userId]);
+
+        // Filter and whitelist safe fields to prevent mass assignment (C-12)
+        $allowed = ['platform', 'username', 'bio', 'category', 'follower_count', 'profile_image'];
+        $clean = array_intersect_key($data, array_flip($allowed));
+
+        $merged   = array_merge($clean, $this->extractPrices($data, $platform), ['user_id' => $userId]);
 
         try {
             if ($existing) {

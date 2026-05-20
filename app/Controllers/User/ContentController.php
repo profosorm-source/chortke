@@ -154,9 +154,9 @@ class ContentController extends BaseUserController
 
             $data = $validator->data();
             
-            // Sanitize URL
-            // H-04: Sanitization is primarily handled in ContentService::submitContent, 
-            // but we ensure it's at least a string here.
+            // Sanitize input fields to prevent HTML Injection / Stored XSS (H-04)
+            $data['title'] = strip_tags((string)$data['title']);
+            $data['description'] = strip_tags((string)($data['description'] ?? ''), '<br><p><strong><em>');
             $data['video_url'] = trim((string)$data['video_url']);
             
             // Submit content

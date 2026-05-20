@@ -75,6 +75,13 @@ class VitrineController extends BaseAdminController
             return;
         }
 
+        // ✅ CSRF verification
+        $token = $this->request->post('csrf_token') ?? $this->request->header('X-CSRF-TOKEN');
+        if (!$token || !$this->csrf->verify($token)) {
+            $this->response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر است (CSRF)'], 403);
+            return;
+        }
+
         // ✅ Prevent self-approval
         $listing = $this->service->getSafe($id);
         if (!$listing) {
@@ -90,7 +97,7 @@ class VitrineController extends BaseAdminController
             return;
         }
 
-        $adminId = (int)admin_id();
+        $adminId = (int)user_id();
         $result = $this->service->adminApproveListing($id, $adminId);
 
         if (!empty($result['success'])) {
@@ -116,6 +123,13 @@ class VitrineController extends BaseAdminController
             return;
         }
 
+        // ✅ CSRF verification
+        $token = $this->request->post('csrf_token') ?? $this->request->header('X-CSRF-TOKEN');
+        if (!$token || !$this->csrf->verify($token)) {
+            $this->response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر است (CSRF)'], 403);
+            return;
+        }
+
         $reason = trim((string)$this->request->input('reason'));
         
         // ✅ Reason validation
@@ -127,7 +141,7 @@ class VitrineController extends BaseAdminController
             return;
         }
 
-        $adminId = (int)admin_id();
+        $adminId = (int)user_id();
         $result = $this->service->adminRejectListing($id, $reason, $adminId);
 
         if (!empty($result['success'])) {
@@ -171,9 +185,21 @@ class VitrineController extends BaseAdminController
      */
     public function resolve(): void
     {
+        if (!is_admin()) {
+            $this->response->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            return;
+        }
+
+        // ✅ CSRF verification
+        $token = $this->request->post('csrf_token') ?? $this->request->header('X-CSRF-TOKEN');
+        if (!$token || !$this->csrf->verify($token)) {
+            $this->response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر است (CSRF)'], 403);
+            return;
+        }
+
         $id     = (int) $this->request->param('id');
         $winner = $this->request->post('winner') ?? 'buyer';
-        $adminId= (int) ($this->session->get('admin_id') ?? $this->session->get('user_id') ?? 0);
+        $adminId= (int)user_id();
 
         // ✅ Winner validation
         if (!in_array($winner, ['buyer', 'seller'], true)) {
@@ -191,6 +217,18 @@ class VitrineController extends BaseAdminController
      */
     public function releaseFunds(): void
     {
+        if (!is_admin()) {
+            $this->response->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            return;
+        }
+
+        // ✅ CSRF verification
+        $token = $this->request->post('csrf_token') ?? $this->request->header('X-CSRF-TOKEN');
+        if (!$token || !$this->csrf->verify($token)) {
+            $this->response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر است (CSRF)'], 403);
+            return;
+        }
+
         $id      = (int) $this->request->param('id');
         $listing = $this->service->getSafe($id);
 
@@ -202,7 +240,7 @@ class VitrineController extends BaseAdminController
             return;
         }
 
-        $adminId = (int) ($this->session->get('admin_id') ?? $this->session->get('user_id') ?? 0);
+        $adminId = (int)user_id();
         $result  = $this->service->releaseFundsToSeller($listing, 'admin_manual');
 
         if ($result['success']) {
@@ -226,7 +264,14 @@ class VitrineController extends BaseAdminController
             return;
         }
 
-        $adminId = (int)admin_id();
+        // ✅ CSRF verification
+        $token = $this->request->post('csrf_token') ?? $this->request->header('X-CSRF-TOKEN');
+        if (!$token || !$this->csrf->verify($token)) {
+            $this->response->json(['success' => false, 'message' => 'توکن امنیتی نامعتبر است (CSRF)'], 403);
+            return;
+        }
+
+        $adminId = (int)user_id();
         $result = $this->service->adminRefundListing($id, $adminId);
 
         if (!empty($result['success'])) {
