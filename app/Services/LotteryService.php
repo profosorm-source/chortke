@@ -6,7 +6,8 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\LoggerInterface;
-use App\Services\Notification\NotificationService;
+use App\Contracts\WalletServiceInterface;
+use App\Contracts\NotificationServiceInterface;
 use App\Services\FeatureFlagService;
 use App\Models\LotteryRound;
 use App\Models\LotteryParticipation;
@@ -19,8 +20,8 @@ use Core\Cache;
 class LotteryService extends \App\Services\BaseService
 {
     private Database $db;
-    private WalletService $walletService;
-    private NotificationService $notificationService;
+    private WalletServiceInterface $walletService;
+    private NotificationServiceInterface $notificationService;
     private LotteryRound $roundModel;
     private LotteryParticipation $participationModel;
     private LotteryDailyNumber $dailyModel;
@@ -38,8 +39,8 @@ class LotteryService extends \App\Services\BaseService
 
     public function __construct(
         Database $db,
-        WalletService $walletService,
-        NotificationService $notificationService,
+        WalletServiceInterface $walletService,
+        NotificationServiceInterface $notificationService,
         \App\Models\LotteryRound $roundModel,
         \App\Models\LotteryParticipation $participationModel,
         \App\Models\LotteryDailyNumber $dailyModel,

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Contracts\WalletServiceInterface;
 use Core\Database;
 use App\Models\ScheduledPayment;
 use App\Models\Transaction;
@@ -15,7 +16,7 @@ class ScheduledPaymentService extends \App\Services\BaseService
 
     public function __construct(
         private ScheduledPayment $scheduledPaymentModel,
-        private WalletService $walletService,
+        private WalletServiceInterface $walletService,
         private Database $db,
         LoggerInterface $logger,
         private ReconciliationService $reconciliationService

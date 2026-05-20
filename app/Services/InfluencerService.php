@@ -2,7 +2,8 @@
 
 namespace App\Services;
 
-use App\Services\Notification\NotificationService;
+use App\Contracts\WalletServiceInterface;
+use App\Contracts\NotificationServiceInterface;
 use App\Models\InfluencerModel;
 use App\Models\StoryOrder;
 use App\Services\InfluencerReputationService;
@@ -20,8 +21,8 @@ class InfluencerService extends \App\Services\BaseService
     private InfluencerModel           $profileModel;
     private StoryOrder                  $orderModel;
     private Database                    $db;
-    private WalletService               $walletService;
-    private NotificationService         $notificationService;
+    private WalletServiceInterface      $walletService;
+    private NotificationServiceInterface $notificationService;
     private ReferralService             $referralService;
     private AuditTrail                 $auditTrail;
     private InfluencerReputationService $reputationService;
@@ -31,8 +32,8 @@ class InfluencerService extends \App\Services\BaseService
 
     public function __construct(
         Database                    $db,
-        WalletService               $walletService,
-        NotificationService         $notificationService,
+        WalletServiceInterface        $walletService,
+        NotificationServiceInterface $notificationService,
         ReferralService             $referralService,
         AuditTrail                 $auditTrail,
         InfluencerModel           $profileModel,

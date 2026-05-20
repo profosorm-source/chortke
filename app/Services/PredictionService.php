@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Contracts\WalletServiceInterface;
 use App\Models\PredictionGame;
 use App\Models\PredictionBet;
 use Core\Database;
@@ -24,14 +25,14 @@ class PredictionService extends \App\Services\BaseService
     private Database $db;
     private PredictionGame $gameModel;
     private PredictionBet $betModel;
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private \App\Services\AuditTrail $auditTrail;
 
     public function __construct(
         Database      $db,
         PredictionGame $gameModel,
         PredictionBet  $betModel,
-        WalletService  $walletService,
+        WalletServiceInterface  $walletService,
         LoggerInterface       $logger,
         \App\Services\AuditTrail $auditTrail
     ) {

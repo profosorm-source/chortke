@@ -6,7 +6,8 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\LoggerInterface;
-use App\Services\Notification\NotificationService;
+use App\Contracts\WalletServiceInterface;
+use App\Contracts\NotificationServiceInterface;
 use App\Services\User\UserService;
 use App\Services\Shared\ReferralService;
 use App\Models\Investment;
@@ -22,8 +23,8 @@ use App\Contracts\CurrencyServiceInterface;
 class InvestmentService extends \App\Services\BaseService
 {
     private Database             $db;
-    private WalletService        $walletService;
-    private NotificationService  $notificationService;
+    private WalletServiceInterface        $walletService;
+    private NotificationServiceInterface  $notificationService;
     private UserService          $userService;
     private ReferralService      $referralService;
     private Investment           $investmentModel;
@@ -51,8 +52,8 @@ EOT;
 
     public function __construct(
     Database $db,
-    WalletService $walletService,
-    NotificationService $notificationService,
+    WalletServiceInterface $walletService,
+    NotificationServiceInterface $notificationService,
     UserService $userService,
     ReferralService $referralService,
     \App\Models\Investment $investmentModel,

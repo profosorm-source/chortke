@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use App\Services\Notification\NotificationService;
+use App\Contracts\WalletServiceInterface;
+use App\Contracts\NotificationServiceInterface;
 use App\Services\User\UserService;
 use App\Services\SettingService;
 use App\Models\VitrineListing;
@@ -29,8 +30,8 @@ class VitrineService extends \App\Services\BaseService
     public function __construct(
         private readonly VitrineListing     $listing,
         private readonly VitrineRequest     $request,
-        private readonly WalletService      $wallet,
-        private readonly NotificationService $notif,
+        private readonly WalletServiceInterface      $wallet,
+        private readonly NotificationServiceInterface $notif,
         private readonly FeatureFlagService $flags,
         private readonly Database           $db,
         LoggerInterface                     $logger,
@@ -638,7 +639,7 @@ public function adminRefundListing(int $listingId, int $adminId): array
             $amount = $listing->offer_price_usdt ?? $listing->price_usdt;
             $this->db->beginTransaction();
             try {
-                $credit = $this->wallet->credit(
+                $credit = $this->wallet->deposit(
                     (int) $listing->buyer_id,
                     $amount,
                     'usdt',

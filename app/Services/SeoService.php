@@ -9,7 +9,7 @@ use App\Models\SeoExecution;
 use App\Services\User\UserScoreService;
 use App\Services\SeoPayoutService;
 use App\Services\AntiFraud\SeoFraudDetector;
-use App\Services\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\Shared\ReferralService;
 use Core\Database;
 use App\Services\SettingService;
@@ -25,7 +25,7 @@ class SeoService extends \App\Services\BaseService
     private UserScoreService $scoreService;
     private SeoPayoutService $payoutService;
     private SeoFraudDetector $fraudDetector;
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private ReferralService $referralService;
     private Database $db;
     private \App\Services\Shared\RatingService $ratingService;
@@ -38,7 +38,7 @@ class SeoService extends \App\Services\BaseService
         UserScoreService $scoreService,
         SeoPayoutService $payoutService,
         SeoFraudDetector $fraudDetector,
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         ReferralService $referralService,
         Database $db,
         \App\Services\Shared\RatingService $ratingService,

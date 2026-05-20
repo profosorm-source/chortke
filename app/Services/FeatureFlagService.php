@@ -20,7 +20,7 @@ use App\Listeners\LogFeatureFlagChange;
  * مدیریت Feature Flags با targeting پیشرفته
  * شامل: user targeting، role، کشور، پلن، device، route، age، percentage rollout
  */
-class FeatureFlagService extends \App\Services\BaseService
+class FeatureFlagService extends \App\Services\BaseService implements FeatureFlagRepositoryInterface
 {
     private \Core\Database $db;
     private FeatureFlag $featureModel;
@@ -480,6 +480,16 @@ class FeatureFlagService extends \App\Services\BaseService
         ]);
 
         return $this->featureModel->findByName($name);
+    }
+
+    public function enable(string $name): bool
+    {
+        return $this->update($name, ['enabled' => true]);
+    }
+
+    public function disable(string $name): bool
+    {
+        return $this->update($name, ['enabled' => false]);
     }
 
     public function toggle(string $name): bool

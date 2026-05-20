@@ -10,14 +10,14 @@ use App\Models\CustomTaskAnalyticsModel;
 use App\Models\Dispute;
 use App\Models\TaskRating;
 use App\Models\InteractionModel;
-use App\Services\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\User\UserLevelService;
 use App\Services\Shared\ReferralService;
 use App\Services\AntiFraud\BrowserFingerprintService;
 use App\Services\AntiFraud\IPQualityService;
 use App\Services\AntiFraud\SessionAnomalyService;
 use App\Services\SettingService;
-use App\Services\Notification\NotificationService;
+use App\Contracts\NotificationServiceInterface;
 use Core\Database;
 use Core\Logger;
 use App\Models\User;
@@ -35,10 +35,10 @@ class CustomTaskService extends \App\Services\BaseService
     private TaskRating $ratingModel;
     private InteractionModel $interactionModel;
     private Database $db;
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private UserLevelService $userLevelService;
     private ReferralService $referralService;
-    private NotificationService $notificationService;
+    private NotificationServiceInterface $notificationService;
     
     // Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Ø³ÛŒØ³ØªÙ… Anti-Fraud Ù…ÙˆØ¬ÙˆØ¯
     private BrowserFingerprintService $fingerprintService;
@@ -53,10 +53,10 @@ class CustomTaskService extends \App\Services\BaseService
     public function __construct(
         Logger $logger,
         Database $db,
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         UserLevelService $userLevelService,
         ReferralService $referralService,
-        NotificationService $notificationService,
+        NotificationServiceInterface $notificationService,
         Ads $taskModel,
         CustomTaskSubmissionModel $submissionModel,
         CustomTaskAnalyticsModel $analyticsModel,

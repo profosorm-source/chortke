@@ -8,14 +8,14 @@ use App\Models\Ticket;
 use App\Models\TicketMessage;
 use Core\Database;
 use App\Contracts\LoggerInterface;
-use App\Services\Notification\NotificationService;
+use App\Contracts\NotificationServiceInterface;
 
 class TicketService extends \App\Services\BaseService
 {
     private Database $db;
     private Ticket $ticketModel;
     private TicketMessage $messageModel;
-    private NotificationService $notificationService;
+    private NotificationServiceInterface $notificationService;
     private \Core\RateLimiter $rateLimiter; // 🛡️ مقابله با سوءاستفاده
     private \Core\Redis $redis;
     
@@ -24,7 +24,7 @@ class TicketService extends \App\Services\BaseService
         TicketMessage $messageModel,
         Database $db,
         LoggerInterface $logger,
-        NotificationService $notificationService,
+        NotificationServiceInterface $notificationService,
         \Core\RateLimiter $rateLimiter, // 🛡️
         \Core\Redis $redis
     ) {

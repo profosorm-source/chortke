@@ -6,7 +6,7 @@ namespace App\Services;
 
 use App\Models\Ads;
 use App\Models\BannerPlacement;
-use App\Services\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Contracts\LoggerInterface;
 use App\Services\UploadService;
 use Core\Database;
@@ -15,7 +15,7 @@ class BannerService extends \App\Services\BaseService
 {
     private Ads $bannerModel;
     private BannerPlacement $placementModel;
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private UploadService $uploadService;
     private Database $db;
     private \Core\Cache $cache;
@@ -23,7 +23,7 @@ class BannerService extends \App\Services\BaseService
     public function __construct(
         Ads $bannerModel,
         BannerPlacement $placementModel,
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         UploadService $uploadService,
         Database $db,
         \Core\Cache $cache,

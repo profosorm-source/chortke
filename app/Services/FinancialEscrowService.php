@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Contracts\WalletServiceInterface;
 use App\Models\User;
 use App\Contracts\LoggerInterface;
 use Core\Database;
@@ -18,7 +19,7 @@ class FinancialEscrowService extends \App\Services\BaseService
 {
     private EscrowService $escrow;
     private User         $userModel;
-    private WalletService $wallet;
+    private WalletServiceInterface $wallet;
     private Database     $db;
     private SettingService $settingService;
 
@@ -26,7 +27,7 @@ class FinancialEscrowService extends \App\Services\BaseService
         EscrowService $escrow,
         User         $userModel,
         LoggerInterface       $logger,
-        WalletService $wallet,
+        WalletServiceInterface $wallet,
         Database $db,
         SettingService $settingService
     ) {

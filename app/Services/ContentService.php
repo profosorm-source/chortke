@@ -7,8 +7,8 @@ namespace App\Services;
 use App\Models\ContentSubmission;
 use App\Models\ContentRevenue;
 use App\Models\ContentAgreement;
-use App\Services\WalletService;
-use App\Services\Notification\NotificationService;
+use App\Contracts\WalletServiceInterface;
+use App\Contracts\NotificationServiceInterface;
 use App\Services\User\UserService;
 use App\Services\Shared\ReferralService;
 use Core\Cache;
@@ -37,8 +37,8 @@ class ContentService extends \App\Services\BaseService
     private const ACTIVE_BONUS_PERCENT = 5;
     private const ACTIVE_MAX_PERCENT = 75;
 
-    private WalletService $walletService;
-    private NotificationService $notificationService;
+    private WalletServiceInterface $walletService;
+    private NotificationServiceInterface $notificationService;
     private UserService $userService;
     private ReferralService $referralService;
     private Cache $cache;
@@ -66,8 +66,8 @@ class ContentService extends \App\Services\BaseService
 EOT;
 
     public function __construct(
-        WalletService $walletService,
-        NotificationService $notificationService,
+        WalletServiceInterface $walletService,
+        NotificationServiceInterface $notificationService,
         UserService $userService,
         ReferralService $referralService,
         ContentSubmission $submissionModel,

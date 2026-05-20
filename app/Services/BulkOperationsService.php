@@ -7,7 +7,7 @@ namespace App\Services;
 use Core\Database;
 use App\Contracts\CacheInterface;
 use App\Models\BulkOperation;
-use App\Services\Notification\NotificationService;
+use App\Contracts\NotificationServiceInterface;
 use App\Contracts\LoggerInterface;
 
 /**
@@ -26,7 +26,7 @@ class BulkOperationsService extends \App\Services\BaseService
     private Database $db;
     private CacheInterface $cache;
     private BulkOperation $bulkOperationModel;
-    private ?NotificationService $notificationService;
+    private ?NotificationServiceInterface $notificationService;
 
     private const MAX_BULK_ITEMS = 1000;
     private const BATCH_SIZE = 100;
@@ -36,7 +36,7 @@ class BulkOperationsService extends \App\Services\BaseService
         Database $db,
         BulkOperation $bulkOperationModel,
         CacheInterface $cache,
-        ?NotificationService $notificationService = null
+        ?NotificationServiceInterface $notificationService = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
