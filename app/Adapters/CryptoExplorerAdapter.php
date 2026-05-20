@@ -3,14 +3,17 @@
 namespace App\Adapters;
 
 use App\Contracts\LoggerInterface;
+use Core\CircuitBreaker;
 
 class CryptoExplorerAdapter implements CryptoVerificationAdapter
 {
     private LoggerInterface $logger;
+    private ?CircuitBreaker $circuitBreaker;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, ?CircuitBreaker $circuitBreaker = null)
     {
         $this->logger = $logger;
+        $this->circuitBreaker = $circuitBreaker;
     }
 
     /**
@@ -24,8 +27,22 @@ class CryptoExplorerAdapter implements CryptoVerificationAdapter
             return ['status' => 'unavailable', 'reason' => 'Explorer ناشناخته'];
         }
 
-        $html = $this->fetchPage($url);
-        if ($html === null) {
+        try {
+            $runner = function () use ($url) {
+                $html = $this->fetchPage($url);
+                if ($html === null) {
+                    throw new \Core\Exceptions\TransientException('Explorer unavailable or timed out.');
+                }
+                return $html;
+            };
+            $html = $this->circuitBreaker
+                ? $this->circuitBreaker->call('crypto_explorer_' . strtolower($network), $runner)
+                : $runner();
+        } catch (\Throwable $e) {
+            $this->logger->warning('crypto.explorer.unavailable', [
+                'network' => $network,
+                'error' => $e->getMessage(),
+            ]);
             return ['status' => 'unavailable', 'reason' => 'عدم دسترسی/تحریم/کلادفلر'];
         }
 

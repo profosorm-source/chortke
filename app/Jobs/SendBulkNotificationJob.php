@@ -72,7 +72,7 @@ class SendBulkNotificationJob
             );
 
             if ($success && $dedupKey) {
-                $this->cache->put($dedupKey, '1', 86400);
+                $this->cache->putSeconds($dedupKey, '1', 86400);
             }
         }
     }

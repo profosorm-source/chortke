@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Adapters;
 
 use App\Contracts\LoggerInterface;
+use Core\CircuitBreaker;
 
 /**
  * DeepFaceKycAdapter
@@ -17,11 +18,13 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
     private ?string $apiToken;
     private LoggerInterface $logger;
     private \Core\Database $db;
+    private ?CircuitBreaker $circuitBreaker;
 
-    public function __construct(LoggerInterface $logger, \Core\Database $db)
+    public function __construct(LoggerInterface $logger, \Core\Database $db, ?CircuitBreaker $circuitBreaker = null)
     {
         $this->logger   = $logger;
         $this->db       = $db;
+        $this->circuitBreaker = $circuitBreaker;
         // این تنظیمات از فایل .env خوانده می‌شوند.
         $this->apiUrl   = config('services.deepface.api_url');
         $this->apiToken = config('services.deepface.api_token');
@@ -56,7 +59,8 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
         try {
             // ساخت بدنه درخواست شامل فایل آپلودی به صورت multipart
             $ch = curl_init();
-            
+            $curlClosed = false;
+
             $cFile = new \CURLFile($absoluteFilePath);
             $postData = [
                 'image' => $cFile
@@ -75,9 +79,20 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
                 ]);
             }
 
-            $responseRaw = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $runner = function () use ($ch) {
+                $raw = curl_exec($ch);
+                $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                if ($code !== 200 || !$raw) {
+                    throw new \Core\Exceptions\TransientException("Invalid AI service response (HTTP {$code})");
+                }
+                return [$raw, $code];
+            };
+
+            [$responseRaw, $httpCode] = $this->circuitBreaker
+                ? $this->circuitBreaker->call('deepface_kyc', $runner)
+                : $runner();
             curl_close($ch);
+            $curlClosed = true;
 
             if ($httpCode !== 200 || !$responseRaw) {
                 throw new \Exception("Invalid AI service response (HTTP $httpCode)");
@@ -105,6 +120,9 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
             ];
 
         } catch (\Throwable $e) {
+            if (isset($ch, $curlClosed) && !$curlClosed) {
+                @curl_close($ch);
+            }
             $this->logger->error('kyc.ai.failed', [
                 'error' => $e->getMessage(),
                 'file' => basename($absoluteFilePath)
