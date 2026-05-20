@@ -262,6 +262,51 @@ return [
      * Two-Factor Authentication
      * محدودیت‌های 2FA
      */
+    /**
+     * Search endpoints — DB-heavy, must be stricter than default API.
+     * Section 8.8 — moved here from SearchController hardcodes.
+     */
+    'search' => [
+        'general' => [
+            'max_attempts' => env('RATE_LIMIT_SEARCH_MAX', 30),
+            'decay_minutes' => 1,
+        ],
+        'advanced' => [
+            'max_attempts' => env('RATE_LIMIT_SEARCH_ADV_MAX', 20),
+            'decay_minutes' => 1,
+        ],
+        // Admin-side bulk search panel.
+        'admin_user' => [
+            'max_attempts' => env('RATE_LIMIT_ADMIN_SEARCH_USER_MAX', 50),
+            'decay_minutes' => 1,
+        ],
+        'admin_ip' => [
+            'max_attempts' => env('RATE_LIMIT_ADMIN_SEARCH_IP_MAX', 100),
+            'decay_minutes' => 1,
+        ],
+        'admin_fingerprint' => [
+            'max_attempts' => env('RATE_LIMIT_ADMIN_SEARCH_FP_MAX', 60),
+            'decay_minutes' => 1,
+        ],
+    ],
+
+    /**
+     * Payment gateway callbacks — extremely sensitive (replay/DoS surface).
+     * Section 8.8 — moved here from PaymentService hardcode (20/1m).
+     */
+    'payment' => [
+        'callback' => [
+            'max_attempts' => env('RATE_LIMIT_PAYMENT_CALLBACK_MAX', 20),
+            'decay_minutes' => 1,
+            'fail_closed' => true,
+        ],
+        'verify' => [
+            'max_attempts' => env('RATE_LIMIT_PAYMENT_VERIFY_MAX', 10),
+            'decay_minutes' => 1,
+            'fail_closed' => true,
+        ],
+    ],
+
     'two_factor' => [
         'verify' => [
             'max_attempts' => 5,
@@ -284,4 +329,95 @@ return [
             'message' => 'تعداد تلاش‌های کد بازیابی بیش از حد. لطفاً 5 دقیقه صبر کنید.'
         ],
     ],
+    /**
+     * Section 8.8 — Centralized route → (group, endpoint) mapping.
+     * Used by App\Middleware\RateLimitMiddleware to replace its
+     * hardcoded ROUTE_LIMITS table. Match is done with str_starts_with.
+     *
+     * Order matters: most specific prefixes first.
+     */
+    'route_map' => [
+        // Auth
+        '/login'                  => ['auth', 'login'],
+        '/register'               => ['auth', 'register'],
+        '/forgot-password'        => ['auth', 'forgot_password'],
+        '/reset-password'         => ['auth', 'reset_password'],
+
+        // Financial
+        '/wallet/deposit/crypto'  => ['financial', 'deposit'],
+        '/payment/callback'       => ['payment',   'callback'],
+        '/payment/verify'         => ['payment',   'verify'],
+        '/payment'                => ['financial', 'deposit'],
+        '/withdrawal'             => ['financial', 'withdrawal'],
+
+        // KYC
+        '/kyc'                    => ['kyc',       'submit'],
+
+        // 2FA
+        '/two-factor/verify'      => ['two_factor','verify'],
+        '/two-factor'             => ['two_factor','enable'],
+
+        // API
+        '/api/auth'               => ['auth',      'login'],
+        '/api/token'              => ['auth',      'login'],
+        '/api/public'             => ['api',       'general'],
+
+        // Search
+        '/search/advanced'        => ['search',    'advanced'],
+        '/search'                 => ['search',    'general'],
+
+        // Reports / exports
+        '/reports/export'         => ['reports',   'export'],
+        '/reports'                => ['reports',   'generate'],
+
+        // Tasks
+        '/task/submit'            => ['task',      'submit'],
+        '/task/dispute'           => ['task',      'dispute'],
+        '/task'                   => ['task',      'execute'],
+
+        // Admin (catch-all)
+        '/admin/auth'             => ['admin',     'login'],
+        '/admin'                  => ['admin',     'general'],
+    ],
+
+    /**
+     * Section 8.8 — Centralized action → (group, endpoint) mapping for
+     * App\Policies\RateLimitPolicy. When a FeatureFlag override is absent
+     * the Policy now falls back to this mapping instead of the previous
+     * restrictive "3 per 24h" lockout.
+     */
+    'action_map' => [
+        'withdrawal'      => ['financial',  'withdrawal'],
+        'manual_deposit'  => ['financial',  'deposit'],
+        'crypto_deposit'  => ['financial',  'deposit'],
+        'bank_card_add'   => ['financial',  'deposit'],
+        'task_submit'     => ['task',       'submit'],
+        'task_dispute'    => ['task',       'dispute'],
+        'task_execute'    => ['task',       'execute'],
+        'task_create'     => ['task',       'create'],
+        'kyc_submit'      => ['kyc',        'submit'],
+        'profile_update'  => ['content',    'update'],
+        'password_change' => ['auth',       'reset_password'],
+        'ticket_create'   => ['social',     'ticket_create'],
+        'ticket_reply'    => ['social',     'ticket_reply'],
+        'login'           => ['auth',       'login'],
+        'register'        => ['auth',       'register'],
+        'two_factor_verify'  => ['two_factor', 'verify'],
+        'two_factor_enable'  => ['two_factor', 'enable'],
+        'two_factor_disable' => ['two_factor', 'disable'],
+        'two_factor_recovery'=> ['two_factor', 'recovery_code'],
+        'payment_callback'   => ['payment', 'callback'],
+        'payment_verify'     => ['payment', 'verify'],
+        'admin_search_user'        => ['search', 'admin_user'],
+        'admin_search_ip'          => ['search', 'admin_ip'],
+        'admin_search_fingerprint' => ['search', 'admin_fingerprint'],
+        'lottery_participate' => ['lottery', 'participate'],
+        'referral_check_code' => ['referral', 'check_code'],
+        'investment_create'   => ['investment', 'create'],
+        'investment_withdraw' => ['investment', 'withdraw'],
+        'content_create'      => ['content',    'create'],
+        'content_update'      => ['content',    'update'],
+        'content_delete'      => ['content',    'delete'],
+    ],
+
 ];

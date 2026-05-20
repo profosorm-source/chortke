@@ -191,7 +191,14 @@ $container->singleton(\App\Services\CryptoDeposit\CryptoDepositService::class);
 // CryptoDeposit Adapters
 $container->singleton(\App\Adapters\CryptoVerificationAdapter::class, \App\Adapters\CryptoExplorerAdapter::class);
 
-$container->singleton(\App\Adapters\CryptoApiAdapter::class);
+$container->singleton(\App\Adapters\CryptoApiAdapter::class, function($c) {
+    return new \App\Adapters\CryptoApiAdapter(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\SettingService::class),
+        $c->make(\Core\CircuitBreaker::class)
+    );
+});
 
 // Bank Inquiry Adapter (Automatic Fallback enabled)
 $container->singleton(\App\Adapters\BankInquiryAdapter::class, \App\Adapters\JibitInquiryAdapter::class);
@@ -332,7 +339,8 @@ $container->singleton(\App\Contracts\NotificationServiceInterface::class, functi
 $container->singleton(\App\Services\Notification\NotificationRetryPolicy::class, function($c) {
     return new \App\Services\Notification\NotificationRetryPolicy(
         $c->make(\Core\Cache::class),
-        $c->make(\App\Contracts\LoggerInterface::class)
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\CircuitBreaker::class)
     );
 });
 
@@ -368,7 +376,8 @@ $container->singleton(\App\Adapters\PushNotificationAdapter::class, function($c)
 $container->singleton(\App\Adapters\SmsNotificationAdapter::class, function($c) {
     return new \App\Adapters\SmsNotificationAdapter(
         $c->make(\App\Models\User::class),
-        $c->make(\Core\Logger::class)
+        $c->make(\Core\Logger::class),
+        $c->make(\Core\CircuitBreaker::class)
     );
 });
 
@@ -377,7 +386,8 @@ $container->singleton(\App\Adapters\FcmNotificationAdapter::class, function($c) 
         $c->make(\Core\Logger::class),
         $c->make(\Core\Cache::class),
         $c->make(\Core\Database::class),
-        $c->make(\App\Contracts\MetricsCollectorInterface::class)
+        $c->make(\App\Contracts\MetricsCollectorInterface::class),
+        $c->make(\Core\CircuitBreaker::class)
     );
 });
 
@@ -914,6 +924,7 @@ $container->singleton(\App\Services\OutboxPublisher::class, function($c) {
     );
 });
 
+
 $container->singleton(\Core\IdempotencyKey::class, function($c) {
     return new \Core\IdempotencyKey(
         $c->make(\Core\Database::class),
@@ -948,6 +959,22 @@ $container->singleton(\Core\Console\CliDispatcher::class, function($c) {
     $dispatcher->register('queue:failed:list', \App\Commands\QueueFailedCommand::class, 'List failed queue jobs');
     $dispatcher->register('queue:failed:retry', \App\Commands\QueueFailedCommand::class, 'Retry a failed queue job by id');
     $dispatcher->register('queue:failed:forget', \App\Commands\QueueFailedCommand::class, 'Delete a failed queue job by id');
+    $dispatcher->register('queue:failed:retry-batch', \App\Commands\QueueFailedCommand::class, 'Re-queue a batch of failed jobs (optionally filtered by --queue)');
+    $dispatcher->register('queue:failed:purge',       \App\Commands\QueueFailedCommand::class, 'Purge failed_jobs older than --days');
+    $dispatcher->register('queue:failed:stats',       \App\Commands\QueueFailedCommand::class, 'Show DLQ size grouped by queue');
+
+    $dispatcher->register('idempotency:stats',   \App\Commands\IdempotencyCommand::class, 'Show idempotency_keys totals grouped by status');
+    $dispatcher->register('idempotency:cleanup', \App\Commands\IdempotencyCommand::class, 'Delete expired idempotency_keys (use --dry-run to preview)');
+
+    $dispatcher->register('ratelimit:audit', \App\Commands\RateLimitAuditCommand::class, 'Audit unified rate-limit policy (config/rate_limits.php)');
+
+    $dispatcher->register('withdrawals:review:scan',     \App\Commands\StuckWithdrawalReviewCommand::class, 'Detect & flag stuck withdrawals for admin review (safe)');
+    $dispatcher->register('withdrawals:review:auto-fix', \App\Commands\StuckWithdrawalReviewCommand::class, 'Auto-resolve only deterministic stuck withdrawals (tx failed/cancelled)');
+    $dispatcher->register('withdrawals:review:list',     \App\Commands\StuckWithdrawalReviewCommand::class, 'List open stuck-withdrawal reviews');
+    $dispatcher->register('withdrawals:review:resolve',  \App\Commands\StuckWithdrawalReviewCommand::class, 'Admin: mark a stuck-withdrawal review as resolved');
+    $dispatcher->register('withdrawals:review:dismiss',  \App\Commands\StuckWithdrawalReviewCommand::class, 'Admin: dismiss a stuck-withdrawal review');
+
+    $dispatcher->register('outbox:publish',              \App\Commands\OutboxPublishCommand::class, 'Publish pending outbox_events (transactional outbox worker)');
 
     return $dispatcher;
 });
@@ -1339,7 +1366,8 @@ $container->singleton(\App\Services\ReconciliationService::class, function($c) {
         $c->make(\App\Contracts\LoggerInterface::class),
         $c->make(\App\Services\WalletService::class),
         $c->make(\App\Services\LedgerService::class),
-        $c->make(\App\Services\AuditTrail::class)
+        $c->make(\App\Services\AuditTrail::class),
+        $c->make(\App\Services\OutboxService::class)
     );
 });
 

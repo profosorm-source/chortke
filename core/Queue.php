@@ -280,4 +280,124 @@ class Queue
     {
         return $this->maxAttempts;
     }
+
+    // =========================================================================
+    // Section 8.5 / 8.7 — DLQ housekeeping helpers
+    // =========================================================================
+
+    /**
+     * حذف failed_jobs قدیمی‌تر از $days روز (به‌صورت اختیاری فقط برای یک queue).
+     * برای جلوگیری از قفل طولانی، در batchهای کوچک حذف می‌کند.
+     *
+     * @return int تعداد رکوردهای حذف‌شده
+     */
+    public function purgeFailedJobsOlderThan(int $days, ?string $queue = null, int $batch = 500): int
+    {
+        $days  = max(1, min(3650, $days));
+        $batch = max(50, min(5000, $batch));
+
+        $totalDeleted = 0;
+        $safety = 0;
+
+        while ($safety++ < 1000) { // hard cap: at most 1000 * batch rows in one call
+            $sql = "DELETE FROM failed_jobs
+                    WHERE failed_at < DATE_SUB(NOW(), INTERVAL ? DAY)";
+            $params = [$days];
+            if ($queue !== null && $queue !== '') {
+                $sql .= " AND queue = ?";
+                $params[] = $queue;
+            }
+            $sql .= " LIMIT " . (int)$batch;
+
+            $deleted = (int) $this->db->execute($sql, $params);
+            if ($deleted <= 0) {
+                break;
+            }
+            $totalDeleted += $deleted;
+            if ($deleted < $batch) {
+                break;
+            }
+        }
+        return $totalDeleted;
+    }
+
+    /**
+     * شمارش failed_jobs (به‌صورت اختیاری filter بر اساس queue).
+     */
+    public function countFailedJobs(?string $queue = null): int
+    {
+        $sql = "SELECT COUNT(*) AS c FROM failed_jobs";
+        $params = [];
+        if ($queue !== null && $queue !== '') {
+            $sql .= " WHERE queue = ?";
+            $params[] = $queue;
+        }
+        $row = $this->db->fetch($sql, $params);
+        return (int) ($row->c ?? 0);
+    }
+
+    /**
+     * بازگرداندن دسته‌ای از failed_jobs به صف اصلی (re-queue).
+     * Idempotent از این جهت که هر row فقط یک بار delete می‌شود و در همان transaction push می‌گردد.
+     *
+     * @param string|null $queue  محدودسازی به یک queue (مثل failed_notifications)
+     * @param int $limit حداکثر تعداد retry در یک اجرا
+     * @return array{requeued:int, skipped:int, errors:int}
+     */
+    public function retryFailedJobsBatch(?string $queue = null, int $limit = 100): array
+    {
+        $limit = max(1, min(1000, $limit));
+        $stats = ['requeued' => 0, 'skipped' => 0, 'errors' => 0];
+
+        $sql = "SELECT id, queue, payload FROM failed_jobs";
+        $params = [];
+        if ($queue !== null && $queue !== '') {
+            $sql .= " WHERE queue = ?";
+            $params[] = $queue;
+        }
+        $sql .= " ORDER BY failed_at ASC LIMIT " . (int)$limit;
+
+        $rows = $this->db->fetchAll($sql, $params);
+        if (empty($rows)) {
+            return $stats;
+        }
+
+        foreach ($rows as $row) {
+            $payload = json_decode((string)$row->payload, true);
+            if (!is_array($payload) || empty($payload['job'])) {
+                $stats['skipped']++;
+                continue;
+            }
+
+            try {
+                $this->db->beginTransaction();
+                $ok = $this->push(
+                    (string)$payload['job'],
+                    (array)($payload['data'] ?? []),
+                    (string)($row->queue ?? $this->defaultQueue)
+                );
+                if (!$ok) {
+                    $this->db->rollBack();
+                    $stats['errors']++;
+                    continue;
+                }
+                $this->db->execute("DELETE FROM failed_jobs WHERE id = ?", [(int)$row->id]);
+                $this->db->commit();
+                $stats['requeued']++;
+            } catch (\Throwable $e) {
+                if ($this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                $stats['errors']++;
+                if (function_exists('logger')) {
+                    logger()->warning('queue.failed_retry.failed', [
+                        'failed_job_id' => (int)$row->id,
+                        'queue'         => $row->queue ?? null,
+                        'error'         => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+        return $stats;
+    }
 }
