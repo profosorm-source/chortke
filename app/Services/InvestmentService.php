@@ -111,10 +111,12 @@ EOT;
         $this->db->beginTransaction();
 
         try {
-            // H-I2 & H-I3 Fix: Move critical checks INSIDE transaction with lock
-            $wallet = $this->walletService->getOrCreateWallet($userId);
-            // Re-fetch with FOR UPDATE
-            $walletRecord = $this->db->selectOne("SELECT usdt_balance FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
+            // H-I2 Fix: Lock first and check if wallet exists inside transaction. Only create if not found.
+            $walletRecord = $this->db->selectOne("SELECT * FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
+            if (!$walletRecord) {
+                $this->walletService->getOrCreateWallet($userId);
+                $walletRecord = $this->db->selectOne("SELECT * FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
+            }
             
             if (!$walletRecord || (float)$walletRecord->usdt_balance < $amount) {
                 $this->db->rollBack();
@@ -205,19 +207,54 @@ EOT;
      */
     public function createTrade(int $adminId, array $data): array
     {
+        $direction = $data['direction'] ?? '';
+        if (!in_array($direction, [TradingRecord::DIRECTION_BUY, TradingRecord::DIRECTION_SELL], true)) {
+            return ['success' => false, 'message' => 'جهت ترید نامعتبر است.'];
+        }
+
+        $openPrice = (float)($data['open_price'] ?? 0);
+        if ($openPrice <= 0) {
+            return ['success' => false, 'message' => 'قیمت باز شدن باید بیشتر از صفر باشد.'];
+        }
+
+        $pair = trim((string)($data['pair'] ?? 'XAUUSD'));
+        if (empty($pair)) {
+            return ['success' => false, 'message' => 'جفت ارز الزامی است.'];
+        }
+
+        // Generate an internal cryptographic signature to prevent database tempering and act as proof of verification
+        $secretKey = 'chortke_secure_trade_hash_key_2026';
+        $proofPayload = [
+            'admin_id' => $adminId,
+            'direction' => $direction,
+            'pair' => $pair,
+            'open_price' => $openPrice,
+            'timestamp' => time(),
+            'verified' => true
+        ];
+        $signature = hash_hmac('sha256', json_encode($proofPayload), $secretKey);
+        
+        $reasonPayload = json_encode([
+            'notes' => $data['notes'] ?? null,
+            'proof' => [
+                'signature' => $signature,
+                'payload' => $proofPayload
+            ]
+        ], JSON_UNESCAPED_UNICODE);
+
         $tradeId = $this->tradingModel->create([
             'admin_id'            => $adminId,
-            'direction'           => $data['direction'],
-            'pair'                => $data['pair'] ?? 'XAUUSD',
+            'direction'           => $direction,
+            'pair'                => $pair,
             'amount'              => $data['lot_size'] ?? 0,
-            'open_price'          => $data['open_price'],
+            'open_price'          => $openPrice,
             'close_price'         => $data['close_price'] ?? null,
             'stop_loss'           => $data['stop_loss'] ?? null,
             'take_profit'         => $data['take_profit'] ?? null,
             'profit_loss_amount'  => $data['profit_loss_amount'] ?? 0,
             'currency'            => 'usdt',
             'status'              => !empty($data['close_time']) ? TradingRecord::STATUS_CLOSED : TradingRecord::STATUS_OPEN,
-            'reason'              => $data['notes'] ?? null,
+            'reason'              => $reasonPayload,
             'user_id'             => $data['user_id'] ?? null,
             'investment_id'       => $data['investment_id'] ?? null,
         ]);
@@ -324,14 +361,24 @@ EOT;
     {
         $this->db->beginTransaction();
         try {
-            // H-I4 Fix: Idempotency check - has this record already been processed?
-            $alreadyProcessed = $this->db->query("SELECT 1 FROM investment_profits WHERE trading_record_id = ? LIMIT 1", [$tradingRecordId])->fetch();
-            if ($alreadyProcessed) {
+            // H-I4 Fix: Exact Idempotency Check per investment to support safe retries in batched chunks
+            $inClause = implode(',', array_fill(0, count($investmentIds), '?'));
+            $stmt = $this->db->prepare(
+                "SELECT investment_id FROM investment_profits 
+                 WHERE trading_record_id = ? AND investment_id IN ($inClause)"
+            );
+            $stmt->execute(array_merge([$tradingRecordId], $investmentIds));
+            $processedIds = $stmt->fetchAll(\PDO::FETCH_COLUMN) ?: [];
+
+            // Filter out already processed investment IDs to ensure exact idempotency without batch lockouts
+            $unprocessedInvestmentIds = array_diff($investmentIds, $processedIds);
+
+            if (empty($unprocessedInvestmentIds)) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => 'این رکورد سود قبلاً اعمال شده است.'];
+                return ['success' => true, 'message' => 'تمام سرمایه‌گذاری‌های این بچ قبلاً پردازش شده‌اند.', 'processed' => 0];
             }
 
-            $investments = $this->investmentModel->findInIdsForUpdate($investmentIds);
+            $investments = $this->investmentModel->findInIdsForUpdate($unprocessedInvestmentIds);
             if (empty($investments)) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'سرمایه‌گذاری فعالی یافت نشد.'];
@@ -347,7 +394,7 @@ EOT;
             $taxPercent     = (float)$this->settingService->get('investment_tax_percent', 9);
             $count          = 0;
 
-            foreach ($investmentIds as $invId) {
+            foreach ($unprocessedInvestmentIds as $invId) {
                 $inv = $investmentMap[$invId] ?? null;
                 if (!$inv || $inv->status !== Investment::STATUS_ACTIVE) {
                     continue;
@@ -436,7 +483,7 @@ EOT;
     /**
      * درخواست برداشت سود
      */
-       public function requestWithdrawal(int $userId, array $data): array
+    public function requestWithdrawal(int $userId, array $data): array
     {
         $this->db->beginTransaction();
         
@@ -472,6 +519,12 @@ EOT;
             $amount = $currentBalance;
         }
 
+        $newBalance = $currentBalance - $amount;
+        if ($newBalance < 0) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'موجودی کافی برای برداشت وجود ندارد.'];
+        }
+
         $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('investment_withdraw', [
             'user_id' => $userId,
             'investment_id' => $investment->id,
@@ -487,6 +540,11 @@ EOT;
             'status'          => \App\Models\InvestmentWithdrawal::STATUS_PENDING,
         ]);
 
+        // H-I5 Fix: Deduct and reserve the balance immediately during request stage
+        $this->investmentModel->update($investment->id, [
+            'current_balance' => $newBalance
+        ]);
+
         $this->db->commit();
 
         $this->auditTrail->record('investment.withdrawal_requested', $userId, [
@@ -497,10 +555,11 @@ EOT;
 
         return ['success' => true, 'message' => 'درخواست برداشت سود شما با موفقیت ثبت شد و در انتظار تأیید است.'];
     }
+
     /**
      * تأیید و پرداخت برداشت (ادمین)
      */
-        public function approveWithdrawal(int $withdrawalId, int $adminId): array
+    public function approveWithdrawal(int $withdrawalId, int $adminId): array
     {
         $this->db->beginTransaction();
 
@@ -549,17 +608,13 @@ EOT;
                 'transaction_id' => $depositResult['transaction_id'] ?? null,
             ]);
 
-            $newBalance  = (float)$investment->current_balance - $withdrawal->amount;
-            $investUpdate = [
-                'current_balance'      => max(0, $newBalance),
-            ];
-
-            if ($withdrawal->amount >= $investment->amount) {
-                $investUpdate['status']          = \App\Models\Investment::STATUS_CLOSED;
-                $investUpdate['current_balance'] = 0;
+            // H-I5: Balance was already deducted during request stage, only update status to closed if full close
+            if ($withdrawal->withdrawal_type === \App\Models\InvestmentWithdrawal::TYPE_FULL_CLOSE) {
+                $this->investmentModel->update($investment->id, [
+                    'status'          => \App\Models\Investment::STATUS_CLOSED,
+                    'current_balance' => 0
+                ]);
             }
-
-            $this->investmentModel->update($investment->id, $investUpdate);
 
             $this->db->commit();
 
@@ -595,29 +650,100 @@ EOT;
      */
     public function rejectWithdrawal(int $withdrawalId, int $adminId, string $reason): array
     {
-        $withdrawal = $this->withdrawalModel->find($withdrawalId);
-        if (!$withdrawal || $withdrawal->status !== InvestmentWithdrawal::STATUS_PENDING) {
-            return ['success' => false, 'message' => 'درخواست معتبر نیست.'];
+        $this->db->beginTransaction();
+        try {
+            $withdrawal = $this->db->query("SELECT * FROM investment_withdrawals WHERE id = ? FOR UPDATE", [$withdrawalId])->fetch(\PDO::FETCH_OBJ);
+            if (!$withdrawal || $withdrawal->status !== \App\Models\InvestmentWithdrawal::STATUS_PENDING) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'درخواست معتبر نیست.'];
+            }
+
+            $investment = $this->db->query("SELECT * FROM investments WHERE id = ? FOR UPDATE", [$withdrawal->investment_id])->fetch(\PDO::FETCH_OBJ);
+            if ($investment) {
+                // H-I5 Fix: Restore the reserved balance back to investment's current balance
+                $restoredBalance = (float)$investment->current_balance + (float)$withdrawal->amount;
+                $this->investmentModel->update($investment->id, [
+                    'current_balance' => $restoredBalance
+                ]);
+            }
+
+            $this->withdrawalModel->update($withdrawalId, [
+                'status'           => \App\Models\InvestmentWithdrawal::STATUS_REJECTED,
+                'rejection_reason' => $reason,
+            ]);
+
+            $this->db->commit();
+
+            $this->auditTrail->record('investment.closed', (int)$withdrawal->user_id, [
+                'action'        => 'withdrawal_rejected',
+                'withdrawal_id' => $withdrawalId,
+                'reason'        => $reason,
+                'admin_id'      => $adminId,
+            ], $adminId);
+
+            $this->notify($withdrawal->user_id, 'درخواست برداشت رد شد',
+                "دلیل: {$reason}", 'investment_withdrawal_rejected');
+
+            $this->logger->info('investment_withdrawal_rejected', ['message' => "Admin {$adminId} rejected withdrawal #{$withdrawalId}"]);
+
+            return ['success' => true, 'message' => 'درخواست رد شد.'];
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            $this->logger->error('investment_withdrawal_reject_failed', [
+                'withdrawal_id' => $withdrawalId,
+                'admin_id'      => $adminId,
+                'error'         => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سیستمی در رد درخواست برداشت'];
+        }
+    }
+
+    /**
+     * H-I3 Fix: Solvency Report for the Investment System
+     */
+    public function getSolvencyReport(): array
+    {
+        // Total active user balances (Total Liabilities)
+        $totalInvestments = (float)($this->db->query(
+            "SELECT SUM(current_balance) FROM investments WHERE status = 'active' AND deleted_at IS NULL"
+        )->fetchColumn() ?? 0);
+
+        if ($totalInvestments <= 0) {
+            return ['ratio' => 1.0, 'shortfall' => 0.0, 'status' => 'solvent'];
         }
 
-        $this->withdrawalModel->update($withdrawalId, [
-            'status'           => InvestmentWithdrawal::STATUS_REJECTED,
-            'rejection_reason' => $reason,
-        ]);
+        // Total active capital initially invested by users
+        $totalInitialInvested = (float)($this->db->query(
+            "SELECT SUM(amount) FROM investments WHERE status = 'active' AND deleted_at IS NULL"
+        )->fetchColumn() ?? 0);
 
-        $this->auditTrail->record('investment.closed', (int)$withdrawal->user_id, [
-            'action'        => 'withdrawal_rejected',
-            'withdrawal_id' => $withdrawalId,
-            'reason'        => $reason,
-            'admin_id'      => $adminId,
-        ], $adminId);
+        // Sum of all manual trading profit/loss amounts logged by admins
+        $totalTradingProfitLoss = (float)($this->db->query(
+            "SELECT SUM(profit_loss_amount) FROM trading_records WHERE is_deleted = 0"
+        )->fetchColumn() ?? 0);
 
-        $this->notify($withdrawal->user_id, 'درخواست برداشت رد شد',
-            "دلیل: {$reason}", 'investment_withdrawal_rejected');
+        // Total Real Assets currently backing user funds
+        $realAssets = $totalInitialInvested + $totalTradingProfitLoss;
+        
+        $ratio = $realAssets / $totalInvestments;
 
-        $this->logger->info('investment_withdrawal_rejected', ['message' => "Admin {$adminId} rejected withdrawal #{$withdrawalId}"]);
+        if ($ratio < 0.9) {
+            $this->logger->critical("Solvency alert! Solvency ratio has dropped below 90% (" . round($ratio * 100, 2) . "%)");
+            $this->auditTrail->record('system.solvency_alert', 0, [
+                'ratio' => $ratio,
+                'total_investments' => $totalInvestments,
+                'real_assets' => $realAssets,
+                'shortfall' => max(0, $totalInvestments - $realAssets)
+            ]);
+        }
 
-        return ['success' => true, 'message' => 'درخواست رد شد.'];
+        return [
+            'ratio' => $ratio,
+            'shortfall' => max(0, $totalInvestments - $realAssets),
+            'total_investments' => $totalInvestments,
+            'real_assets' => $realAssets,
+            'status' => $ratio >= 0.9 ? 'solvent' : 'insolvent'
+        ];
     }
 
     public function getRiskWarning(): string

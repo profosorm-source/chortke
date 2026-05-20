@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\User\UserScoreService;
 use App\Services\InfluencerReputationService;
 use Core\Cache;
+use App\Contracts\LoggerInterface;
 
 /**
  * ScoreService - اورکستریتور اصلی مدیریت امتیازات
