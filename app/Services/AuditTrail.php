@@ -349,20 +349,24 @@ class AuditTrail extends \App\Services\BaseService
 
     private function sanitizeEvent(string $event): string
     {
-        $event = trim(strtolower($event));
-        return mb_substr($event, 0, 100);
+        // حذف کاراکترهای خاص
+        $event = preg_replace('/[^a-zA-Z0-9_.\-:]/', '', $event);
+        
+        // محدود کردن طول
+        return substr($event, 0, 100);
     }
 
     private function sanitizeContext(array $context): array
     {
+        $sensitiveKeys = ['password', 'token', 'secret', 'api_key', 'private_key', 'card_number', 'sheba', 'iban'];
+        
+        // Mask sensitive keys at any level recursively
         $masked = $context;
-        $sensitive = ['password', 'token', 'api_key', 'secret', 'card_number', 'sheba', 'iban'];
-
-        array_walk_recursive($masked, function (&$value, $key) use ($sensitive) {
+        array_walk_recursive($masked, function (&$value, $key) use ($sensitiveKeys) {
             $k = strtolower((string)$key);
-            foreach ($sensitive as $field) {
+            foreach ($sensitiveKeys as $field) {
                 if (str_contains($k, $field)) {
-                    $value = '***MASKED***';
+                    $value = '[REDACTED]';
                     return;
                 }
             }
@@ -372,7 +376,26 @@ class AuditTrail extends \App\Services\BaseService
             }
         });
 
-        return $masked;
+        // Limit array depth to prevent size explosion
+        return $this->limitArrayDepth($masked, 5);
+    }
+
+    private function limitArrayDepth(array $array, int $maxDepth, int $currentDepth = 0): array
+    {
+        if ($currentDepth >= $maxDepth) {
+            return ['[MAX_DEPTH_REACHED]'];
+        }
+        
+        $result = [];
+        foreach ($array as $key => $value) {
+            if (is_array($value)) {
+                $result[$key] = $this->limitArrayDepth($value, $maxDepth, $currentDepth + 1);
+            } else {
+                $result[$key] = $value;
+            }
+        }
+        
+        return $result;
     }
 
     /**

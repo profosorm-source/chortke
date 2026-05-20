@@ -136,6 +136,13 @@ class EscrowService extends \App\Services\BaseService
             throw new \RuntimeException('releaseFunds must be called inside an active transaction');
         }
 
+        // ✅ Escrow already released check (idempotency key check)
+        $ledgerKey = "escrow_release_{$escrowId}";
+        $existing = $this->ledgerService->findByTransactionId($ledgerKey);
+        if (!empty($existing)) {
+            throw new \RuntimeException('Escrow already released - ledger entry exists');
+        }
+
         // ✅ Acquire lock & validate state
         $escrow = $this->escrowModel->findReleasable($escrowId, $sellerId);
 

@@ -103,4 +103,9 @@ class LedgerService extends \App\Services\BaseService
 
         return bccomp($debit, $credit, 8) === 0;
     }
+
+    public function findByTransactionId(string $transactionId): array
+    {
+        return $this->ledgerEntry->getByTransactionId($transactionId);
+    }
 }
