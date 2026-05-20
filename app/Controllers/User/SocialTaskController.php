@@ -4,7 +4,7 @@ namespace App\Controllers\User;
 
 use App\Services\SocialTask\RatingService;
 use App\Services\SocialTask\SocialTaskService;
-use App\Services\Shared\ScoreService;
+use App\Services\SocialTask\TrustScoreService;
 use Core\Logger;
 use Core\Database;
 use App\Contracts\LoggerInterface;
@@ -39,7 +39,7 @@ class SocialTaskController extends BaseUserController
 {
     public function __construct(
         private SocialTaskService $service,
-        private ScoreService $scoreService,
+        private TrustScoreService $trustScoreService,
         private RatingService $ratingService,
         private \App\Services\AdSystemManager $adManager,
         protected LoggerInterface $logger
@@ -101,13 +101,13 @@ class SocialTaskController extends BaseUserController
         $userId  = (int)user_id();
         $stats   = $this->service->getExecutorStats($userId);
         $history = $this->service->getExecutorHistory($userId, 7);
-        $weekly  = $this->scoreService->getWeeklyStats($userId);
+        $weekly  = $this->trustScoreService->getWeeklyStats($userId);
 
         view('user.social-tasks.dashboard', [
             'title'        => 'داشبورد تسک‌های اجتماعی',
             'stats'        => $stats,
             'recent'       => $history,
-            'trust_score'  => $this->scoreService->getTrustScore($userId),
+            'trust_score'  => $this->trustScoreService->get($userId),
             'weekly_stats' => $weekly,
         ]);
     }
@@ -231,7 +231,7 @@ class SocialTaskController extends BaseUserController
             'title'       => 'تاریخچه تسک‌ها',
             'history'     => $history,
             'stats'       => $stats,
-            'trust_score' => $this->scoreService->getTrustScore($userId),
+            'trust_score' => $this->trustScoreService->get($userId),
             'page'        => $page,
         ]);
     }

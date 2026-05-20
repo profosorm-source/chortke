@@ -4,7 +4,7 @@ namespace App\Controllers\User;
 
 use App\Models\Ads;
 use App\Models\SeoExecution;
-use App\Services\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\Shared\AnalyticsService;
 use App\Services\SeoPayoutService;
 use App\Services\AdSystemManager;
@@ -16,7 +16,7 @@ class SeoAdController extends BaseUserController
 {
     private Ads $model;
     private SeoExecution $executionModel;
-    private WalletService $wallet;
+    private WalletServiceInterface $wallet;
     private AnalyticsService $analytics;
     private SeoPayoutService $payoutService;
     private AdSystemManager $adManager;
@@ -24,7 +24,7 @@ class SeoAdController extends BaseUserController
     public function __construct(
         Ads $m,
         SeoExecution $e,
-        WalletService $w,
+        WalletServiceInterface $w,
         AnalyticsService $a,
         SeoPayoutService $p,
         AdSystemManager $adManager
@@ -124,10 +124,16 @@ class SeoAdController extends BaseUserController
             $this->session->setFlash('warning', 'توجه: بودجه شما ممکن است برای تعداد کاربران مورد نظر کافی نباشد.');
         }
 
-        // کسر از کیف پول
-        $debit = $this->wallet->debit(
-            $uid, $budget, 'irt', 'seo_ad',
-            'SEO Ad: ' . $data['keyword']
+        // کسر از کیف پول از طریق API رسمی WalletService
+        $debit = $this->wallet->pay(
+            $uid,
+            (string)$budget,
+            'irt',
+            [
+                'type' => 'seo_ad',
+                'description' => 'SEO Ad: ' . $data['keyword'],
+                'ref_type' => 'seo_ad',
+            ]
         );
         
         if (!$debit['success']) {
@@ -157,8 +163,12 @@ class SeoAdController extends BaseUserController
             $this->session->setFlash('success', 'آگهی SEO ثبت شد و پس از تایید مدیر فعال می‌شود.');
             redirect(url('/seo-ad'));
         } else {
-            // برگشت وجه
-            $this->wallet->credit($uid, $budget, 'irt', 'seo_ad_refund', 'برگشت بودجه SEO Ad');
+            // برگشت وجه از طریق API رسمی WalletService
+            $this->wallet->deposit($uid, (string)$budget, 'irt', [
+                'type' => 'seo_ad_refund',
+                'description' => 'برگشت بودجه SEO Ad',
+                'ref_type' => 'seo_ad',
+            ]);
             $this->session->setFlash('error', 'خطا در ثبت آگهی.');
             redirect(url('/seo-ad/create'));
         }
