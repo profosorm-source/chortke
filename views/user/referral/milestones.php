@@ -25,16 +25,16 @@
                     <div class="milestone-card achieved">
                         <div class="milestone-icon">
                             <?php if ($milestone->badge_icon): ?>
-                                <img src="<?= $milestone->badge_icon ?>" alt="<?= $milestone->title_fa ?>">
+                                <img src="<?= e($milestone->badge_icon) ?>" alt="<?= e($milestone->title_fa) ?>">
                             <?php else: ?>
                                 <span class="default-icon">🏅</span>
                             <?php endif; ?>
                         </div>
                         
                         <div class="milestone-content">
-                            <h3><?= $milestone->title_fa ?></h3>
+                            <h3><?= e($milestone->title_fa) ?></h3>
                             <?php if ($milestone->description): ?>
-                                <p class="description"><?= $milestone->description ?></p>
+                                <p class="description"><?= e($milestone->description) ?></p>
                             <?php endif; ?>
                             
                             <div class="milestone-reward">
@@ -103,16 +103,16 @@
                             <div class="milestone-card available">
                                 <div class="milestone-icon locked">
                                     <?php if ($milestone->badge_icon): ?>
-                                        <img src="<?= $milestone->badge_icon ?>" alt="<?= $milestone->title_fa ?>">
+                                        <img src="<?= e($milestone->badge_icon) ?>" alt="<?= e($milestone->title_fa) ?>">
                                     <?php else: ?>
                                         <span class="default-icon">🔒</span>
                                     <?php endif; ?>
                                 </div>
                                 
                                 <div class="milestone-content">
-                                    <h3><?= $milestone->title_fa ?></h3>
+                                    <h3><?= e($milestone->title_fa) ?></h3>
                                     <?php if ($milestone->description): ?>
-                                        <p class="description"><?= $milestone->description ?></p>
+                                        <p class="description"><?= e($milestone->description) ?></p>
                                     <?php endif; ?>
                                     
                                     <div class="milestone-requirement">

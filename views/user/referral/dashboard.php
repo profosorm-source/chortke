@@ -26,13 +26,13 @@
         <h2>سطح فعلی شما</h2>
         <div class="tier-card">
             <div class="tier-badge tier-<?= strtolower($current_tier->slug ?? 'bronze') ?>">
-                <?= $current_tier->name_fa ?? 'برنز' ?>
+                <?= e($current_tier->name_fa ?? 'برنز') ?>
             </div>
             <p>افزایش کمیسیون: <strong>+<?= $current_tier->commission_boost_percent ?? 0 ?>%</strong></p>
             
             <?php if ($next_tier_progress && $next_tier_progress['has_next']): ?>
                 <div class="tier-progress">
-                    <h3>پیشرفت تا سطح بعدی: <?= $next_tier_progress['next_tier']->name_fa ?></h3>
+                    <h3>پیشرفت تا سطح بعدی: <?= e($next_tier_progress['next_tier']->name_fa) ?></h3>
                     
                     <div class="progress-item">
                         <span>تعداد رفرال فعال:</span>
@@ -92,7 +92,7 @@
             <div class="gauge-bar">
                 <div class="gauge-fill" style="width: <?= $quality_score ?>%; background-color: <?= $quality_interpretation['color'] ?>"></div>
             </div>
-            <p><?= $quality_interpretation['description'] ?></p>
+            <p><?= e($quality_interpretation['description']) ?></p>
         </div>
         
         <?php if (!empty($improvement_suggestions)): ?>
@@ -101,9 +101,9 @@
                 <ul>
                     <?php foreach ($improvement_suggestions as $suggestion): ?>
                         <li class="suggestion-<?= $suggestion['type'] ?>">
-                            <strong><?= $suggestion['message'] ?></strong>
+                            <strong><?= e($suggestion['message']) ?></strong>
                             <?php if (isset($suggestion['action'])): ?>
-                                <br><small>💡 <?= $suggestion['action'] ?></small>
+                                <br><small>💡 <?= e($suggestion['action']) ?></small>
                             <?php endif; ?>
                         </li>
                     <?php endforeach; ?>
@@ -120,7 +120,7 @@
             <div class="next-milestone">
                 <h3>🎯 نزدیک‌ترین دستاورد:</h3>
                 <div class="milestone-card">
-                    <h4><?= $next_milestone->title_fa ?></h4>
+                    <h4><?= e($next_milestone->title_fa) ?></h4>
                     <div class="milestone-progress">
                         <div class="progress-bar">
                             <div class="progress-fill" style="width: <?= min(100, $next_milestone->progress_percent) ?>%"></div>
@@ -140,7 +140,7 @@
                 <?php foreach (array_slice($achieved_milestones, 0, 6) as $milestone): ?>
                     <div class="milestone-badge achieved">
                         <span class="badge-icon">🏅</span>
-                        <span class="badge-title"><?= $milestone->title_fa ?></span>
+                        <span class="badge-title"><?= e($milestone->title_fa) ?></span>
                         <small><?= to_jalali($milestone->achieved_at) ?></small>
                     </div>
                 <?php endforeach; ?>
