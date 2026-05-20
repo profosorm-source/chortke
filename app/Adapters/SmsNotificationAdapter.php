@@ -3,7 +3,9 @@
 namespace App\Adapters;
 
 use Core\Logger;
+use Core\CircuitBreaker;
 use App\Models\User;
+use App\Traits\ExternalCallTrait;
 
 /**
  * SmsNotificationAdapter — ارسال پیامک برای نوتیفیکیشن‌های فوری
@@ -20,17 +22,21 @@ use App\Models\User;
  */
 class SmsNotificationAdapter
 {
+    use ExternalCallTrait;
+
     private User   $userModel;
     private Logger $logger;
+    private ?CircuitBreaker $circuit;
     private bool   $enabled;
     private string $provider;
     private string $apiKey;
     private string $from;
 
-    public function __construct(User $userModel, Logger $logger)
+    public function __construct(User $userModel, Logger $logger, ?CircuitBreaker $circuit = null)
     {
         $this->userModel = $userModel;
         $this->logger   = $logger;
+        $this->circuit  = $circuit;
         $this->enabled  = (bool)config('services.sms.enabled', false);
         $this->provider = config('services.sms.provider', '');
         $this->apiKey   = config('services.sms.api_key', '');
@@ -76,7 +82,10 @@ class SmsNotificationAdapter
         }
 
         try {
-            $result = $this->sendViaSmsProvider($mobile, $message);
+            $providerName = 'sms_' . ($this->provider !== '' ? $this->provider : 'unknown');
+            $result = (bool) $this->callWithBreaker($providerName, function () use ($mobile, $message): bool {
+                return $this->sendViaSmsProvider($mobile, $message);
+            });
 
             $this->logger->info('sms.sent', [
                 'mobile'   => $this->maskMobile($mobile),
@@ -86,9 +95,16 @@ class SmsNotificationAdapter
 
             return $result;
 
+        } catch (\Core\Exceptions\PermanentFailure $e) {
+            $this->logger->warning('sms.permanent_failure', [
+                'mobile' => $this->maskMobile($mobile),
+                'error'  => $e->getMessage(),
+            ]);
+            return false;
         } catch (\Throwable $e) {
             $this->logger->error('sms.send_failed', [
                 'mobile' => $this->maskMobile($mobile),
+                'class'  => get_class($e),
                 'error'  => $e->getMessage(),
             ]);
             return false;

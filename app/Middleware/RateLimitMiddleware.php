@@ -24,21 +24,12 @@ class RateLimitMiddleware extends BaseMiddleware
     private int $decayMinutes;
 
     /**
-     * تنظیمات پیش‌فرض برای مسیرهای خاص
+     * Section 8.8 — Hardcoded ROUTE_LIMITS removed. The mapping now lives in
+     * config/rate_limits.php under 'route_map' (single source of truth).
+     * It's resolved at runtime via resolveLimit(); allows ops to tune
+     * per-route limits via .env without code changes.
      */
-    private const ROUTE_LIMITS = [
-        '/login'                => [5,  60],
-        '/register'             => [3,  30],
-        '/forgot-password'      => [3,  60],
-        '/reset-password'       => [3,  60],
-        '/payment'              => [10, 1],
-        '/withdrawal'           => [5,  60],
-        '/wallet/deposit/crypto' => [5,  60],
-        '/security/csp-report'  => [5,  1],
-        '/api/auth'             => [10, 1],
-        '/api/token'            => [5,  1],
-        '/api/public'           => [30, 1],
-    ];
+    private ?array $routeMap = null;
 
     public function __construct(RateLimiter $rateLimiter, LoggerInterface $logger, Session $session, int $maxAttempts = 60, int $decayMinutes = 1)
     {
@@ -53,20 +44,19 @@ class RateLimitMiddleware extends BaseMiddleware
     {
         $calledNext = false;
         try {
-            [$maxAttempts, $decayMinutes] = $this->resolveLimit($request);
+            [$maxAttempts, $decayMinutes, $configFailClosed] = $this->resolveLimit($request);
             if ($maxAttemptsParam !== null) {
                 $maxAttempts = (int)$maxAttemptsParam;
             }
             if ($decayMinutesParam !== null) {
                 $decayMinutes = (int)$decayMinutesParam;
             }
-            
-            // CORE-042: Use high-precision token_bucket for sensitive critical operations
+
+            // CORE-042: Use high-precision token_bucket for any path matched by the central route_map.
+            $requestUri = (string)($request->uri() ?? '');
             $isCriticalPath = false;
-            $requestUri = $request->uri();
-            foreach (array_keys(self::ROUTE_LIMITS) as $pattern) {
-                // HIGH-H-09 Fix: Use str_starts_with instead of str_contains for strict pattern matching
-                if (str_starts_with($requestUri, $pattern)) {
+            foreach (array_keys($this->getRouteMap()) as $pattern) {
+                if (str_starts_with($requestUri, (string)$pattern)) {
                     $isCriticalPath = true;
                     break;
                 }
@@ -80,8 +70,9 @@ class RateLimitMiddleware extends BaseMiddleware
             $key = $this->resolveRequestSignature($request);
 
             try {
-                // CORE-044: Enforce fail-closed for critical paths to maintain security posture when Redis is down
-                $failClosed = $isCriticalPath;
+                // CORE-044 + Section 8.8: fail-closed when either the path is critical or the
+                // config entry explicitly requests it (e.g. payment.callback).
+                $failClosed = $isCriticalPath || $configFailClosed;
                 $allowed = $this->rateLimiter->attempt($key, $maxAttempts, $decayMinutes, $failClosed);
             } finally {
                 $this->rateLimiter->setStrategy($originalStrategy);
@@ -137,16 +128,49 @@ class RateLimitMiddleware extends BaseMiddleware
         }
     }
 
+    /**
+     * @return array{0:int,1:int,2:bool}  [maxAttempts, decayMinutes, failClosed]
+     */
     private function resolveLimit(Request $request): array
     {
-        $uri = $request->uri();
-        foreach (self::ROUTE_LIMITS as $pattern => $limits) {
-            // HIGH-H-09 Fix: Use str_starts_with instead of str_contains for strict pattern matching
-            if (str_starts_with($uri, $pattern)) {
-                return $limits;
+        $uri = (string)($request->uri() ?? '');
+        $map = $this->getRouteMap();
+
+        foreach ($map as $pattern => $target) {
+            if (!str_starts_with($uri, (string)$pattern)) {
+                continue;
+            }
+            // $target is [group, endpoint]
+            $group    = (string)($target[0] ?? '');
+            $endpoint = (string)($target[1] ?? 'general');
+            if ($group === '') {
+                continue;
+            }
+            $cfg = config("rate_limits.{$group}.{$endpoint}");
+            if (!is_array($cfg) || empty($cfg)) {
+                // group itself may be the config (no nested endpoint)
+                $cfg = config("rate_limits.{$group}");
+            }
+            if (is_array($cfg) && isset($cfg['max_attempts'])) {
+                return [
+                    (int)($cfg['max_attempts'] ?? $this->maxAttempts),
+                    (int)($cfg['decay_minutes'] ?? $this->decayMinutes),
+                    (bool)($cfg['fail_closed'] ?? false),
+                ];
             }
         }
-        return [$this->maxAttempts, $this->decayMinutes];
+
+        return [$this->maxAttempts, $this->decayMinutes, false];
+    }
+
+    private function getRouteMap(): array
+    {
+        if ($this->routeMap !== null) {
+            return $this->routeMap;
+        }
+        $cfg = config('rate_limits.route_map');
+        $this->routeMap = is_array($cfg) ? $cfg : [];
+        return $this->routeMap;
     }
 
     private function resolveRequestSignature(Request $request): string

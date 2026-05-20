@@ -6,19 +6,30 @@ use App\Services\SettingService;
 use Core\Database;
 use App\Contracts\LoggerInterface;
 use Core\Cache;
+use Core\CircuitBreaker;
+use App\Traits\ExternalCallTrait;
 
 class CryptoApiAdapter implements CryptoVerificationAdapter
 {
+    use ExternalCallTrait;
+
     private Database $db;
     private LoggerInterface $logger;
     private SettingService $settingService;
     private array $siteWallets = [];
 
-    public function __construct(Database $db, LoggerInterface $logger, SettingService $settingService)
-    {
+    private ?CircuitBreaker $circuit;
+
+    public function __construct(
+        Database $db,
+        LoggerInterface $logger,
+        SettingService $settingService,
+        ?CircuitBreaker $circuit = null
+    ) {
         $this->db = $db;
         $this->logger = $logger;
         $this->settingService = $settingService;
+        $this->circuit = $circuit;
         $this->loadSiteWallets();
     }
 
@@ -87,75 +98,57 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     }
 
     /**
-     * Execute a network GET request with exponential backoff and circuit breaker
+     * Section 8.3/8.4 — single source of truth for circuit-breaker + retry +
+     * failure classification via App\Traits\ExternalCallTrait.
+     *
+     * Returns the response body on success, or null on (Permanent/CB-open).
      */
     private function executeWithRetry(string $url): ?string
     {
-        $cache = Cache::getInstance();
-        
-        // Circuit Breaker check
-        $disabledUntil = $cache->get('crypto_circuit_breaker_disabled_until');
-        $maxDisableDuration = 3600; // 1 hour max (VULN-03)
-        if ($disabledUntil && ((int)$disabledUntil - \time()) > $maxDisableDuration) {
-            $cache->forget('crypto_circuit_breaker_disabled_until');
-            $disabledUntil = null;
-        }
-        if ($disabledUntil && (int)$disabledUntil > \time()) {
-            $this->logger->warning('crypto.circuit_breaker.active', ['url' => $url]);
-            return null;
-        }
-
-        $attempts = 3;
-        $delays = [2, 4, 8];
         $timeout = (int)$this->settingService->get('crypto_api_timeout', 15);
 
-        for ($i = 0; $i < $attempts; $i++) {
-            $ch = \curl_init($url);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
-            \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-            \curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'User-Agent: ChortkeSecureApp/1.0 (+https://chortke.com)',
-                'Accept: application/json'
+        try {
+            return $this->callWithBreaker('crypto_api', function () use ($url, $timeout): ?string {
+                return $this->retryTransient(function () use ($url, $timeout): string {
+                    $ch = \curl_init($url);
+                    \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    \curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+                    \curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, min(8, max(2, (int)floor($timeout / 2))));
+                    \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+                    \curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                        'User-Agent: ChortkeSecureApp/1.0 (+https://chortke.com)',
+                        'Accept: application/json',
+                    ]);
+                    $response = \curl_exec($ch);
+                    $httpCode = (int) \curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $errno    = (int) \curl_errno($ch);
+                    $error    = \curl_error($ch);
+                    \curl_close($ch);
+
+                    if ($httpCode === 200 && is_string($response) && $response !== '') {
+                        return $response;
+                    }
+
+                    $this->logger->warning('crypto.api.attempt_failed', [
+                        'url'       => $url,
+                        'http_code' => $httpCode,
+                        'errno'     => $errno,
+                        'error'     => $error ?: 'HTTP Status ' . $httpCode,
+                    ]);
+                    throw $this->classifyHttpFailure($httpCode, $errno, (string)$response, ['provider' => 'crypto_api']);
+                }, 3, 500, 4000);
+            });
+        } catch (\Core\Exceptions\PermanentFailure $e) {
+            $this->logger->warning('crypto.api.permanent_failure', ['url' => $url, 'error' => $e->getMessage()]);
+            return null;
+        } catch (\Throwable $e) {
+            $this->logger->error('crypto.api.unavailable', [
+                'url'   => $url,
+                'class' => get_class($e),
+                'error' => $e->getMessage(),
             ]);
-
-            $response = \curl_exec($ch);
-            $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = \curl_error($ch);
-            \curl_close($ch);
-
-            if ($httpCode === 200 && $response) {
-                // Success: reset failures count
-                $cache->forget('crypto_circuit_breaker_failures');
-                return $response;
-            }
-
-            $this->logger->warning('crypto.api.attempt_failed', [
-                'url' => $url,
-                'attempt' => $i + 1,
-                'http_code' => $httpCode,
-                'error' => $curlError ?: 'HTTP Status ' . $httpCode
-            ]);
-
-            if ($i < $attempts - 1) {
-                \sleep($delays[$i]);
-            }
+            return null;
         }
-
-        // Tripped Circuit Breaker: increment failure count
-        $failures = (int)$cache->get('crypto_circuit_breaker_failures', 0) + 1;
-        $cache->put('crypto_circuit_breaker_failures', $failures, 10); // keep history for 10 mins
-        
-        if ($failures >= 5) {
-            $cache->put('crypto_circuit_breaker_disabled_until', \time() + 300, 300); // disable for 5 mins (M-07)
-            $cache->forget('crypto_circuit_breaker_failures'); // RESET failures counter to prevent immediate re-tripping after cooldown!
-            $this->logger->error('crypto.circuit_breaker.tripped', [
-                'failures' => $failures,
-                'last_url' => $url
-            ]);
-        }
-
-        return null;
     }
 
     /**

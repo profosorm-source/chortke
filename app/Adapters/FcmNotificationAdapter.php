@@ -5,7 +5,9 @@ namespace App\Adapters;
 use Core\Logger;
 use Core\Cache;
 use Core\Database;
+use Core\CircuitBreaker;
 use App\Contracts\MetricsCollectorInterface;
+use App\Traits\ExternalCallTrait;
 /**
  * FcmNotificationAdapter — ارسال Push Notification با Firebase Cloud Messaging (FCM)
  *
@@ -20,10 +22,13 @@ use App\Contracts\MetricsCollectorInterface;
 
 class FcmNotificationAdapter
 {
+    use ExternalCallTrait;
+
     private Logger    $logger;
     private Cache     $cache;
     private Database  $db;
     private MetricsCollectorInterface $metrics;
+    private ?CircuitBreaker $circuit;
     private ?string   $projectId;
     private ?string   $serviceAccountPath;
 
@@ -32,12 +37,18 @@ class FcmNotificationAdapter
     private const TOKEN_TTL        = 55;   // دقیقه (access token هر ساعت expire می‌شود)
     private const BATCH_SIZE       = 500;  // حداکثر FCM multicast batch
 
-    public function __construct(Logger $logger, Cache $cache, Database $db, MetricsCollectorInterface $metrics)
-    {
+    public function __construct(
+        Logger $logger,
+        Cache $cache,
+        Database $db,
+        MetricsCollectorInterface $metrics,
+        ?CircuitBreaker $circuit = null
+    ) {
         $this->logger             = $logger;
         $this->cache              = $cache;
         $this->db                 = $db;
         $this->metrics            = $metrics;
+        $this->circuit            = $circuit;
         $this->projectId          = config('services.fcm.project_id');
         $this->serviceAccountPath = config('services.fcm.service_account_json');
     }
@@ -338,6 +349,10 @@ class FcmNotificationAdapter
     /**
      * ارسال واقعی به FCM API
      */
+    /**
+     * Section 8.3/8.4 — wraps HTTP call in Core\CircuitBreaker via the trait
+     * and classifies failures into the standard hierarchy.
+     */
     private function dispatch(array $payload): bool
     {
         $accessToken = $this->getAccessToken();
@@ -347,42 +362,56 @@ class FcmNotificationAdapter
 
         $url  = sprintf(self::FCM_ENDPOINT, $this->projectId);
         $json = json_encode(array_filter($payload['message'] ?? $payload, fn($v) => $v !== null), JSON_UNESCAPED_UNICODE);
-
-        // wrapping مجدد با ساختار صحیح
         $body = json_encode(['message' => json_decode($json, true)], JSON_UNESCAPED_UNICODE);
 
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $body,
-            CURLOPT_HTTPHEADER     => [
-                'Authorization: Bearer ' . $accessToken,
-                'Content-Type: application/json',
-            ],
-            CURLOPT_TIMEOUT        => 10,
-        ]);
+        try {
+            return (bool) $this->callWithBreaker('fcm', function () use ($url, $body): bool {
+                return $this->retryTransient(function () use ($url, $body): bool {
+                    $ch = curl_init($url);
+                    curl_setopt_array($ch, [
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_POST           => true,
+                        CURLOPT_POSTFIELDS     => $body,
+                        CURLOPT_HTTPHEADER     => [
+                            'Authorization: Bearer ' . $this->getAccessToken(),
+                            'Content-Type: application/json',
+                        ],
+                        CURLOPT_TIMEOUT        => 10,
+                        CURLOPT_CONNECTTIMEOUT => 5,
+                    ]);
+                    $response = curl_exec($ch);
+                    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $errno    = (int) curl_errno($ch);
+                    $error    = curl_error($ch);
+                    curl_close($ch);
 
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error    = curl_error($ch);
-        curl_close($ch);
-
-        if ($httpCode === 200) {
-            return true;
+                    if ($httpCode === 200) {
+                        return true;
+                    }
+                    if ($httpCode === 401) {
+                        // token expired → invalidate cache so the next attempt re-issues
+                        $this->cache->forget(self::TOKEN_CACHE_KEY);
+                    }
+                    $this->logger->warning('fcm.send_failed', [
+                        'http'  => $httpCode,
+                        'errno' => $errno,
+                        'error' => $error ?: (is_string($response) ? mb_substr($response, 0, 200) : ''),
+                    ]);
+                    throw $this->classifyHttpFailure($httpCode, $errno, (string)$response, ['provider' => 'fcm']);
+                });
+            });
+        } catch (\Core\Exceptions\PermanentFailure $e) {
+            // Permanent 4xx — log + return false (do NOT propagate up to caller as exception)
+            $this->logger->warning('fcm.permanent_failure', ['error' => $e->getMessage()]);
+            return false;
+        } catch (\Throwable $e) {
+            // Transient/Provider/RateLimited or CB-open → log + return false (matches old behavior)
+            $this->logger->warning('fcm.transient_failure', [
+                'class' => get_class($e),
+                'error' => $e->getMessage(),
+            ]);
+            return false;
         }
-
-        // token منقضی شده — پاک‌کردن cache
-        if ($httpCode === 401) {
-            $this->cache->forget(self::TOKEN_CACHE_KEY);
-        }
-
-        $this->logger->warning('fcm.send_failed', [
-            'http'  => $httpCode,
-            'error' => $error ?: $response,
-        ]);
-
-        return false;
     }
 
     /**
@@ -393,53 +422,13 @@ class FcmNotificationAdapter
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
 
-    private function isFcmCircuitOpen(): bool
-    {
-        $state = $this->cache->get('fcm:circuit_state') ?: 'closed';
-        if ($state === 'open') {
-            $lastChange = (int)$this->cache->get('fcm:last_state_change');
-            if (time() - $lastChange > 60) {
-                // Cool down duration passed, move to half-open state
-                $this->cache->put('fcm:circuit_state', 'half-open', 3600);
-                $this->cache->put('fcm:last_state_change', time(), 3600);
-                $this->logger->info('fcm.circuit_breaker.half_open');
-                return false;
-            }
-            return true;
-        }
-        return false;
-    }
-
-    private function recordFcmSuccess(): void
-    {
-        $state = $this->cache->get('fcm:circuit_state') ?: 'closed';
-        if ($state === 'half-open') {
-            $this->cache->put('fcm:circuit_state', 'closed', 3600);
-            $this->cache->put('fcm:failures', 0, 3600);
-            $this->cache->put('fcm:last_state_change', time(), 3600);
-            $this->logger->info('fcm.circuit_breaker.closed');
-        } else {
-            $this->cache->put('fcm:failures', 0, 3600);
-        }
-    }
-
-    private function recordFcmFailure(): void
-    {
-        $state = $this->cache->get('fcm:circuit_state') ?: 'closed';
-        if ($state === 'half-open') {
-            $this->cache->put('fcm:circuit_state', 'open', 3600);
-            $this->cache->put('fcm:last_state_change', time(), 3600);
-            $this->logger->warning('fcm.circuit_breaker.opened_from_half_open');
-        } else {
-            $failures = (int)$this->cache->get('fcm:failures') + 1;
-            $this->cache->put('fcm:failures', $failures, 3600);
-            if ($failures >= 5) {
-                $this->cache->put('fcm:circuit_state', 'open', 3600);
-                $this->cache->put('fcm:last_state_change', time(), 3600);
-                $this->logger->error('fcm.circuit_breaker.opened', ['consecutive_failures' => $failures]);
-            }
-        }
-    }
+    // -------------------------------------------------------------------------
+    // Legacy home-grown circuit breaker — kept as no-ops for binary compatibility.
+    // The real CB is Core\CircuitBreaker invoked via ExternalCallTrait::callWithBreaker('fcm').
+    // -------------------------------------------------------------------------
+    private function isFcmCircuitOpen(): bool { return false; }
+    private function recordFcmSuccess(): void {}
+    private function recordFcmFailure(): void {}
 }
 
 

@@ -20,6 +20,8 @@ use App\Services\SettingService;
  */
 abstract class AdapterBase
 {
+    use \App\Traits\ExternalCallTrait;
+
     protected LoggerInterface $logger;
     protected SettingService $settingService;
 
