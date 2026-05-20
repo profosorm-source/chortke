@@ -199,16 +199,25 @@ class PredictionBet extends Model
         return $affected > 0;
     }
 
+    public function countByGame(int $gameId): int
+    {
+        $res = $this->db->fetch(
+            "SELECT COUNT(*) AS cnt FROM prediction_bets WHERE game_id = ?",
+            [$gameId]
+        );
+        return (int)($res->cnt ?? 0);
+    }
+
     // ─── آمار توزیع شرط‌ها برای یک بازی ─────────────────────────────
     public function getDistribution(int $gameId): object
     {
         $row = $this->db->fetch(
             "SELECT
                 COUNT(*) AS total_bets,
-                COALESCE(SUM(amount_usdt), 0) AS total_pool,
-                COALESCE(SUM(CASE WHEN prediction='home' THEN amount_usdt ELSE 0 END), 0) AS pool_home,
-                COALESCE(SUM(CASE WHEN prediction='away' THEN amount_usdt ELSE 0 END), 0) AS pool_away,
-                COALESCE(SUM(CASE WHEN prediction='draw' THEN amount_usdt ELSE 0 END), 0) AS pool_draw,
+                CAST(COALESCE(SUM(amount_usdt), 0) AS CHAR) AS total_pool,
+                CAST(COALESCE(SUM(CASE WHEN prediction='home' THEN amount_usdt ELSE 0 END), 0) AS CHAR) AS pool_home,
+                CAST(COALESCE(SUM(CASE WHEN prediction='away' THEN amount_usdt ELSE 0 END), 0) AS CHAR) AS pool_away,
+                CAST(COALESCE(SUM(CASE WHEN prediction='draw' THEN amount_usdt ELSE 0 END), 0) AS CHAR) AS pool_draw,
                 COUNT(CASE WHEN prediction='home' THEN 1 END) AS count_home,
                 COUNT(CASE WHEN prediction='away' THEN 1 END) AS count_away,
                 COUNT(CASE WHEN prediction='draw' THEN 1 END) AS count_draw
@@ -218,8 +227,8 @@ class PredictionBet extends Model
         );
 
         return $row ?? (object)[
-            'total_bets' => 0, 'total_pool' => 0,
-            'pool_home'  => 0, 'pool_away'  => 0, 'pool_draw'  => 0,
+            'total_bets' => 0, 'total_pool' => '0',
+            'pool_home'  => '0', 'pool_away'  => '0', 'pool_draw'  => '0',
             'count_home' => 0, 'count_away' => 0, 'count_draw' => 0,
         ];
     }
