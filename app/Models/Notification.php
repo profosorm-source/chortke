@@ -320,6 +320,59 @@ class Notification extends Model
     }
 
     /**
+     * حذف فیزیکی نوتیفیکیشن‌های آرشیو‌شده‌ی قدیمی (cron, Section 8.7).
+     * فقط رکوردهایی که هم archived و هم بیشتر از $days روز قدیمی‌اند پاک می‌شوند.
+     * در batchهای کوچک برای جلوگیری از قفل طولانی.
+     */
+    public function purgeArchivedOlderThan(int $days = 90, int $batch = 1000): int
+    {
+        $days  = max(7, min(3650, $days));
+        $batch = max(100, min(10000, $batch));
+
+        $totalDeleted = 0;
+        $safety = 0;
+        while ($safety++ < 1000) {
+            $stmt = $this->db->query(
+                "DELETE FROM notifications
+                 WHERE is_archived = 1
+                   AND archived_at IS NOT NULL
+                   AND archived_at < DATE_SUB(NOW(), INTERVAL ? DAY)
+                 LIMIT " . (int)$batch,
+                [$days]
+            );
+            $deleted = $stmt instanceof \PDOStatement ? $stmt->rowCount() : 0;
+            if ($deleted <= 0) {
+                break;
+            }
+            $totalDeleted += $deleted;
+            if ($deleted < $batch) {
+                break;
+            }
+        }
+        return $totalDeleted;
+    }
+
+    /**
+     * علامت‌گذاری sent برای زمانبندی‌شده‌هایی که خیلی قدیمی مانده‌اند ولی sent نشده‌اند
+     * (poison-message detection برای scheduled notifications).
+     */
+    public function markStaleScheduledAsFailed(int $olderThanHours = 48): int
+    {
+        $olderThanHours = max(1, min(24 * 30, $olderThanHours));
+        $stmt = $this->db->query(
+            "UPDATE notifications
+             SET sent_at = NOW(), updated_at = NOW(), is_archived = 1, archived_at = NOW()
+             WHERE scheduled_at IS NOT NULL
+               AND sent_at IS NULL
+               AND is_deleted = 0
+               AND is_archived = 0
+               AND scheduled_at < DATE_SUB(NOW(), INTERVAL ? HOUR)",
+            [$olderThanHours]
+        );
+        return $stmt instanceof \PDOStatement ? $stmt->rowCount() : 0;
+    }
+
+    /**
      * نوتیفیکیشن‌های زمان‌بندی‌شده آماده ارسال (cron)
      */
     public function getPendingScheduled(int $limit = 100): array
