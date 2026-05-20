@@ -4,15 +4,21 @@ declare(strict_types=1);
 
 namespace App\Services\Search;
 
-use App\Services\SocialTask\SocialTaskService;
-use App\Services\InfluencerService;
-use App\Services\VitrineService;
 
 /**
  * 🚀 UPG-01: ModuleSearchProvider - تأمین‌کننده اختصاصی جستجوهای ماژولار به صورت Tagged Cache
  */
 class ModuleSearchProvider extends BaseSearchProvider
 {
+    public function __construct(
+        \App\Models\AdvancedSearch $searchModel,
+        \Core\Cache $cache,
+        \App\Contracts\LoggerInterface $logger,
+        private ModuleSearchGateway $gateway
+    ) {
+        parent::__construct($searchModel, $cache, $logger);
+    }
+
     /**
      * جستجوی اختصاصی ماژول‌های سیستم
      */
@@ -84,16 +90,16 @@ class ModuleSearchProvider extends BaseSearchProvider
 
     private function searchSocialTasks(array $f, int $limit, int $offset): array
     {
-        return $this->getService(SocialTaskService::class)->searchSocialTasks($f, $limit, $offset);
+        return $this->gateway->searchSocialTasks($f, $limit, $offset);
     }
 
     private function searchInfluencersModule(array $f, int $limit, int $offset): array
     {
-        return $this->getService(InfluencerService::class)->searchInfluencers($f, $limit, $offset);
+        return $this->gateway->searchInfluencers($f, $limit, $offset);
     }
 
     private function searchVitrine(array $f, int $limit, int $offset): array
     {
-        return $this->getService(VitrineService::class)->searchVitrine($f, $limit, $offset);
+        return $this->gateway->searchVitrine($f, $limit, $offset);
     }
 }

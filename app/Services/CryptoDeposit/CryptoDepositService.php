@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Services\CryptoDeposit;
 
 use App\Adapters\CryptoVerificationAdapter;
-use App\Services\Notification\NotificationService;
-use App\Services\WalletService;
+use App\Contracts\NotificationServiceInterface;
+use App\Contracts\WalletServiceInterface;
 use App\Services\SettingService;
 use App\Services\ReconciliationService;
 use App\Models\CryptoDepositIntent;
@@ -19,8 +19,8 @@ class CryptoDepositService extends \App\Services\BaseService
     private Database $db;
     private CryptoDepositIntent $intentModel;
     private CryptoDeposit $depositModel;
-    private NotificationService $notifier;
-    private WalletService $wallet;
+    private NotificationServiceInterface $notifier;
+    private WalletServiceInterface $wallet;
     private CryptoVerificationAdapter $verifier;
     private SettingService $settingService;
     private ReconciliationService $reconciliationService;
@@ -28,8 +28,8 @@ class CryptoDepositService extends \App\Services\BaseService
 
     public function __construct(
         Database $db,
-        WalletService $walletService,
-        NotificationService $notificationService,
+        WalletServiceInterface $walletService,
+        NotificationServiceInterface $notificationService,
         CryptoDepositIntent $intentModel,
         CryptoDeposit $depositModel,
         LoggerInterface $logger,

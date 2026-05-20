@@ -4,25 +4,21 @@ declare(strict_types=1);
 
 namespace App\Services\Search;
 
-use App\Services\User\UserService;
-use App\Services\WalletService;
-use App\Services\TicketService;
-use App\Services\WithdrawalService;
-use App\Services\ManualDepositService;
-use App\Services\CryptoDeposit\CryptoDepositService;
-use App\Services\CustomTaskService;
-use App\Services\BannerService;
-use App\Services\ContentService;
-use App\Services\ApiTokenService;
-use App\Services\EmailService;
-use App\Services\InvestmentService;
-use App\Services\InfluencerService;
 
 /**
  * 🚀 UPG-01: AdminSearchProvider - تأمین‌کننده اختصاصی جستجوی ادمین و پنل مدیریت
  */
 class AdminSearchProvider extends BaseSearchProvider
 {
+    public function __construct(
+        \App\Models\AdvancedSearch $searchModel,
+        \Core\Cache $cache,
+        \App\Contracts\LoggerInterface $logger,
+        private AdminSearchGateway $gateway
+    ) {
+        parent::__construct($searchModel, $cache, $logger);
+    }
+
     /**
      * جستجوی سراسری ادمین در کل جداول سیستم
      */
@@ -69,7 +65,7 @@ class AdminSearchProvider extends BaseSearchProvider
         if ($cached !== null) return $cached;
 
         $q = $this->sanitize($q);
-        $result = $this->getService(BannerService::class)->searchBanners($q, $filters, $limit, $offset);
+        $result = $this->gateway->searchBanners($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
@@ -86,7 +82,7 @@ class AdminSearchProvider extends BaseSearchProvider
         if ($cached !== null) return $cached;
 
         $q = $this->sanitize($q);
-        $result = $this->getService(ContentService::class)->searchContent($q, $filters, $limit, $offset);
+        $result = $this->gateway->searchContent($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
@@ -103,7 +99,7 @@ class AdminSearchProvider extends BaseSearchProvider
         if ($cached !== null) return $cached;
 
         $q = $this->sanitize($q);
-        $result = $this->getService(ApiTokenService::class)->searchTokens($q, $filters, $limit, $offset);
+        $result = $this->gateway->searchTokens($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
@@ -120,7 +116,7 @@ class AdminSearchProvider extends BaseSearchProvider
         if ($cached !== null) return $cached;
 
         $q = $this->sanitize($q);
-        $result = $this->getService(EmailService::class)->searchEmails($q, $filters, $limit, $offset);
+        $result = $this->gateway->searchEmails($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
@@ -137,7 +133,7 @@ class AdminSearchProvider extends BaseSearchProvider
         if ($cached !== null) return $cached;
 
         $q = $this->sanitize($q);
-        $result = $this->getService(CustomTaskService::class)->searchAdTasks($q, $filters, $limit, $offset);
+        $result = $this->gateway->searchAdTasks($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
@@ -154,7 +150,7 @@ class AdminSearchProvider extends BaseSearchProvider
         if ($cached !== null) return $cached;
 
         $q = $this->sanitize($q);
-        $result = $this->getService(InvestmentService::class)->searchInvestments($q, $filters, $limit, $offset);
+        $result = $this->gateway->searchInvestments($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
@@ -171,7 +167,7 @@ class AdminSearchProvider extends BaseSearchProvider
         if ($cached !== null) return $cached;
 
         $q = $this->sanitize($q);
-        $result = $this->getService(TicketService::class)->searchTicketsAdmin($q, $filters, $limit, $offset);
+        $result = $this->gateway->searchTicketsAdmin($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
@@ -188,7 +184,7 @@ class AdminSearchProvider extends BaseSearchProvider
         if ($cached !== null) return $cached;
 
         $q = $this->sanitize($q);
-        $result = $this->getService(InfluencerService::class)->searchInfluencersAdmin($q, $filters, $limit, $offset);
+        $result = $this->gateway->searchInfluencersAdmin($q, $filters, $limit, $offset);
 
         $this->cache->set($cacheKey, $result, self::CACHE_TTL_SECONDS);
         return $result;
@@ -198,41 +194,31 @@ class AdminSearchProvider extends BaseSearchProvider
 
     private function searchUsers(string $q, int $limit): array
     {
-        return $this->getService(UserService::class)->quickSearch($q, $limit);
+        return $this->gateway->quickSearchUsers($q, $limit);
     }
 
     private function searchTransactions(string $q, int $limit): array
     {
-        return $this->getService(WalletService::class)->quickSearchTransactions($q, null, $limit);
+        return $this->gateway->quickSearchTransactions($q, null, $limit);
     }
 
     private function searchTicketsGlobal(string $q, int $limit): array
     {
-        return $this->getService(TicketService::class)->quickSearchTickets($q, null, $limit);
+        return $this->gateway->quickSearchTickets($q, null, $limit);
     }
 
     private function searchWithdrawals(string $q, int $limit): array
     {
-        return $this->getService(WithdrawalService::class)->quickSearchWithdrawals($q, $limit);
+        return $this->gateway->quickSearchWithdrawals($q, $limit);
     }
 
     private function searchDeposits(string $q, int $limit): array
     {
-        $manual = $this->getService(ManualDepositService::class)->quickSearchManualDeposits($q, $limit);
-        $crypto = $this->getService(CryptoDepositService::class)->quickSearchCryptoDeposits($q, $limit);
-        
-        $results = array_merge($manual, $crypto);
-        usort($results, function($a, $b) {
-            $dateA = is_object($a) ? ($a->created_at ?? '') : ($a['created_at'] ?? '');
-            $dateB = is_object($b) ? ($b->created_at ?? '') : ($b['created_at'] ?? '');
-            return strtotime((string)$dateB) <=> strtotime((string)$dateA);
-        });
-        
-        return array_slice($results, 0, $limit);
+        return $this->gateway->quickSearchDeposits($q, $limit);
     }
 
     private function searchAds(string $q, int $limit): array
     {
-        return $this->getService(CustomTaskService::class)->quickSearchAds($q, null, $limit);
+        return $this->gateway->quickSearchAds($q, null, $limit);
     }
 }

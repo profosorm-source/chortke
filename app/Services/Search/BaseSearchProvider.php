@@ -9,7 +9,7 @@ use Core\Cache;
 use App\Models\AdvancedSearch;
 
 /**
- * 🚀 UPG-01: BaseSearchProvider - کلاس پایه تأمین‌کنندگان جستجو با قابلیت بارگذاری تنبل سرویس‌ها
+ * BaseSearchProvider - کلاس پایه تأمین‌کنندگان جستجو بدون Service Locator
  */
 abstract class BaseSearchProvider extends \App\Services\BaseService
 {
@@ -32,15 +32,6 @@ abstract class BaseSearchProvider extends \App\Services\BaseService
         $this->searchModel = $searchModel;
         $this->cache = $cache;
         $this->logger = $logger;
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    // Lazy-loading Shared Services
-    // ─────────────────────────────────────────────────────────────
-    
-    protected function getService(string $class): mixed
-    {
-        return app($class);
     }
 
     // ─────────────────────────────────────────────────────────────

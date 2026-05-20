@@ -4,15 +4,21 @@ declare(strict_types=1);
 
 namespace App\Services\Search;
 
-use App\Services\WalletService;
-use App\Services\TicketService;
-use App\Services\CustomTaskService;
 
 /**
  * 🚀 UPG-01: UserSearchProvider - تأمین‌کننده اختصاصی جستجوی عمومی سمت کاربران
  */
 class UserSearchProvider extends BaseSearchProvider
 {
+    public function __construct(
+        \App\Models\AdvancedSearch $searchModel,
+        \Core\Cache $cache,
+        \App\Contracts\LoggerInterface $logger,
+        private UserSearchGateway $gateway
+    ) {
+        parent::__construct($searchModel, $cache, $logger);
+    }
+
     /**
      * جستجوی سراسری توسط یک کاربر (محدود به داده‌های همان کاربر)
      */
@@ -50,21 +56,21 @@ class UserSearchProvider extends BaseSearchProvider
 
     private function searchUserTransactions(string $q, int $userId, int $limit): array
     {
-        return $this->getService(WalletService::class)->quickSearchTransactions($q, $userId, $limit);
+        return $this->gateway->searchTransactions($q, $userId, $limit);
     }
 
     private function searchUserTickets(string $q, int $userId, int $limit): array
     {
-        return $this->getService(TicketService::class)->quickSearchTickets($q, $userId, $limit);
+        return $this->gateway->searchTickets($q, $userId, $limit);
     }
 
     private function searchUserAds(string $q, int $userId, int $limit): array
     {
-        return $this->getService(CustomTaskService::class)->quickSearchAds($q, $userId, $limit);
+        return $this->gateway->searchAds($q, $userId, $limit);
     }
 
     private function searchUserTasks(string $q, int $userId, int $limit): array
     {
-        return $this->getService(CustomTaskService::class)->quickSearchSubmissions($q, $userId, $limit);
+        return $this->gateway->searchTasks($q, $userId, $limit);
     }
 }

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Shared;
 
 use Core\Database;
-use App\Services\Notification\NotificationService;
+use App\Contracts\NotificationServiceInterface;
 use App\Services\ReconciliationService;
 use App\Models\Dispute;
 use App\Contracts\LoggerInterface;
@@ -26,7 +26,7 @@ class DisputeService extends \App\Services\BaseService
     public function __construct(
         private Database $db,
         protected LoggerInterface $logger,
-        private NotificationService $notificationService,
+        private NotificationServiceInterface $notificationService,
         private Dispute $disputeModel,
         private WalletServiceInterface $walletService,
         private ReconciliationService $reconciliationService,

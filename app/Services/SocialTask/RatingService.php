@@ -7,7 +7,7 @@ namespace App\Services\SocialTask;
 use App\Services\Shared\RatingService as SharedRatingService;
 use App\Models\SocialTaskExecutionModel;
 use App\Models\SocialTaskAnalyticsModel;
-use App\Services\Shared\ScoreService;
+use App\Services\Shared\TrustScoreService;
 
 use App\Contracts\LoggerInterface;
 /**
@@ -24,7 +24,7 @@ class RatingService extends \App\Services\BaseService
         private SharedRatingService $sharedRating,
         private SocialTaskExecutionModel $executionModel,
         private SocialTaskAnalyticsModel $analyticsModel,
-        private ScoreService $trust,
+        private TrustScoreService $trust,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);

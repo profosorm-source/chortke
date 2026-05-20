@@ -8,7 +8,7 @@ use App\Services\AntiFraud\IPQualityService;
 use App\Services\AntiFraud\BrowserFingerprintService;
 use App\Services\AntiFraud\SessionAnomalyService;
 use App\Services\AuditTrail;
-use App\Services\Notification\NotificationService;
+use App\Contracts\NotificationServiceInterface;
 use App\Models\SocialTaskExecutionModel;
 use App\Services\SettingService;
 
@@ -35,7 +35,7 @@ class SilentAntiFraudService extends \App\Services\BaseService
         private TrustScoreService $trustService,
         private SocialTaskScoringService $scoringService,
         private AuditTrail $auditTrail,
-        private NotificationService $notificationService,
+        private NotificationServiceInterface $notificationService,
         private SettingService $settingService,
         LoggerInterface $logger
     ) {

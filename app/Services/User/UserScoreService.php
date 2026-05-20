@@ -16,7 +16,7 @@ use App\Models\Score as ScoreModel;
 class UserScoreService extends \App\Services\BaseService
 {
     // HIGH-05: Strict Scoring Domain Whitelist prevents logic injections into scoring buckets
-    private const ALLOWED_DOMAINS = ['fraud', 'task', 'trust', 'referral', 'activity', 'loyalty'];
+    private const ALLOWED_DOMAINS = ['fraud', 'task', 'trust', 'social_trust', 'referral', 'activity', 'loyalty'];
 
     public function __construct(
         private Database $db,
@@ -29,9 +29,16 @@ class UserScoreService extends \App\Services\BaseService
         parent::__construct($logger);
     }
 
+    private function normalizeDomain(string $domain): string
+    {
+        // Do not collapse module-specific domains here.
+        // "trust" and "social_trust" may represent different score buckets.
+        return strtolower(trim($domain));
+    }
+
     private function validateDomain(string $domain): void
     {
-        if (!\in_array($domain, self::ALLOWED_DOMAINS, true)) {
+        if (!\in_array($this->normalizeDomain($domain), self::ALLOWED_DOMAINS, true)) {
             throw new \InvalidArgumentException("Unsupported or unauthorized score domain: {$domain}");
         }
     }
@@ -39,6 +46,7 @@ class UserScoreService extends \App\Services\BaseService
     public function applyEventDelta(int $userId, string $domain, float $delta, string $source, array $meta = []): bool
     {
         $this->validateDomain($domain);
+        $domain = $this->normalizeDomain($domain);
 
         // MED-06: Offload physical database persistence for ALL score domains to background workers for high responsiveness
         // 1. Pre-register in consistent cache block
@@ -62,6 +70,7 @@ class UserScoreService extends \App\Services\BaseService
     {
         try {
             $this->validateDomain($domain);
+            $domain = $this->normalizeDomain($domain);
 
             $stmt = $this->db->prepare("
                 INSERT INTO user_scores (user_id, domain, score, updated_at)
@@ -92,6 +101,7 @@ class UserScoreService extends \App\Services\BaseService
     public function getScore(int $userId, string $domain): float
     {
         $this->validateDomain($domain);
+        $domain = $this->normalizeDomain($domain);
 
         try {
             $stmt = $this->db->prepare("SELECT score FROM user_scores WHERE user_id = ? AND domain = ? LIMIT 1");
@@ -122,6 +132,7 @@ class UserScoreService extends \App\Services\BaseService
     public function getEffectiveScore(int $userId, string $domain, float $rawScore): float
     {
         $this->validateDomain($domain);
+        $domain = $this->normalizeDomain($domain);
 
         // LOW-05: Wire placeholder to dynamically calculate effective scoring through adjustments
         $effective = $rawScore;
@@ -160,6 +171,7 @@ class UserScoreService extends \App\Services\BaseService
         ?int $createdBy = null
     ): array {
         $this->validateDomain($domain);
+        $domain = $this->normalizeDomain($domain);
 
         // LOW-06: Replace dummy stub to trigger physical persistent adjustments in Score Model
         $success = $this->scoreModel->createAdjustment([

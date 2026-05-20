@@ -9,13 +9,13 @@ use App\Models\User;
 use Core\Database;
 use App\Contracts\LoggerInterface;
 use App\Services\SettingService;
-use App\Services\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\Shared\ReferralService as ReferralCommissionService;
 use Core\EventDispatcher;
 
 class UserLevelService extends \App\Services\BaseService
 {
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private ReferralCommissionService $commissionService;
     private UserLevel $levelModel;
     private UserLevelHistory $historyModel;
@@ -25,7 +25,7 @@ class UserLevelService extends \App\Services\BaseService
 
     public function __construct(
         Database $db,
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         ReferralCommissionService $commissionService,
         UserLevel $levelModel,
         UserLevelHistory $historyModel,

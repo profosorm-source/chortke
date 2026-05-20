@@ -157,12 +157,18 @@ class TrustScoreService extends \App\Services\BaseService
             return;
         }
 
-        // Database Transaction wrapper to ensure atomic event creation and update
+        // Database transaction + row-level lock to prevent lost updates under concurrency.
         $this->transaction(function() use ($userId, $delta, $source, $meta) {
-            $current = $this->getTrustScore($userId);
-            $newVal = $this->clampTrustScore($current + $delta);
+            $result = $this->scoreModel->applyTrustDeltaAtomic(
+                $userId,
+                $delta,
+                self::TRUST_MIN,
+                self::TRUST_MAX,
+                self::TRUST_INITIAL
+            );
 
-            $this->scoreModel->updateTrustScore($userId, $newVal);
+            $current = (float)$result['old'];
+            $newVal = (float)$result['new'];
 
             $this->scoreEventService->recordEvent(
                 $userId,

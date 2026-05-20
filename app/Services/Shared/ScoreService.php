@@ -19,6 +19,19 @@ use App\Contracts\LoggerInterface;
  */
 class ScoreService extends \App\Services\BaseService
 {
+    private const DOMAIN_FRAUD = 'fraud';
+    private const DOMAIN_TASK = 'task';
+    private const DOMAIN_SOCIAL_TRUST = 'social_trust';
+
+    private const DOMAIN_TRUST = 'trust';
+
+    private const ALLOWED_ADJUSTMENT_DOMAINS = [
+        self::DOMAIN_FRAUD,
+        self::DOMAIN_TASK,
+        self::DOMAIN_TRUST,
+        self::DOMAIN_SOCIAL_TRUST,
+    ];
+
     public function __construct(
         private Database $db,
         protected LoggerInterface $logger,
@@ -44,7 +57,7 @@ class ScoreService extends \App\Services\BaseService
 
     public function createEvent(int $userId, string $domain, string $source, float $delta, array $meta = []): bool
     {
-        return $this->scoreEventService->recordEvent($userId, $domain, $source, $delta, $meta);
+        return $this->scoreEventService->recordEvent($userId, $this->normalizeDomain($domain), $source, $delta, $meta);
     }
 
     public function getTotalScore(int $entityId, string $entityType, string $domain): float
@@ -117,7 +130,7 @@ class ScoreService extends \App\Services\BaseService
 
     public function applyEventDelta(int $userId, string $domain, float $delta, string $source, array $meta = []): bool
     {
-        return $this->userScoreService->applyEventDelta($userId, $domain, $delta, $source, $meta);
+        return $this->userScoreService->applyEventDelta($userId, $this->normalizeDomain($domain), $delta, $source, $meta);
     }
 
     public function getFraudScore(int $userId): float
@@ -132,7 +145,7 @@ class ScoreService extends \App\Services\BaseService
 
     public function getEffectiveScore(int $userId, string $domain, float $rawScore): float
     {
-        return $this->userScoreService->getEffectiveScore($userId, $domain, $rawScore);
+        return $this->userScoreService->getEffectiveScore($userId, $this->normalizeDomain($domain), $rawScore);
     }
 
     public function incrementFraudRawScore(int $userId, float $delta, string $source, array $meta = []): bool
@@ -140,9 +153,47 @@ class ScoreService extends \App\Services\BaseService
         return $this->userScoreService->incrementFraudRawScore($userId, $delta, $source, $meta);
     }
 
-    public function createAdjustment(int $userId, string $domain, float $adjustment, string $reason, ?string $expiry = null, ?int $createdBy = null): array
-    {
-        return $this->userScoreService->createAdjustment($userId, $domain, $adjustment, $reason, $expiry, $createdBy);
+    public function createAdjustment(
+        int $userId,
+        string $domain,
+        string $operation,
+        float $value,
+        string $reason,
+        ?string $expiresAt = null,
+        ?int $createdBy = null
+    ): array {
+        try {
+            $domain = $this->normalizeDomain($domain);
+            $this->validateAdjustment($domain, $operation, $value, $reason);
+
+            $success = $this->scoreModel->createAdjustment([
+                'user_id' => $userId,
+                'domain' => $domain,
+                'operation' => $operation,
+                'value' => $value,
+                'reason' => $reason,
+                'expires_at' => $expiresAt,
+                'created_by' => $createdBy ?? 0,
+            ]);
+
+            if ($success) {
+                $this->createEvent($userId, $domain, 'admin_adjustment', 0, [
+                    'operation' => $operation,
+                    'value' => $value,
+                    'reason' => $reason,
+                    'expires_at' => $expiresAt,
+                    'admin_id' => $createdBy,
+                ]);
+                $this->invalidateUserScoreCaches($userId, $domain);
+            }
+
+            return [
+                'success' => (bool)$success,
+                'message' => $success ? 'اصلاح امتیاز ثبت شد.' : 'ثبت اصلاح امتیاز ناموفق بود.',
+            ];
+        } catch (\InvalidArgumentException $e) {
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -165,12 +216,8 @@ class ScoreService extends \App\Services\BaseService
 
     public function adjust(int $adminId, int $userId, string $domain, string $operation, float $value, string $reason, ?string $expiresAt = null): bool
     {
-        // Security: Verify operational authority at the service level
-        $adminUser = $this->userModel->findById($adminId);
-        if (!$adminUser || ($adminUser->role !== 'admin' && $adminUser->role !== 'superadmin')) {
-            throw new InvalidArgumentException('Unauthorized action: Only administrators can perform score adjustments.');
-        }
-
+        $this->assertAdminCanAdjust($adminId, 'perform score adjustments');
+        $domain = $this->normalizeDomain($domain);
         $this->validateAdjustment($domain, $operation, $value, $reason);
 
         $ok = $this->scoreModel->createAdjustment([
@@ -192,6 +239,8 @@ class ScoreService extends \App\Services\BaseService
                 'admin_id' => $adminId,
             ]);
 
+            $this->invalidateUserScoreCaches($userId, $domain);
+
             $this->logInfo('admin.score.adjusted', [
                 'admin_id' => $adminId,
                 'user_id' => $userId,
@@ -206,14 +255,10 @@ class ScoreService extends \App\Services\BaseService
 
     public function revokeAdjustment(int $adminId, int $adjustmentId, string $reason): bool
     {
-        // Security: Verify operational authority at the service level
-        $adminUser = $this->userModel->findById($adminId);
-        if (!$adminUser || ($adminUser->role !== 'admin' && $adminUser->role !== 'superadmin')) {
-            throw new InvalidArgumentException('Unauthorized action: Only administrators can revoke score adjustments.');
-        }
+        $this->assertAdminCanAdjust($adminId, 'revoke score adjustments');
 
         if (trim($reason) === '') {
-            throw new InvalidArgumentException('Revoke reason is required.');
+            throw new \InvalidArgumentException('Revoke reason is required.');
         }
 
         // Verify if adjustment actually exists and is currently active
@@ -222,11 +267,11 @@ class ScoreService extends \App\Services\BaseService
             ->first();
 
         if (!$adjustment) {
-            throw new InvalidArgumentException('Adjustment not found.');
+            throw new \InvalidArgumentException('Adjustment not found.');
         }
 
         if ((int)$adjustment->is_active === 0) {
-            throw new InvalidArgumentException('Adjustment is already inactive.');
+            throw new \InvalidArgumentException('Adjustment is already inactive.');
         }
 
         $ok = $this->scoreModel->revokeAdjustment($adjustmentId, $adminId, $reason);
@@ -235,10 +280,7 @@ class ScoreService extends \App\Services\BaseService
             $userId = (int)$adjustment->user_id;
             $domain = (string)$adjustment->domain;
 
-            // ⚡ Invalidate relevant caches to ensure instant UI update
-            $this->cache->forget("user_dashboard_stats:{$userId}");
-            $this->cache->forget("user_score:{$userId}:{$domain}");
-            $this->cache->forget("temp_{$domain}_score:{$userId}");
+            $this->invalidateUserScoreCaches($userId, $domain);
 
             $this->logInfo('admin.score.adjustment_revoked', [
                 'admin_id' => $adminId,
@@ -253,23 +295,56 @@ class ScoreService extends \App\Services\BaseService
 
     public function getActiveAdjustments(int $userId, string $domain): array
     {
-        return $this->scoreModel->getActiveAdjustments($userId, $domain);
+        return $this->scoreModel->getActiveAdjustments($userId, $this->normalizeDomain($domain));
     }
 
     private function validateAdjustment(string $domain, string $operation, float $value, string $reason): void
     {
-        if (!in_array($domain, ['fraud', 'task', 'social_trust'], true)) {
-            throw new InvalidArgumentException('Invalid score domain.');
+        if (!in_array($this->normalizeDomain($domain), self::ALLOWED_ADJUSTMENT_DOMAINS, true)) {
+            throw new \InvalidArgumentException('Invalid score domain.');
         }
         if (!in_array($operation, ['set', 'add', 'subtract'], true)) {
-            throw new InvalidArgumentException('Invalid score operation.');
+            throw new \InvalidArgumentException('Invalid score operation.');
         }
-        if ($value <= 0) {
-            throw new InvalidArgumentException('Adjustment value must be greater than 0.');
+        // set can legitimately reset a score to 0; add/subtract must be positive deltas.
+        if ($operation === 'set' ? $value < 0 : $value <= 0) {
+            throw new \InvalidArgumentException('Adjustment value is invalid for the selected operation.');
         }
         if (trim($reason) === '') {
-            throw new InvalidArgumentException('Adjustment reason is required.');
+            throw new \InvalidArgumentException('Adjustment reason is required.');
         }
+    }
+
+    public function revokeScoreAdjustment(int $adjustmentId, ?int $adminId, string $reason): bool
+    {
+        if ($adminId === null) {
+            throw new \InvalidArgumentException('Admin id is required.');
+        }
+        return $this->revokeAdjustment($adminId, $adjustmentId, $reason);
+    }
+
+    private function normalizeDomain(string $domain): string
+    {
+        // Keep module score domains isolated. Do not globally map "trust" to
+        // "social_trust" because other modules may define their own trust semantics.
+        return strtolower(trim($domain));
+    }
+
+    private function assertAdminCanAdjust(int $adminId, string $action): void
+    {
+        $adminUser = $this->userModel->findById($adminId);
+        $role = (string)($adminUser->role ?? '');
+        if (!$adminUser || !in_array($role, ['admin', 'superadmin', 'super_admin'], true)) {
+            throw new \InvalidArgumentException("Unauthorized action: Only administrators can {$action}.");
+        }
+    }
+
+    private function invalidateUserScoreCaches(int $userId, string $domain): void
+    {
+        $domain = $this->normalizeDomain($domain);
+        $this->cache->forget("user_dashboard_stats:{$userId}");
+        $this->cache->forget("user_score:{$userId}:{$domain}");
+        $this->cache->forget("temp_{$domain}_score:{$userId}");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

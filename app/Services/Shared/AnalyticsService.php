@@ -6,7 +6,6 @@ namespace App\Services\Shared;
 
 use Core\Database;
 use Core\Cache;
-use App\Services\ReferralAnalyticsService;
 use App\Services\Notification\NotificationService;
 use App\Models\AdvancedAnalytics;
 
@@ -28,7 +27,6 @@ class AnalyticsService extends \App\Services\BaseService
         private Database $db,
         protected LoggerInterface $logger,
         private Cache $cache,
-        private ReferralAnalyticsService $referralAnalytics,
         private NotificationService $notificationService,
         private AdvancedAnalytics $advancedAnalytics,
         private \App\Services\Analytics\AnalyticsService $customTaskAnalytics
@@ -230,7 +228,27 @@ class AnalyticsService extends \App\Services\BaseService
      */
     public function getReferralStats(): array
     {
-        return $this->referralAnalytics->getStats();
+        try {
+            $total = (int)($this->db->fetchColumn("SELECT COUNT(*) FROM referral_commissions") ?: 0);
+            $paid = (int)($this->db->fetchColumn("SELECT COUNT(*) FROM referral_commissions WHERE status = 'paid'") ?: 0);
+            $pending = (int)($this->db->fetchColumn("SELECT COUNT(*) FROM referral_commissions WHERE status = 'pending'") ?: 0);
+            $paidAmount = (string)($this->db->fetchColumn("SELECT COALESCE(SUM(amount), 0) FROM referral_commissions WHERE status = 'paid'") ?: '0');
+
+            return [
+                'total_commissions' => $total,
+                'paid_commissions' => $paid,
+                'pending_commissions' => $pending,
+                'paid_amount' => $paidAmount,
+            ];
+        } catch (\Throwable $e) {
+            $this->logger->warning('shared_analytics.referral_stats_failed', ['error' => $e->getMessage()]);
+            return [
+                'total_commissions' => 0,
+                'paid_commissions' => 0,
+                'pending_commissions' => 0,
+                'paid_amount' => '0',
+            ];
+        }
     }
 
     /**

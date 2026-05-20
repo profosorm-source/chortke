@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\SocialTask;
 
-use App\Services\WalletService;
-use App\Services\Notification\NotificationService;
+use App\Contracts\WalletServiceInterface;
+use App\Contracts\NotificationServiceInterface;
 use App\Policies\RateLimitPolicy;
 use App\Services\FinancialEscrowService;
 use App\Services\StateMachineService;
@@ -43,8 +43,8 @@ class SocialTaskService extends \App\Services\BaseService
         private SocialTaskScoringService $scoring,
         private TrustScoreService $trust,
         private SilentAntiFraudService $antiFraud,
-        private WalletService $wallet,
-        private NotificationService $notification,
+        private WalletServiceInterface $wallet,
+        private NotificationServiceInterface $notification,
         private RateLimitPolicy $rateLimiter,
         protected LoggerInterface $logger,
         private FinancialEscrowService $escrow,
