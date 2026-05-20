@@ -45,25 +45,23 @@ class RateLimitPolicy
      */
     public function check(string $action, string|int $identifier, ?string $limitKey = null): bool
     {
-        // Whitelist check (Mocked for AntiFraud logic consolidation)
         if ($this->isWhitelisted($identifier)) {
             return true;
         }
 
-        $featureName = self::ACTIONS[$action] ?? 'rate_limiting';
-        $config = $this->getFeatureConfig($featureName, $limitKey ?? 'standard');
-        
+        $config = $this->resolveActionConfig($action, $limitKey);
+
         $key = "rl_{$action}_{$identifier}";
         $allowed = $this->limiter->attempt($key, $config['max_attempts'], $config['decay_minutes']);
 
         if (!$allowed) {
             $this->logger->warning('rate_limit_exceeded', [
-                'action' => $action,
+                'action'     => $action,
                 'identifier' => $identifier,
-                'limit' => $config['max_attempts']
+                'limit'      => $config['max_attempts'],
+                'window_min' => $config['decay_minutes'],
             ]);
         }
-
         return $allowed;
     }
 
@@ -76,24 +74,85 @@ class RateLimitPolicy
 
     private function getFeatureConfig(string $featureName, string $limitKey): array
     {
-        // H-05: Load feature flags from model if available
+        // 1) Highest priority: ops-controlled FeatureFlag (live overrides without deploy).
         if ($this->featureFlagModel) {
-            $flag = $this->featureFlagModel->findByName($featureName);
-            if ($flag) {
-                $metadata = json_decode($flag->metadata ?? '{}', true);
-                if (isset($metadata[$limitKey])) {
-                    return [
-                        'max_attempts' => $metadata[$limitKey]['max'] ?? 5,
-                        'decay_minutes' => $metadata[$limitKey]['window'] ?? 60,
-                    ];
+            try {
+                $flag = $this->featureFlagModel->findByName($featureName);
+                if ($flag) {
+                    $metadata = json_decode($flag->metadata ?? '{}', true);
+                    if (is_array($metadata) && isset($metadata[$limitKey])) {
+                        return [
+                            'max_attempts'  => (int)($metadata[$limitKey]['max'] ?? 5),
+                            'decay_minutes' => (int)($metadata[$limitKey]['window'] ?? 60),
+                        ];
+                    }
                 }
+            } catch (\Throwable $e) {
+                // Don't fail-closed silently here — drop to next source.
+                $this->logger->warning('rate_limit.feature_flag_lookup_failed', [
+                    'feature' => $featureName,
+                    'error'   => $e->getMessage(),
+                ]);
             }
         }
-        
-        // Fail-closed / highly restrictive defaults if flag not found or model not available
+
+        // 2) Section 8.8 — Fallback to config/rate_limits.php (single source of truth).
+        //    The legacy 'standard'/'standard' lookup path is preserved for old callers,
+        //    but new callers should pass the action name and let resolveByAction() find
+        //    the right (group, endpoint) pair via the action_map.
+        $cfg = config("rate_limits.{$featureName}");
+        if (is_array($cfg)) {
+            // grouped: pick $limitKey or its first nested entry
+            if (isset($cfg[$limitKey]) && is_array($cfg[$limitKey]) && isset($cfg[$limitKey]['max_attempts'])) {
+                return [
+                    'max_attempts'  => (int)$cfg[$limitKey]['max_attempts'],
+                    'decay_minutes' => (int)$cfg[$limitKey]['decay_minutes'],
+                ];
+            }
+            if (isset($cfg['max_attempts'])) {
+                return [
+                    'max_attempts'  => (int)$cfg['max_attempts'],
+                    'decay_minutes' => (int)$cfg['decay_minutes'],
+                ];
+            }
+        }
+
+        // 3) Default from config (instead of hard restrictive 3/24h).
+        $default = config('rate_limits.default', ['max_attempts' => 60, 'decay_minutes' => 1]);
         return [
-            'max_attempts' => 3,
-            'decay_minutes' => 1440 // 24 hours lockout
+            'max_attempts'  => (int)($default['max_attempts'] ?? 60),
+            'decay_minutes' => (int)($default['decay_minutes'] ?? 1),
+        ];
+    }
+
+    /**
+     * Section 8.8 — Resolve config for an action using config('rate_limits.action_map').
+     * Used by check() / retryAfter() / remaining() to avoid duplicating the
+     * old hardcoded ACTIONS constant on every change.
+     */
+    private function resolveActionConfig(string $action, ?string $limitKey): array
+    {
+        $map = config('rate_limits.action_map');
+        if (is_array($map) && isset($map[$action]) && is_array($map[$action])) {
+            $group    = (string)($map[$action][0] ?? '');
+            $endpoint = (string)($map[$action][1] ?? ($limitKey ?? 'general'));
+            $cfg = config("rate_limits.{$group}.{$endpoint}");
+            if (is_array($cfg) && isset($cfg['max_attempts'])) {
+                return [
+                    'max_attempts'  => (int)$cfg['max_attempts'],
+                    'decay_minutes' => (int)$cfg['decay_minutes'],
+                    'message'       => $cfg['message'] ?? null,
+                ];
+            }
+        }
+
+        // Backward-compatible path: legacy ACTIONS constant + FeatureFlag.
+        $featureName = self::ACTIONS[$action] ?? 'rate_limiting';
+        $cfg = $this->getFeatureConfig($featureName, $limitKey ?? 'standard');
+        return [
+            'max_attempts'  => (int)$cfg['max_attempts'],
+            'decay_minutes' => (int)$cfg['decay_minutes'],
+            'message'       => null,
         ];
     }
     
@@ -105,13 +164,10 @@ class RateLimitPolicy
 
     public function remaining(string $action, string|int $identifier, ?string $limitKey = null): int
     {
-        $featureName = self::ACTIONS[$action] ?? 'rate_limiting';
-        $config = $this->getFeatureConfig($featureName, $limitKey ?? 'standard');
-        
+        $config = $this->resolveActionConfig($action, $limitKey);
         $key = "rl_{$action}_{$identifier}";
         $attempts = $this->limiter->getAttempts($key);
-        
-        return max(0, $config['max_attempts'] - $attempts);
+        return max(0, (int)$config['max_attempts'] - (int)$attempts);
     }
 
     public function tooManyResponse(string $action, string|int $identifier, bool $isAjax = false): never
