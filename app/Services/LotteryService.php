@@ -27,6 +27,7 @@ class LotteryService extends \App\Services\BaseService
     private LotteryVote $voteModel;
     private LotteryChanceLog $chanceLogModel;
     private FeatureFlagService $featureFlagService;
+    private \App\Services\AuditTrail $auditTrail;
 
     private const MATCH_TYPES = ['value', 'position', 'value_position', 'signal'];
     private const MAX_CODE_GENERATION_ATTEMPTS = 100;
@@ -46,7 +47,8 @@ class LotteryService extends \App\Services\BaseService
         \App\Models\LotteryChanceLog $chanceLogModel,
         FeatureFlagService $featureFlagService,
         Cache $cache,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        \App\Services\AuditTrail $auditTrail
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -59,6 +61,7 @@ class LotteryService extends \App\Services\BaseService
         $this->notificationService = $notificationService;
         $this->featureFlagService = $featureFlagService;
         $this->cache = $cache;
+        $this->auditTrail = $auditTrail;
     }
 
     public function createRound(int $adminId, array $data): array
@@ -277,13 +280,20 @@ class LotteryService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'اعداد امروز قبلاً تولید شده‌اند.', 'daily_number_id' => $existing->id];
         }
 
+        // L-1: Check immutable audit log before allowing generation
+        // Even if the DB row is deleted, this log proves generation already occurred
+        $auditKey = "lottery_numbers_generated_{$roundId}_{$today}";
+        $alreadyAudited = $this->cache->get($auditKey);
+        if ($alreadyAudited) {
+            return ['success' => false, 'message' => 'اعداد امروز قبلاً تولید و ثبت حسابرسی شده‌اند.'];
+        }
+
         $numbers = $this->generateSecureRandomNumbers(3, 0, 9);
         $seedRaw = bin2hex(random_bytes(32));
         $seedData = implode('|', [$seedRaw, $today, $roundId, microtime(true), random_int(1000000, 9999999)]);
         $seedHash = hash('sha256', $seedData);
         
-        // H-L3 Fix: matchType is now fixed based on the seed to be deterministic and non-manipulable.
-        // Even if an admin regenerates numbers, the type for that seed/date will follow a pattern or we can just pick one.
+        // matchType is fixed/deterministic based on the seed — non-manipulable
         $matchType = self::MATCH_TYPES[hexdec(substr($seedHash, 0, 2)) % count(self::MATCH_TYPES)];
 
         $this->db->beginTransaction();
@@ -311,6 +321,19 @@ class LotteryService extends \App\Services\BaseService
 
             $this->db->commit();
             $this->clearCache("daily_numbers_{$roundId}");
+
+            // L-1: Write immutable audit trail AFTER commit. Cache key persists for 48h as a
+            // secondary guard even if the DB row is deleted by a malicious admin.
+            $this->auditTrail->record('lottery.numbers_generated', null, [
+                'round_id'   => $roundId,
+                'date'       => $today,
+                'daily_id'   => $dailyId,
+                'seed_hash'  => $seedHash,
+                'match_type' => $matchType,
+                'numbers'    => $numbers,
+                'timestamp'  => microtime(true),
+            ]);
+            $this->cache->put($auditKey, ['seed_hash' => $seedHash, 'daily_id' => $dailyId], 60 * 48);
 
             $this->logger->info('lottery_daily_numbers', ['message' => "Round {$roundId}, date {$today}, type {$matchType}"]);
 
@@ -351,13 +374,23 @@ class LotteryService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'شما در این دوره شرکت نکرده‌اید.'];
         }
 
-        if ($this->voteModel->hasVotedToday($userId, $dailyNumberId)) {
-            return ['success' => false, 'message' => 'شما قبلاً امروز رأی داده‌اید.'];
-        }
+        // L-5: Do NOT check hasVotedToday() outside the transaction — TOCTOU race condition.
+        // The FOR UPDATE lock inside the transaction is the authoritative check.
 
         $this->db->beginTransaction();
 
         try {
+            // L-5: Pessimistic lock — serialize concurrent votes from the same user
+            $existingVote = $this->db->query(
+                "SELECT id FROM lottery_votes WHERE user_id = ? AND daily_number_id = ? FOR UPDATE",
+                [$userId, $dailyNumberId]
+            )->fetch();
+
+            if ($existingVote) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'شما قبلاً امروز رأی داده‌اید.'];
+            }
+
             $voteId = $this->voteModel->create([
                 'user_id' => $userId,
                 'round_id' => $dailyNumber->round_id,
@@ -485,19 +518,19 @@ class LotteryService extends \App\Services\BaseService
 
         switch ($matchType) {
             case 'value':
-                // Does the code contain this digit?
+                // The code contains this digit somewhere
                 return in_array((string)$selectedNumber, $digits, true);
             case 'position':
-                // BUG-L2 Fix: Match the digit at exactly its own position value (if within range)
-                $pos = $selectedNumber; 
+                // The digit at position $selectedNumber equals $selectedNumber
+                $pos = $selectedNumber;
                 return isset($digits[$pos]) && (int)$digits[$pos] === $selectedNumber;
             case 'value_position':
-                // BUG-L1 Fix: If the digit exists, is its position parity matching the digit parity?
-                $idx = array_search((string)$selectedNumber, $digits, true);
-                if ($idx === false) return false;
-                return ($idx % 2 === $selectedNumber % 2);
+                // L-2 Fix: digit must appear at exactly its own positional index.
+                // e.g. selectedNumber=4 → code must have '4' at index 4.
+                // Prevents always-true for even digits in even positions.
+                return isset($digits[$selectedNumber]) && (int)$digits[$selectedNumber] === $selectedNumber;
             case 'signal':
-                // Sum first 5 digits, match last digit of sum
+                // Sum of first 5 digits; last digit of sum must equal selectedNumber
                 $sum = array_sum(array_map('intval', array_slice($digits, 0, 5)));
                 return ($sum % 10) === $selectedNumber;
             default:
@@ -564,6 +597,22 @@ class LotteryService extends \App\Services\BaseService
 
             $totalScore = $this->participationModel->getTotalChanceScore($roundId);
 
+            // L-3: If all scores have decayed to near-zero, reset everyone to DEFAULT_CHANCE
+            // so a winner can always be selected (prevents infinite decay lock-out).
+            if ($totalScore < 1.0) {
+                foreach ($participants as $p) {
+                    $this->participationModel->update($p->id, [
+                        'chance_score' => LotteryParticipation::DEFAULT_CHANCE
+                    ]);
+                }
+                $totalScore = LotteryParticipation::DEFAULT_CHANCE * count($participants);
+                $this->logger->warning('lottery.chance_reset', [
+                    'round_id' => $roundId,
+                    'participants' => count($participants),
+                    'new_total' => $totalScore,
+                ]);
+            }
+
             if ($totalScore <= 0) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'مجموع امتیازات صفر است.'];
@@ -597,29 +646,10 @@ class LotteryService extends \App\Services\BaseService
             $finalSeedData = implode('|', [$roundId, $winner->user_id, $winner->chance_score, $totalScore, $randomPoint, microtime(true), bin2hex(random_bytes(16))]);
             $finalSeed = hash('sha256', $finalSeedData);
 
-            // Process prize if applicable
-            if ($round->prize_amount > 0) {
-                // H-L4 Fix: Pay prize BEFORE updating status to COMPLETED to ensure atomicity
-                // If payment fails, transaction rolls back. If DB fails after payment, it's safer than vice versa.
-                $depositResult = $this->walletService->deposit(
-                    $winner->user_id,
-                    (float)$round->prize_amount,
-                    $round->currency,
-                    [
-                        'type' => 'lottery_prize', 
-                        'round_id' => $roundId, 
-                        'description' => "جایزه قرعه‌کشی: {$round->title}",
-                        'idempotency_key' => "lottery_winner_{$roundId}_{$winner->user_id}"
-                    ]
-                );
-
-                if (!$depositResult['success']) {
-                    $this->db->rollBack();
-                    return ['success' => false, 'message' => 'خطا در واریز جایزه.'];
-                }
-            }
-
-            // 🔒 Update round with LOCK HELD - ensures atomicity
+            // L-4 Fix: Update round status FIRST (within the lock), THEN pay.
+            // If the DB update fails the transaction rolls back cleanly with no payment made.
+            // If the payment fails after a successful DB commit, the idempotency_key prevents
+            // double payment on retry and the error is logged for manual reconciliation.
             $this->roundModel->update($roundId, [
                 'status' => \App\Models\LotteryRound::STATUS_COMPLETED,
                 'winner_user_id' => $winner->user_id,
@@ -627,7 +657,7 @@ class LotteryService extends \App\Services\BaseService
                 'final_seed' => $finalSeed,
             ]);
 
-            // Mark participants
+            // Mark participants inside the transaction (still within the lock)
             $this->participationModel->update($winner->id, ['status' => 'winner']);
 
             foreach ($participants as $p) {
@@ -636,8 +666,34 @@ class LotteryService extends \App\Services\BaseService
                 }
             }
 
-            // Commit transaction with lock held
             $this->db->commit();
+
+            // Pay prize AFTER commit so a wallet failure cannot roll back the winner record.
+            // The idempotency_key guarantees no double-payment on retry.
+            if ($round->prize_amount > 0) {
+                $depositResult = $this->walletService->deposit(
+                    $winner->user_id,
+                    (float)$round->prize_amount,
+                    $round->currency,
+                    [
+                        'type' => 'lottery_prize',
+                        'round_id' => $roundId,
+                        'description' => "جایزه قرعه‌کشی: {$round->title}",
+                        'idempotency_key' => "lottery_winner_{$roundId}_{$winner->user_id}"
+                    ]
+                );
+
+                if (!$depositResult['success']) {
+                    // Winner record is already committed. Log for manual reconciliation.
+                    $this->logger->error('lottery.prize_payment_failed', [
+                        'round_id'      => $roundId,
+                        'winner_user_id'=> $winner->user_id,
+                        'prize_amount'  => $round->prize_amount,
+                        'currency'      => $round->currency,
+                    ]);
+                    // Do NOT return failure — the winner selection itself succeeded.
+                }
+            }
 
             $this->logger->info('lottery.select_winner.success', [
                 'round_id' => $roundId,

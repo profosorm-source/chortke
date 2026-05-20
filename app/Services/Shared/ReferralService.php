@@ -77,6 +77,20 @@ class ReferralService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'امکان واریز پورسانت به خود وجود ندارد.'];
         }
 
+        // R-1: Circular chain check
+        $investorId = (int)($context['investor_id'] ?? $context['user_id'] ?? 0);
+        if ($investorId > 0 && $this->detectCircularReferral($investorId, $referrerId)) {
+            return ['success' => false, 'message' => 'Circular referral chain detected.'];
+        }
+
+        // R-3: Rate Limit Check (throttling daily commission payout rate per referrer)
+        $rateLimitKey = "ref_commission_limit:" . date('Y-m-d') . ":" . $referrerId;
+        $dailyCount = \Core\Cache::getInstance()->increment($rateLimitKey, 1, 86400);
+        $dailyMax = (int)$this->settingService->get('referral_daily_limit', 50);
+        if ($dailyCount !== false && $dailyCount > $dailyMax) {
+            return ['success' => false, 'message' => 'محدودیت تعداد پورسانت‌های روزانه برای این معرف به پایان رسیده است.'];
+        }
+
         try {
             $this->db->beginTransaction();
 
@@ -127,6 +141,19 @@ class ReferralService extends \App\Services\BaseService
         // H-R3: Self-referral check
         if ($referrerId === (int)$referredUserId) {
             return ['success' => false, 'message' => 'Self-referral detected'];
+        }
+
+        // R-1: Circular chain check
+        if ($this->detectCircularReferral((int)$referredUserId, $referrerId)) {
+            return ['success' => false, 'message' => 'Circular referral chain detected.'];
+        }
+
+        // R-3: Rate Limit Check (throttling daily commission payout rate per referrer)
+        $rateLimitKey = "ref_commission_limit:" . date('Y-m-d') . ":" . $referrerId;
+        $dailyCount = \Core\Cache::getInstance()->increment($rateLimitKey, 1, 86400);
+        $dailyMax = (int)$this->settingService->get('referral_daily_limit', 50);
+        if ($dailyCount !== false && $dailyCount > $dailyMax) {
+            return ['success' => false, 'message' => 'محدودیت تعداد پورسانت‌های روزانه برای این معرف به پایان رسیده است.'];
         }
 
         // دریافت درصد پورسانت بر اساس نوع ماژول
@@ -197,15 +224,25 @@ class ReferralService extends \App\Services\BaseService
         $referrer = $this->userModel->findById($userId);
 
         if ($referrer && $referrer->referred_by) {
-            $processed[1] = $this->processCommission((int)$referrer->referred_by, $amount, $currency);
+            $referrerId = (int)$referrer->referred_by;
+            if (!$this->detectCircularReferral($userId, $referrerId)) {
+                $processed[1] = $this->processCommission($referrerId, $amount, $currency, ['user_id' => $userId]);
+            } else {
+                $processed[1] = ['success' => false, 'message' => 'Circular referral chain detected.'];
+            }
 
             // 🛡️ H18 Fix: Use BCMath for tier2 multiplier calculation
             $tier2Multiplier = (string)$this->settingService->get('referral_tier2_multiplier', '0.5');
-            $referrer2 = $this->userModel->findById((int)$referrer->referred_by);
+            $referrer2 = $this->userModel->findById($referrerId);
             if ($referrer2 && $referrer2->referred_by) {
-                // ✅ PRECISE: Use BCMath multiplication
-                $tier2Amount = (string)bcmul((string)$amount, $tier2Multiplier, 2);
-                $processed[2] = $this->processCommission((int)$referrer2->referred_by, $tier2Amount, $currency);
+                $referrer2Id = (int)$referrer2->referred_by;
+                if (!$this->detectCircularReferral($userId, $referrer2Id)) {
+                    // ✅ PRECISE: Use BCMath multiplication
+                    $tier2Amount = (string)bcmul((string)$amount, $tier2Multiplier, 2);
+                    $processed[2] = $this->processCommission($referrer2Id, $tier2Amount, $currency, ['user_id' => $userId]);
+                } else {
+                    $processed[2] = ['success' => false, 'message' => 'Circular referral chain detected.'];
+                }
             }
         }
 
@@ -474,39 +511,79 @@ class ReferralService extends \App\Services\BaseService
         $currency = strtolower($currency);
         if (!in_array($currency, ['irt', 'usdt'], true)) return ['success' => false, 'message' => 'ارز نامعتبر'];
 
-        $commissions = $this->commissionModel
-            ->where('status', '=', 'pending')
-            ->where('currency', '=', $currency)
-            ->orderBy('created_at', 'ASC')
-            ->limit(100)
-            ->get() ?? [];
-        $results = ['success' => 0, 'failed' => 0, 'skipped' => 0];
-
-        foreach ($commissions as $commission) {
-            try {
-                if (!isset($commission->referrer_id, $commission->commission_amount)) {
-                    $results['skipped']++;
-                    continue;
-                }
-
-                $this->db->beginTransaction();
-                $deposit = $this->walletService->deposit((int)$commission->referrer_id, (float)$commission->commission_amount, $currency, [
-                    'type' => 'referral_commission',
-                    'idempotency_key' => "referral_{$commission->id}_{$commission->referrer_id}",
-                ]);
-
-                if (empty($deposit['success'])) throw new \RuntimeException('Wallet deposit failed');
-
-                $this->commissionModel->updateStatus((int)$commission->id, 'paid', $deposit['transaction_id'] ?? null);
-                $this->db->commit();
-                $results['success']++;
-            } catch (\Throwable $e) {
-                $this->db->rollBack();
-                $results['failed']++;
-                $this->logger->error('referral.batch_pay_failed', ['commission_id' => $commission->id ?? null, 'error' => $e->getMessage()]);
-            }
+        // R-4: Idempotency locking for batch pay
+        $lockKey = "referral_batch_pay_lock_" . $currency;
+        $lock = \Core\Cache::getInstance()->lock($lockKey, 300); // 5-minute timeout
+        if (!$lock) {
+            return ['success' => 0, 'failed' => 0, 'skipped' => 0, 'locked' => true];
         }
-        return $results;
+
+        try {
+            $commissions = $this->commissionModel
+                ->where('status', '=', 'pending')
+                ->where('currency', '=', $currency)
+                ->orderBy('created_at', 'ASC')
+                ->limit(100)
+                ->get() ?? [];
+            $results = ['success' => 0, 'failed' => 0, 'skipped' => 0];
+
+            foreach ($commissions as $commission) {
+                try {
+                    if (!isset($commission->referrer_id, $commission->commission_amount)) {
+                        $results['skipped']++;
+                        continue;
+                    }
+
+                    $this->db->beginTransaction();
+                    $deposit = $this->walletService->deposit((int)$commission->referrer_id, (float)$commission->commission_amount, $currency, [
+                        'type' => 'referral_commission',
+                        'idempotency_key' => "referral_{$commission->id}_{$commission->referrer_id}",
+                    ]);
+
+                    if (empty($deposit['success'])) throw new \RuntimeException('Wallet deposit failed');
+
+                    $this->commissionModel->updateStatus((int)$commission->id, 'paid', $deposit['transaction_id'] ?? null);
+                    $this->db->commit();
+                    $results['success']++;
+                } catch (\Throwable $e) {
+                    $this->db->rollBack();
+                    $results['failed']++;
+                    $this->logger->error('referral.batch_pay_failed', ['commission_id' => $commission->id ?? null, 'error' => $e->getMessage()]);
+                }
+            }
+            return $results;
+        } finally {
+            \Core\Cache::getInstance()->unlock($lockKey);
+        }
+    }
+
+    /**
+     * بررسی گراف معرف‌ها برای یافتن حلقه‌های چرخشی (ممانعت از Circular Referral Chain Attack)
+     */
+    public function detectCircularReferral(int $userId, int $proposedReferrerId, int $maxDepth = 10): bool
+    {
+        if ($userId === $proposedReferrerId) {
+            return true;
+        }
+
+        $currentReferrerId = $proposedReferrerId;
+        $depth = 0;
+
+        while ($currentReferrerId > 0 && $depth < $maxDepth) {
+            if ($currentReferrerId === $userId) {
+                return true;
+            }
+
+            $user = $this->userModel->findById($currentReferrerId);
+            if (!$user || empty($user->referred_by)) {
+                break;
+            }
+
+            $currentReferrerId = (int)$user->referred_by;
+            $depth++;
+        }
+
+        return false;
     }
 }
 

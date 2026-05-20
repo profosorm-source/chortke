@@ -160,17 +160,25 @@ EOT;
                 'transaction_id' => $payResult['transaction_id'] ?? null,
             ]);
             
-            // ۳. پورسانت شبکه ارجاع (Referral) صندوق سرمایه گذاری
-            $userRecord = $this->userService->findById($userId);
-            if ($userRecord && !empty($userRecord->referred_by)) {
-                $this->referralService->processCommission((int)$userRecord->referred_by, $amount, 'usdt', [
-                    'action' => 'investment_creation',
-                    'investor_id' => $userId,
-                    'investment_id' => $investmentId
+            $this->db->commit();
+
+            // ۳. پورسانت شبکه ارجاع (Referral) صندوق سرمایه گذاری (پس از موفقیت در commit اصلی)
+            try {
+                $userRecord = $this->userService->findById($userId);
+                if ($userRecord && !empty($userRecord->referred_by)) {
+                    $this->referralService->processCommission((int)$userRecord->referred_by, $amount, 'usdt', [
+                        'action' => 'investment_creation',
+                        'investor_id' => $userId,
+                        'investment_id' => $investmentId
+                    ]);
+                }
+            } catch (\Throwable $commissionEx) {
+                $this->logger->error('investment_commission_post_commit_failed', [
+                    'user_id' => $userId,
+                    'investment_id' => $investmentId,
+                    'error' => $commissionEx->getMessage()
                 ]);
             }
-
-            $this->db->commit();
 
             $this->auditTrail->record('investment.created', $userId, [
                 'investment_id' => $investmentId,

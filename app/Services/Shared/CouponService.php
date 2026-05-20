@@ -74,6 +74,19 @@ class CouponService extends \App\Services\BaseService
 
         $finalAmount = max(0, $amount - $discount);
 
+        // H-C2 Fix: Generate temporary validation token cached for 15 minutes to guarantee checkout integrity
+        $validationToken = bin2hex(random_bytes(16));
+        $cacheKey = "coupon_val_token_{$userId}_{$validationToken}";
+        $cacheData = [
+            'coupon_id' => $coupon->id,
+            'coupon_code' => $coupon->code,
+            'original_amount' => $amount,
+            'discount_amount' => round($discount, 2),
+            'final_amount' => round($finalAmount, 2),
+            'currency' => $currency
+        ];
+        \Core\Cache::getInstance()->put($cacheKey, $cacheData, 15);
+
         return [
             'valid' => true,
             'coupon_id' => $coupon->id,
@@ -81,7 +94,8 @@ class CouponService extends \App\Services\BaseService
             'original_amount' => $amount,
             'discount_amount' => round($discount, 2),
             'final_amount' => round($finalAmount, 2),
-            'currency' => $currency
+            'currency' => $currency,
+            'validation_token' => $validationToken
         ];
     }
 
@@ -96,11 +110,36 @@ class CouponService extends \App\Services\BaseService
         float $finalAmount,
         string $currency,
         string $entityType,
-        ?int $entityId = null
+        ?int $entityId = null,
+        ?string $validationToken = null
     ): bool {
         return $this->transaction(function() use (
-            $couponId, $userId, $originalAmount, $discountAmount, $finalAmount, $currency, $entityType, $entityId
+            $couponId, $userId, $originalAmount, $discountAmount, $finalAmount, $currency, $entityType, $entityId, $validationToken
         ) {
+            // H-C2 Fix: Verify validation token parameter integrity if supplied
+            if ($validationToken !== null) {
+                $cacheKey = "coupon_val_token_{$userId}_{$validationToken}";
+                $cacheData = \Core\Cache::getInstance()->get($cacheKey);
+                
+                if (!$cacheData) {
+                    throw new \Exception('توکن اعتبارسنجی کد تخفیف نامعتبر یا منقضی شده است. لطفا مجددا کد تخفیف را اعتبارسنجی کنید.');
+                }
+
+                // Verify parameters match exactly!
+                if (
+                    (int)$cacheData['coupon_id'] !== $couponId ||
+                    abs((float)$cacheData['original_amount'] - $originalAmount) > 0.01 ||
+                    abs((float)$cacheData['discount_amount'] - $discountAmount) > 0.01 ||
+                    abs((float)$cacheData['final_amount'] - $finalAmount) > 0.01 ||
+                    strtolower($cacheData['currency']) !== strtolower($currency)
+                ) {
+                    throw new \Exception('پارامترهای اعتبارسنجی کد تخفیف با مقادیر نهایی مغایرت دارند. لطفا مجددا تلاش کنید.');
+                }
+                
+                // Consume the validation token so it cannot be reused
+                \Core\Cache::getInstance()->forget($cacheKey);
+            }
+
             // Architectural Fix: Utilize locked Model locator instead of writing inline RAW FOR UPDATE.
             $coupon = $this->couponModel->findWithLock($couponId);
             
@@ -158,6 +197,112 @@ class CouponService extends \App\Services\BaseService
             ]);
 
             return true;
+        });
+    }
+
+    /**
+     * اعتبارسنجی و ثبت مصرف کوپن به صورت کاملاً اتمیک (حل Race Condition)
+     */
+    public function validateAndRedeem(
+        int $userId,
+        string $code,
+        float $amount,
+        string $currency,
+        string $entityType,
+        ?int $entityId = null,
+        string $applicableTo = 'all'
+    ): array {
+        return $this->transaction(function() use (
+            $userId, $code, $amount, $currency, $entityType, $entityId, $applicableTo
+        ) {
+            $coupon = $this->couponModel->findByCodeWithLock($code);
+
+            if (!$coupon) {
+                return ['success' => false, 'message' => 'کد تخفیف معتبر نیست'];
+            }
+
+            if (!$coupon->isActive()) {
+                return ['success' => false, 'message' => 'کد تخفیف منقضی شده یا غیرفعال است'];
+            }
+
+            // بررسی محدودیت استفاده کلی با قفل FOR UPDATE
+            if ($coupon->usage_limit !== null && $coupon->usage_limit > 0 && $coupon->usage_count >= $coupon->usage_limit) {
+                return ['success' => false, 'message' => 'ظرفیت استفاده از این کد تخفیف به پایان رسیده است.'];
+            }
+
+            if ($coupon->applicable_to !== 'all' && $coupon->applicable_to !== $applicableTo) {
+                return ['success' => false, 'message' => 'این کد تخفیف برای این نوع عملیات قابل استفاده نیست'];
+            }
+
+            if ($coupon->min_purchase && $amount < $coupon->min_purchase) {
+                return ['success' => false, 'message' => sprintf('مبلغ خرید باید حداقل %s باشد', number_format($coupon->min_purchase))];
+            }
+
+            // بررسی استفاده قبلی کاربر با قفل FOR UPDATE
+            if ($this->redemptionModel->hasUserUsedCouponForUpdate($userId, $coupon->id)) {
+                return ['success' => false, 'message' => 'شما قبلاً از این کد تخفیف استفاده کرده‌اید'];
+            }
+
+            // جلوگیری از ثبت مجدد برای همان ماهیت (Idempotency)
+            $existing = $this->db->query(
+                "SELECT id FROM coupon_redemptions WHERE entity_type = ? AND entity_id = ? FOR UPDATE",
+                [$entityType, $entityId]
+            )->fetch();
+            if ($existing) {
+                return ['success' => false, 'message' => 'برای این تراکنش قبلاً کد تخفیف اعمال شده است.'];
+            }
+
+            // محاسبه تخفیف
+            $discount = 0.0;
+            if ($coupon->type === 'percent') {
+                $discount = round(($amount * (float)$coupon->value) / 100.0, 2);
+                if ($coupon->max_discount && $discount > (float)$coupon->max_discount) {
+                    $discount = (float)$coupon->max_discount;
+                }
+            } else {
+                $discount = min((float)$coupon->value, $amount);
+            }
+
+            $finalAmount = max(0, $amount - $discount);
+
+            $redemptionId = $this->redemptionModel->create([
+                'coupon_id' => $coupon->id,
+                'user_id' => $userId,
+                'original_amount' => $amount,
+                'discount_amount' => round($discount, 2),
+                'final_amount' => round($finalAmount, 2),
+                'currency' => $currency,
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+                'ip_address' => \get_client_ip()
+            ]);
+
+            if (!$redemptionId) {
+                throw new \RuntimeException('Redemption trace failed.');
+            }
+
+            $success = $this->couponModel->incrementUsage($coupon->id);
+            if (!$success) {
+                throw new \RuntimeException('Increment usage failed.');
+            }
+
+            $this->logInfo('coupon.redeemed', [
+                'coupon_id' => $coupon->id,
+                'user_id' => $userId,
+                'discount' => $discount,
+                'final' => $finalAmount,
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+            ]);
+
+            return [
+                'success' => true,
+                'coupon_id' => $coupon->id,
+                'original_amount' => $amount,
+                'discount_amount' => round($discount, 2),
+                'final_amount' => round($finalAmount, 2),
+                'redemption_id' => $redemptionId
+            ];
         });
     }
 
