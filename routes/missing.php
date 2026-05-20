@@ -131,6 +131,7 @@ $r->get('/admin/prediction/create',              [AdminPredictionController::cla
 $r->post('/admin/prediction/store',              [AdminPredictionController::class, 'store'],       $adminCSRF);
 $r->get('/admin/prediction/{id}',                [AdminPredictionController::class, 'show'],        $admin);
 $r->post('/admin/prediction/{id}/settle',        [AdminPredictionController::class, 'settle'],      $adminCSRF);
+$r->post('/admin/prediction/{id}/update',        [AdminPredictionController::class, 'update'],      $adminCSRF);
 $r->post('/admin/prediction/{id}/cancel',        [AdminPredictionController::class, 'cancel'],      $adminCSRF);
 $r->post('/admin/prediction/{id}/close-betting', [AdminPredictionController::class, 'closeBetting'],$adminCSRF);
 

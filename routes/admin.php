@@ -254,6 +254,7 @@ $r->post('/admin/content/revenue/{rid}/pay',        [AdminContentController::cla
 
 // ── سرمایه‌گذاری ─────────────────────────────────────────────────────────────
 $r->get('/admin/investment',                              [AdminInvestmentController::class, 'index'],         $admin);
+$r->get('/admin/investment/solvency-report',              [AdminInvestmentController::class, 'solvencyReport'], $admin);
 $r->get('/admin/investment/trades',                       [AdminInvestmentController::class, 'trades'],        $admin);
 $r->get('/admin/investment/trades/create',                [AdminInvestmentController::class, 'tradeCreate'],   $admin);
 $r->post('/admin/investment/trades/store',                [AdminInvestmentController::class, 'tradeStore'],    $admin);

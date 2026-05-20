@@ -1521,7 +1521,8 @@ $container->singleton(\App\Services\PredictionService::class, function($c) {
         $c->make(\App\Models\PredictionGame::class),
         $c->make(\App\Models\PredictionBet::class),
         $c->make(\App\Services\WalletService::class),
-        $c->make(\App\Contracts\LoggerInterface::class)
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\AuditTrail::class)
     );
 });
 
