@@ -17,49 +17,105 @@ class ScoreEventService extends \App\Services\BaseService
         parent::__construct($logger);
     }
 
-    public function addEvent(int $entityId, string $entityType, string $domain, float $delta, string $source, array $meta = []): bool
-    {
+    /**
+     * Section 8.2 — optional idempotency via $dedupKey.
+     * Many score events are legitimately repeated (e.g. "+5 per task"),
+     * so dedup is opt-in. Pass a stable dedupKey (e.g. "task:{id}:{userId}")
+     * to prevent double-crediting from at-least-once callers/queues.
+     */
+    public function addEvent(
+        int $entityId,
+        string $entityType,
+        string $domain,
+        float $delta,
+        string $source,
+        array $meta = [],
+        ?string $dedupKey = null
+    ): bool {
         $domain = ScoreDomain::normalize($domain);
-        $ok = $this->scoreModel->addEvent([
-            'entity_id' => $entityId,
-            'entity_type' => $entityType,
-            'domain' => $domain,
-            'delta' => $delta,
-            'source' => $source,
-            'meta' => $meta
-        ]);
 
-        if ($ok) {
-            $this->logInfo('score_event.recorded', [
+        $write = function () use ($entityId, $entityType, $domain, $delta, $source, $meta): array {
+            $ok = $this->scoreModel->addEvent([
+                'entity_id'   => $entityId,
                 'entity_type' => $entityType,
-                'entity_id' => $entityId,
-                'domain' => $domain,
-                'delta' => $delta,
-                'source' => $source
+                'domain'      => $domain,
+                'delta'       => $delta,
+                'source'      => $source,
+                'meta'        => $meta,
             ]);
+
+            if ($ok) {
+                $this->logInfo('score_event.recorded', [
+                    'entity_type' => $entityType,
+                    'entity_id'   => $entityId,
+                    'domain'      => $domain,
+                    'delta'       => $delta,
+                    'source'      => $source,
+                ]);
+            }
+            return ['ok' => (bool)$ok];
+        };
+
+        if ($dedupKey === null || $dedupKey === '') {
+            return (bool)($write()['ok']);
         }
 
-        return $ok;
+        $result = $this->idempotent(
+            'score.add',
+            $entityId,
+            [
+                'entity_type' => $entityType,
+                'domain'      => $domain,
+                'source'      => $source,
+                'dedup'       => $dedupKey,
+            ],
+            $write
+        );
+        return (bool)($result['ok'] ?? false);
     }
 
     /**
      * Renamed to recordEvent to avoid confusion with ScoreService delegates.
+     * Section 8.2 — optional idempotency via $dedupKey (see addEvent()).
      */
-    public function recordEvent(int $userId, string $domain, string $source, float $delta, array $meta = []): bool
-    {
+    public function recordEvent(
+        int $userId,
+        string $domain,
+        string $source,
+        float $delta,
+        array $meta = [],
+        ?string $dedupKey = null
+    ): bool {
         $domain = ScoreDomain::normalize($domain);
-        $ok = $this->scoreModel->createEvent($userId, $domain, $source, $delta, $meta);
 
-        if ($ok) {
-            $this->logInfo('score_event.user_recorded', [
-                'user_id' => $userId,
-                'domain' => $domain,
-                'delta' => $delta,
-                'source' => $source
-            ]);
+        $write = function () use ($userId, $domain, $source, $delta, $meta): array {
+            $ok = $this->scoreModel->createEvent($userId, $domain, $source, $delta, $meta);
+            if ($ok) {
+                $this->logInfo('score_event.user_recorded', [
+                    'user_id' => $userId,
+                    'domain'  => $domain,
+                    'delta'   => $delta,
+                    'source'  => $source,
+                ]);
+            }
+            return ['ok' => (bool)$ok];
+        };
+
+        if ($dedupKey === null || $dedupKey === '') {
+            return (bool)($write()['ok']);
         }
 
-        return $ok;
+        $result = $this->idempotent(
+            'score.record',
+            $userId,
+            [
+                'domain' => $domain,
+                'source' => $source,
+                'dedup'  => $dedupKey,
+            ],
+            $write
+        );
+        return (bool)($result['ok'] ?? false);
     }
 
     public function getTotalScore(int $entityId, string $entityType, string $domain): float

@@ -475,7 +475,26 @@ class CryptoDepositService extends \App\Services\BaseService
     /**
      * Try auto-verification of a crypto deposit
      */
+    /**
+     * Section 8.2 — idempotent at the API-call boundary.
+     * The verification logic itself stays unchanged. Multiple concurrent
+     * verify requests for the same depositId return the same cached
+     * outcome instead of racing on the underlying state machine.
+     */
     public function tryAutoVerify(int $depositId): array
+    {
+        if ($depositId <= 0) {
+            return ['auto' => false, 'message' => 'شناسه واریز نامعتبر است'];
+        }
+        return $this->idempotent(
+            'crypto_deposit.auto_verify',
+            (int)($depositId),
+            ['deposit_id' => $depositId],
+            fn() => $this->tryAutoVerifyInternal($depositId)
+        );
+    }
+
+    private function tryAutoVerifyInternal(int $depositId): array
     {
         if ($depositId <= 0) {
             return ['auto' => false, 'message' => 'شناسه واریز نامعتبر است'];

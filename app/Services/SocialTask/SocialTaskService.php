@@ -377,7 +377,21 @@ class SocialTaskService extends \App\Services\BaseService
         }
     }
 
+    /**
+     * Section 8.2 — Idempotent shim. Repeated submits for the same
+     * (userId, executionId) return the same cached result.
+     */
     public function submitExecution(int $userId, int $executionId, array $payload = []): array
+    {
+        return $this->idempotent(
+            'social_task.submit',
+            $userId,
+            ['execution_id' => $executionId],
+            fn() => $this->submitExecutionInternal($userId, $executionId, $payload)
+        );
+    }
+
+    private function submitExecutionInternal(int $userId, int $executionId, array $payload = []): array
     {
         $validatedPayload = $this->validateExecutionSubmissionPayload($userId, $executionId, $payload);
         if (empty($validatedPayload['valid'])) {

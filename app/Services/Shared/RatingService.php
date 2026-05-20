@@ -38,31 +38,50 @@ class RatingService extends \App\Services\BaseService
     ): bool {
         $this->validateRatingInput($raterId, $ratedId, $refType, $refId, $rating, $review, $ratedType);
 
-        $ok = $this->ratingModel->createOnce([
-            'rater_id' => $raterId,
-            'rated_id' => $ratedId,
-            'rated_type' => $ratedType, // Support dynamic injection
-            'ref_type' => $refType,
-            'ref_id' => $refId,
-            'rating' => $rating,
-            'review_text' => $review
-        ]);
+        // Section 8.2 — idempotency at the API-call boundary. createOnce()
+        // already enforces uniqueness on (rater_id, ref_type, ref_id) at the
+        // DB level, but the wrapper also stabilizes the *response* so a
+        // duplicate hammered submit returns the same shape consistently
+        // and is observable in the idempotency_keys audit log.
+        $result = $this->idempotent(
+            'rating.submit',
+            $raterId,
+            [
+                'rated_id'   => $ratedId,
+                'rated_type' => $ratedType,
+                'ref_type'   => $refType,
+                'ref_id'     => $refId,
+            ],
+            function () use ($raterId, $ratedId, $refType, $refId, $rating, $review, $ratedType): array {
+                $ok = $this->ratingModel->createOnce([
+                    'rater_id'    => $raterId,
+                    'rated_id'    => $ratedId,
+                    'rated_type'  => $ratedType,
+                    'ref_type'    => $refType,
+                    'ref_id'      => $refId,
+                    'rating'      => $rating,
+                    'review_text' => $review,
+                ]);
 
-        if ($ok) {
-            $this->logInfo('rating.submitted', [
-                'rater_id' => $raterId,
-                'ref_id' => $refId,
-                'rating' => $rating
-            ]);
-        } else {
-            $this->logWarning('rating.duplicate_or_lock_failed', [
-                'rater_id' => $raterId,
-                'ref_type' => $refType,
-                'ref_id' => $refId,
-            ]);
-        }
+                if ($ok) {
+                    $this->logInfo('rating.submitted', [
+                        'rater_id' => $raterId,
+                        'ref_id'   => $refId,
+                        'rating'   => $rating,
+                    ]);
+                } else {
+                    $this->logWarning('rating.duplicate_or_lock_failed', [
+                        'rater_id' => $raterId,
+                        'ref_type' => $refType,
+                        'ref_id'   => $refId,
+                    ]);
+                }
 
-        return (bool)$ok;
+                return ['ok' => (bool)$ok];
+            }
+        );
+
+        return (bool)($result['ok'] ?? false);
     }
 
     private function validateRatingInput(

@@ -42,6 +42,12 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
     /**
      * ارسال نوتیفیکیشن به یک کاربر (بخش‌بندی شده برای کاهش وابستگی‌های یکپارچه)
+     *
+     * Section 8.2 — Opt-in idempotency: callers can pass
+     *   $data['idempotency_key'] = 'business_intent:identifier'
+     * to prevent duplicate notification rows when the same business event
+     * fires twice (e.g. webhook replay, queue at-least-once retry).
+     * Without that key, send() behaves exactly as before.
      */
     public function send(
         int     $userId,
@@ -56,6 +62,46 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         ?string $imageUrl    = null,
         ?string $groupKey    = null,
         ?string $scheduledAt = null
+    ): ?int {
+        $idemKey = is_array($data) && !empty($data['idempotency_key'])
+            ? (string)$data['idempotency_key']
+            : null;
+
+        if ($idemKey !== null) {
+            $result = $this->idempotent(
+                'notification.send',
+                $userId,
+                ['type' => $type, 'idem' => $idemKey],
+                fn() => ['id' => $this->sendInternal(
+                    $userId, $type, $title, $message, $data,
+                    $actionUrl, $actionText, $priority, $expiresAt,
+                    $imageUrl, $groupKey, $scheduledAt
+                )]
+            );
+            $id = $result['id'] ?? null;
+            return is_int($id) ? $id : null;
+        }
+
+        return $this->sendInternal(
+            $userId, $type, $title, $message, $data,
+            $actionUrl, $actionText, $priority, $expiresAt,
+            $imageUrl, $groupKey, $scheduledAt
+        );
+    }
+
+    private function sendInternal(
+        int     $userId,
+        string  $type,
+        string  $title,
+        string  $message,
+        ?array  $data,
+        ?string $actionUrl,
+        ?string $actionText,
+        string  $priority,
+        ?string $expiresAt,
+        ?string $imageUrl,
+        ?string $groupKey,
+        ?string $scheduledAt
     ): ?int {
         // 1. Rate Limiter assertion
         if (!$this->checkRateLimit($userId)) {

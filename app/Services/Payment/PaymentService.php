@@ -289,10 +289,22 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
 
     if ($this->rateLimiter) {
         $ip = function_exists('get_client_ip') ? get_client_ip() : 'unknown';
-        if (!$this->rateLimiter->attempt('payment_callback:' . $gatewayName . ':' . $ip, 20, 1, true)) {
+        // Section 8.8 — pull limits from config/rate_limits.php:payment.callback
+        $cbCfg = config('rate_limits.payment.callback', ['max_attempts' => 20, 'decay_minutes' => 1, 'fail_closed' => true]);
+        $maxAttempts = (int)($cbCfg['max_attempts'] ?? 20);
+        $decay       = (int)($cbCfg['decay_minutes'] ?? 1);
+        $failClosed  = (bool)($cbCfg['fail_closed'] ?? true);
+        if (!$this->rateLimiter->attempt(
+            'payment_callback:' . $gatewayName . ':' . $ip,
+            $maxAttempts,
+            $decay,
+            $failClosed
+        )) {
             $this->logger->critical('payment.callback.rate_limited', [
                 'gateway' => $gatewayName,
-                'ip' => $ip,
+                'ip'      => $ip,
+                'limit'   => $maxAttempts,
+                'window'  => $decay,
             ]);
             return ['success' => false, 'message' => 'تعداد درخواست‌های بازگشت پرداخت بیش از حد مجاز است'];
         }

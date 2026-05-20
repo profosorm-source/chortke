@@ -6,9 +6,15 @@ namespace App\Services\Notification;
 
 use App\Contracts\LoggerInterface;
 use Core\Cache;
+use Core\CircuitBreaker;
 
 /**
- * Channel-specific retry policy + lightweight circuit breaker for notification gateways.
+ * Channel-specific retry policy + circuit breaker for notification gateways.
+ *
+ * Section 8.3 — The actual circuit-breaker is delegated to Core\CircuitBreaker
+ * via constructor injection (single source of truth). The legacy cache-based
+ * tripping kept here as a *secondary* defense for hot-path attempt throttling
+ * (e.g. "don't even try 3 attempts if 5 consecutive failures happened in 60s").
  */
 class NotificationRetryPolicy
 {
@@ -22,7 +28,8 @@ class NotificationRetryPolicy
 
     public function __construct(
         private Cache $cache,
-        private LoggerInterface $logger
+        private LoggerInterface $logger,
+        private ?CircuitBreaker $circuit = null
     ) {}
 
     public function execute(string $channel, callable $operation): bool
@@ -34,6 +41,28 @@ class NotificationRetryPolicy
             $this->logger->warning('notif.circuit_open_skip', ['channel' => $channel]);
             return false;
         }
+
+        // Wrap the entire retry loop in Core\CircuitBreaker when available.
+        if ($this->circuit !== null) {
+            try {
+                return (bool) $this->circuit->call('notif_' . $channel, function () use ($channel, $policy, $operation): bool {
+                    return $this->executeRetryLoop($channel, $policy, $operation);
+                });
+            } catch (\RuntimeException $e) {
+                // CB is open → propagate same false semantics as legacy path.
+                $this->logger->warning('notif.core_cb_open', [
+                    'channel' => $channel,
+                    'error' => $e->getMessage(),
+                ]);
+                return false;
+            }
+        }
+
+        return $this->executeRetryLoop($channel, $policy, $operation);
+    }
+
+    private function executeRetryLoop(string $channel, array $policy, callable $operation): bool
+    {
 
         $last = null;
         for ($attempt = 1; $attempt <= (int) $policy['attempts']; $attempt++) {
