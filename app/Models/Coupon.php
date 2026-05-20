@@ -44,6 +44,18 @@ class Coupon extends Model
     }
 
     /**
+     * یافتن کوپن با کد و قفل بدبینانه (Pessimistic Locking)
+     */
+    public function findByCodeWithLock(string $code): ?object
+    {
+        return $this->db->table(static::$table)
+            ->where('code', '=', $code)
+            ->whereNull('deleted_at')
+            ->lockForUpdate()
+            ->first();
+    }
+
+    /**
      * یافتن کوپن با قفل بدبینانه (Pessimistic Locking)
      */
     public function findWithLock(int $id): ?object
