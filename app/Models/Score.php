@@ -169,6 +169,11 @@ class Score extends Model
 
     public function getDomainScore(int $userId, string $domain): float
     {
+        // 🔒 جلوگیری از Race Condition با قفل بدبینانه در صورت فعال بودن تراکنش
+        if ($this->db->inTransaction()) {
+            $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$userId]);
+        }
+
         // به شکل همزمان و ریاضی هردو جدول سنتی و جدید را تجمیع می‌کند
         $stmt = $this->db->prepare("
             SELECT COALESCE(SUM(total_delta), 0.0) FROM (

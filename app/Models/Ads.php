@@ -194,7 +194,7 @@ class Ads extends Model
     /**
      * افزایش شمارنده نمایش به صورت گروهی برای بهینه‌سازی عملکرد N+1
      */
-    public function bulkIncrementImpressions(array $ids): bool
+    public function bulkIncrementImpressions(array $ids, int $step = 1): bool
     {
         if (empty($ids)) return true;
         
@@ -204,11 +204,12 @@ class Ads extends Model
         
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $sql = "UPDATE `" . static::$table . "` 
-                SET impressions = impressions + 1,
-                    ctr = CASE WHEN impressions > 0 THEN ROUND((clicks / (impressions + 1)) * 100, 2) ELSE 0 END 
+                SET impressions = impressions + ?,
+                    ctr = CASE WHEN impressions > 0 THEN ROUND((clicks / (impressions + ?)) * 100, 2) ELSE 0 END 
                 WHERE id IN ($placeholders)";
                 
-        return $this->db->prepare($sql)->execute($ids);
+        $params = array_merge([$step, $step], $ids);
+        return $this->db->prepare($sql)->execute($params);
     }
 
     /**
