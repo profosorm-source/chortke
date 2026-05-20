@@ -43,23 +43,23 @@ class Database
 
     private function reconnect(): void
     {
-        $dsn = "mysql:host={$this->config['host']};port={$this->config['port']};dbname={$this->config['name']};charset={$this->config['charset']};connect_timeout=5";
+        $dsn = "mysql:host={$this->config['host']};port={$this->config['port']};dbname={$this->config['name']};charset={$this->config['charset']};connect_timeout=2";
         
         $options = [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_OBJ, // ✅ Object به جای Array
             \PDO::ATTR_EMULATE_PREPARES => false,
-            \PDO::ATTR_TIMEOUT => 5, // ✅ Query timeout
+            \PDO::ATTR_TIMEOUT => 2, // ✅ Strict timeout to protect against Time-Based SQLi DoS
         ];
 
         if (defined('\PDO::MYSQL_ATTR_INIT_COMMAND')) {
             $options[\PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES {$this->config['charset']} COLLATE utf8mb4_unicode_ci";
         }
         if (defined('\PDO::MYSQL_ATTR_READ_TIMEOUT')) {
-            $options[\PDO::MYSQL_ATTR_READ_TIMEOUT] = 10;
+            $options[\PDO::MYSQL_ATTR_READ_TIMEOUT] = 2;
         }
         if (defined('\PDO::MYSQL_ATTR_WRITE_TIMEOUT')) {
-            $options[\PDO::MYSQL_ATTR_WRITE_TIMEOUT] = 10;
+            $options[\PDO::MYSQL_ATTR_WRITE_TIMEOUT] = 2;
         }
         
         $this->pdo = new \PDO($dsn, $this->config['user'], $this->config['pass'], $options);

@@ -328,6 +328,9 @@ class Response
         }
 
         // [MED-03] Security Headers: Enforcing best-practice security policies
+        if (function_exists('header_remove')) {
+            header_remove('X-Powered-By');
+        }
         header('X-Frame-Options: SAMEORIGIN');
         header('X-Content-Type-Options: nosniff');
         header('X-XSS-Protection: 1; mode=block');
