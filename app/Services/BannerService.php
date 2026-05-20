@@ -189,6 +189,9 @@ class BannerService extends \App\Services\BaseService
             return ['success' => true, 'banner_id' => $adId];
 
         } catch (\Throwable $e) {
+            if (isset($imagePath) && $imagePath) {
+                $this->deleteBannerImage($imagePath);
+            }
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
