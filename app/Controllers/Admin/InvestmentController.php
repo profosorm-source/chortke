@@ -328,4 +328,13 @@ class InvestmentController extends BaseAdminController
 
         return $this->response->json(['success' => true, 'message' => 'سرمایه‌گذاری تعلیق شد.']);
     }
+
+    /**
+     * گزارش توانگری و حلالیت سیستم سرمایه‌گذاری (AJAX / GET)
+     */
+    public function solvencyReport()
+    {
+        $report = $this->investmentService->getSolvencyReport();
+        return $this->response->json($report, 200);
+    }
 }
