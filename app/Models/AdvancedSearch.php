@@ -34,12 +34,24 @@ class AdvancedSearch extends Model
         $limit = max(1, (int)$limit);
         $offset = max(0, (int)$offset);
 
-        $sql = "SELECT * FROM " . static::$table . " WHERE 1=1";
         $params = [];
 
-        $escaped = $this->escapeLikeValue($keyword);
-        $sql .= " AND (title LIKE :keyword OR description LIKE :keyword OR content LIKE :keyword)";
-        $params['keyword'] = "%{$escaped}%";
+        // Prefer FULLTEXT when the deployment has the recommended index; otherwise fallback to LIKE.
+        if ($this->hasFullTextIndex(['title', 'description', 'content'])) {
+            $sql = "SELECT *, MATCH(title, description, content) AGAINST (:keyword_score IN BOOLEAN MODE) AS relevance
+                    FROM " . static::$table . " WHERE 1=1
+                    AND MATCH(title, description, content) AGAINST (:keyword_match IN BOOLEAN MODE)";
+            $booleanKeyword = $this->toBooleanFulltextQuery($keyword);
+            $params['keyword_score'] = $booleanKeyword;
+            $params['keyword_match'] = $booleanKeyword;
+        } else {
+            $sql = "SELECT * FROM " . static::$table . " WHERE 1=1";
+            $escaped = $this->escapeLikeValue($keyword);
+            $sql .= " AND (title LIKE :keyword_title ESCAPE '\\' OR description LIKE :keyword_description ESCAPE '\\' OR content LIKE :keyword_content ESCAPE '\\')";
+            $params['keyword_title'] = "%{$escaped}%";
+            $params['keyword_description'] = "%{$escaped}%";
+            $params['keyword_content'] = "%{$escaped}%";
+        }
 
         // Apply filters if provided
         if (!empty($filters['user_id'])) {
@@ -52,13 +64,56 @@ class AdvancedSearch extends Model
             $params['category'] = $filters['category'];
         }
 
-        $sql .= " ORDER BY created_at DESC LIMIT :limit OFFSET :offset";
-        $params['limit'] = $limit;
-        $params['offset'] = $offset;
-
+        $sql .= str_contains($sql, 'MATCH(')
+            ? " ORDER BY relevance DESC, created_at DESC LIMIT :limit OFFSET :offset"
+            : " ORDER BY created_at DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue(':' . $key, $value, is_int($value) ? \PDO::PARAM_INT : \PDO::PARAM_STR);
+        }
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(\PDO::FETCH_OBJ);
+    }
+
+
+    private function hasFullTextIndex(array $columns): bool
+    {
+        try {
+            $rows = $this->db->fetchAll("SHOW INDEX FROM " . static::$table . " WHERE Index_type = 'FULLTEXT'");
+            $indexed = [];
+            foreach ($rows as $row) {
+                $indexed[] = (string)($row->Column_name ?? '');
+            }
+            return count(array_intersect($columns, $indexed)) === count($columns);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function toBooleanFulltextQuery(string $keyword): string
+    {
+        $terms = preg_split('/\s+/u', trim($keyword)) ?: [];
+        $terms = array_values(array_filter(array_map(
+            fn($term) => preg_replace('/[^\pL\pN_\-]/u', '', (string)$term),
+            $terms
+        )));
+
+        if (empty($terms)) {
+            return $keyword;
+        }
+
+        return implode(' ', array_map(fn($term) => '+' . $term . '*', $terms));
+    }
+
+    public function getSearchIndexRecommendations(): array
+    {
+        return [
+            'ALTER TABLE searches ADD FULLTEXT ft_searches_text (title, description, content)',
+            'ALTER TABLE searches ADD INDEX idx_searches_user_created (user_id, created_at)',
+            'ALTER TABLE searches ADD INDEX idx_searches_category_created (category, created_at)',
+        ];
     }
 
     /**

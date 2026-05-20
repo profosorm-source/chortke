@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use Core\Model;
+use App\Enums\ScoreDomain;
 
 /**
  * Score Model - مدل اشتراکی امتیازات
@@ -22,12 +23,34 @@ class Score extends Model
 {
     protected static string $table = 'score_events';
 
+    public const DOMAIN_FRAUD = 'fraud';
+    public const DOMAIN_TASK = 'task';
+    public const DOMAIN_SOCIAL_TRUST = 'social_trust';
+    public const DOMAIN_REFERRAL = 'referral';
+    public const DOMAIN_ACTIVITY = 'activity';
+    public const DOMAIN_LOYALTY = 'loyalty';
+
+    public static function normalizeDomain(string $domain): string
+    {
+        $normalized = ScoreDomain::normalize($domain);
+        if (!ScoreDomain::isValid($normalized)) {
+            throw new \InvalidArgumentException("Unsupported score domain: {$domain}");
+        }
+        return $normalized;
+    }
+
+    public static function allowedDomains(): array
+    {
+        return ScoreDomain::values();
+    }
+
     // ==========================================
     // Event Management (from UserScoreEvent)
     // ==========================================
 
     public function createEvent(int $userId, string $domain, string $source, float $delta, array $meta = []): bool
     {
+        $domain = self::normalizeDomain($domain);
         $stmt = $this->db->prepare("
             INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at)
             VALUES ('user', ?, ?, ?, ?, ?, NOW())
@@ -45,6 +68,7 @@ class Score extends Model
     public function getEventsByUser(int $userId, ?string $domain = null, int $limit = 200): array
     {
         $limit = \max(1, (int)$limit);
+        $domain = $domain !== null ? self::normalizeDomain($domain) : null;
         if ($domain === null) {
             $stmt = $this->db->prepare("
                 SELECT id, domain, source, delta, meta_json, created_at FROM score_events
@@ -81,6 +105,7 @@ class Score extends Model
      */
     public function getActiveAdjustments(int $userId, string $domain): array
     {
+        $domain = self::normalizeDomain($domain);
         $stmt = $this->db->prepare("
             SELECT * FROM user_score_adjustments
             WHERE user_id = ? AND domain = ? AND is_active = 1
@@ -97,6 +122,7 @@ class Score extends Model
      */
     public function createAdjustment(array $data): bool
     {
+        $data['domain'] = self::normalizeDomain((string)($data['domain'] ?? ''));
         $stmt = $this->db->prepare("
             INSERT INTO user_score_adjustments 
             (user_id, domain, operation, value, reason, expires_at, created_by, is_active)
@@ -139,6 +165,7 @@ class Score extends Model
      */
     public function addEvent(array $data): bool
     {
+        $data['domain'] = self::normalizeDomain((string)($data['domain'] ?? ''));
         $stmt = $this->db->prepare("
             INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at)
             VALUES (?, ?, ?, ?, ?, ?, NOW())
@@ -159,6 +186,7 @@ class Score extends Model
      */
     public function getTotal(int $entityId, string $entityType, string $domain): float
     {
+        $domain = self::normalizeDomain($domain);
         $stmt = $this->db->prepare("
             SELECT SUM(delta) FROM score_events
             WHERE entity_id = ? AND entity_type = ? AND domain = ?
@@ -169,6 +197,7 @@ class Score extends Model
 
     public function getDomainScore(int $userId, string $domain): float
     {
+        $domain = self::normalizeDomain($domain);
         // 🔒 جلوگیری از Race Condition با قفل بدبینانه در صورت فعال بودن تراکنش
         if ($this->db->inTransaction()) {
             $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$userId]);
