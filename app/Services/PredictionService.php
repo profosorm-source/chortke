@@ -21,14 +21,26 @@ use App\Contracts\LoggerInterface;
  */
 class PredictionService extends \App\Services\BaseService
 {
+    private Database $db;
+    private PredictionGame $gameModel;
+    private PredictionBet $betModel;
+    private WalletService $walletService;
+    private \App\Services\AuditTrail $auditTrail;
+
     public function __construct(
-        private Database      $db,
-        private PredictionGame $gameModel,
-        private PredictionBet  $betModel,
-        private WalletService  $walletService,
-        LoggerInterface       $logger
+        Database      $db,
+        PredictionGame $gameModel,
+        PredictionBet  $betModel,
+        WalletService  $walletService,
+        LoggerInterface       $logger,
+        \App\Services\AuditTrail $auditTrail
     ) {
         parent::__construct($logger);
+        $this->db = $db;
+        $this->gameModel = $gameModel;
+        $this->betModel = $betModel;
+        $this->walletService = $walletService;
+        $this->auditTrail = $auditTrail;
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -52,9 +64,11 @@ class PredictionService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // قفل بازی برای خواندن اطلاعات معتبر
+            // P-3 Fix: Lock game and check deadline using authoritative database NOW() time to prevent TOCTOU race conditions
             $game = $this->db->fetch(
-                "SELECT * FROM prediction_games WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+                "SELECT *, CASE WHEN bet_deadline > NOW() THEN 1 ELSE 0 END as is_deadline_valid 
+                 FROM prediction_games 
+                 WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
                 [$gameId]
             );
 
@@ -64,7 +78,7 @@ class PredictionService extends \App\Services\BaseService
             if ($game->status !== 'open') {
                 throw new \RuntimeException('این بازی برای شرط‌بندی باز نیست.');
             }
-            if (strtotime($game->bet_deadline) < time()) {
+            if (!(bool)($game->is_deadline_valid ?? false)) {
                 throw new \RuntimeException('مهلت ثبت شرط تمام شده است.');
             }
             if ($amount < (float)$game->min_bet_usdt) {
@@ -151,7 +165,17 @@ class PredictionService extends \App\Services\BaseService
             if (!in_array($game->status, ['open', 'closed'], true)) {
                 throw new \RuntimeException('این بازی قابل تسویه نیست (وضعیت فعلی: ' . $game->status . ')');
             }
-            if ((bool)($game->winners_paid ?? false)) {
+            // P-4 Fix: Authoritatively acquire exclusive settle-lock on winners_paid immediately.
+            // If another admin settles concurrently, one will have affectedRows = 0 and rollback instantly.
+            $affected = $this->db->execute(
+                "UPDATE prediction_games 
+                 SET winners_paid = 1 
+                 WHERE id = ? AND winners_paid = 0",
+                [$gameId]
+            );
+
+            if ($affected === 0) {
+                $this->db->rollBack();
                 throw new \RuntimeException('جوایز این بازی قبلاً پرداخت شده است.');
             }
 
@@ -181,7 +205,7 @@ class PredictionService extends \App\Services\BaseService
             };
 
             // H-P5: Audit Trail - log the result before distributing
-            app(\App\Services\AuditTrail::class)->record('prediction.settle_start', $adminId, [
+            $this->auditTrail->record('prediction.settle_start', $adminId, [
                 'game_id' => $gameId,
                 'result' => $result,
                 'total_pool' => $totalPool,
@@ -236,10 +260,10 @@ class PredictionService extends \App\Services\BaseService
                 }
             }
 
-            // BUG-P1 Fix: Synchronize winners_paid and status in one update
+            // Update remaining status fields in the database
             $this->db->execute(
                 "UPDATE prediction_games 
-                 SET winners_paid = 1, paid_at = NOW(), status = 'finished', 
+                 SET paid_at = NOW(), status = 'finished', 
                      finished_at = NOW(), settled_by = ?, result = ?
                  WHERE id = ?",
                 [$adminId, $result, $gameId]
@@ -247,9 +271,13 @@ class PredictionService extends \App\Services\BaseService
 
             $this->db->commit();
             
-            app(\App\Services\AuditTrail::class)->record('prediction.settle_end', $adminId, [
+            // P-5: Log immutable structured audit trail for dispute resolution
+            $this->auditTrail->record('prediction.settled', $adminId, [
                 'game_id' => $gameId,
-                'summary' => $summary
+                'result' => $result,
+                'total_pool' => $totalPool,
+                'winners_paid' => count($winnerBets),
+                'timestamp' => microtime(true)
             ]);
 
             return ['success' => true, 'summary' => $summary];
