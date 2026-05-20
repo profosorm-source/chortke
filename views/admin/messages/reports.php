@@ -88,7 +88,7 @@
                                         <p class="text-gray-500"><?php echo e($report['reporter_email']); ?></p>
                                     </div>
                                 </td>
-                                <td class="px-6 py-4 text-sm text-gray-900"><?php echo $report['reason']; ?></td>
+                                 <td class="px-6 py-4 text-sm text-gray-900"><?php echo e($report['reason']); ?></td>
                                 <td class="px-6 py-4 text-sm">
                                     <span class="px-2 py-1 rounded-full text-xs font-medium
                                         <?php
@@ -100,7 +100,7 @@
                                         }
                                         ?>
                                     ">
-                                        <?php echo $report['status']; ?>
+                                        <?php echo e($report['status']); ?>
                                     </span>
                                 </td>
                                 <td class="px-6 py-4 text-sm text-gray-600">
