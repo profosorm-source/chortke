@@ -38,10 +38,14 @@ class SearchController extends BaseController
         $ip = get_client_ip();
         $fingerprint = function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : md5($ip);
 
+        // Section 8.8 — limits now sourced from config/rate_limits.php:search.*
+        $admUser = get_rate_limit_config('search', 'admin_user');
+        $admIp   = get_rate_limit_config('search', 'admin_ip');
+        $admFp   = get_rate_limit_config('search', 'admin_fingerprint');
         $limits = [
-            'admin_search_user:' . $userId        => [50, 1],
-            'admin_search_ip:' . $ip              => [100, 1],
-            'admin_search_fingerprint:' . $fingerprint => [60, 1],
+            'admin_search_user:' . $userId             => [(int)$admUser['max_attempts'], (int)$admUser['decay_minutes']],
+            'admin_search_ip:' . $ip                   => [(int)$admIp['max_attempts'],   (int)$admIp['decay_minutes']],
+            'admin_search_fingerprint:' . $fingerprint => [(int)$admFp['max_attempts'],   (int)$admFp['decay_minutes']],
         ];
 
         foreach ($limits as $key => $conf) {
@@ -79,14 +83,16 @@ class SearchController extends BaseController
         $ip = get_client_ip();
         $fingerprint = function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : md5($ip);
 
-        // Rate Limit چندلایه برای کاربر (IP + User ID + Fingerprint)
+        // Section 8.8 — limits now sourced from config/rate_limits.php:search.*
+        $genCfg = get_rate_limit_config('search', 'general');
+        $advCfg = get_rate_limit_config('search', 'advanced');
         $limits = [
-            'user_search_ip:' . $ip => [30, 1],
-            'user_search_fingerprint:' . $fingerprint => [20, 1],
+            'user_search_ip:' . $ip                   => [(int)$genCfg['max_attempts'], (int)$genCfg['decay_minutes']],
+            'user_search_fingerprint:' . $fingerprint => [(int)$advCfg['max_attempts'], (int)$advCfg['decay_minutes']],
         ];
 
         if ($userId > 0) {
-            $limits['user_search_user:' . $userId] = [20, 1];
+            $limits['user_search_user:' . $userId] = [(int)$advCfg['max_attempts'], (int)$advCfg['decay_minutes']];
         }
 
         foreach ($limits as $key => $conf) {
@@ -129,14 +135,16 @@ class SearchController extends BaseController
             return;
         }
 
-        // Rate Limit چندلایه برای صفحه کامل
+        // Section 8.8 — limits now sourced from config/rate_limits.php:search.*
+        $genCfg = get_rate_limit_config('search', 'general');
+        $advCfg = get_rate_limit_config('search', 'advanced');
         $limits = [
-            'full_search_ip:' . $ip => [45, 1],
-            'full_search_fingerprint:' . $fingerprint => [35, 1],
+            'full_search_ip:' . $ip                   => [(int)$genCfg['max_attempts'] + 15, (int)$genCfg['decay_minutes']],
+            'full_search_fingerprint:' . $fingerprint => [(int)$genCfg['max_attempts'] + 5,  (int)$genCfg['decay_minutes']],
         ];
 
         if ($userId > 0) {
-            $limits['full_search_user:' . $userId] = [30, 1];
+            $limits['full_search_user:' . $userId] = [(int)$advCfg['max_attempts'] + 10, (int)$advCfg['decay_minutes']];
         }
 
         foreach ($limits as $key => $conf) {
