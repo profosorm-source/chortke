@@ -135,40 +135,85 @@ class SeoFraudDetector extends \App\Services\BaseService
         $reasons = [];
         $riskScore = 0;
 
-        $duration = $data['duration'] ?? 0;
-        $score = $data['final_score'] ?? 0;
+        $duration = (float)($data['duration'] ?? 0);
+        $score = (float)($data['final_score'] ?? 0);
         
+        // ۱. سرعت عمل غیرطبیعی
         if ($duration < 30 && $score > 80) {
             $suspicious = true;
             $reasons[] = 'امتیاز بالا در زمان خیلی کوتاه';
             $riskScore += 30;
         }
 
-        $interactions = $data['interactions'] ?? 0;
+        $interactions = (int)($data['interactions'] ?? 0);
         if ($interactions === 0 && $duration > 60) {
             $suspicious = true;
             $reasons[] = 'عدم تعامل با حضور طولانی';
             $riskScore += 25;
         }
 
-        $scrollSpeed = $data['behavior']['scroll_speed'] ?? 0;
-        if ($scrollSpeed > 5000) {
+        // ۲. محاسبه انحراف معیار و آنتروپی زمانی کلیک‌ها و رفتارها
+        $clickTimings = $data['behavior']['click_timings'] ?? [];
+        if (!empty($clickTimings) && count($clickTimings) >= 3) {
+            $intervals = [];
+            for ($i = 1; $i < count($clickTimings); $i++) {
+                $intervals[] = $clickTimings[$i] - $clickTimings[$i - 1];
+            }
+            // محاسبه میانگین و انحراف معیار فواصل زمانی
+            $mean = array_sum($intervals) / count($intervals);
+            $variance = 0.0;
+            foreach ($intervals as $val) {
+                $variance += pow($val - $mean, 2);
+            }
+            $stdDev = sqrt($variance / count($intervals));
+
+            // اگر انحراف معیار به شکل ربات‌گونه‌ای بسیار کوچک باشد (زیر ۵ میلی‌ثانیه یعنی فواصل تکراری بی‌نقص)
+            if ($stdDev < 0.005) {
+                $suspicious = true;
+                $reasons[] = 'فواصل زمانی کلیک‌ها غیرطبیعی و کاملاً منظم (ربات)';
+                $riskScore += 35;
+            }
+        }
+
+        // ۳. سرعت و شتاب حرکت موس
+        $mouseSpeeds = $data['behavior']['mouse_speeds'] ?? [];
+        if (!empty($mouseSpeeds) && count($mouseSpeeds) >= 4) {
+            $meanSpeed = array_sum($mouseSpeeds) / count($mouseSpeeds);
+            $varSpeed = 0.0;
+            foreach ($mouseSpeeds as $s) {
+                $varSpeed += pow($s - $meanSpeed, 2);
+            }
+            $stdDevSpeed = sqrt($varSpeed / count($mouseSpeeds));
+
+            // نوسان سرعت حرکت انسان همیشه بالاست؛ نوسان ثابت یعنی حرکت خطی ربات
+            if ($stdDevSpeed < 1.0) {
+                $suspicious = true;
+                $reasons[] = 'الگوی سرعت حرکت موس خطی و بدون شتاب طبیعی';
+                $riskScore += 30;
+            }
+        }
+
+        // ۴. بررسی اسکرول خطی (Linear Scrolling Momentum)
+        $scrollPattern = $data['behavior']['scroll_pattern'] ?? 'natural';
+        if ($scrollPattern === 'linear') {
             $suspicious = true;
-            $reasons[] = 'سرعت اسکرول غیرطبیعی';
+            $reasons[] = 'اسکرول خطی و بدون فیزیک حرکتی طبیعی';
             $riskScore += 20;
         }
 
-        $mousePattern = $data['behavior']['mouse_pattern'] ?? 'normal';
-        if ($mousePattern === 'linear' || $mousePattern === 'none') {
+        // ۵. نسبت رویدادهای کیبورد به موس
+        $mouseEvents = (int)($data['behavior']['mouse_events_count'] ?? 0);
+        $keyEvents = (int)($data['behavior']['key_events_count'] ?? 0);
+        if ($keyEvents > 0 && $mouseEvents === 0) {
             $suspicious = true;
-            $reasons[] = 'الگوی حرکت موس مشکوک';
+            $reasons[] = 'تعامل صرفاً کیبوردی بدون هیچ رویداد موس';
             $riskScore += 15;
         }
 
         return [
-            'suspicious' => $suspicious,
+            'suspicious' => $suspicious || ($riskScore >= 40),
             'reasons' => $reasons,
-            'risk_score' => $riskScore,
+            'risk_score' => min($riskScore, 100),
         ];
     }
 

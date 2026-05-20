@@ -9,8 +9,7 @@ use App\Models\Score;
 use App\Models\User;
 use App\Services\User\UserScoreService;
 use App\Services\InfluencerReputationService;
-use InvalidArgumentException;
-use App\Contracts\LoggerInterface;
+use Core\Cache;
 
 /**
  * ScoreService - اورکستریتور اصلی مدیریت امتیازات
@@ -27,7 +26,8 @@ class ScoreService extends \App\Services\BaseService
         private UserScoreService $userScoreService,
         private InfluencerReputationService $influencerReputationService,
         private TrustScoreService $trustScoreService,
-        private ScoreEventService $scoreEventService
+        private ScoreEventService $scoreEventService,
+        private Cache $cache
     ) {
         parent::__construct($logger);
     }
@@ -231,9 +231,19 @@ class ScoreService extends \App\Services\BaseService
         $ok = $this->scoreModel->revokeAdjustment($adjustmentId, $adminId, $reason);
         
         if ($ok) {
+            $userId = (int)$adjustment->user_id;
+            $domain = (string)$adjustment->domain;
+
+            // ⚡ Invalidate relevant caches to ensure instant UI update
+            $this->cache->forget("user_dashboard_stats:{$userId}");
+            $this->cache->forget("user_score:{$userId}:{$domain}");
+            $this->cache->forget("temp_{$domain}_score:{$userId}");
+
             $this->logInfo('admin.score.adjustment_revoked', [
                 'admin_id' => $adminId,
                 'adjustment_id' => $adjustmentId,
+                'user_id' => $userId,
+                'domain' => $domain,
                 'reason' => $reason
             ]);
         }

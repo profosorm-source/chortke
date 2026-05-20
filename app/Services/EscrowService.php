@@ -175,6 +175,68 @@ class EscrowService extends \App\Services\BaseService
     }
 
     /**
+     * partialRelease - Release partial amount from escrow to seller, keeping the rest.
+     */
+    public function partialRelease(
+        int    $escrowId,
+        int    $sellerId,
+        string $releaseAmount,
+        string $reason
+    ): array {
+        if (!$this->db->inTransaction()) {
+            throw new \RuntimeException('partialRelease must be called inside an active transaction');
+        }
+
+        $escrow = $this->escrowModel->findReleasable($escrowId, $sellerId);
+        if (!$escrow) {
+            return ['ok' => false, 'error' => 'Escrow not found or not releasable'];
+        }
+
+        // بررسی amount
+        if (bccomp($releaseAmount, $escrow->amount, 8) > 0) {
+            return ['ok' => false, 'error' => 'Release amount exceeds escrow amount'];
+        }
+
+        $remaining = bcsub($escrow->amount, $releaseAmount, 8);
+
+        // اگر کل مبلغ release شد
+        if (bccomp($remaining, '0', 8) <= 0) {
+            return $this->releaseFunds($escrowId, $sellerId, 'partial_release_completed');
+        }
+
+        // partial release
+        $stmt = $this->db->prepare("
+            UPDATE escrow_transactions 
+            SET status = 'partial',
+                amount = ?,
+                partial_released = COALESCE(partial_released, 0.0) + ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+
+        $result = $stmt->execute([$remaining, $releaseAmount, $escrowId]);
+
+        if ($result) {
+            $this->escrowModel->logEscrowAction($escrowId, 'partial_release', $releaseAmount, 'seller', $reason);
+            
+            // Record double-entry bookkeeping ledger records for auditing
+            $this->ledgerService->recordDoubleEntry(
+                "escrow_partial_release_{$escrowId}_" . time(),
+                "escrow:{$escrowId}",          // debit from escrow
+                "wallet:user:{$sellerId}",      // credit to seller
+                $releaseAmount,
+                strtolower($escrow->currency),
+                "Escrow partial release for order {$escrow->order_id}: {$reason}",
+                ['escrow_id' => $escrowId, 'released_by' => 'seller', 'reason' => $reason]
+            );
+
+            return ['ok' => true, 'released' => $releaseAmount, 'remaining' => $remaining];
+        }
+
+        return ['ok' => false, 'error' => 'Failed to partial release'];
+    }
+
+    /**
      * بازگرداندن funds به خریدار (in_escrow/pending → refunded)
      * ✅ Used for cancellations or refunds
      */
