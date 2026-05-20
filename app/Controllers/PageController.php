@@ -20,28 +20,16 @@ class PageController extends BaseController
         parent::__construct();
         $this->pageModel = $pageModel;
     }
-    /**
-     * صفحه اصلی (Welcome)
-     */
-    public function home()
-    {
-        // اگر لاگین است، به داشبورد هدایت شود
-        if ($this->session->get('logged_in')) {
-            return $this->response->redirect(url('dashboard'));
-        }
 
-return $this->response->view('welcome', [
-            'title' => 'خوش آمدید به چرتکه'
-        ]);
-
-        
-    }
-	
 	/**
      * نمایش صفحه
      */
     public function show(string $slug)
     {
+        if (!preg_match('/^[a-z0-9\-]+$/i', $slug)) {
+            return view('errors/404');
+        }
+        
         $page = $this->pageModel->findBySlug($slug);
         
         if (!$page) {

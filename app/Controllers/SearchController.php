@@ -33,11 +33,22 @@ class SearchController extends BaseController
     {
         $query = trim($this->request->get('q') ?? '');
 
-        // Rate Limit برای ادمین (مثلاً ۵۰ جستجو در دقیقه)
-        $rateKey = 'admin_search:' . user_id();
-        if (!$this->rateLimiter->attempt($rateKey, 50, 1)) {
-            $this->response->json(['success' => false, 'message' => 'Too many requests'], 429);
-            return;
+        // Rate Limit چندلایه برای ادمین (IP + User ID + Global)
+        $userId = user_id();
+        $ip = get_client_ip();
+        $fingerprint = function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : md5($ip);
+
+        $limits = [
+            'admin_search_user:' . $userId        => [50, 1],
+            'admin_search_ip:' . $ip              => [100, 1],
+            'admin_search_fingerprint:' . $fingerprint => [60, 1],
+        ];
+
+        foreach ($limits as $key => $conf) {
+            if (!$this->rateLimiter->attempt($key, $conf[0], $conf[1])) {
+                $this->response->json(['success' => false, 'message' => 'Too many requests'], 429);
+                return;
+            }
         }
 
         if (strlen($query) < 2) {
@@ -65,12 +76,24 @@ class SearchController extends BaseController
     {
         $userId = (int)user_id();
         $query = trim($this->request->get('q') ?? '');
+        $ip = get_client_ip();
+        $fingerprint = function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : md5($ip);
 
-        // Rate Limit برای کاربر (۲۰ جستجو در دقیقه)
-        $rateKey = 'user_search:' . ($userId ?: get_client_ip());
-        if (!$this->rateLimiter->attempt($rateKey, 20, 1)) {
-            $this->response->json(['success' => false, 'message' => 'Too many requests'], 429);
-            return;
+        // Rate Limit چندلایه برای کاربر (IP + User ID + Fingerprint)
+        $limits = [
+            'user_search_ip:' . $ip => [30, 1],
+            'user_search_fingerprint:' . $fingerprint => [20, 1],
+        ];
+
+        if ($userId > 0) {
+            $limits['user_search_user:' . $userId] = [20, 1];
+        }
+
+        foreach ($limits as $key => $conf) {
+            if (!$this->rateLimiter->attempt($key, $conf[0], $conf[1])) {
+                $this->response->json(['success' => false, 'message' => 'Too many requests'], 429);
+                return;
+            }
         }
 
         if (strlen($query) < 2) {
@@ -90,12 +113,14 @@ class SearchController extends BaseController
     }
 
     /**
-     * مسیر /search - JSON یا صفحه HTML بسته به Accept header
+     * مسیر /search - JSON یا صفحه HTML صفحه کامل
      */
     public function fullResults(): void
     {
         $userId = (int)user_id();
         $query = trim($this->request->get('q') ?? '');
+        $ip = get_client_ip();
+        $fingerprint = function_exists('generate_device_fingerprint') ? generate_device_fingerprint() : md5($ip);
 
         // اگر AJAX / JSON بخواند
         $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
@@ -104,12 +129,22 @@ class SearchController extends BaseController
             return;
         }
 
-        // Rate Limit برای صفحه کامل (۳۰ بار در دقیقه)
-        $rateKey = 'full_search:' . ($userId ?: get_client_ip());
-        if (!$this->rateLimiter->attempt($rateKey, 30, 1)) {
-            $this->session->setFlash('error', 'تعداد درخواست‌های شما بیش از حد مجاز است.');
-            $this->response->redirect(url('/'));
-            return;
+        // Rate Limit چندلایه برای صفحه کامل
+        $limits = [
+            'full_search_ip:' . $ip => [45, 1],
+            'full_search_fingerprint:' . $fingerprint => [35, 1],
+        ];
+
+        if ($userId > 0) {
+            $limits['full_search_user:' . $userId] = [30, 1];
+        }
+
+        foreach ($limits as $key => $conf) {
+            if (!$this->rateLimiter->attempt($key, $conf[0], $conf[1])) {
+                $this->session->setFlash('error', 'تعداد درخواست‌های شما بیش از حد مجاز است.');
+                $this->response->redirect(url('/'));
+                return;
+            }
         }
 
         $results = strlen($query) >= 2

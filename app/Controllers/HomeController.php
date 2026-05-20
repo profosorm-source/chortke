@@ -267,7 +267,7 @@ class HomeController extends BaseController
         ];
 
         // برندگان (نمونه)
-        $winners = [];
+        // $winners has been initialized above at line 153
 
         return view('welcome', [
             'stats'        => $stats,

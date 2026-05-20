@@ -28,8 +28,26 @@ class BannerController extends BaseController
 
         if ($result['success'] && !empty($result['redirect'])) {
             $url = $result['redirect'];
-            // C-02: Final Safety Check for Open Redirect/XSS
-            if (filter_var($url, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $url)) {
+            
+            // Extra layer of validation inside Controller
+            $parsed = parse_url($url);
+            $host = strtolower($parsed['host'] ?? '');
+            
+            $allowedDomains = ['chortke.com', 'trusted-partner.com', 'example.com'];
+            $currentHost = strtolower($_SERVER['HTTP_HOST'] ?? '');
+            if ($currentHost !== '') {
+                $allowedDomains[] = $currentHost;
+            }
+            
+            $isAllowedHost = false;
+            foreach ($allowedDomains as $allowed) {
+                if ($host === $allowed || str_ends_with($host, '.' . $allowed)) {
+                    $isAllowedHost = true;
+                    break;
+                }
+            }
+            
+            if ($isAllowedHost && filter_var($url, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $url)) {
                 return redirect($url);
             }
         }

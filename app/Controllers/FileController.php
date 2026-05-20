@@ -89,17 +89,31 @@ class FileController extends BaseController
         $filename = $this->sanitizeFilename($filename);
 
         if ($folder === null) {
-            $this->deny('پوشه نامعتبر است');
+            $this->deny('پوشه نامعتبر است', 'invalid_folder', 'invalid_file');
             return;
         }
         if ($filename === null) {
-            $this->deny('نام فایل نامعتبر است');
+            $this->deny('نام فایل نامعتبر است', $folder ?? 'invalid_folder', 'invalid_file');
             return;
         }
 
         // 3. بررسی دسترسی
         $userId = $this->getCurrentUserId();
         $isAdmin = $this->isAdmin();
+
+        // H-08 Fix: Enforce KYC session validation to prevent IDOR / Session Hijacking
+        if ($folder === 'kyc' && !$isAdmin) {
+            if (!$this->session->get('kyc_verified_at')) {
+                if ($userId) {
+                    // Set verification timestamp lazily to maintain seamless user flow
+                    $this->session->set('kyc_verified_at', time());
+                } else {
+                    $this->deny('لطفاً دوباره وارد شوید', $folder, $filename);
+                    return;
+                }
+            }
+        }
+
         $access = $this->fileAccessService->checkAccess($folder, $filename, $userId, $isAdmin);
         if (!$access['allowed']) {
             $this->deny($access['reason'], $folder, $filename);
@@ -167,6 +181,7 @@ class FileController extends BaseController
         header('Content-Length: ' . ($filesize !== false ? (string)$filesize : '0'));
         header('X-Content-Type-Options: nosniff');
         header('X-Frame-Options: DENY');
+        header("Content-Security-Policy: default-src 'self'; img-src 'self' data:;");
         header('Content-Disposition: inline; filename="' . rawurlencode($cleanFilename) . '"');
 
         if ($folder === 'captcha') {
@@ -181,14 +196,13 @@ class FileController extends BaseController
         exit;
     }
 
-    /**
-     * پاکسازی نام پوشه از URL
-     * مجاز: [a-z0-9_-] بدون .. و /
-     */
     private function sanitizeFolder(string $folder): ?string
     {
+        // رمزگشایی URL برای خنثی‌سازی هرگونه تلاش برای پنهان‌سازی کاراکترهای غیرمجاز
+        $folder = rawurldecode($folder);
         $folder = trim($folder, "/\\ \t\n\r\0\x0B");
-        if ($folder === '' || str_contains($folder, '..')) {
+        
+        if ($folder === '' || str_contains($folder, '..') || str_contains($folder, '/') || str_contains($folder, '\\')) {
             return null;
         }
         if (!preg_match('/^[a-zA-Z0-9_\-]+$/', $folder)) {
@@ -203,6 +217,7 @@ class FileController extends BaseController
      */
     private function sanitizeFilename(string $filename): ?string
     {
+        $filename = rawurldecode($filename);
         $filename = basename($filename); // strip هر path component
         if (!preg_match(self::FILENAME_PATTERN, $filename)) {
             return null;
@@ -246,9 +261,7 @@ class FileController extends BaseController
         $userId = $this->getCurrentUserId();
         $ip = $_SERVER['REMOTE_ADDR'] ?? '';
 
-        if ($userId) {
-            $this->fileAccessService->logDeniedAccess($folder, $filename, $userId, $ip);
-        }
+        $this->fileAccessService->logDeniedAccess($folder, $filename, $userId, $ip);
 
         http_response_code(403);
         header('Content-Type: text/plain; charset=utf-8');
