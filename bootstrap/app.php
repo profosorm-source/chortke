@@ -48,7 +48,7 @@ if (!defined('BASE_PATH')) {
 
 // ── Tracing Context (Correlation ID) ──────────────────────────
 if (!isset($_SERVER['REQUEST_ID'])) {
-    $_SERVER['REQUEST_ID'] = $_SERVER['HTTP_X_REQUEST_ID'] 
+    $_SERVER['REQUEST_ID'] = $_SERVER['HTTP_X_REQUEST_ID']
         ?? bin2hex(random_bytes(16));
 }
 
@@ -329,14 +329,22 @@ $container->singleton(\App\Contracts\NotificationServiceInterface::class, functi
     return $c->make(\App\Services\Notification\NotificationService::class);
 });
 
+$container->singleton(\App\Services\Notification\NotificationRetryPolicy::class, function($c) {
+    return new \App\Services\Notification\NotificationRetryPolicy(
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
 $container->singleton(\App\Services\Notification\NotificationDispatcher::class, function($c) {
     return new \App\Services\Notification\NotificationDispatcher(
-        $c->make(\App\Adapters\Notification\PushNotificationAdapter::class),
-        $c->make(\App\Adapters\Notification\SmsNotificationAdapter::class),
-        $c->make(\App\Adapters\Notification\FcmNotificationAdapter::class),
-        $c->make(\App\Adapters\Notification\LogNotificationAdapter::class),
+        $c->make(\App\Adapters\PushNotificationAdapter::class),
+        $c->make(\App\Adapters\SmsNotificationAdapter::class),
+        $c->make(\App\Adapters\FcmNotificationAdapter::class),
+        $c->make(\App\Adapters\LogNotificationAdapter::class),
         $c->make(Logger::class),
-        $c->make(\Core\Queue::class)
+        $c->make(\Core\Queue::class),
+        $c->make(\App\Services\Notification\NotificationRetryPolicy::class)
     );
 });
 
@@ -350,22 +358,22 @@ $container->singleton(\App\Services\AdNotificationDispatcher::class, function($c
     );
 });
 
-$container->singleton(\App\Adapters\Notification\PushNotificationAdapter::class, function($c) {
-    return new \App\Adapters\Notification\PushNotificationAdapter(
-        $c->make(\App\Adapters\Notification\FcmNotificationAdapter::class),
+$container->singleton(\App\Adapters\PushNotificationAdapter::class, function($c) {
+    return new \App\Adapters\PushNotificationAdapter(
+        $c->make(\App\Adapters\FcmNotificationAdapter::class),
         $c->make(\Core\Logger::class)
     );
 });
 
-$container->singleton(\App\Adapters\Notification\SmsNotificationAdapter::class, function($c) {
-    return new \App\Adapters\Notification\SmsNotificationAdapter(
+$container->singleton(\App\Adapters\SmsNotificationAdapter::class, function($c) {
+    return new \App\Adapters\SmsNotificationAdapter(
         $c->make(\App\Models\User::class),
         $c->make(\Core\Logger::class)
     );
 });
 
-$container->singleton(\App\Adapters\Notification\FcmNotificationAdapter::class, function($c) {
-    return new \App\Adapters\Notification\FcmNotificationAdapter(
+$container->singleton(\App\Adapters\FcmNotificationAdapter::class, function($c) {
+    return new \App\Adapters\FcmNotificationAdapter(
         $c->make(\Core\Logger::class),
         $c->make(\Core\Cache::class),
         $c->make(\Core\Database::class),
@@ -373,8 +381,8 @@ $container->singleton(\App\Adapters\Notification\FcmNotificationAdapter::class, 
     );
 });
 
-$container->singleton(\App\Adapters\Notification\LogNotificationAdapter::class, function($c) {
-    return new \App\Adapters\Notification\LogNotificationAdapter(
+$container->singleton(\App\Adapters\LogNotificationAdapter::class, function($c) {
+    return new \App\Adapters\LogNotificationAdapter(
         $c->make(\App\Models\Notification::class),
         $c->make(\App\Models\SystemTelemetryModel::class),
         $c->make(\Core\Logger::class)
@@ -383,7 +391,7 @@ $container->singleton(\App\Adapters\Notification\LogNotificationAdapter::class, 
 
 $container->singleton(\App\Services\Notification\FcmService::class, function($c) {
     return new \App\Services\Notification\FcmService(
-        $c->make(\App\Adapters\Notification\FcmNotificationAdapter::class),
+        $c->make(\App\Adapters\FcmNotificationAdapter::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -636,7 +644,8 @@ $container->singleton(\App\Services\AdvancedSearchService::class, function($c) {
         $c->make(\App\Services\Search\AdminSearchProvider::class),
         $c->make(\App\Services\Search\UserSearchProvider::class),
         $c->make(\App\Services\Search\ModuleSearchProvider::class),
-        $c->make(\App\Contracts\LoggerInterface::class)
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\RateLimiter::class)
     );
 });
 
@@ -867,9 +876,48 @@ $container->singleton(\Core\Queue::class, function($c) {
     );
 });
 
+
+$container->singleton(\App\Services\QueueWorker::class, function($c) {
+    return new \App\Services\QueueWorker(
+        $c->make(\Core\Queue::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\Cache\CacheInvalidationService::class, function($c) {
+    return new \App\Services\Cache\CacheInvalidationService(
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
 $container->singleton(\Core\EventDispatcher::class, function($c) {
     return new \Core\EventDispatcher(
         $c->make(\Core\Queue::class)
+    );
+});
+
+
+$container->singleton(\App\Services\OutboxService::class, function($c) {
+    return new \App\Services\OutboxService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\OutboxPublisher::class, function($c) {
+    return new \App\Services\OutboxPublisher(
+        $c->make(\Core\Database::class),
+        $c->make(\Core\Queue::class),
+        $c->make(\Core\EventDispatcher::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\Core\IdempotencyKey::class, function($c) {
+    return new \Core\IdempotencyKey(
+        $c->make(\Core\Database::class),
+        $c->make(\Core\Cache::class)
     );
 });
 
@@ -877,10 +925,10 @@ $container->singleton(\Core\EventDispatcher::class, function($c) {
 $container->singleton(\Core\Console\CliDispatcher::class, function($c) {
     // M40 Fix: ارسال صریح پارامتر کانتینر به سازنده دیسپچر جهت جلوگیری از خطای پارامتر در محیط CLI
     $dispatcher = new \Core\Console\CliDispatcher($c);
-    
+
     // ✅ ثبت مرکزی دستورات خط فرمان به جای Switch-Case های پراکنده
     $dispatcher->register('feature:*', \App\Commands\FeatureFlagCommand::class, 'Feature Flag Management');
-    
+
     // 🚀 UPG-04: ثبت دستور پیش‌گرمایش کش‌های سنگین داشبورد آماری
     $dispatcher->register('analytics:warm', \App\Commands\AnalyticsCacheWarmupCommand::class, 'Warm up heavy analytics dashboards caches');
 
@@ -895,6 +943,11 @@ $container->singleton(\Core\Console\CliDispatcher::class, function($c) {
 
     // Automatically cleanup and refund expired escrows
     $dispatcher->register('escrow:cleanup-expired', \App\Commands\EscrowCleanupCommand::class, 'Automatically cleanup and refund expired escrows');
+
+
+    $dispatcher->register('queue:failed:list', \App\Commands\QueueFailedCommand::class, 'List failed queue jobs');
+    $dispatcher->register('queue:failed:retry', \App\Commands\QueueFailedCommand::class, 'Retry a failed queue job by id');
+    $dispatcher->register('queue:failed:forget', \App\Commands\QueueFailedCommand::class, 'Delete a failed queue job by id');
 
     return $dispatcher;
 });
@@ -925,7 +978,7 @@ $container->singleton('event.bootstrap', function($c) {
     $dispatcher->listen('rate_limit.exceeded', function($event) use ($c) {
         $data = $event->getData();
         $key = $data['key'] ?? '';
-        
+
         // اگر کلید مربوط به API کاربر باشد (فرمت api:{userId})
         if (strpos($key, 'api:') === 0) {
             $userId = (int) substr($key, 4);
@@ -1069,7 +1122,7 @@ $container->singleton(\App\Services\SocialTask\RatingService::class, function($c
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
- 
+
 
 
 
@@ -1689,14 +1742,16 @@ $container->singleton(\App\Services\WithdrawalService::class, function($c) {
 
 $container->singleton(\App\Adapters\CryptoExplorerAdapter::class, function($c) {
     return new \App\Adapters\CryptoExplorerAdapter(
-        $c->make(\App\Contracts\LoggerInterface::class)
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\Core\CircuitBreaker::class)
     );
 });
 
 $container->singleton(\App\Adapters\DeepFaceKycAdapter::class, function($c) {
     return new \App\Adapters\DeepFaceKycAdapter(
         $c->make(\App\Contracts\LoggerInterface::class),
-        $c->make(\Core\Database::class)
+        $c->make(\Core\Database::class),
+        $c->make(\Core\CircuitBreaker::class)
     );
 });
 
@@ -1798,7 +1853,7 @@ $container->singleton(\App\Services\Notification\NotificationTracker::class, fun
 
 $container->singleton(\App\Services\Notification\SmsNotificationService::class, function($c) {
     return new \App\Services\Notification\SmsNotificationService(
-        $c->make(\App\Adapters\Notification\SmsNotificationAdapter::class),
+        $c->make(\App\Adapters\SmsNotificationAdapter::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -1958,17 +2013,17 @@ try {
 // =========================================================================
 try {
     $dispatcher = $container->make(\Core\EventDispatcher::class);
-    
+
     // شنونده‌های ماژول احراز هویت (احراز، لاگ، ردپا به صورت پس‌زمینه)
     $dispatcher->listen('auth.login', \App\Listeners\LogUserLoggedInActivity::class);
     $dispatcher->listen('auth.register', \App\Listeners\LogUserRegisteredActivity::class);
-    
+
     // فعال‌سازی شنونده فراموش‌شده تاریخچه تغییر فیچرفلگ‌ها
     $dispatcher->listen('feature_flag.changed', \App\Listeners\LogFeatureFlagChange::class);
-    
+
     // ثبت شنونده هوشمند پردازش امتیازهای بحرانی فِراد به صورت پس‌زمینه (🚀 UPG-06)
     $dispatcher->listen('fraud.score_updated', \App\Listeners\ProcessFraudAlert::class);
-    
+
 } catch (\Throwable $e) {
     if (function_exists('logger')) {
         logger()->error('bootstrap.events_registration_failed', [

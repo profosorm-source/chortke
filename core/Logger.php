@@ -22,6 +22,7 @@ class Logger implements LoggerInterface
 {
     private LogService $logService;
     private ?int $userId = null;
+    private array $defaultContext = [];
 
     public function __construct(LogService $logService)
 {
@@ -37,53 +38,71 @@ class Logger implements LoggerInterface
         return $this;
     }
 
+
+    public function withContext(array $context): self
+    {
+        $this->defaultContext = array_merge($this->defaultContext, $context);
+        return $this;
+    }
+
+    private function enrich(array $context): array
+    {
+        return array_merge(
+            [
+                'request_id' => $_SERVER['REQUEST_ID'] ?? ($_SERVER['HTTP_X_REQUEST_ID'] ?? null),
+            ],
+            $this->defaultContext,
+            $context
+        );
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // PSR-3 METHODS
     // ─────────────────────────────────────────────────────────────────────────
 
     public function emergency(string $message, array $context = []): void
     {
-        $this->logService->logSystem('emergency', $message, $context);
+        $this->logService->logSystem('emergency', $message, $this->enrich($context));
     }
 
     public function alert(string $message, array $context = []): void
     {
-        $this->logService->logSystem('alert', $message, $context);
+        $this->logService->logSystem('alert', $message, $this->enrich($context));
     }
 
     public function critical(string $message, array $context = []): void
     {
-        $this->logService->logSystem('critical', $message, $context);
+        $this->logService->logSystem('critical', $message, $this->enrich($context));
     }
 
     public function error(string $message, array $context = []): void
     {
-        $this->logService->logSystem('error', $message, $context);
+        $this->logService->logSystem('error', $message, $this->enrich($context));
     }
 
     public function warning(string $message, array $context = []): void
     {
-        $this->logService->logSystem('warning', $message, $context);
+        $this->logService->logSystem('warning', $message, $this->enrich($context));
     }
 
     public function notice(string $message, array $context = []): void
     {
-        $this->logService->logSystem('notice', $message, $context);
+        $this->logService->logSystem('notice', $message, $this->enrich($context));
     }
 
     public function info(string $message, array $context = []): void
     {
-        $this->logService->logSystem('info', $message, $context);
+        $this->logService->logSystem('info', $message, $this->enrich($context));
     }
 
     public function debug(string $message, array $context = []): void
     {
-        $this->logService->logSystem('debug', $message, $context);
+        $this->logService->logSystem('debug', $message, $this->enrich($context));
     }
 
     public function log(string $level, string $message, array $context = []): void
     {
-        $this->logService->logSystem($level, $message, $context);
+        $this->logService->logSystem($level, $message, $this->enrich($context));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -95,7 +114,7 @@ class Logger implements LoggerInterface
      */
     public function system(string $level, string $message, array $context = []): void
     {
-        $this->logService->logSystem($level, $message, $context);
+        $this->logService->logSystem($level, $message, $this->enrich($context));
     }
 
     /**
@@ -103,7 +122,7 @@ class Logger implements LoggerInterface
      */
     public function activity(string $action, string $description, ?int $userId = null, array $metadata = []): void
     {
-        $this->logService->logActivity($action, $description, $userId ?? $this->userId, $metadata);
+        $this->logService->logActivity($action, $description, $userId ?? $this->userId, $this->enrich($metadata));
     }
 
      /**
@@ -111,7 +130,7 @@ class Logger implements LoggerInterface
      */
     public function security(string $level, string $message, array $context = []): void
     {
-        $this->logService->logSecurity($context['type'] ?? 'security', $message, $level, $context);
+        $this->logService->logSecurity($context['type'] ?? 'security', $message, $level, $this->enrich($context));
     }
 
     /**
@@ -119,7 +138,7 @@ class Logger implements LoggerInterface
      */
     public function performance(string $metric, float $value, array $context = []): void
     {
-        $this->logService->logPerformance($metric, $value, $context);
+        $this->logService->logPerformance($metric, $value, $this->enrich($context));
     }
 
     /**

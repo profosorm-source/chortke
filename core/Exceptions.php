@@ -62,6 +62,26 @@ class BusinessException extends AppException
 {
 }
 
+class DomainException extends BusinessException
+{
+}
+
+class ApplicationException extends AppException
+{
+}
+
+class InfrastructureException extends AppException
+{
+}
+
+class TransientException extends InfrastructureException
+{
+}
+
+class ExternalServiceException extends InfrastructureException
+{
+}
+
 class HttpResponseException extends AppException
 {
     private $response;

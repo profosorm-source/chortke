@@ -41,14 +41,60 @@ class Queue
             'queue' => $queue,
             'payload' => json_encode([
                 'job' => $job,
-                'data' => $data
-            ]),
+                'data' => $data,
+                'meta' => [
+                    'correlation_id' => $_SERVER['REQUEST_ID'] ?? ($_SERVER['HTTP_X_REQUEST_ID'] ?? null),
+                ],
+            ], JSON_UNESCAPED_UNICODE),
             'attempts' => 0,
             'available_at' => date('Y-m-d H:i:s', $availableAt),
             'created_at' => date('Y-m-d H:i:s')
         ]);
 
         return (bool)$result;
+    }
+
+    /**
+     * Push a job only once for a bounded time-window.
+     *
+     * این پیاده‌سازی بدون نیاز به migration جدید و با استفاده از Cache atomic counter کار می‌کند.
+     * در production اگر Redis موجود نباشد، Core\Cache طبق سیاست fail-closed خطا می‌دهد تا duplicateهای خطرناک ایجاد نشود.
+     */
+    public function pushUnique(
+        string $job,
+        array $data = [],
+        string $dedupKey = '',
+        ?string $queue = null,
+        int $delay = 0,
+        int $uniqueForSeconds = 86400
+    ): bool {
+        $queue = $queue ?: $this->defaultQueue;
+        $dedupKey = trim($dedupKey);
+
+        if ($dedupKey === '') {
+            return $this->push($job, $data, $queue, $delay);
+        }
+
+        $cacheKey = 'queue_dedup:' . $queue . ':' . hash('sha256', $dedupKey);
+        $count = \Core\Cache::getInstance()->increment($cacheKey, 1, max(60, $uniqueForSeconds));
+
+        if ($count !== 1) {
+            if (function_exists('logger')) {
+                logger()->info('queue.unique_duplicate_skipped', [
+                    'queue' => $queue,
+                    'job' => $job,
+                    'dedup_key' => $dedupKey,
+                ]);
+            }
+            return false;
+        }
+
+        try {
+            return $this->push($job, $data, $queue, $delay);
+        } catch (\Throwable $e) {
+            \Core\Cache::getInstance()->forget($cacheKey);
+            throw $e;
+        }
     }
 
     public function pop(?string $queue = null): ?array
@@ -66,12 +112,12 @@ class Queue
             // SELECT ... FOR UPDATE قفل امن برای جلوگیری از همپوشانی در سیستم‌های توزیع شده
             // الحاق شرط بازیابی جاب‌های استاک‌شده در وضعیت reserved_at
             $job = $this->db->selectOne(
-                "SELECT * FROM queues 
-                 WHERE queue = :queue 
-                   AND attempts < :max_attempts 
-                   AND available_at <= :now 
-                   AND (reserved_at IS NULL OR reserved_at <= :timeout) 
-                 ORDER BY created_at ASC 
+                "SELECT * FROM queues
+                 WHERE queue = :queue
+                   AND attempts < :max_attempts
+                   AND available_at <= :now
+                   AND (reserved_at IS NULL OR reserved_at <= :timeout)
+                 ORDER BY created_at ASC
                  LIMIT 1 FOR UPDATE",
                 [
                     'queue' => $queue,
@@ -90,8 +136,8 @@ class Queue
             $newAttempts = (int)$job->attempts + 1;
 
             $this->db->execute(
-                "UPDATE queues 
-                 SET reserved_at = :reserved_at, attempts = :attempts 
+                "UPDATE queues
+                 SET reserved_at = :reserved_at, attempts = :attempts
                  WHERE id = :id",
                 [
                     'reserved_at' => $reservedAt,
@@ -108,6 +154,7 @@ class Queue
                 'id' => (int)$job->id,
                 'job' => $payload['job'] ?? '',
                 'data' => $payload['data'] ?? [],
+                'meta' => $payload['meta'] ?? [],
                 'attempts' => $newAttempts
             ];
         } catch (\Throwable $e) {
@@ -137,7 +184,7 @@ class Queue
             // Calculate delay based on attempts
             $job = $this->db->selectOne("SELECT attempts FROM queues WHERE id = :id", ['id' => $id]);
             $attempts = $job ? (int)$job->attempts : 1;
-            
+
             $baseDelay = 60; // 60 seconds
             $exponential = $baseDelay * pow(2, $attempts - 1);
             $jitter = rand(5, 45);
@@ -197,7 +244,7 @@ class Queue
 
             // ۲. درج در جدول failed_jobs
             $exceptionStr = get_class($exception) . ': ' . $exception->getMessage() . "\n" . $exception->getTraceAsString();
-            
+
             // Critical logger call for poison message / DLQ movement
             if (function_exists('logger')) {
                 logger()->critical('queue_job_failed_dlq_moved', [

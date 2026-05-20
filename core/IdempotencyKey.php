@@ -437,6 +437,23 @@ class IdempotencyKey
         }
     }
 
+
+    /**
+     * Scope-aware idempotency wrapper for general application use-cases.
+     */
+    public function run(string $scope, int $actorId, string $key, callable $callback, ?array $requestData = null): mixed
+    {
+        $scope = preg_replace('/[^A-Za-z0-9_.:-]/', '_', trim($scope)) ?: 'default';
+        $scopedKey = hash('sha256', $scope . '|' . $actorId . '|' . $key);
+        return $this->wrapInstance($scopedKey, $actorId, $scope, $callback, $requestData);
+    }
+
+    public function keyFromPayload(string $scope, array $payload): string
+    {
+        ksort($payload);
+        return hash('sha256', $scope . '|' . json_encode($payload, JSON_UNESCAPED_UNICODE));
+    }
+
     /**
      * پاک کردن کلیدهای قدیمی و منقضی شده
      * 

@@ -148,7 +148,7 @@ class Cache
     {
         // CORE-040: JSON encoding preferentially to mitigate deserialization risk
         $payload = is_object($value) ? serialize($value) : json_encode($value, JSON_UNESCAPED_UNICODE);
-        
+
         if ($this->driver === 'redis') {
             return (bool) $this->redis->setEx(
                 $this->redisKey($key),
@@ -166,6 +166,47 @@ class Cache
     public function set(string $key, mixed $value, int $minutes = 60): bool
     {
         return $this->put($key, $value, $minutes);
+    }
+
+    /**
+     * ذخیره با TTL صریح بر حسب دقیقه.
+     * این متد برای جلوگیری از ابهام API قدیمی set/put اضافه شده است.
+     */
+    public function setMinutes(string $key, mixed $value, int $minutes = 60): bool
+    {
+        return $this->put($key, $value, $minutes);
+    }
+
+    public function putMinutes(string $key, mixed $value, int $minutes = 60): bool
+    {
+        return $this->put($key, $value, $minutes);
+    }
+
+    /**
+     * ذخیره با TTL صریح بر حسب ثانیه.
+     * Core\Cache همچنان درونی بر اساس دقیقه کار می‌کند؛ این wrapper تبدیل امن انجام می‌دهد.
+     */
+    public function setSeconds(string $key, mixed $value, int $seconds = 3600): bool
+    {
+        if ($seconds <= 0) {
+            return $this->forget($key);
+        }
+
+        return $this->put($key, $value, max(1, (int) ceil($seconds / 60)));
+    }
+
+    public function putSeconds(string $key, mixed $value, int $seconds = 3600): bool
+    {
+        return $this->setSeconds($key, $value, $seconds);
+    }
+
+    public function rememberSeconds(string $key, int $seconds, callable $callback): mixed
+    {
+        if ($seconds <= 0) {
+            return $callback();
+        }
+
+        return $this->remember($key, max(1, (int) ceil($seconds / 60)), $callback);
     }
 
     public function get(string $key, mixed $default = null): mixed
@@ -246,7 +287,7 @@ class Cache
                 if ($value !== null) {
                     return $value;
                 }
-                
+
                 $value = $callback();
                 $this->put($key, $value, $minutes);
                 return $value;
@@ -335,7 +376,7 @@ LUA;
         if (flock($fh, LOCK_EX)) {
             $size = @filesize($file);
             $raw = ($size > 0) ? fread($fh, $size) : '';
-            
+
             $currentValue = 0;
             // یک سال پیش‌فرض (بر حسب ثانیه)
             $expireAt = time() + ($ttlSeconds > 0 ? $ttlSeconds : (525_600 * 60));
@@ -355,12 +396,12 @@ LUA;
             }
 
             $new = $currentValue + $step;
-            
+
             $newData = serialize([
                 'expire_at' => $expireAt,
                 'value'     => $new,
             ]);
-            
+
             ftruncate($fh, 0);
             rewind($fh);
             fwrite($fh, $newData);
@@ -413,7 +454,7 @@ LUA;
         if (flock($fh, LOCK_EX)) {
             $size = @filesize($file);
             $raw = ($size > 0) ? fread($fh, $size) : '';
-            
+
             $currentValue = 0.0;
             $expireAt = time() + ($ttlSeconds > 0 ? $ttlSeconds : (525_600 * 60));
 
@@ -430,12 +471,12 @@ LUA;
             }
 
             $new = $currentValue + $step;
-            
+
             $newData = serialize([
                 'expire_at' => $expireAt,
                 'value'     => $new,
             ]);
-            
+
             ftruncate($fh, 0);
             rewind($fh);
             fwrite($fh, $newData);
@@ -537,7 +578,7 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
                 $uniqueId,
                 ['nx', 'ex' => $ttl]
             );
-            
+
             if ($result !== false) {
                 $this->redisLocks[$lockKey] = $uniqueId;
                 return true;
@@ -588,9 +629,9 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
             if ($owner === null) {
                 return false; // این پردازش مالک قفل نبوده و اجازه آزاد سازی ندارد
             }
-            
+
             unset($this->redisLocks[$lockKey]);
-            
+
             $script = '
                 if redis.call("get", KEYS[1]) == ARGV[1] then
                     return redis.call("del", KEYS[1])
@@ -598,7 +639,7 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
                     return 0
                 end
             ';
-            
+
             return (bool) $this->redis->eval($script, [$this->redisKey($lockKey), $owner], 1);
         }
 
@@ -682,7 +723,7 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
                 'cleaned' => $cleaned,
             ]);
         }
-        
+
         return $cleaned;
     }
 
@@ -696,14 +737,14 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
             'expire_at' => time() + ($minutes * 60),
             'value'     => $value,
         ];
-        
+
         // CORE-040: Write as JSON to avoid dangerous deserialization payload risk.
         $encoded = json_encode($data, JSON_UNESCAPED_UNICODE);
         if (json_last_error() !== JSON_ERROR_NONE) {
             // Fallback safe serialization only for objects
             $encoded = serialize($data);
         }
-        
+
         return (bool) file_put_contents($this->cacheFile($key), $encoded);
     }
 
@@ -743,12 +784,12 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
         if ($raw === false) {
             return false;
         }
-        
+
         $data = json_decode($raw, true);
         if ($data === null) {
             $data = $this->safeUnserialize($raw);
         }
-        
+
         if ($data === false || $data === null || $data['expire_at'] < time()) {
             @unlink($file);
             return false;
@@ -946,6 +987,6 @@ class TaggedCache
         }
         return $dir . md5($tag) . '.json';
     }
-	
+
     // M17 Fix: متد منقضی شده و بلااستفاده به نفع متد تجمیع شده و پابلیک کلاس والد حذف شد
 }
