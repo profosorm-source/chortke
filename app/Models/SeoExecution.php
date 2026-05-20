@@ -11,6 +11,8 @@ use Core\Database;
  */
 class SeoExecution extends Model
 {
+    protected static string $table = 'seo_executions';
+
     public int     $id;
     public int     $ad_id;              // seo_ads.id
     public int     $user_id;            // انجام‌دهنده
