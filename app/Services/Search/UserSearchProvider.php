@@ -22,11 +22,11 @@ class UserSearchProvider extends BaseSearchProvider
     /**
      * جستجوی سراسری توسط یک کاربر (محدود به داده‌های همان کاربر)
      */
-    public function searchUser(string $query, int $userId, int $limit = 5): array
+    public function searchUser(string $query, int $userId, int $limit = 5, int $offset = 0): array
     {
         $this->logSearch('user', $query, $userId);
 
-        $cacheKey = "global_search_user:{$userId}:" . md5($query . ':' . $limit);
+        $cacheKey = "global_search_user:{$userId}:" . md5($query . ':' . $limit . ':' . $offset);
         $tags = $this->searchTags('search:user', "search:user:{$userId}");
         $cached = $this->cacheGet($cacheKey, $tags);
         if ($cached !== null) {
@@ -42,7 +42,7 @@ class UserSearchProvider extends BaseSearchProvider
             'transactions' => $this->searchUserTransactions($q, $userId, $limit),
             'tickets' => $this->searchUserTickets($q, $userId, $limit),
             'ads' => $this->searchUserAds($q, $userId, $limit),
-            'tasks' => $this->searchUserTasks($q, $userId, $limit),
+            'tasks' => $this->searchUserTasks($q, $userId, $limit, $offset),
         ];
 
         $total = array_sum(array_map('count', $results));
@@ -70,8 +70,8 @@ class UserSearchProvider extends BaseSearchProvider
         return $this->gateway->searchAds($q, $userId, $limit);
     }
 
-    private function searchUserTasks(string $q, int $userId, int $limit): array
+    private function searchUserTasks(string $q, int $userId, int $limit, int $offset): array
     {
-        return $this->gateway->searchTasks($q, $userId, $limit);
+        return $this->gateway->searchTasks($q, $userId, $limit, $offset);
     }
 }

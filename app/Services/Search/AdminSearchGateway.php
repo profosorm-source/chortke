@@ -116,6 +116,13 @@ final class AdminSearchGateway
 
     public function searchContent(string $q, array $filters, int $limit, int $offset): array
     {
+        $limit = max(1, min(100, $limit));
+        return $this->searchTable('content_submissions', 'cs', ['title', 'description', 'video_url', 'category', 'platform'], $q, $filters, $limit, $offset, 'LEFT JOIN users u ON u.id = cs.user_id', ['status', 'platform', 'category', 'user_id'], 'cs.created_at DESC', 'cs.is_deleted = 0');
+    }
+
+    public function searchContentExport(string $q, array $filters, int $limit, int $offset): array
+    {
+        $limit = max(1, min(5000, $limit));
         return $this->searchTable('content_submissions', 'cs', ['title', 'description', 'video_url', 'category', 'platform'], $q, $filters, $limit, $offset, 'LEFT JOIN users u ON u.id = cs.user_id', ['status', 'platform', 'category', 'user_id'], 'cs.created_at DESC', 'cs.is_deleted = 0');
     }
 

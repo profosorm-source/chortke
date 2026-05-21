@@ -17,6 +17,7 @@ use App\Services\Shared\ReferralService;
 use App\Services\SocialTask\CameraVerificationService;
 use App\Services\User\UserService;
 use App\Services\OutboxService;
+use App\Validators\Requests\ExecuteSocialTaskRequest;
 
 /**
  * SocialTaskService
@@ -393,11 +394,25 @@ class SocialTaskService extends \App\Services\BaseService
 
     private function submitExecutionInternal(int $userId, int $executionId, array $payload = []): array
     {
-        $validatedPayload = $this->validateExecutionSubmissionPayload($userId, $executionId, $payload);
-        if (empty($validatedPayload['valid'])) {
-            return ['success' => false, 'message' => $validatedPayload['message'] ?? 'داده‌های ارسال تسک نامعتبر است'];
+        // اعتبارسنجی از طریق Request object — همه rules در یک جا تعریف شده‌اند
+        if ($userId <= 0 || $executionId <= 0) {
+            return ['success' => false, 'message' => 'شناسه کاربر یا اجرا نامعتبر است'];
         }
-        $payload = $validatedPayload['payload'];
+
+        $request = new ExecuteSocialTaskRequest(array_merge($payload, ['execution_id' => $executionId]));
+        if (!$request->validate()) {
+            $firstError = array_values($request->errors())[0] ?? 'داده‌های ارسال تسک نامعتبر است';
+            return ['success' => false, 'message' => is_array($firstError) ? ($firstError[0] ?? 'نامعتبر') : $firstError];
+        }
+
+        if (!$request->hasProof()) {
+            return ['success' => false, 'message' => 'مدرک انجام تسک الزامی است'];
+        }
+
+        // payload را با مقادیر trim‌شده و validated جایگزین می‌کنیم
+        $payload = array_merge($payload, $request->validated());
+        $payload['proof_url']  = trim((string)($payload['proof_url']  ?? ''));
+        $payload['proof_text'] = trim((string)($payload['proof_text'] ?? ''));
 
         try {
             $this->model->beginTransaction();
@@ -413,13 +428,8 @@ class SocialTaskService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'وضعیت اجرا برای ارسال معتبر نیست'];
             }
 
-            $proofUrl = trim((string)($payload['proof_url'] ?? ''));
-            $proofText = trim((string)($payload['proof_text'] ?? ''));
-
-            if ($proofUrl === '' && $proofText === '') {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'مدرک انجام تسک الزامی است'];
-            }
+            $proofUrl  = $payload['proof_url']  ?? '';
+            $proofText = $payload['proof_text'] ?? '';
 
             // 🛡️ گیت متمرکز ضدتقلب (شامل بررسی کپی بودن ویدئو و الگوهای رفتاری سیستمی)
             if ($this->fraudGuard) {
@@ -633,45 +643,7 @@ class SocialTaskService extends \App\Services\BaseService
         return $this->model->getExecutorHistory($userId, $limit, $offset);
     }
 
-    private function validateExecutionSubmissionPayload(int $userId, int $executionId, array $payload): array
-    {
-        if ($userId <= 0 || $executionId <= 0) {
-            return ['valid' => false, 'message' => 'شناسه کاربر یا اجرا نامعتبر است'];
-        }
 
-        $proofUrl = trim((string)($payload['proof_url'] ?? ''));
-        $proofText = trim((string)($payload['proof_text'] ?? ''));
-
-        if ($proofUrl !== '' && mb_strlen($proofUrl) > 500) {
-            return ['valid' => false, 'message' => 'آدرس مدرک بیش از حد طولانی است'];
-        }
-        if ($proofUrl !== '' && !filter_var($proofUrl, FILTER_VALIDATE_URL) && !str_starts_with($proofUrl, '/')) {
-            return ['valid' => false, 'message' => 'آدرس مدرک معتبر نیست'];
-        }
-        if ($proofText !== '' && mb_strlen($proofText) > 2000) {
-            return ['valid' => false, 'message' => 'متن مدرک بیش از حد طولانی است'];
-        }
-
-        foreach (['active_time', 'expected_time'] as $numericField) {
-            if (isset($payload[$numericField]) && (!is_numeric($payload[$numericField]) || (int)$payload[$numericField] < 0 || (int)$payload[$numericField] > 86400)) {
-                return ['valid' => false, 'message' => 'زمان‌های ارسالی معتبر نیستند'];
-            }
-        }
-
-        foreach (['interactions', 'behavior_signals'] as $arrayField) {
-            if (isset($payload[$arrayField]) && !is_array($payload[$arrayField])) {
-                return ['valid' => false, 'message' => 'داده‌های رفتاری معتبر نیستند'];
-            }
-        }
-
-        if (isset($payload['video_hash']) && !preg_match('/^[A-Fa-f0-9]{16,128}$/', (string)$payload['video_hash'])) {
-            return ['valid' => false, 'message' => 'اثر انگشت ویدئو معتبر نیست'];
-        }
-
-        $payload['proof_url'] = $proofUrl;
-        $payload['proof_text'] = $proofText;
-        return ['valid' => true, 'payload' => $payload];
-    }
 
     private function recordExecutionOutbox(
         int $executionId,

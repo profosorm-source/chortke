@@ -10,6 +10,7 @@ use App\Services\User\UserService;
 use App\Services\EmailService;
 use App\Services\BaseService;
 use App\Services\AuditTrail;
+use App\Validators\Requests\RegisterRequest;
 use Core\Logger;
 use Core\Session;
 use Core\RateLimiter;
@@ -590,36 +591,34 @@ class AuthService extends \App\Services\BaseService
 
     public function validateRegister(array $data): array
     {
-        $minLength = (int)config('auth.password.min_length', 12);
-        $validator = new \Core\Validator($data, [
-            'full_name' => 'required|min:3',
-            'email' => 'required|email',
-            'password' => "required|min:{$minLength}",
-        ]);
-
-        $errors = [];
-        if ($validator->fails()) {
-            foreach ($validator->errors() as $field => $errs) {
-                if (is_array($errs)) {
-                    $errors = array_merge($errors, $errs);
+        $request = new RegisterRequest($data);
+        if (!$request->validate()) {
+            $errors = [];
+            foreach ($request->errors() as $fieldErrors) {
+                if (is_array($fieldErrors)) {
+                    $errors = array_merge($errors, $fieldErrors);
                 } else {
-                    $errors[] = $errs;
+                    $errors[] = $fieldErrors;
                 }
             }
+        } else {
+            $errors = [];
         }
 
-        if ($this->userService->emailExists($data['email'])) {
-            $errors[] = 'این ایمیل قبلاً ثبت شده است.';
-        }
+        if (!isset($errors) || empty($errors)) {
+            if ($this->userService->emailExists($data['email'] ?? '')) {
+                $errors[] = 'این ایمیل قبلاً ثبت شده است.';
+            }
 
-        // H23 Fix: اعمال سیاست پیچیدگی رمز عبور (Password Policy)
-        $policyErrors = \App\Validators\PasswordPolicy::validate($data['password'] ?? '', [
-            'username' => $data['username'] ?? '',
-            'email' => $data['email'] ?? '',
-            'full_name' => $data['full_name'] ?? '',
-        ]);
-        if (!empty($policyErrors)) {
-            $errors = array_merge($errors, $policyErrors);
+            // H23 Fix: اعمال سیاست پیچیدگی رمز عبور (Password Policy)
+            $policyErrors = \App\Validators\PasswordPolicy::validate($data['password'] ?? '', [
+                'username' => $data['username'] ?? '',
+                'email' => $data['email'] ?? '',
+                'full_name' => $data['full_name'] ?? '',
+            ]);
+            if (!empty($policyErrors)) {
+                $errors = array_merge($errors, $policyErrors);
+            }
         }
 
         return $errors;

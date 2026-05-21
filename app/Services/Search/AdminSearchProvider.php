@@ -22,11 +22,11 @@ class AdminSearchProvider extends BaseSearchProvider
     /**
      * جستجوی سراسری ادمین در کل جداول سیستم
      */
-    public function searchAdmin(string $query, int $limit = 5): array
+    public function searchAdmin(string $query, int $limit = 5, int $offset = 0): array
     {
         $this->logSearch('admin', $query, null);
 
-        $cacheKey = "global_search_admin:" . md5($query . ':' . $limit);
+        $cacheKey = "global_search_admin:" . md5($query . ':' . $limit . ':' . $offset);
         $tags = $this->searchTags('search:admin');
         $cached = $this->cacheGet($cacheKey, $tags);
         if ($cached !== null) {
@@ -86,6 +86,24 @@ class AdminSearchProvider extends BaseSearchProvider
 
         $q = $this->sanitize($q);
         $result = $this->gateway->searchContent($q, $filters, $limit, $offset);
+
+        $this->cacheSetSeconds($cacheKey, $result, self::CACHE_TTL_SECONDS, $tags);
+        return $result;
+    }
+
+    public function searchContentForExport(string $q, array $filters = [], int $limit = 1000, int $offset = 0): array
+    {
+        $this->logSearch('content_export', $q, null);
+        $limit = max(1, min(5000, $limit));
+        $offset = max(0, $offset);
+
+        $cacheKey = $this->generateCacheKey('content_export', array_merge(['q' => $q], $filters), $limit, $offset);
+        $tags = $this->searchTags('search:admin', 'search:content', 'export:content');
+        $cached = $this->cacheGet($cacheKey, $tags);
+        if ($cached !== null) return $cached;
+
+        $q = $this->sanitize($q);
+        $result = $this->gateway->searchContentExport($q, $filters, $limit, $offset);
 
         $this->cacheSetSeconds($cacheKey, $result, self::CACHE_TTL_SECONDS, $tags);
         return $result;

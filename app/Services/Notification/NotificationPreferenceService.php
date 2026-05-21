@@ -6,6 +6,7 @@ namespace App\Services\Notification;
 
 use App\Models\NotificationPreference;
 use App\Contracts\LoggerInterface;
+use Core\Cache;
 
 class NotificationPreferenceService extends \App\Services\BaseService
 {
@@ -13,6 +14,7 @@ class NotificationPreferenceService extends \App\Services\BaseService
 
     public function __construct(
         private NotificationPreference $prefModel,
+        private Cache $cacheService,
         protected LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -26,17 +28,10 @@ class NotificationPreferenceService extends \App\Services\BaseService
         if (empty($userIds)) return;
         
         $prefs = $this->prefModel->getByUsers($userIds);
-        try {
-            $cache = \Core\Container::getInstance()->make(\Core\Cache::class);
-        } catch (\Throwable $e) {
-            $cache = null;
-        }
 
         foreach ($prefs as $pref) {
             $this->cache[$pref->user_id] = $pref;
-            if ($cache) {
-                $cache->put("user_prefs:{$pref->user_id}", json_encode($pref), 300);
-            }
+            $this->cacheService->put("user_prefs:{$pref->user_id}", json_encode($pref), 300);
         }
     }
 
@@ -47,8 +42,7 @@ class NotificationPreferenceService extends \App\Services\BaseService
         }
 
         try {
-            $cache = \Core\Container::getInstance()->make(\Core\Cache::class);
-            $cached = $cache->get("user_prefs:{$userId}");
+            $cached = $this->cacheService->get("user_prefs:{$userId}");
             if ($cached) {
                 $decoded = json_decode($cached);
                 if ($decoded) {
@@ -63,8 +57,7 @@ class NotificationPreferenceService extends \App\Services\BaseService
         $this->cache[$userId] = $pref;
 
         try {
-            $cache = \Core\Container::getInstance()->make(\Core\Cache::class);
-            $cache->put("user_prefs:{$userId}", json_encode($pref), 300);
+            $this->cacheService->put("user_prefs:{$userId}", json_encode($pref), 300);
         } catch (\Throwable $e) {
         }
 
@@ -84,8 +77,7 @@ class NotificationPreferenceService extends \App\Services\BaseService
 
         unset($this->cache[$userId]);
         try {
-            $cache = \Core\Container::getInstance()->make(\Core\Cache::class);
-            $cache->forget("user_prefs:{$userId}");
+            $this->cacheService->forget("user_prefs:{$userId}");
         } catch (\Throwable $e) {
         }
 

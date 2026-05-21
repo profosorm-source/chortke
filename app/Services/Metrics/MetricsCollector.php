@@ -13,13 +13,10 @@ class MetricsCollector implements MetricsCollectorInterface
     private ?Cache $cache = null;
     private LoggerInterface $logger;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, ?Cache $cache = null)
     {
         $this->logger = $logger;
-        try {
-            $this->cache = \Core\Container::getInstance()->make(\Core\Cache::class);
-        } catch (\Throwable $e) {
-        }
+        $this->cache  = $cache;
     }
 
     public function increment(string $metric, array $tags = []): void

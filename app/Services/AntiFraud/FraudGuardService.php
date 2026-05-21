@@ -341,7 +341,9 @@ final class FraudGuardService extends BaseService
         $sessionId = $context['session_id'] ?? session_id();
 
         // A. Central Seo Fraud Detection Engine
-        $results['seo_fraud'] = $this->seoDetector->evaluateClick($userId, $context);
+        $adId = (int)($context['ad_id'] ?? 0);
+        $engagementData = $context['engagement_data'] ?? [];
+        $results['seo_fraud'] = $this->seoDetector->detect($userId, $adId, $engagementData);
 
         // B. Session Tracking
         if ($sessionId) {

@@ -31,9 +31,10 @@ final class UserSearchGateway
         return $this->reader->quickSearchAds($q, $userId, $limit);
     }
 
-    public function searchTasks(string $q, int $userId, int $limit): array
+    public function searchTasks(string $q, int $userId, int $limit, int $offset = 0): array
     {
         $limit = max(1, min(100, $limit));
+        $offset = max(0, $offset);
         $term = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], trim(mb_substr($q, 0, 100))) . '%';
 
         try {
@@ -48,7 +49,7 @@ final class UserSearchGateway
                     WHERE s.user_id = :user_id
                       AND (a.title LIKE :q1 ESCAPE '\\\\' OR a.description LIKE :q2 ESCAPE '\\\\')
                     ORDER BY s.created_at DESC
-                    LIMIT {$limit}";
+                    LIMIT {$limit} OFFSET {$offset}";
 
             return $this->db->fetchAll($sql, $params);
         } catch (\Throwable $e) {

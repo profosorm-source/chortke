@@ -6,6 +6,7 @@ namespace App\Services\User;
 
 use App\Models\User;
 use Core\Cache;
+use App\Validators\Requests\UpdateProfileRequest;
 
 use App\Contracts\LoggerInterface;
 /**
@@ -295,7 +296,14 @@ class ProfileService extends \App\Services\BaseService
      */
     public function updateProfileWithValidation(int $userId, array $data): array
     {
-        // Validate
+        $request = new UpdateProfileRequest($data);
+        if (!$request->validate()) {
+            return ['success' => false, 'errors' => $request->errors()];
+        }
+
+        $data = $request->validated();
+
+        // Validate business rules and unique cases
         $errors = $this->validateProfileUpdate($data, $userId);
         if (!empty($errors)) {
             return ['success' => false, 'errors' => $errors];

@@ -40,23 +40,23 @@ class SearchOrchestrator extends \App\Services\BaseService implements SearchServ
     /**
      * هدایت به جستجوی ادمین
      */
-    public function searchAdmin(string $query, int $limit = 5): array
+    public function searchAdmin(string $query, int $limit = 5, int $offset = 0): array
     {
         if (!$this->allowSearch('admin', null, 30, 1)) {
             return ['users' => [], 'transactions' => [], 'tickets' => [], 'withdrawals' => [], 'deposits' => [], 'ads' => [], 'total' => 0, 'rate_limited' => true];
         }
-        return $this->adminProvider->searchAdmin($query, $limit);
+        return $this->adminProvider->searchAdmin($query, $limit, $offset);
     }
 
     /**
      * هدایت به جستجوی کاربر
      */
-    public function searchUser(string $query, int $userId, int $limit = 5): array
+    public function searchUser(string $query, int $userId, int $limit = 5, int $offset = 0): array
     {
         if (!$this->allowSearch('user', $userId, 60, 1)) {
             return ['transactions' => [], 'tickets' => [], 'ads' => [], 'tasks' => [], 'total' => 0, 'rate_limited' => true];
         }
-        return $this->userProvider->searchUser($query, $userId, $limit);
+        return $this->userProvider->searchUser($query, $userId, $limit, $offset);
     }
 
     /**
@@ -115,6 +115,11 @@ class SearchOrchestrator extends \App\Services\BaseService implements SearchServ
     public function searchContent(string $q, array $filters = [], int $limit = 20, int $offset = 0): array
     {
         return $this->adminProvider->searchContent($q, $filters, $limit, $offset);
+    }
+
+    public function searchContentForExport(string $q, array $filters = [], int $limit = 1000, int $offset = 0): array
+    {
+        return $this->adminProvider->searchContentForExport($q, $filters, $limit, $offset);
     }
 
     public function searchTokens(string $q, array $filters = [], int $limit = 20, int $offset = 0): array
