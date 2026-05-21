@@ -324,8 +324,125 @@ class SentryModel extends Model
                 "SELECT COUNT(DISTINCT user_id) FROM user_sessions WHERE last_activity >= DATE_SUB(NOW(), INTERVAL ? MINUTE)",
                 [$minutes]
             ),
+            'failed_jobs' => (float)$this->db->fetchColumn(
+                "SELECT COUNT(*) FROM failed_jobs",
+                []
+            ),
             default => 0.0
         };
+    }
+
+    public function getFailedJobsSummary(): ?object
+    {
+        return $this->db->fetch(
+            "SELECT 
+                COUNT(*) AS total,
+                SUM(CASE WHEN failed_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) THEN 1 ELSE 0 END) AS recent_24h,
+                MIN(failed_at) AS oldest_failed_at
+             FROM failed_jobs"
+        );
+    }
+
+    public function getFailedJobQueueCounts(int $limit = 10): array
+    {
+        return $this->db->fetchAll(
+            "SELECT queue, COUNT(*) AS count 
+             FROM failed_jobs 
+             GROUP BY queue 
+             ORDER BY count DESC 
+             LIMIT ?",
+            [$limit]
+        );
+    }
+
+    public function getFailedJobsCount(?string $queue = null): int
+    {
+        $sql = "SELECT COUNT(*) AS c FROM failed_jobs";
+        $params = [];
+        if ($queue !== null && $queue !== '') {
+            $sql .= " WHERE queue = ?";
+            $params[] = $queue;
+        }
+
+        return (int)$this->db->fetchColumn($sql, $params);
+    }
+
+    public function getOutboxDLQSummary(): ?object
+    {
+        return $this->db->fetch(
+            "SELECT 
+                COUNT(*) AS total,
+                SUM(CASE WHEN updated_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) THEN 1 ELSE 0 END) AS recent_24h,
+                MIN(updated_at) AS oldest_failed_at
+             FROM outbox_events
+             WHERE status IN ('failed', 'dlq')"
+        );
+    }
+
+    public function getOutboxDLQList(int $limit, int $offset): array
+    {
+        return $this->db->fetchAll(
+            "SELECT * FROM outbox_events
+             WHERE status IN ('failed', 'dlq')
+             ORDER BY updated_at DESC
+             LIMIT ? OFFSET ?",
+            [$limit, $offset]
+        );
+    }
+
+    public function getFailedJobsPaged(int $limit, int $offset, ?string $queue = null): array
+    {
+        $query = "SELECT * FROM failed_jobs WHERE 1=1";
+        $params = [];
+        if ($queue !== null && $queue !== '') {
+            $query .= " AND queue = ?";
+            $params[] = $queue;
+        }
+        $query .= " ORDER BY failed_at DESC LIMIT ? OFFSET ?";
+        $params[] = $limit;
+        $params[] = $offset;
+
+        return $this->db->fetchAll($query, $params);
+    }
+
+    public function getFailedJobById(int $id): ?object
+    {
+        return $this->db->fetch(
+            "SELECT * FROM failed_jobs WHERE id = ?",
+            [$id]
+        );
+    }
+
+    public function retryFailedJob(int $id): bool
+    {
+        $job = $this->getFailedJobById($id);
+        if (!$job) {
+            return false;
+        }
+
+        $this->db->beginTransaction();
+        try {
+            $this->db->table('queues')->insert([
+                'queue' => $job->queue,
+                'payload' => $job->payload,
+                'attempts' => 0,
+                'reserved_at' => null,
+                'available_at' => date('Y-m-d H:i:s'),
+                'created_at' => date('Y-m-d H:i:s')
+            ]);
+
+            $this->db->execute("DELETE FROM failed_jobs WHERE id = ?", [$id]);
+            $this->db->commit();
+            return true;
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            return false;
+        }
+    }
+
+    public function forgetFailedJob(int $id): bool
+    {
+        return (bool)$this->db->execute("DELETE FROM failed_jobs WHERE id = ?", [$id]);
     }
 
     // --- Missing Sentry Dashboard & Issues Methods ---

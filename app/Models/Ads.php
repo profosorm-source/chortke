@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace App\Models;
 
 use Core\Model;
+use App\Contracts\AdsRepositoryInterface;
 use App\Traits\Filterable;
 
 /**
  * Ads Model - متمرکزکننده تمام انواع تبلیغات در سیستم
  */
-class Ads extends Model
+class Ads extends Model implements AdsRepositoryInterface
 {
     use Filterable;
 
