@@ -6,7 +6,7 @@ use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\TicketCategory;
 use App\Services\TicketService;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use App\Controllers\Admin\BaseAdminController;
 
 class TicketController extends BaseAdminController
@@ -15,14 +15,14 @@ class TicketController extends BaseAdminController
     private TicketMessage $messageModel;
     private TicketCategory $categoryModel;
     private TicketService $ticketService;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
     
     public function __construct(
         \App\Models\Ticket $ticketModel,
         \App\Models\TicketMessage $messageModel,
         \App\Models\TicketCategory $categoryModel,
         \App\Services\TicketService $ticketService,
-        AdvancedSearchService $searchService)
+        SearchOrchestrator $searchService)
     {
         parent::__construct();
         $this->ticketModel = $ticketModel;

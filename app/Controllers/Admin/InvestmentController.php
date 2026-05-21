@@ -8,8 +8,7 @@ use App\Models\TradingRecord;
 use App\Models\InvestmentProfit;
 use App\Models\InvestmentWithdrawal;
 use App\Services\InvestmentService;
-use App\Services\AdvancedSearchService;
-use Core\Validator;
+use App\Services\Search\SearchOrchestrator;
 use App\Controllers\Admin\BaseAdminController;
 
 class InvestmentController extends BaseAdminController
@@ -19,7 +18,7 @@ class InvestmentController extends BaseAdminController
     private \App\Models\InvestmentProfit $investmentProfitModel;
     private \App\Models\Investment $investmentModel;
     private InvestmentService $investmentService;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
 
     public function __construct(
         \App\Models\Investment $investmentModel,
@@ -27,7 +26,7 @@ class InvestmentController extends BaseAdminController
         \App\Models\InvestmentWithdrawal $investmentWithdrawalModel,
         \App\Models\TradingRecord $tradingRecordModel,
         \App\Services\InvestmentService $investmentService,
-        AdvancedSearchService $searchService)
+        SearchOrchestrator $searchService)
     {
         parent::__construct();
         $this->investmentService = $investmentService;
@@ -55,7 +54,7 @@ class InvestmentController extends BaseAdminController
         $perPage = 15;
         $offset = ($page - 1) * $perPage;
 
-        // استفاده از AdvancedSearchService برای جستجو
+        // استفاده از SearchOrchestrator برای جستجو
         if (!empty($search)) {
             $result = $this->searchService->searchInvestments($search, $filters, $perPage, $offset);
             $investments = $result['items'] ?? [];
@@ -151,7 +150,7 @@ class InvestmentController extends BaseAdminController
     {
                 $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'direction' => 'required|in:buy,sell',
             'open_price' => 'required|numeric|min:0',
             'open_time' => 'required',
@@ -181,7 +180,7 @@ class InvestmentController extends BaseAdminController
 
         $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'close_price' => 'required|numeric|min:0',
             'profit_loss_percent' => 'required|numeric',
             'profit_loss_amount' => 'required|numeric',
@@ -220,7 +219,7 @@ class InvestmentController extends BaseAdminController
     {
         $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'trading_record_id' => 'required|numeric',
             'profit_loss_percent' => 'required|numeric',
             'period' => 'required|max:10',
@@ -289,7 +288,7 @@ class InvestmentController extends BaseAdminController
 
         $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'reason' => 'required|min:10|max:500',
         ]);
 

@@ -4,7 +4,6 @@ namespace App\Controllers\Admin;
 use App\Services\User\UserService;
 use App\Models\CryptoDeposit;
 use App\Services\WalletService;
-use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 use App\Services\CryptoDeposit\CryptoDepositService;
 use Core\Logger;

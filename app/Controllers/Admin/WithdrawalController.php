@@ -6,7 +6,6 @@ use App\Services\WalletService;
 use App\Services\User\UserService;
 use App\Services\BankCardService;
 use App\Services\ReconciliationService;
-use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 
 class WithdrawalController extends BaseAdminController
@@ -152,7 +151,7 @@ public function __construct(
         ];
 
         // اعتبارسنجی
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'withdrawal_id' => 'required|numeric',
             'payment_reference' => 'required|min:5|max:100',
         ], [
@@ -233,7 +232,7 @@ public function __construct(
         ];
 
         // اعتبارسنجی
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'withdrawal_id' => 'required|numeric',
             'rejection_reason' => 'required|min:10|max:500',
         ], [

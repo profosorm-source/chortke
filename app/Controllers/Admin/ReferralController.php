@@ -6,7 +6,6 @@ use App\Services\User\UserService;
 
 use App\Models\ReferralCommission;
 use App\Services\Shared\ReferralService;
-use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 
 class ReferralController extends BaseAdminController

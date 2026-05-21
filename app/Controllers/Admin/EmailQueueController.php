@@ -5,20 +5,20 @@ namespace App\Controllers\Admin;
 use App\Services\RedisEmailQueueService;
 use App\Services\EmailService;
 use App\Models\EmailQueue;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 
 class EmailQueueController extends BaseAdminController
 {
     private EmailQueue $model;
     private EmailService $emailService;
     private RedisEmailQueueService $emailQueueService;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
 
     public function __construct(
         EmailQueue       $model,
         EmailService     $emailService,
         RedisEmailQueueService $emailQueueService,
-        AdvancedSearchService $searchService
+        SearchOrchestrator $searchService
     ) {
         parent::__construct();
         $this->model = $model;
@@ -40,7 +40,7 @@ class EmailQueueController extends BaseAdminController
             $filters['status'] = $status;
         }
 
-        // استفاده از AdvancedSearchService برای جستجو
+        // استفاده از SearchOrchestrator برای جستجو
         if (!empty($search)) {
             $result = $this->searchService->searchEmails($search, $filters, $perPage, $offset);
             $emails = $result['items'] ?? [];

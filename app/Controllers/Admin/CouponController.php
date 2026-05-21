@@ -2,7 +2,6 @@
 
 namespace App\Controllers\Admin;
 
-use Core\Validator;
 use App\Models\Coupon;
 use App\Models\CouponRedemption;
 use App\Services\Shared\CouponService;
@@ -59,7 +58,7 @@ class CouponController extends BaseAdminController
      */
     public function store(): void
     {
-        $validator = new Validator($this->request->all(), [
+        $validator = $this->validatorFactory()->make($this->request->all(), [
             'code' => 'required|string|max:50',
             'type' => 'required|in:percent,fixed',
             'value' => 'required|numeric|min:0',
@@ -164,7 +163,7 @@ class CouponController extends BaseAdminController
             return;
         }
 
-        $validator = new Validator($this->request->all(), [
+        $validator = $this->validatorFactory()->make($this->request->all(), [
             'type'          => 'required|in:percent,fixed',
             'value'         => 'required|numeric|min:0',
             'applicable_to' => 'required|in:all,task,investment,vip,story_order',

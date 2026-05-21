@@ -4,7 +4,7 @@ namespace App\Controllers\Admin;
 
 use Core\Response;
 use App\Services\ApiTokenService;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 
 class ApiTokenAdminController extends BaseAdminController
 {
@@ -12,7 +12,7 @@ class ApiTokenAdminController extends BaseAdminController
 
     public function __construct(
         ApiTokenService $apiTokenService,
-        AdvancedSearchService $searchService,
+        SearchOrchestrator $searchService,
         \App\Services\AuditTrail $auditTrail
     ) {
         parent::__construct();
@@ -34,7 +34,7 @@ class ApiTokenAdminController extends BaseAdminController
             $filters['status'] = $statusFilter;
         }
 
-        // استفاده از AdvancedSearchService برای جستجو
+        // استفاده از SearchOrchestrator برای جستجو
         if (!empty($search)) {
             $result = $this->searchService->searchTokens($search, $filters, $perPage, $offset);
             $tokens = $result['items'] ?? [];

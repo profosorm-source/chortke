@@ -5,7 +5,7 @@ namespace App\Controllers\Admin;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
 use App\Models\InteractionModel;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use App\Services\CustomTaskService;
 use App\Services\Analytics\AnalyticsService;
 use App\Services\Shared\DisputeService;
@@ -14,7 +14,7 @@ use App\Controllers\Admin\BaseAdminController;
 
 class CustomTaskController extends BaseAdminController
 {
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
     private CustomTaskService $customTaskService;
     private AnalyticsService $analyticsService;
     private WalletService $walletService;
@@ -24,7 +24,7 @@ class CustomTaskController extends BaseAdminController
     private InteractionModel $interactionModel;
 
     public function __construct(
-        AdvancedSearchService $searchService,
+        SearchOrchestrator $searchService,
         CustomTaskService $customTaskService,
         AnalyticsService $analyticsService,
         WalletService $walletService,

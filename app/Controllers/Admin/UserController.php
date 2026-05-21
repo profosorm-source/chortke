@@ -3,22 +3,25 @@
 namespace App\Controllers\Admin;
 
 use App\Services\User\UserService;
-use Core\Validator;
+use App\Contracts\ValidatorFactoryInterface;
 use App\Controllers\Admin\BaseAdminController;
 
 class UserController extends BaseAdminController
 {
     private UserService $userService;
     private \App\Services\User\AccountDeletionService $deletionService;
+    private ValidatorFactoryInterface $validatorFactory;
 
     public function __construct(
         UserService $userService,
-        \App\Services\User\AccountDeletionService $deletionService
+        \App\Services\User\AccountDeletionService $deletionService,
+        ValidatorFactoryInterface $validatorFactory
     )
     {
         parent::__construct();
         $this->userService = $userService;
         $this->deletionService = $deletionService;
+        $this->validatorFactory = $validatorFactory;
     }
 
     /**
@@ -77,7 +80,7 @@ class UserController extends BaseAdminController
     {
         // Create validation is kept local to avoid depending on removed/legacy FormRequest classes.
         $data = $this->request->body() ?? [];
-        $validator = new \Core\Validator($data, [
+        $validator = $this->validatorFactory->make($data, [
             'full_name' => 'required|min:3|max:100',
             'email'     => 'required|email',
             'password'  => 'required|min:8',

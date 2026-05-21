@@ -4,19 +4,19 @@ namespace App\Controllers\Admin;
 
 use App\Models\CustomTaskSubmissionModel;
 use App\Models\InteractionModel;
-use App\Services\CustomTaskService;
+use App\Services\CustomTask\AdminCustomTaskService;
 use App\Services\Shared\DisputeService;
 use App\Controllers\Admin\BaseAdminController;
 
 class ExecutorTaskController extends BaseAdminController
 {
-    private CustomTaskService $customTaskService;
+    private AdminCustomTaskService $customTaskService;
     private CustomTaskSubmissionModel $submissionModel;
     private DisputeService $disputeService;
     private InteractionModel $interactionModel;
 
     public function __construct(
-        CustomTaskService $customTaskService,
+        AdminCustomTaskService $customTaskService,
         CustomTaskSubmissionModel $submissionModel,
         DisputeService $disputeService,
         InteractionModel $interactionModel

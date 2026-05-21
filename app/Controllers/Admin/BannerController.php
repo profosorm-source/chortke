@@ -5,20 +5,20 @@ namespace App\Controllers\Admin;
 use App\Services\BannerService;
 use App\Controllers\Admin\BaseAdminController;
 use App\Services\UploadService;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 
 class BannerController extends BaseAdminController
 {
     private BannerService $bannerService;
     private UploadService $uploadService;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
     private \App\Models\Ads $banner;
     private \App\Models\BannerPlacement $placement;
 
     public function __construct(
         BannerService $bannerService, 
         UploadService $uploadService, 
-        AdvancedSearchService $searchService,
+        SearchOrchestrator $searchService,
         \App\Models\Ads $banner,
         \App\Models\BannerPlacement $placement
     ) {

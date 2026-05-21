@@ -5,7 +5,6 @@ namespace App\Controllers\Admin;
 use App\Models\UserLevel;
 use App\Models\UserLevelHistory;
 use App\Services\User\UserLevelService;
-use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 
 class LevelController extends BaseAdminController
@@ -82,7 +81,7 @@ class LevelController extends BaseAdminController
 
 
 
-        $validator = new Validator($this->request->all(), [
+        $validator = $this->validatorFactory()->make($this->request->all(), [
             'name' => 'required|min:2|max:50',
             'min_active_days' => 'required|numeric',
             'min_completed_tasks' => 'required|numeric',
@@ -229,7 +228,7 @@ class LevelController extends BaseAdminController
 
 
 
-        $validator = new Validator($this->request->all(), [
+        $validator = $this->validatorFactory()->make($this->request->all(), [
             'name'                  => 'required|min:2|max:50',
             'slug'                  => 'required|min:2|max:50',
             'min_active_days'       => 'required|numeric',

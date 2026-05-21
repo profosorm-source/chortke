@@ -8,7 +8,7 @@ use App\Models\Dispute;
 use App\Services\InfluencerService;
 use App\Services\Shared\DisputeService;
 use App\Services\VerificationService;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use Core\Logger;
 use App\Services\AuditTrail;
 
@@ -21,7 +21,7 @@ class InfluencerController extends BaseAdminController
     private DisputeService           $disputeService;
     private VerificationService      $verificationService;
     private AuditTrail               $auditTrail;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
 
     public function __construct(
         InfluencerModel        $profileModel,
@@ -31,7 +31,7 @@ class InfluencerController extends BaseAdminController
         DisputeService           $disputeService,
         VerificationService      $verificationService,
         AuditTrail               $auditTrail,
-        AdvancedSearchService $searchService
+        SearchOrchestrator $searchService
     ) {
         parent::__construct();
         $this->profileModel       = $profileModel;
@@ -60,7 +60,7 @@ class InfluencerController extends BaseAdminController
         $limit  = 30;
         $offset = ($page - 1) * $limit;
 
-        // استفاده از AdvancedSearchService برای جستجو
+        // استفاده از SearchOrchestrator برای جستجو
         if (!empty($search)) {
             $result = $this->searchService->searchInfluencers($search, $filters, $limit, $offset);
             $orders = $result['items'] ?? [];
@@ -100,7 +100,7 @@ class InfluencerController extends BaseAdminController
         $limit  = 30;
         $offset = ($page - 1) * $limit;
 
-        // استفاده از AdvancedSearchService برای جستجو
+        // استفاده از SearchOrchestrator برای جستجو
         if (!empty($search)) {
             $result = $this->searchService->searchInfluencers($search, $filters, $limit, $offset);
             $profiles = $result['items'] ?? [];

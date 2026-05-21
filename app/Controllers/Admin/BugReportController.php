@@ -4,19 +4,19 @@ namespace App\Controllers\Admin;
 
 use App\Services\TicketService;
 use App\Services\UploadService;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use App\Controllers\Admin\BaseAdminController;
 
 class BugReportController extends BaseAdminController
 {
     private TicketService $ticketService;
     private UploadService $uploadService;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
 
     public function __construct(
         TicketService $ticketService,
         UploadService $uploadService,
-        AdvancedSearchService $searchService
+        SearchOrchestrator $searchService
     ) {
         parent::__construct();
         $this->ticketService = $ticketService;

@@ -5,7 +5,7 @@ namespace App\Controllers\Admin;
 use Core\Logger;
 use App\Services\AuditTrail;
 use App\Services\ExportService;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use App\Models\AuditEvent;
 use App\Controllers\Admin\BaseAdminController;
 
@@ -18,14 +18,14 @@ class AuditTrailController extends BaseAdminController
     private ExportService $exportService;
     private AuditTrail $auditTrail;
     private AuditEvent $auditEventModel;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
 
     public function __construct(
         ExportService $exportService,
         Logger $logger,
         AuditTrail $auditTrail,
         AuditEvent $auditEventModel,
-        AdvancedSearchService $searchService
+        SearchOrchestrator $searchService
     ) {
         parent::__construct();
         $this->exportService = $exportService;

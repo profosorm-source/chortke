@@ -2,7 +2,7 @@
 
 namespace App\Controllers\Admin;
 
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use App\Services\SocialTask\SocialTaskService;
 use App\Services\SocialTask\TrustScoreService;
 use App\Services\SocialTask\RatingService;
@@ -14,7 +14,7 @@ use Core\Database;
 
 class SocialTaskController extends BaseAdminController
 {
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
     private SocialTaskService      $service;
     private TrustScoreService      $trust;
     private RatingService          $ratingService;
@@ -24,7 +24,7 @@ class SocialTaskController extends BaseAdminController
     private AuditTrail $auditTrail;
 
     public function __construct(
-        AdvancedSearchService  $searchService,
+        SearchOrchestrator  $searchService,
         SocialTaskService      $service,
         TrustScoreService      $trust,
         RatingService          $ratingService,

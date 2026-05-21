@@ -6,7 +6,6 @@ use App\Services\User\UserService;
 
 use App\Models\ManualDeposit;
 use App\Services\WalletService;
-use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 use App\Services\ManualDepositService;
 use Core\Logger;

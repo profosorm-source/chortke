@@ -3,26 +3,26 @@
 namespace App\Controllers\Admin;
 
 use App\Models\Ads;
-use App\Services\CustomTaskService;
+use App\Services\CustomTask\AdminCustomTaskService;
 use App\Services\Analytics\AnalyticsService;
 use App\Services\WalletService;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use App\Controllers\Admin\BaseAdminController;
 
 class AdTaskController extends BaseAdminController
 {
-    private CustomTaskService $customTaskService;
+    private AdminCustomTaskService $customTaskService;
     private AnalyticsService $analyticsService;
     private WalletService $walletService;
     private Ads $adsModel;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
 
     public function __construct(
-        CustomTaskService $customTaskService,
+        AdminCustomTaskService $customTaskService,
         AnalyticsService $analyticsService,
         WalletService $walletService,
         Ads $adsModel,
-        AdvancedSearchService $searchService
+        SearchOrchestrator $searchService
     ) {
         parent::__construct();
         $this->customTaskService = $customTaskService;
@@ -47,7 +47,7 @@ class AdTaskController extends BaseAdminController
         $limit = 30;
         $offset = ($page - 1) * $limit;
 
-        // استفاده از AdvancedSearchService برای جستجو
+        // استفاده از SearchOrchestrator برای جستجو
         if (!empty($search)) {
             $result = $this->searchService->searchAdTasks($search, $filters, $limit, $offset);
             $tasks = $result['items'] ?? [];

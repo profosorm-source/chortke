@@ -5,7 +5,6 @@ namespace App\Controllers\Admin;
 use App\Models\Role;
 use App\Models\Permission;
 use App\Middleware\PermissionMiddleware;
-use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 
 class RoleController extends BaseAdminController
@@ -57,7 +56,7 @@ class RoleController extends BaseAdminController
     {
 
         
-        $validator = new Validator($this->request->all(), [
+        $validator = $this->validatorFactory()->make($this->request->all(), [
             'name'        => 'required|min:2|max:50',
             'slug'        => 'required|min:2|max:50|alpha_dash',
             'description' => 'max:255',
@@ -156,7 +155,7 @@ class RoleController extends BaseAdminController
         
 
         
-        $validator = new Validator($this->request->all(), [
+        $validator = $this->validatorFactory()->make($this->request->all(), [
             'name'        => 'required|min:2|max:50',
             'description' => 'max:255',
         ]);

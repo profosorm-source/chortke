@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Admin;
 
+use App\Models\SentryModel;
 use App\Services\Sentry\Analytics\DashboardService;
 use App\Services\Sentry\Analytics\TrendAnalyzer;
 use App\Services\Sentry\Alerting\AlertRulesEngine;
@@ -19,13 +20,15 @@ class SentryAdminController extends BaseAdminController
     private AlertRulesEngine $alertRules;
     private EscalationManager $escalation;
     private AdvancedAuditTrail $audit;
+    private SentryModel $model;
 
     public function __construct(
         DashboardService $dashboard,
         TrendAnalyzer $trendAnalyzer,
         AlertRulesEngine $alertRules,
         EscalationManager $escalation,
-        AdvancedAuditTrail $audit
+        AdvancedAuditTrail $audit,
+        SentryModel $model
     ) {
         parent::__construct();
         $this->dashboard = $dashboard;
@@ -33,6 +36,7 @@ class SentryAdminController extends BaseAdminController
         $this->alertRules = $alertRules;
         $this->escalation = $escalation;
         $this->audit = $audit;
+        $this->model = $model;
     }
 
     /**
@@ -86,6 +90,82 @@ class SentryAdminController extends BaseAdminController
             'issue' => $issue,
             'events' => $issue->events,
         ]);
+    }
+
+    /**
+     * 🧾 Failed Jobs / DLQ
+     */
+    public function failedJobs(): void
+    {
+        $page = (int)($_GET['page'] ?? 1);
+        $queue = $_GET['queue'] ?? null;
+
+        $failedJobs = $this->dashboard->getFailedJobsList($page, 20, $queue);
+        $summary = $this->dashboard->getFailedJobsOverview();
+
+        view('admin/sentry/failed-jobs', [
+            'failed_jobs' => $failedJobs,
+            'summary' => $summary,
+            'queue_counts' => $this->model->getFailedJobQueueCounts(20),
+        ]);
+    }
+
+    /**
+     * � Outbox DLQ
+     */
+    public function outboxDLQ(): void
+    {
+        $page = (int)($_GET['page'] ?? 1);
+
+        $outbox = $this->dashboard->getOutboxDLQList($page, 20);
+        $summary = $this->dashboard->getOutboxSummary();
+
+        view('admin/sentry/outbox-dlq', [
+            'outbox' => $outbox,
+            'summary' => $summary,
+        ]);
+    }
+
+    /**
+     * �📝 Failed Job Details
+     */
+    public function failedJobDetails(int $id): void
+    {
+        $job = $this->dashboard->getFailedJobDetails($id);
+        if (!$job) {
+            Response::notFound();
+            return;
+        }
+
+        view('admin/sentry/failed-job-details', [
+            'job' => $job,
+        ]);
+    }
+
+    /**
+     * 🔁 Retry Failed Job
+     */
+    public function retryFailedJob(int $id): void
+    {
+        if ($this->dashboard->retryFailedJob($id)) {
+            Response::json(['success' => true]);
+            return;
+        }
+
+        Response::json(['success' => false, 'error' => 'Unable to retry failed job']);
+    }
+
+    /**
+     * 🗑️ Forget Failed Job
+     */
+    public function forgetFailedJob(int $id): void
+    {
+        if ($this->dashboard->forgetFailedJob($id)) {
+            Response::json(['success' => true]);
+            return;
+        }
+
+        Response::json(['success' => false, 'error' => 'Unable to delete failed job']);
     }
 
     /**

@@ -9,8 +9,7 @@ use App\Models\ContentRevenue;
 use App\Models\ContentAgreement;
 use App\Services\ContentService;
 use App\Services\BulkOperationsService;
-use App\Services\AdvancedSearchService;
-use Core\Validator;
+use App\Services\Search\SearchOrchestrator;
 use App\Controllers\Admin\BaseAdminController;
 
 class ContentController extends BaseAdminController
@@ -20,7 +19,7 @@ class ContentController extends BaseAdminController
     private ContentAgreement $contentAgreementModel;
     private ContentService $contentService;
     private BulkOperationsService $bulkService;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
 
     public function __construct(
         ContentAgreement $contentAgreementModel,
@@ -28,7 +27,7 @@ class ContentController extends BaseAdminController
         ContentSubmission $contentSubmissionModel,
         ContentService $contentService,
         BulkOperationsService $bulkService,
-        AdvancedSearchService $searchService
+        SearchOrchestrator $searchService
     ) {
         parent::__construct();
         $this->contentService = $contentService;
@@ -55,7 +54,7 @@ class ContentController extends BaseAdminController
         $perPage = 15;
         $offset = ($page - 1) * $perPage;
 
-        // استفاده از AdvancedSearchService برای جستجو
+        // استفاده از SearchOrchestrator برای جستجو
         if (!empty($search)) {
             $result = $this->searchService->searchContent($search, $filters, $perPage, $offset);
             $submissions = $result['items'] ?? [];
@@ -123,7 +122,7 @@ class ContentController extends BaseAdminController
         $id = (int)$this->request->param('id');
         $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'reason' => 'required|min:10|max:1000',
         ]);
 
@@ -149,7 +148,7 @@ class ContentController extends BaseAdminController
         $id = (int)$this->request->param('id');
         $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'published_url' => 'url|max:500',
             'channel_name' => 'max:255',
         ]);
@@ -216,7 +215,7 @@ class ContentController extends BaseAdminController
             ], 422);
         }
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'reason' => 'required|min:10|max:1000',
         ]);
 
@@ -358,12 +357,13 @@ class ContentController extends BaseAdminController
     {
         $input = $_POST;
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'submission_id' => 'required|integer',
             'period' => 'required',
             'total_revenue' => 'required|numeric|min:0',
             'user_share_percent' => 'required|numeric|min:0|max:100',
             'tax_percent' => 'required|numeric|min:0|max:100',
+            'idempotency_key' => 'nullable|string|min:10|max:128',
         ]);
 
         if ($validator->fails()) {
@@ -374,7 +374,7 @@ class ContentController extends BaseAdminController
         }
 
         $data = $validator->data();
-        $result = $this->contentService->createRevenue((array)$data, user_id());
+        $result = $this->contentService->createRevenue((array)$data, user_id(), $data['idempotency_key'] ?? null);
 
         if ($result['success']) {
             return redirect('/admin/content/revenues')

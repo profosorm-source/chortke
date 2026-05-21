@@ -2,23 +2,26 @@
 
 namespace App\Controllers\Admin;
 use App\Services\User\UserService;
+use App\Contracts\ValidatorFactoryInterface;
 
 use App\Services\KYCService;
-use Core\Validator;
 use App\Controllers\Admin\BaseAdminController;
 
 class KYCController extends BaseAdminController
 {
     private UserService $userService;
     private KYCService $kycService;
+    private ValidatorFactoryInterface $validatorFactory;
 
     public function __construct(
         UserService $userService,
-        KYCService $kycService)
+        KYCService $kycService,
+        ValidatorFactoryInterface $validatorFactory)
     {
         parent::__construct();
         $this->userService = $userService;
         $this->kycService = $kycService;
+        $this->validatorFactory = $validatorFactory;
     }
 
     public function index(): void
@@ -157,30 +160,29 @@ public function verify(int $id): void
 }
 
     // ✅ Reject: Ajax JSON
-  public function reject(int $id): void
-{
-        
-    $data = $this->request->json();
-    if (!$data) {
-        $this->response->json(['success' => false, 'message' => 'داده نامعتبر'], 400);
-        return;
+    public function reject(int $id): void
+    {
+        $data = $this->request->json();
+        if (!$data) {
+            $this->response->json(['success' => false, 'message' => 'داده نامعتبر'], 400);
+            return;
+        }
+
+        $validator = $this->validatorFactory->make($data, [
+            'reason' => 'required|min:10'
+        ]);
+
+        if ($validator->fails()) {
+            $this->response->json(['success' => false, 'errors' => $validator->errors()], 422);
+            return;
+        }
+
+        $result = $this->kycService->rejectKYC($id, user_id(), $data['reason']);
+
+        $this->response->json([
+            'success' => (bool)($result['success'] ?? false),
+            'message' => $result['message'] ?? 'خطا',
+            'redirect' => url('/admin/kyc')
+        ], ($result['success'] ?? false) ? 200 : 400);
     }
-
-    $validator = new \Core\Validator($data, [
-        'reason' => 'required|min:10'
-    ]);
-
-    if ($validator->fails()) {
-        $this->response->json(['success' => false, 'errors' => $validator->errors()], 422);
-        return;
-    }
-
-    $result = $this->kycService->rejectKYC($id, user_id(), $data['reason']);
-
-    $this->response->json([
-        'success' => (bool)($result['success'] ?? false),
-        'message' => $result['message'] ?? 'خطا',
-        'redirect' => url('/admin/kyc')
-    ], ($result['success'] ?? false) ? 200 : 400);
-}
 }
