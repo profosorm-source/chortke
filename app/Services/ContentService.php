@@ -48,6 +48,7 @@ class ContentService extends \App\Services\BaseService
     private TransactionWrapper $transactionWrapper;
     private EventDispatcher $eventDispatcher;
     private SettingService $settingService;
+    private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
     // متن تعهدنامه
     private const AGREEMENT_TEXT = <<<EOT
 تعهدنامه همکاری محتوایی با مجموعه چرتکه
@@ -77,7 +78,8 @@ EOT;
         EventDispatcher $eventDispatcher,
         LoggerInterface $logger,
         Cache $cache,
-        SettingService $settingService
+        SettingService $settingService,
+        ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
         $this->submissionModel = $submissionModel;
@@ -91,6 +93,7 @@ EOT;
         $this->eventDispatcher = $eventDispatcher;
         $this->cache = $cache;
         $this->settingService = $settingService;
+        $this->cacheInvalidation = $cacheInvalidation;
     }
 
     /**
@@ -976,8 +979,12 @@ EOT;
     private function clearUserCache(int $userId): void
     {
         try {
-            $this->cache->forget("user_content_stats_{$userId}");
-            $this->cache->forget("user_revenue_{$userId}");
+            if ($this->cacheInvalidation) {
+                $this->cacheInvalidation->invalidateUser($userId);
+            } else {
+                $this->cache->forget("user_content_stats_{$userId}");
+                $this->cache->forget("user_revenue_{$userId}");
+            }
         } catch (\Throwable $e) {
             $this->logError('content.cache_clear.failed', [
                 'user_id'   => $userId,
