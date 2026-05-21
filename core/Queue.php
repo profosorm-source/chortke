@@ -37,6 +37,31 @@ class Queue
         $queue = $queue ?: $this->defaultQueue;
         $availableAt = $delay > 0 ? time() + $delay : time();
 
+        // 🚀 Real-time delta-buffering to eliminate propagation delay/race conditions during async updates!
+        if (trim($job, '\\') === 'App\\Jobs\\UpdateFraudScoreJob') {
+            $userId = (int)($data['user_id'] ?? 0);
+            $delta  = (float)($data['delta'] ?? 0);
+            $domain = (string)($data['domain'] ?? 'fraud');
+            
+            if ($userId > 0 && $delta !== 0.0) {
+                try {
+                    $cache = \Core\Cache::getInstance();
+                    $tempKey = "temp_{$domain}_score:{$userId}";
+                    $cache->incrementFloat($tempKey, $delta);
+                    $cache->forget("user_score:{$userId}:{$domain}");
+                } catch (\Throwable $e) {
+                    if (function_exists('logger')) {
+                        logger()->warning('queue.delta_buffer.failed', [
+                            'user_id' => $userId,
+                            'domain' => $domain,
+                            'delta' => $delta,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
+                }
+            }
+        }
+
         $result = $this->db->table('queues')->insert([
             'queue' => $queue,
             'payload' => json_encode([
