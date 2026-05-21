@@ -78,9 +78,10 @@ class PredictionController extends BaseUserController
         $gameId     = (int)$this->request->param('id');
         $prediction = trim((string)($this->request->post('prediction') ?? ''));
         $amount     = (float)($this->request->post('amount_usdt') ?? 0);
+        $idempotencyKey = trim((string)($this->request->post('idempotency_key') ?? '')) ?: null;
 
         try {
-            $result = $this->predictionService->placeBet($userId, $gameId, $prediction, $amount);
+            $result = $this->predictionService->placeBet($userId, $gameId, $prediction, $amount, $idempotencyKey);
             $this->response->json($result);
 
         } catch (\InvalidArgumentException $e) {

@@ -6,7 +6,6 @@ namespace App\Controllers\User;
 
 use App\Services\User\UserService;
 use App\Services\Auth\AuthService;
-use Core\Validator;
 use App\Controllers\BaseController;
 use App\Services\Auth\LoginRiskService;
 
@@ -89,7 +88,7 @@ class AuthController extends BaseController
         }
 
         $minLength = (int)config('auth.password.min_length', 8);
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'email'    => 'required|email',
             'password' => "required|min:{$minLength}",
         ]);
@@ -488,7 +487,7 @@ class AuthController extends BaseController
             $data['token'] = $this->session->get('pw_reset_token');
         }
 
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'token'            => 'required',
             'password'         => 'required|min:8',
             'password_confirm' => 'required|same:password',

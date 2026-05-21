@@ -4,7 +4,6 @@ namespace App\Controllers\User;
 
 use App\Services\BankCardService;
 use App\Services\User\UserService;
-use Core\Validator;
 use App\Controllers\User\BaseUserController;
 
 class BankCardController extends BaseUserController

@@ -7,7 +7,6 @@ use App\Models\TicketMessage;
 use App\Models\TicketCategory;
 use App\Services\TicketService;
 use App\Services\UploadService;
-use Core\Validator;
 use App\Services\ApiRateLimiter;
 use App\Controllers\User\BaseUserController;
 
@@ -91,7 +90,7 @@ class TicketController extends BaseUserController
         $data['message'] = trim($data['message'] ?? '');
         
         // Validation
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'category_id' => 'required|integer',
             'subject' => 'required|min:5|max:150',
             'message' => 'required|min:10|max:5000',
@@ -232,7 +231,7 @@ class TicketController extends BaseUserController
             return;
         }
 
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'ticket_id' => 'required|integer',
             'message'   => 'required|min:5|max:5000'
         ]);

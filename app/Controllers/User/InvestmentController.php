@@ -8,7 +8,6 @@ use App\Models\TradingRecord;
 use App\Models\InvestmentProfit;
 use App\Models\InvestmentWithdrawal;
 use App\Services\InvestmentService;
-use Core\Validator;
 use App\Services\ApiRateLimiter;
 use App\Controllers\User\BaseUserController;
 
@@ -108,9 +107,10 @@ class InvestmentController extends BaseUserController
     {
         $input = $this->request->json() ?? $this->request->all();
 
-        $validator = new Validator($input, [
-            'amount'        => 'required|numeric|min:1',
-            'risk_accepted' => 'required',
+        $validator = $this->validatorFactory()->make($input, [
+            'amount'           => 'required|numeric|min:1',
+            'risk_accepted'    => 'required',
+            'idempotency_key'  => 'nullable|string|min:10|max:128',
         ]);
 
         if ($validator->fails()) {
@@ -128,6 +128,7 @@ class InvestmentController extends BaseUserController
         $result = $this->investmentService->createInvestment((int) user_id(), [
             'amount'        => (float) ($data['amount'] ?? 0),
             'risk_accepted' => (int)   ($data['risk_accepted'] ?? 0),
+            'idempotency_key' => $data['idempotency_key'] ?? null,
         ]);
 
         return $this->response->json($result, $result['success'] ? 200 : 422);
@@ -139,7 +140,7 @@ class InvestmentController extends BaseUserController
     {
         $input = $this->request->json() ?? $this->request->all();
 
-        $validator = new Validator($input, [
+        $validator = $this->validatorFactory()->make($input, [
             'withdrawal_type' => 'required|in:profit_only,full_close',
         ]);
 

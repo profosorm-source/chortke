@@ -2,40 +2,52 @@
 
 namespace App\Controllers\User;
 
-use App\Services\CustomTaskService;
+use App\Services\CustomTask\CustomTaskService as CustomTaskCoreService;
+use App\Services\CustomTask\CustomTaskExecutorService;
+use App\Services\CustomTask\CustomTaskModerationService;
 use App\Services\Analytics\AnalyticsService;
 use App\Services\UploadService;
 use App\Validators\Requests\CreateCustomTaskRequest;
 use App\Validators\Requests\SubmitCustomTaskProofRequest;
 use App\Validators\Requests\RateCustomTaskRequest;
 use App\Controllers\User\BaseUserController;
+use App\Models\Ads;
 use Core\Logger;
 
 class CustomTaskController extends BaseUserController
 {
-    private CustomTaskService $customTaskService;
+    private CustomTaskCoreService $coreService;
+    private CustomTaskExecutorService $executorService;
+    private CustomTaskModerationService $moderationService;
     private AnalyticsService $analyticsService;
     private UploadService $uploadService;
+    private Ads $adsModel;
     private Logger $logger;
 
     public function __construct(
-        CustomTaskService $customTaskService,
+        CustomTaskCoreService $coreService,
+        CustomTaskExecutorService $executorService,
+        CustomTaskModerationService $moderationService,
         AnalyticsService $analyticsService,
         UploadService $uploadService,
+        Ads $adsModel,
         Logger $logger
     ) {
         parent::__construct();
-        $this->customTaskService = $customTaskService;
+        $this->coreService = $coreService;
+        $this->executorService = $executorService;
+        $this->moderationService = $moderationService;
         $this->analyticsService = $analyticsService;
         $this->uploadService = $uploadService;
+        $this->adsModel = $adsModel;
         $this->logger = $logger;
     }
 
     public function create()
     {
         return view('user.custom-tasks.ad.create', [
-            'taskTypes' => $this->customTaskService->getTaskTypes(),
-            'proofTypes' => $this->customTaskService->getProofTypes(),
+            'taskTypes' => $this->adsModel->taskTypes(),
+            'proofTypes' => $this->adsModel->proofTypes(),
         ]);
     }
 
@@ -57,7 +69,7 @@ class CustomTaskController extends BaseUserController
 
         $data = $request->validated();
 
-        $result = $this->customTaskService->createTask($userId, $data);
+        $result = $this->coreService->createTask($userId, $data);
 
         if (!$result['success']) {
             $this->session->setFlash('error', $result['message']);
@@ -99,7 +111,7 @@ class CustomTaskController extends BaseUserController
             }
         }
 
-        $result = $this->customTaskService->submitProof($subId, $userId, $proofData);
+        $result = $this->executorService->submitProof($subId, $userId, $proofData);
         $this->response->json($result, $result['success'] ? 200 : 422);
     }
 
@@ -121,7 +133,7 @@ class CustomTaskController extends BaseUserController
             return;
         }
 
-        $result = $this->customTaskService->rateSubmission(
+        $result = $this->moderationService->rateSubmission(
             (int)$body['submission_id'],
             $userId,
             $request->validated()
@@ -129,7 +141,4 @@ class CustomTaskController extends BaseUserController
 
         $this->response->json($result, $result['success'] ? 200 : 422);
     }
-
-    // سایر متدها (index, available, show, review, etc.) فعلاً بدون تغییر اساسی نگه داشته شده‌اند
-    // در فازهای بعدی به تدریج Requestها به آنها اضافه خواهد شد.
 }

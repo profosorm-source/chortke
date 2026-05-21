@@ -3,7 +3,6 @@
 namespace App\Controllers\User;
 
 use App\Models\CryptoDeposit;
-use Core\Validator;
 use App\Controllers\User\BaseUserController;
 
 class CryptoDepositController extends BaseUserController
@@ -97,7 +96,7 @@ class CryptoDepositController extends BaseUserController
         ];
 
         // اعتبارسنجی
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'network' => 'required|in:bnb20,trc20,sol,erc20,ton',
             'amount' => 'required|numeric|min:10',
             'tx_hash' => 'required',

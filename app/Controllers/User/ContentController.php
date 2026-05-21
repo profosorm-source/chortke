@@ -6,7 +6,6 @@ namespace App\Controllers\User;
 use App\Models\ContentSubmission;
 use App\Models\ContentRevenue;
 use App\Services\ContentService;
-use Core\Validator;
 use App\Controllers\User\BaseUserController;
 use Core\Exceptions\NotFoundException;
 use Core\Exceptions\UnauthorizedException;
@@ -276,11 +275,11 @@ class ContentController extends BaseUserController
      * اعتبارسنجی ورودی فرم ثبت محتوا
      * 
      * @param array $input
-     * @return Validator
+     * @return \Core\Validator
      */
-    private function validateStoreInput(array $input): Validator
+    private function validateStoreInput(array $input): \Core\Validator
     {
-        return new Validator($input, [
+        return $this->validatorFactory()->make($input, [
             'platform' => 'required|in:aparat,youtube,upload_center',
             'video_url' => 'required|url|max:500',
             'title' => 'required|min:5|max:255',

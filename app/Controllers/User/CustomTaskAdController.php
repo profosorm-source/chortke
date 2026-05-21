@@ -4,7 +4,8 @@ namespace App\Controllers\User;
 
 use App\Controllers\User\BaseUserController;
 use App\Models\Ads;
-use App\Services\CustomTaskService;
+use App\Services\CustomTask\CustomTaskService as CustomTaskCoreService;
+use App\Services\CustomTask\CustomTaskModerationService;
 use App\Validators\CustomTaskValidator;
 use App\Services\AntiFraud\GeoIPService;
 use App\Services\AntiFraud\BrowserFingerprintService;
@@ -12,21 +13,24 @@ use App\Services\AdSystemManager;
 
 class CustomTaskAdController extends BaseUserController
 {
-    private CustomTaskService $service;
+    private CustomTaskCoreService $coreService;
+    private CustomTaskModerationService $moderationService;
     private GeoIPService $ipQualityService;
     private BrowserFingerprintService $fingerprintService;
     private AdSystemManager $adManager;
     private Ads $adsModel;
 
     public function __construct(
-        CustomTaskService $service,
+        CustomTaskCoreService $coreService,
+        CustomTaskModerationService $moderationService,
         GeoIPService $ipQualityService,
         BrowserFingerprintService $fingerprintService,
         AdSystemManager $adManager,
         Ads $adsModel
     ) {
         parent::__construct();
-        $this->service = $service;
+        $this->coreService = $coreService;
+        $this->moderationService = $moderationService;
         $this->ipQualityService = $ipQualityService;
         $this->fingerprintService = $fingerprintService;
         $this->adManager = $adManager;
@@ -39,7 +43,7 @@ class CustomTaskAdController extends BaseUserController
     public function index()
     {
         $userId = $this->userId();
-        $tasks = $this->service->getMyTasks($userId, null, 30, 0);
+        $tasks = $this->coreService->getMyTasks($userId, null, 30, 0);
 
         return view('user.custom-tasks.ad.index', [
             'tasks' => $tasks,
@@ -83,7 +87,7 @@ class CustomTaskAdController extends BaseUserController
         }
 
         // ایجاد تسک
-        $result = $this->service->createTask($userId, $payload);
+        $result = $this->coreService->createTask($userId, $payload);
 
         if (!$result['success']) {
             $this->session->setFlash('error', $result['message'] ?? 'ثبت تسک ناموفق بود.');
@@ -102,7 +106,7 @@ class CustomTaskAdController extends BaseUserController
         $userId = $this->userId();
         $taskId = (int) $this->request->param('id');
         
-        $task = $this->service->find($taskId);
+        $task = $this->coreService->find($taskId);
 
         if (!$task || $task->user_id !== $userId) {
             http_response_code(404);
@@ -111,7 +115,7 @@ class CustomTaskAdController extends BaseUserController
         }
 
         // گرفتن submission ها از طریق سرویس یکپارچه
-        $submissions = $this->service->getSubmissionsByTask($taskId, null, 50, 0);
+        $submissions = $this->coreService->getSubmissionsByTask($taskId, null, 50, 0);
 
         return view('user.custom-tasks.ad.show', [
             'task' => $task,
@@ -128,7 +132,7 @@ class CustomTaskAdController extends BaseUserController
         $submissionId = (int) $this->request->post('submission_id');
         $note = trim((string) ($this->request->post('note') ?? ''));
 
-        $result = $this->service->reviewSubmission($submissionId, $userId, 'approve', $note);
+        $result = $this->moderationService->reviewSubmission($submissionId, $userId, 'approve', $note);
 
         $this->session->setFlash($result['success'] ? 'success' : 'error', $result['message']);
         return redirect_back();
@@ -148,7 +152,7 @@ class CustomTaskAdController extends BaseUserController
             return redirect_back();
         }
 
-        $result = $this->service->reviewSubmission($submissionId, $userId, 'reject', $reason);
+        $result = $this->moderationService->reviewSubmission($submissionId, $userId, 'reject', $reason);
 
         $this->session->setFlash($result['success'] ? 'success' : 'error', $result['message']);
         return redirect_back();
@@ -162,7 +166,7 @@ class CustomTaskAdController extends BaseUserController
         $userId = $this->userId();
         $taskId = (int) $this->request->post('task_id');
 
-        $task = $this->service->find($taskId);
+        $task = $this->coreService->find($taskId);
         if (!$task || $task->user_id !== $userId) {
             $this->session->setFlash('error', 'دسترسی غیرمجاز.');
             return redirect('/custom-tasks/ad');
@@ -182,7 +186,7 @@ class CustomTaskAdController extends BaseUserController
         $userId = $this->userId();
         $taskId = (int) $this->request->post('task_id');
 
-        $task = $this->service->find($taskId);
+        $task = $this->coreService->find($taskId);
         if (!$task || $task->user_id !== $userId) {
             $this->session->setFlash('error', 'دسترسی غیرمجاز.');
             return redirect('/custom-tasks/ad');

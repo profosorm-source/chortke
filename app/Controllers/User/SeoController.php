@@ -4,7 +4,7 @@ namespace App\Controllers\User;
 
 use App\Models\Ads;
 use App\Models\SeoExecution;
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use App\Services\SeoService;
 use App\Services\Shared\AnalyticsService;
 
@@ -15,14 +15,14 @@ class SeoController extends BaseUserController
 {
     private Ads $adModel;
     private SeoExecution $executionModel;
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
     private SeoService $seoService;
     private AnalyticsService $analytics;
 
     public function __construct(
         Ads $adModel,
         SeoExecution $executionModel,
-        AdvancedSearchService $searchService,
+        SearchOrchestrator $searchService,
         SeoService $seoService,
         AnalyticsService $analytics
     ) {

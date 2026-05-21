@@ -5,7 +5,6 @@ namespace App\Controllers\User;
 use App\Models\KYCVerification;
 use App\Services\KYCService;
 use App\Services\UploadService;
-use Core\Validator;
 use App\Policies\RateLimitPolicy;
 use App\Controllers\User\BaseUserController;
 
@@ -83,7 +82,7 @@ class KYCController extends BaseUserController
 
         $data = $this->request->all();
 
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'national_code' => 'required|digits:10',
             'birth_date'    => 'required',
         ]);

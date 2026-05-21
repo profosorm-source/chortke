@@ -31,6 +31,8 @@ use App\Contracts\LoggerInterface;
  */
 abstract class BaseController
 {
+    use \App\Traits\UsesValidatorFactory;
+    
     protected Session  $session;
     protected Request  $request;
     protected Response $response;

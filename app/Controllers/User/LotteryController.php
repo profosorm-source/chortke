@@ -80,10 +80,11 @@ class LotteryController extends BaseUserController
 
     public function join()
     {
-                $input = \json_decode(\file_get_contents('php://input'), true) ?? $_POST;
+        $input = \json_decode(\file_get_contents('php://input'), true) ?? $_POST;
         $roundId = (int)($input['round_id'] ?? 0);
+        $idempotencyKey = trim((string)($input['idempotency_key'] ?? '')) ?: null;
 
-        $result = $this->lotteryService->participate(user_id(), $roundId);
+        $result = $this->lotteryService->participate(user_id(), $roundId, $idempotencyKey);
         ApiRateLimiter::enforce('lottery_participate', (int)user_id(), true);
 
         return $this->response->json($result, $result['success'] ? 200 : 422);

@@ -5,7 +5,6 @@ namespace App\Controllers\User;
 use App\Services\ManualDepositService;
 use App\Services\BankCardService;
 use App\Services\UploadService;
-use Core\Validator;
 use App\Services\ApiRateLimiter;
 use App\Controllers\User\BaseUserController;
 
@@ -104,7 +103,7 @@ class ManualDepositController extends BaseUserController
 
         $idempotencyKey = $this->request->input('idempotency_key');
 
-        $validator = new Validator($data, [
+        $validator = $this->validatorFactory()->make($data, [
             'bank_card_id'   => 'required|numeric',
             'amount'         => 'required|numeric|min:10000',
             'tracking_code'  => 'required|min:5|max:50',

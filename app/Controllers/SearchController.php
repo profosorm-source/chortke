@@ -2,7 +2,7 @@
 
 namespace App\Controllers;
 
-use App\Services\AdvancedSearchService;
+use App\Services\Search\SearchOrchestrator;
 use App\Controllers\BaseController;
 
 /**
@@ -13,11 +13,11 @@ use App\Controllers\BaseController;
  */
 class SearchController extends BaseController
 {
-    private AdvancedSearchService $searchService;
+    private SearchOrchestrator $searchService;
     private \Core\RateLimiter $rateLimiter;
 
     public function __construct(
-        AdvancedSearchService $searchService,
+        SearchOrchestrator $searchService,
         \Core\RateLimiter $rateLimiter
     )
     {
