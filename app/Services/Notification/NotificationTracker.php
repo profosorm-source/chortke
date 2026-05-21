@@ -16,7 +16,8 @@ class NotificationTracker extends \App\Services\BaseService
     public function __construct(
         private Notification $notificationModel,
         private Cache $cache,
-        protected LoggerInterface $logger
+        protected LoggerInterface $logger,
+        private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
     }
@@ -88,7 +89,11 @@ class NotificationTracker extends \App\Services\BaseService
 
     public function invalidateUnreadCache(int $userId): void
     {
-        $this->cache->forget(self::UNREAD_CACHE_PREFIX . $userId);
+        if ($this->cacheInvalidation) {
+            $this->cacheInvalidation->invalidateUser($userId);
+        } else {
+            $this->cache->forget(self::UNREAD_CACHE_PREFIX . $userId);
+        }
     }
 
     public function getNewNotificationsAfterId(int $userId, int $lastId, int $limit = 20): array

@@ -32,6 +32,53 @@ final class ModuleSearchGateway
         return $this->searchVitrineRead((string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
     }
 
+    public function searchCustomTasks(array $filters, int $limit, int $offset): array
+    {
+        $filters['type'] = 'custom_task';
+        return $this->reader->searchAdTasks((string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
+    public function searchInvestments(array $filters, int $limit, int $offset): array
+    {
+        return $this->reader->searchInvestments((string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
+    public function searchPredictions(array $filters, int $limit, int $offset): array
+    {
+        return $this->reader->searchRegistered('prediction', (string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
+    public function searchLotteries(array $filters, int $limit, int $offset): array
+    {
+        return $this->reader->searchRegistered('lottery', (string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
+    public function searchContents(array $filters, int $limit, int $offset): array
+    {
+        return $this->reader->searchContent((string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
+    public function searchCoupons(array $filters, int $limit, int $offset): array
+    {
+        return $this->reader->searchRegistered('coupons', (string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
+    public function searchTickets(array $filters, int $limit, int $offset): array
+    {
+        return $this->reader->searchTicketsAdmin((string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
+    public function searchSeoAds(array $filters, int $limit, int $offset): array
+    {
+        $filters['type'] = 'seo';
+        return $this->reader->searchAdTasks((string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
+    public function searchDirectMessages(array $filters, int $limit, int $offset): array
+    {
+        return $this->reader->searchRegistered('direct_messages', (string)($filters['q'] ?? $filters['search'] ?? ''), $filters, $limit, $offset);
+    }
+
     private function searchVitrineRead(string $q, array $filters, int $limit, int $offset): array
     {
         $limit = max(1, min(100, $limit));

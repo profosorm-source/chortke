@@ -45,6 +45,113 @@ class DashboardService
             'trending_issues'   => $this->model->getTrendingIssues(10),
             'recent_events'     => $this->model->getRecentSentryEvents(20),
             'cron_status'       => $this->getCronHeartbeatStatus(), // M28 Fix: مانیتورینگ ضربان قلب کرون‌جاب سیستم
+            'failed_jobs'       => $this->getFailedJobsOverview(),
+            'outbox'            => $this->getOutboxSummary(),
+        ];
+    }
+
+    public function getFailedJobsOverview(): array
+    {
+        $summary = $this->model->getFailedJobsSummary();
+        if (!$summary) {
+            return [
+                'total' => 0,
+                'recent_24h' => 0,
+                'oldest_failed_at' => null,
+                'queue_breakdown' => [],
+                'status' => 'healthy',
+            ];
+        }
+
+        $total = (int)($summary->total ?? 0);
+        $status = 'healthy';
+        if ($total >= 50) {
+            $status = 'critical';
+        } elseif ($total >= 20) {
+            $status = 'warning';
+        }
+
+        return [
+            'total' => $total,
+            'recent_24h' => (int)($summary->recent_24h ?? 0),
+            'oldest_failed_at' => $summary->oldest_failed_at,
+            'queue_breakdown' => $this->model->getFailedJobQueueCounts(10),
+            'status' => $status,
+        ];
+    }
+
+    public function getFailedJobsList(int $page, int $perPage = 20, ?string $queue = null): array
+    {
+        $offset = ($page - 1) * $perPage;
+        $failedJobs = $this->model->getFailedJobsPaged($perPage, $offset, $queue);
+        $total = $this->model->getFailedJobsCount($queue);
+
+        return [
+            'items' => $failedJobs,
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => (int)ceil($total / $perPage),
+            'queue' => $queue,
+        ];
+    }
+
+    public function getFailedJobDetails(int $id): ?object
+    {
+        return $this->model->getFailedJobById($id);
+    }
+
+    public function retryFailedJob(int $id): bool
+    {
+        return $this->model->retryFailedJob($id);
+    }
+
+    public function forgetFailedJob(int $id): bool
+    {
+        return $this->model->forgetFailedJob($id);
+    }
+
+    public function getOutboxSummary(): array
+    {
+        $summary = $this->model->getOutboxDLQSummary();
+        if (!$summary) {
+            return [
+                'total' => 0,
+                'recent_24h' => 0,
+                'oldest_failed_at' => null,
+                'status' => 'healthy',
+            ];
+        }
+
+        $total = (int)($summary->total ?? 0);
+        $status = 'healthy';
+        if ($total >= 50) {
+            $status = 'critical';
+        } elseif ($total >= 20) {
+            $status = 'warning';
+        }
+
+        return [
+            'total' => $total,
+            'recent_24h' => (int)($summary->recent_24h ?? 0),
+            'oldest_failed_at' => $summary->oldest_failed_at,
+            'status' => $status,
+        ];
+    }
+
+    public function getOutboxDLQList(int $page, int $perPage = 20): array
+    {
+        $offset = ($page - 1) * $perPage;
+        $items = $this->model->getOutboxDLQList($perPage, $offset);
+        $summary = $this->model->getOutboxDLQSummary();
+        $total = (int)($summary->total ?? 0);
+
+        return [
+            'items' => $items,
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => (int)ceil($total / $perPage),
         ];
     }
 

@@ -9,11 +9,13 @@ use App\Contracts\LoggerInterface;
 use App\Exceptions\PaymentGatewayConnectionException;
 use App\Services\BaseService;
 use Core\RetryPolicy;
+use Core\CircuitBreaker;
 
 /**
  * BasePaymentGateway - درگاه پیمنٹ بنیادی
  * 
  * تمام payment gateways کے لیے مشترک functionality:
+ * - Circuit Breaker protection against cascading failures
  * - Retry logic with exponential backoff
  * - SSL/TLS verification
  * - Timeout handling
@@ -57,11 +59,13 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
 
     protected RetryPolicy $retryPolicy;
     protected LoggerInterface $logger;
+    protected ?CircuitBreaker $circuitBreaker;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, ?CircuitBreaker $circuitBreaker = null)
     {
         parent::__construct($logger);
         $this->retryPolicy = new RetryPolicy();
+        $this->circuitBreaker = $circuitBreaker;
     }
 
     /**
@@ -331,4 +335,39 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
      * درگاہ کا نام حاصل کریں
      */
     abstract public function getGatewayName(): string;
+
+    /**
+     * CircuitBreaker کے ساتھ درخواست کو execute کریں
+     * 
+     * یہ method CircuitBreaker کے ذریعے درخواستوں کو wrap کرتا ہے تاکہ:
+     * - مسلسل ناکامیوں سے بچا جا سکے (Cascading Failures)
+     * - درگاہ کے بند ہونے کی فوری صورت میں fast fail کریں
+     * - سسٹم کو بوجھ سے بچائے
+     * 
+     * @param string $url درگاہ کا URL
+     * @param array $data بھیجنے کا ڈیٹا
+     * @param string $method HTTP method
+     * @param array $headers اضافی headers
+     * @param string $contentType 'json' or 'form'
+     * @return array Response
+     * @throws PaymentGatewayConnectionException
+     */
+    protected function executeWithCircuitBreaker(
+        string $url,
+        array $data = [],
+        string $method = 'POST',
+        array $headers = [],
+        string $contentType = 'json'
+    ): array {
+        $gatewayName = $this->getGatewayName();
+        
+        if ($this->circuitBreaker !== null) {
+            return $this->circuitBreaker->call($gatewayName, function() use ($url, $data, $method, $headers, $contentType) {
+                return $this->executeWithRetry($url, $data, $method, $headers, $contentType);
+            });
+        }
+        
+        // Fallback to retry only if CircuitBreaker is not available
+        return $this->executeWithRetry($url, $data, $method, $headers, $contentType);
+    }
 }

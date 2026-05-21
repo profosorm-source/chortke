@@ -35,7 +35,8 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         private SettingService $settingService,
         private \Core\Queue $queue, // 🚀 UPG-03: تزریق مکانیزم صف سیستم
         private ?EmailService $emailService = null,
-        private ?SmsNotificationService $smsService = null
+        private ?SmsNotificationService $smsService = null,
+        private ?\App\Services\OutboxService $outbox = null
     ) {
         parent::__construct($logger);
     }
@@ -249,33 +250,54 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             } catch (\Throwable $syncError) {
                 $this->logger->error('notif.push_fallback_sync_failed', ['user_id' => $userId, 'error' => $syncError->getMessage()]);
 
-                // 🚀 DLQ Fallback: Save failed payload to failed_jobs table
-                try {
-                    $db = $this->model->getDb();
-                    $payload = [
-                        'job' => \App\Jobs\SendBulkNotificationJob::class,
-                        'data' => [
-                            'channel' => 'fcm',
-                            'user_ids' => [$userId],
-                            'title' => $title,
-                            'message' => $message,
-                            'data' => array_merge($data ?? [], [
+                // 🚀 DLQ Fallback: Avoid blocking request with legacy failed_jobs insert.
+                // Prefer Outbox persistence if available, otherwise log the failure.
+                $payload = [
+                    'notification' => [
+                        'method' => 'dispatch',
+                        'args' => [
+                            'fcm',
+                            $userId,
+                            $title,
+                            $message,
+                            array_merge($data ?? [], [
                                 'type' => $type,
                                 'notif_id' => (string)($notifId ?? ''),
                                 'idempotency_key' => $idempotencyKey
                             ]),
-                            'image_url' => $imageUrl,
-                            'action_url' => $actionUrl,
-                        ]
-                    ];
-                    $db->table('failed_jobs')->insert([
-                        'queue' => 'failed_notifications',
-                        'payload' => json_encode($payload, JSON_UNESCAPED_UNICODE),
-                        'exception' => 'Queue push failed: ' . $e->getMessage() . ' | Sync dispatch failed: ' . $syncError->getMessage(),
-                        'failed_at' => date('Y-m-d H:i:s')
+                            $imageUrl,
+                            $actionUrl,
+                        ],
+                    ],
+                    'metadata' => [
+                        'user_id' => $userId,
+                        'message_id' => $messageId,
+                        'type' => $type,
+                        'fallback' => 'notification_push',
+                    ],
+                ];
+
+                if ($this->outbox) {
+                    try {
+                        $this->outbox->record(
+                            'notification',
+                            $userId,
+                            'push_failed',
+                            $payload,
+                            null
+                        );
+                    } catch (\Throwable $outboxWriteError) {
+                        $this->logger->error('notif.outbox_save_failed', [
+                            'user_id' => $userId,
+                            'error' => $outboxWriteError->getMessage(),
+                        ]);
+                    }
+                } else {
+                    $this->logger->critical('notif.fallback_to_failed_jobs_disabled', [
+                        'user_id' => $userId,
+                        'error' => $syncError->getMessage(),
+                        'queue_error' => $e->getMessage(),
                     ]);
-                } catch (\Throwable $dlqError) {
-                    $this->logger->error('notif.dlq_save_failed', ['error' => $dlqError->getMessage()]);
                 }
             }
         }

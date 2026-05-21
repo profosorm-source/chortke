@@ -1,0 +1,405 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services\CustomTask;
+
+use App\Services\BaseService;
+use App\Models\Ads;
+use App\Models\CustomTaskSubmissionModel;
+use App\Services\WalletService;
+use App\Services\SettingService;
+use App\Traits\ValidationTrait;
+use Core\Database;
+use Core\Logger;
+use App\Exceptions\BusinessException;
+use App\Validators\Requests\CreateCustomTaskRequest;
+
+/**
+ * CustomTaskService - Core custom tasks management
+ */
+class CustomTaskService extends BaseService
+{
+    use ValidationTrait;
+    private Ads $taskModel;
+    private CustomTaskSubmissionModel $submissionModel;
+    private Database $db;
+    private WalletService $walletService;
+    private SettingService $settingService;
+    private \Core\RateLimiter $rateLimiter;
+    private \App\Models\TaskRating $ratingModel;
+    private \App\Models\CustomTaskAnalyticsModel $analyticsModel;
+
+    public function __construct(
+        Logger $logger,
+        Database $db,
+        WalletService $walletService,
+        SettingService $settingService,
+        Ads $taskModel,
+        CustomTaskSubmissionModel $submissionModel,
+        \Core\RateLimiter $rateLimiter,
+        \App\Models\TaskRating $ratingModel,
+        \App\Models\CustomTaskAnalyticsModel $analyticsModel
+    ) {
+        parent::__construct($logger);
+        $this->db = $db;
+        $this->walletService = $walletService;
+        $this->settingService = $settingService;
+        $this->taskModel = $taskModel;
+        $this->submissionModel = $submissionModel;
+        $this->rateLimiter = $rateLimiter;
+        $this->ratingModel = $ratingModel;
+        $this->analyticsModel = $analyticsModel;
+    }
+
+    public function guardCanCreateTask(int $creatorId, array $data): void
+    {
+        // Use centralized validation pipeline instead of inline checks
+        try {
+            $validated = $this->validateWith(
+                $data,
+                [
+                    'title'              => 'required|string|min:5|max:200',
+                    'description'        => 'required|string|min:20|max:2000',
+                    'price_per_task'     => 'required|numeric|min:1000',
+                    'total_quantity'     => 'required|integer|min:1|max:10000',
+                    'currency'           => 'required|in:IRT,USDT',
+                    'task_type'          => 'required|in:signup,install,review,vote,follow,join,custom',
+                    'proof_type'         => 'required|in:screenshot,text,video,code,file',
+                    'deadline_hours'     => 'required|integer|min:1|max:168',
+                    'daily_limit_per_user' => 'nullable|integer|min:1|max:50',
+                    'device_restriction' => 'nullable|in:all,mobile,desktop',
+                    'link'               => 'nullable|url',
+                    'idempotency_key'    => 'required|string|min:10|max:128',
+                ],
+                null, // No special authorization check needed
+                [
+                    'creator_id' => [
+                        'callback' => fn() => $creatorId > 0,
+                        'message' => 'کاربر سازنده نامعتبر است'
+                    ],
+                    'price_per_task' => [
+                        'callback' => function() use ($data) {
+                            $currency = strtoupper($data['currency'] ?? 'IRT');
+                            $price = (float)($data['price_per_task'] ?? 0);
+                            $minKey = $currency === 'IRT' 
+                                ? 'custom_task_min_price_irt' 
+                                : 'custom_task_min_price_usdt';
+                            $minPrice = (float)$this->settingService->get($minKey, $currency === 'IRT' ? 5000 : 0.5);
+                            return $price >= $minPrice;
+                        },
+                        'message' => 'قیمت پیشنهادی کمتر از حداقل مجاز است'
+                    ],
+                    'budget_available' => [
+                        'callback' => function() use ($creatorId, $data) {
+                            $totalCost = (float)$data['price_per_task'] * (int)$data['total_quantity'];
+                            $userBalance = $this->walletService->getBalance($creatorId, $data['currency'] ?? 'IRT');
+                            return $userBalance >= $totalCost;
+                        },
+                        'message' => 'موجودی کافی برای ایجاد این تسک نیست'
+                    ]
+                ]
+            );
+
+            $this->logger->info('custom_task.guard.create.passed', [
+                'creator_id' => $creatorId,
+                'title' => $validated['title']
+            ]);
+        } catch (BusinessException $e) {
+            throw $e;
+        }
+    }
+
+    public function createTask(int $creatorId, array $data): array
+    {
+        try {
+            $this->guardCanCreateTask($creatorId, $data);
+        } catch (BusinessException $e) {
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+
+        if (!$this->rateLimiter->attempt('custom_task:create:' . $creatorId, 5, 60)) {
+            $wait = ceil($this->rateLimiter->availableIn('custom_task:create:' . $creatorId) / 60);
+            return ['success' => false, 'message' => "تعداد درخواست‌های ساخت تسک شما بیش از حد مجاز است. لطفاً {$wait} دقیقه دیگر تلاش کنید."];
+        }
+
+        if (!$this->settingService->get('custom_task_enabled', 1)) {
+            return ['success' => false, 'message' => 'سیستم وظایف سفارشی غیرفعال است.'];
+        }
+
+        $currency = $data['currency'] ?? 'irt';
+        $pricePerTask = (float) ($data['price_per_task'] ?? 0);
+        $quantity = (int) ($data['total_quantity'] ?? 1);
+
+        $minPrice = $currency === 'usdt'
+            ? (float) $this->settingService->get('custom_task_min_price_usdt', 0.50)
+            : (float) $this->settingService->get('custom_task_min_price_irt', 5000);
+
+        if ($pricePerTask < $minPrice) {
+            $label = $currency === 'usdt' 
+                ? number_format($minPrice, 2) . ' USDT' 
+                : number_format($minPrice) . ' تومان';
+            return ['success' => false, 'message' => "حداقل قیمت هر تسک {$label} است."];
+        }
+
+        $feePercent = (float) $this->settingService->get('custom_task_site_fee_percent', 10);
+        $totalBudget = $pricePerTask * $quantity;
+        $feeAmount = round($totalBudget * ($feePercent / 100), 2);
+        $totalWithFee = $totalBudget + $feeAmount;
+
+        try {
+            $this->db->beginTransaction();
+
+            $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$creatorId])->fetch();
+
+            $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('task_budget_allocation', [
+                'creator_id' => $creatorId,
+                'title' => $data['title'] ?? 'untitled',
+                'amount' => $totalWithFee,
+                'currency' => $currency
+            ]);
+            
+            $txId = $this->walletService->withdraw(
+                $creatorId,
+                $totalWithFee,
+                $currency,
+                [
+                    'type' => 'task_budget',
+                    'description' => "بودجه وظیفه: {$data['title']}",
+                    'idempotency_key' => $idempotencyKey,
+                ]
+            );
+
+            if (!$txId) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'موجودی کافی نیست.'];
+            }
+
+            $status = $this->settingService->get('custom_task_auto_approve', 0) ? 'active' : 'pending_review';
+
+            $task = $this->taskModel->create([
+                'type' => 'custom_task',
+                'user_id' => $creatorId,
+                'title' => $data['title'],
+                'description' => $data['description'],
+                'link' => $data['link'] ?? null,
+                'task_type' => $data['task_type'] ?? 'custom',
+                'proof_type' => $data['proof_type'] ?? 'screenshot',
+                'proof_description' => $data['proof_description'] ?? null,
+                'sample_image' => $data['sample_image'] ?? null,
+                'price_per_task' => $pricePerTask,
+                'currency' => $currency,
+                'total_budget' => $totalBudget,
+                'remaining_budget' => $totalBudget,
+                'total_count' => $quantity,
+                'remaining_count' => $quantity,
+                'deadline_hours' => $data['deadline_hours'] ?? 24,
+                'country_restriction' => $data['country_restriction'] ?? null,
+                'device_restriction' => $data['device_restriction'] ?? 'all',
+                'os_restriction' => $data['os_restriction'] ?? null,
+                'status' => ($status === 'pending_review') ? 'pending' : $status,
+                'site_commission_percent' => $feePercent,
+                'restrictions' => json_encode([
+                    'daily_limit_per_user' => $data['daily_limit_per_user'] ?? 1,
+                    'site_fee_amount' => $feeAmount,
+                ]),
+            ]);
+
+            if (!$task) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در ایجاد وظیفه.'];
+            }
+
+            $this->db->commit();
+
+            $this->logger->info('Custom task created', [
+                'task_id' => $task->id,
+                'creator_id' => $creatorId,
+                'budget' => $totalWithFee,
+            ]);
+
+            try {
+                \Core\EventDispatcher::getInstance()->dispatch('custom_task.created', [
+                    'task_id' => $task->id,
+                    'module' => 'custom_task',
+                    'type' => 'custom_task'
+                ]);
+            } catch (\Throwable $evtErr) {
+                $this->logger->warning('custom_task.create.event_failed', [
+                    'task_id' => $task->id,
+                    'error' => $evtErr->getMessage()
+                ]);
+            }
+
+            return [
+                'success' => true,
+                'message' => 'وظیفه با موفقیت ثبت شد.',
+                'task' => $task,
+            ];
+
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            $this->logger->error('task.create.failed', [
+                'channel' => 'task',
+                'error' => $e->getMessage(),
+            ]);
+            return ['success' => false, 'message' => 'خطا در ثبت وظیفه: ' . $e->getMessage()];
+        }
+    }
+
+    public function find(int $id): ?object
+    {
+        return $this->taskModel->find($id);
+    }
+
+    public function getAvailableTasks(int $workerId, array $filters, int $limit, int $offset): array
+    {
+        return $this->taskModel->getAvailableCustomTasks($workerId, $filters, $limit, $offset);
+    }
+
+    public function getMyTasks(int $creatorId, ?string $status, int $limit, int $offset): array
+    {
+        return $this->taskModel->getByAdvertiser($creatorId, $limit, $offset, 'custom_task', $status);
+    }
+
+    public function getMySubmissions(int $workerId, ?string $status, int $limit, int $offset): array
+    {
+        return $this->submissionModel->submission_getByWorker($workerId, $status, $limit, $offset);
+    }
+
+    public function toggleFavorite(int $taskId, int $userId): array
+    {
+        try {
+            $isCurrentlyFavorite = $this->taskModel->isTaskFavorited($taskId, $userId);
+
+            $this->db->beginTransaction();
+
+            if ($isCurrentlyFavorite) {
+                $success = $this->taskModel->removeFromFavorites($taskId, $userId);
+                $message = 'از علاقه‌مندی‌ها حذف شد.';
+                $isFavorite = false;
+            } else {
+                $success = $this->taskModel->addToFavorites($taskId, $userId);
+                $message = 'به علاقه‌مندی‌ها اضافه شد.';
+                $isFavorite = true;
+            }
+
+            if ($success) {
+                $this->db->commit();
+                return [
+                    'success' => true,
+                    'message' => $message,
+                    'is_favorite' => $isFavorite
+                ];
+            } else {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'خطا در عملیات.'];
+            }
+
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            return ['success' => false, 'message' => 'خطا در عملیات.'];
+        }
+    }
+
+    public function quickSearchAds(string $term, ?int $userId = null, int $limit = 5): array
+    {
+        $query = $this->taskModel->query();
+
+        if ($userId !== null) {
+            $query->select('id', 'title', 'platform', 'task_type', 'status', 'created_at')
+                  ->where('user_id', '=', $userId);
+        } else {
+            $query->select('ads.id', 'ads.title', 'ads.platform', 'ads.task_type', 'ads.status', 'ads.created_at', 'u.full_name', 'u.email')
+                  ->leftJoin('users as u', 'u.id', '=', 'ads.user_id');
+        }
+
+        $query->whereNull('ads.deleted_at');
+
+        $this->taskModel->applySearch($query, $term);
+
+        if (!empty($term)) {
+            $escaped = addcslashes(trim($term), '%_');
+            $like = "%{$escaped}%";
+            $query->where(function($sub) use ($like, $userId) {
+                $sub->orWhere('ads.title', 'LIKE', $like);
+                if ($userId === null) {
+                    $sub->orWhere('u.email', 'LIKE', $like);
+                }
+            });
+        }
+
+        return $query->orderBy('ads.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
+
+    public function quickSearchSubmissions(string $term, ?int $userId = null, int $limit = 5): array
+    {
+        $query = $this->db->table('custom_task_submissions as s')
+            ->join('ads as a', 'a.id', '=', 's.task_id');
+
+        if ($userId !== null) {
+            $query->select('s.id', 's.status', 's.reward_amount', 's.created_at', 'a.title as ad_title')
+                  ->where('s.worker_id', '=', $userId);
+        } else {
+            $query->select('s.*', 'a.title as ad_title');
+        }
+
+        if (!empty($term)) {
+            $escaped = addcslashes(trim($term), '%_');
+            $like = "%{$escaped}%";
+            $query->where('a.title', 'LIKE', $like);
+        }
+
+        return $query->orderBy('s.created_at', 'DESC')
+                     ->limit($limit)
+                     ->get() ?? [];
+    }
+
+    public function searchAdTasks(string $q, array $filters, int $limit, int $offset): array
+    {
+        $query = $this->db->table('ads as a')
+            ->select('a.*', 'u.full_name', 'u.email')
+            ->leftJoin('users as u', 'u.id', '=', 'a.user_id')
+            ->where('a.type', '=', 'custom_task')
+            ->whereNull('a.deleted_at');
+
+        if (!empty($q)) {
+            $like = '%' . $this->sanitizeSearch($q) . '%';
+            $query->where(function($sub) use ($like) {
+                $sub->where('a.title', 'LIKE', $like)->orWhere('a.description', 'LIKE', $like);
+            });
+        }
+
+        if (!empty($filters['status'])) {
+            $query->where('a.status', '=', e($filters['status'], ENT_QUOTES, 'UTF-8'));
+        }
+        if (!empty($filters['task_type'])) {
+            $query->where('a.task_type', '=', e($filters['task_type'], ENT_QUOTES, 'UTF-8'));
+        }
+
+        return [
+            'total' => $query->count(),
+            'items' => (clone $query)->orderBy('a.created_at', 'DESC')
+                                     ->limit($limit)->offset($offset)->get() ?? []
+        ];
+    }
+
+    public function getSubmissionsByTask(int $taskId, ?string $status = null, int $limit = 30, int $offset = 0): array
+    {
+        return $this->submissionModel->submission_getByTask($taskId, $status, $limit, $offset);
+    }
+
+    public function getTaskAnalytics(int $taskId, int $days = 30): array
+    {
+        $analytics = $this->analyticsModel->getTaskAnalytics($taskId);
+        $ratings = $this->ratingModel->getTaskRatings($taskId, 100, 0);
+
+        return [
+            'overall' => $analytics['overall'],
+            'daily' => $analytics['daily'],
+            'ratings' => $ratings,
+        ];
+    }
+}

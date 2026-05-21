@@ -62,6 +62,15 @@ class PolicyService extends \App\Services\BaseService
         return $this->hasPermission($user, $action);
     }
 
+    private function cacheSet(string $key, bool $value): void
+    {
+        if (count($this->permissionCache) >= 1000) {
+            // Clear entire cache to prevent memory creep in long-lived processes
+            $this->permissionCache = [];
+        }
+        $this->permissionCache[$key] = $value;
+    }
+
     private function hasPermission(User $user, string $action): bool
     {
         $cacheKey = "user_{$user->id}_action_{$action}";
@@ -72,7 +81,8 @@ class PolicyService extends \App\Services\BaseService
         // Architectural Decoupling: Delegating lookups directly into model logic.
         $result = $this->userModel->hasPermission($user->id, $action);
 
-        return $this->permissionCache[$cacheKey] = $result;
+        $this->cacheSet($cacheKey, $result);
+        return $result;
     }
 
     public function isAdmin(User $user): bool
@@ -111,7 +121,8 @@ class PolicyService extends \App\Services\BaseService
 
         $result = $this->userModel->hasPermission($userId, $action);
 
-        return $this->permissionCache[$cacheKey] = $result;
+        $this->cacheSet($cacheKey, $result);
+        return $result;
     }
 
     public function getPermissions(User $user): array
@@ -154,7 +165,7 @@ class PolicyService extends \App\Services\BaseService
     {
         $this->permissionCache = array_filter(
             $this->permissionCache,
-            fn($key) => !str_starts_with($key, "user_{$userId}_"),
+            fn($key) => !str_starts_with($key, "user_{$userId}_") && !str_starts_with($key, "uid_{$userId}_"),
             ARRAY_FILTER_USE_KEY
         );
     }

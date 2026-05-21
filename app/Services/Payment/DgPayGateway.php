@@ -7,6 +7,7 @@ namespace App\Services\Payment;
 use App\Models\PaymentGateway;
 use App\Contracts\LoggerInterface;
 use App\Exceptions\PaymentGatewayConnectionException;
+use Core\CircuitBreaker;
 use App\Exceptions\PaymentVerificationException;
 
 /**
@@ -30,9 +31,10 @@ class DgPayGateway extends BasePaymentGateway
     public function __construct(
         \App\Models\PaymentGateway   $paymentGatewayModel,
         LoggerInterface              $logger,
-        \App\Services\SettingService $settingService
+        \App\Services\SettingService $settingService,
+        ?CircuitBreaker              $circuitBreaker = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, $circuitBreaker);
         $this->paymentGatewayModel = $paymentGatewayModel;
         $this->settingService      = $settingService;
         $this->config = $paymentGatewayModel->getActiveGateway('dgpay');
@@ -83,8 +85,8 @@ class DgPayGateway extends BasePaymentGateway
         ];
 
         try {
-            // 🔄 Execute with retry and exponential backoff
-            $response = $this->executeWithRetry($url, $data, 'POST', $headers);
+            // 🔄 Execute with Circuit Breaker + retry and exponential backoff
+            $response = $this->executeWithCircuitBreaker($url, $data, 'POST', $headers);
 
             // DgPay returns 200 on success
             if (!$response['success'] || $response['http_code'] !== 200) {
@@ -171,8 +173,8 @@ class DgPayGateway extends BasePaymentGateway
         ];
 
         try {
-            // 🔄 Execute with retry and exponential backoff
-            $response = $this->executeWithRetry($url, $data, 'POST', $headers);
+            // 🔄 Execute with Circuit Breaker + retry and exponential backoff
+            $response = $this->executeWithCircuitBreaker($url, $data, 'POST', $headers);
 
             // DgPay returns 200 on success
             if (!$response['success'] || $response['http_code'] !== 200) {

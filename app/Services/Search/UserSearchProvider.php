@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\Search;
 
-
 /**
  * 🚀 UPG-01: UserSearchProvider - تأمین‌کننده اختصاصی جستجوی عمومی سمت کاربران
  */
@@ -39,10 +38,13 @@ class UserSearchProvider extends BaseSearchProvider
         }
 
         $results = [
-            'transactions' => $this->searchUserTransactions($q, $userId, $limit),
-            'tickets' => $this->searchUserTickets($q, $userId, $limit),
-            'ads' => $this->searchUserAds($q, $userId, $limit),
-            'tasks' => $this->searchUserTasks($q, $userId, $limit, $offset),
+            'transactions'    => $this->searchUserTransactions($q, $userId, $limit),
+            'tickets'         => $this->searchUserTickets($q, $userId, $limit),
+            'ads'             => $this->searchUserAds($q, $userId, $limit),
+            'tasks'           => $this->searchUserTasks($q, $userId, $limit, $offset),
+            'vitrines'        => $this->searchUserVitrines($q, $userId, $limit, $offset),
+            'contents'        => $this->searchUserContents($q, $userId, $limit, $offset),
+            'direct_messages' => $this->searchUserDirectMessages($q, $userId, $limit, $offset),
         ];
 
         $total = array_sum(array_map('count', $results));
@@ -51,6 +53,20 @@ class UserSearchProvider extends BaseSearchProvider
         $this->cacheSetSeconds($cacheKey, $results, self::CACHE_TTL_SECONDS, $tags);
 
         return $results;
+    }
+
+    private function emptyUserResult(): array
+    {
+        return [
+            'transactions'    => [],
+            'tickets'         => [],
+            'ads'             => [],
+            'tasks'           => [],
+            'vitrines'        => [],
+            'contents'        => [],
+            'direct_messages' => [],
+            'total'           => 0,
+        ];
     }
 
     // Internal delegators
@@ -73,5 +89,20 @@ class UserSearchProvider extends BaseSearchProvider
     private function searchUserTasks(string $q, int $userId, int $limit, int $offset): array
     {
         return $this->gateway->searchTasks($q, $userId, $limit, $offset);
+    }
+
+    private function searchUserVitrines(string $q, int $userId, int $limit, int $offset): array
+    {
+        return $this->gateway->searchVitrines($q, $userId, $limit, $offset);
+    }
+
+    private function searchUserContents(string $q, int $userId, int $limit, int $offset): array
+    {
+        return $this->gateway->searchContents($q, $userId, $limit, $offset);
+    }
+
+    private function searchUserDirectMessages(string $q, int $userId, int $limit, int $offset): array
+    {
+        return $this->gateway->searchDirectMessages($q, $userId, $limit, $offset);
     }
 }

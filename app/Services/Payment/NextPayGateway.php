@@ -7,6 +7,7 @@ namespace App\Services\Payment;
 use App\Models\PaymentGateway;
 use App\Contracts\LoggerInterface;
 use App\Exceptions\PaymentGatewayConnectionException;
+use Core\CircuitBreaker;
 use App\Exceptions\PaymentVerificationException;
 
 /**
@@ -30,9 +31,10 @@ class NextPayGateway extends BasePaymentGateway
     public function __construct(
         \App\Models\PaymentGateway   $paymentGatewayModel,
         LoggerInterface              $logger,
-        \App\Services\SettingService $settingService
+        \App\Services\SettingService $settingService,
+        ?CircuitBreaker              $circuitBreaker = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, $circuitBreaker);
         $this->paymentGatewayModel = $paymentGatewayModel;
         $this->settingService      = $settingService;
         $this->config = $paymentGatewayModel->getActiveGateway('nextpay');
@@ -79,8 +81,8 @@ class NextPayGateway extends BasePaymentGateway
         $url = 'https://nextpay.org/nx/gateway/token';
 
         try {
-            // 🔄 Execute with retry and exponential backoff (Using explicitly mapped 'form' payload type)
-            $response = $this->executeWithRetry($url, $data, 'POST', [], 'form');
+            // 🔄 Execute with Circuit Breaker + retry and exponential backoff (Using explicitly mapped 'form' payload type)
+            $response = $this->executeWithCircuitBreaker($url, $data, 'POST', [], 'form');
 
             // NextPay returns 200 on success
             if (!$response['success'] || $response['http_code'] !== 200) {
@@ -164,8 +166,8 @@ class NextPayGateway extends BasePaymentGateway
         $url = 'https://nextpay.org/nx/gateway/verify';
 
         try {
-            // 🔄 Execute with retry and exponential backoff
-            $response = $this->executeWithRetry($url, $data, 'POST', [], 'form');
+            // 🔄 Execute with Circuit Breaker + retry and exponential backoff
+            $response = $this->executeWithCircuitBreaker($url, $data, 'POST', [], 'form');
 
             // NextPay returns 200 on success
             if (!$response['success'] || $response['http_code'] !== 200) {

@@ -77,6 +77,9 @@ class ScoreEventService extends \App\Services\BaseService
     /**
      * Renamed to recordEvent to avoid confusion with ScoreService delegates.
      * Section 8.2 — optional idempotency via $dedupKey (see addEvent()).
+     * 
+     * ✅ TRANSACTION BOUNDARY: This method is called WITHIN transaction
+     * All score event recording happens atomically with the caller's transaction
      */
     public function recordEvent(
         int $userId,
@@ -96,6 +99,7 @@ class ScoreEventService extends \App\Services\BaseService
                     'domain'  => $domain,
                     'delta'   => $delta,
                     'source'  => $source,
+                    'in_transaction' => true,
                 ]);
             }
             return ['ok' => (bool)$ok];

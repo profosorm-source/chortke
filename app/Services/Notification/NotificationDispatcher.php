@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Services\Notification;
 
-use App\Adapters\PushNotificationAdapter;
-use App\Adapters\SmsNotificationAdapter;
-use App\Adapters\FcmNotificationAdapter;
-use App\Adapters\LogNotificationAdapter;
+use App\Adapters\Notification\PushNotificationAdapter;
+use App\Adapters\Notification\SmsNotificationAdapter;
+use App\Adapters\Notification\FcmNotificationAdapter;
+use App\Adapters\Notification\LogNotificationAdapter;
 use App\Contracts\LoggerInterface;
 use Core\Queue;
 use App\Jobs\SendBulkNotificationJob;

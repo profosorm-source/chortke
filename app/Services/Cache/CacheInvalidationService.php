@@ -6,6 +6,7 @@ namespace App\Services\Cache;
 
 use App\Contracts\LoggerInterface;
 use Core\Cache;
+use App\Services\BaseService;
 
 /**
  * Centralized cache invalidation rules.
@@ -49,6 +50,11 @@ class CacheInvalidationService extends BaseService
             "user_profile:{$userId}",
             "user_permissions:{$userId}",
             "user_notifications_count:{$userId}",
+            "user_settings:{$userId}",
+            "user_prefs:{$userId}",
+            "notif_unread:{$userId}",
+            "user_content_stats_{$userId}",
+            "user_revenue_{$userId}",
         ]);
 
         $this->flushTag("search:user:{$userId}");

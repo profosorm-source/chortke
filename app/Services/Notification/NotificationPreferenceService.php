@@ -7,6 +7,7 @@ namespace App\Services\Notification;
 use App\Models\NotificationPreference;
 use App\Contracts\LoggerInterface;
 use Core\Cache;
+use App\Services\Cache\CacheInvalidationService;
 
 class NotificationPreferenceService extends \App\Services\BaseService
 {
@@ -15,7 +16,8 @@ class NotificationPreferenceService extends \App\Services\BaseService
     public function __construct(
         private NotificationPreference $prefModel,
         private Cache $cacheService,
-        protected LoggerInterface $logger
+        protected LoggerInterface $logger,
+        private ?CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
     }
@@ -77,7 +79,11 @@ class NotificationPreferenceService extends \App\Services\BaseService
 
         unset($this->cache[$userId]);
         try {
-            $this->cacheService->forget("user_prefs:{$userId}");
+            if ($this->cacheInvalidation) {
+                $this->cacheInvalidation->invalidateUser($userId);
+            } else {
+                $this->cacheService->forget("user_prefs:{$userId}");
+            }
         } catch (\Throwable $e) {
         }
 

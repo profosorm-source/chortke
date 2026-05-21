@@ -21,7 +21,7 @@ abstract class BaseSearchProvider extends \App\Services\BaseService
     protected const CACHE_TTL_MINUTES = 5;
     protected const DEFAULT_LIMIT = 20;
     protected const MAX_LIMIT = 100;
-    protected const MODULES = ['social_task', 'influencer', 'vitrine'];
+    protected const MODULES = ['social_task', 'influencer', 'vitrine', 'custom_task', 'investment', 'prediction', 'lottery', 'content', 'coupon', 'ticket', 'seo_ad', 'direct_message'];
 
     public function __construct(
         AdvancedSearch $searchModel,
@@ -52,9 +52,23 @@ abstract class BaseSearchProvider extends \App\Services\BaseService
 
     protected function cacheGet(string $key, array $tags = []): mixed
     {
-        return empty($tags)
-            ? $this->cache->get($key)
-            : $this->cache->tags($tags)->get($key);
+        if (empty($tags)) {
+            return $this->cache->get($key);
+        }
+
+        try {
+            if ($this->hasTagSupport()) {
+                return $this->cache->tags($tags)->get($key);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('search.cache.tags_get_failed', [
+                'key' => $key,
+                'tags' => $tags,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $this->cache->get($key);
     }
 
     protected function cacheSetSeconds(string $key, mixed $value, int $seconds, array $tags = []): bool
@@ -63,7 +77,24 @@ abstract class BaseSearchProvider extends \App\Services\BaseService
             return $this->cache->setSeconds($key, $value, $seconds);
         }
 
-        return $this->cache->tags($tags)->put($key, $value, max(1, (int) ceil($seconds / 60)));
+        try {
+            if ($this->hasTagSupport()) {
+                return $this->cache->tags($tags)->put($key, $value, max(1, (int) ceil($seconds / 60)));
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('search.cache.tags_set_failed', [
+                'key' => $key,
+                'tags' => $tags,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $this->cache->setSeconds($key, $value, $seconds);
+    }
+
+    protected function hasTagSupport(): bool
+    {
+        return method_exists($this->cache, 'tags') && $this->cache->driver() === 'redis';
     }
 
     protected function searchTags(string ...$tags): array

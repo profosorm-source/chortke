@@ -8,6 +8,7 @@ use App\Models\PaymentGateway;
 use App\Contracts\LoggerInterface;
 use App\Exceptions\PaymentGatewayConnectionException;
 use App\Exceptions\PaymentVerificationException;
+use Core\CircuitBreaker;
 
 /**
  * IDPayGateway - درگاه آیدی‌پی
@@ -30,9 +31,10 @@ class IDPayGateway extends BasePaymentGateway
     public function __construct(
         \App\Models\PaymentGateway   $paymentGatewayModel,
         LoggerInterface              $logger,
-        \App\Services\SettingService $settingService
+        \App\Services\SettingService $settingService,
+        ?CircuitBreaker              $circuitBreaker = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, $circuitBreaker);
         $this->paymentGatewayModel = $paymentGatewayModel;
         $this->settingService      = $settingService;
         $this->config = $paymentGatewayModel->getActiveGateway('idpay');
@@ -87,8 +89,8 @@ class IDPayGateway extends BasePaymentGateway
         ];
 
         try {
-            // 🔄 Execute with retry and exponential backoff
-            $response = $this->executeWithRetry($url, $data, 'POST', $headers);
+            // 🔄 Execute with Circuit Breaker + retry and exponential backoff
+            $response = $this->executeWithCircuitBreaker($url, $data, 'POST', $headers);
 
             // IDPay returns 201 on success
             if (!$response['success'] || $response['http_code'] !== 201) {
@@ -196,8 +198,8 @@ class IDPayGateway extends BasePaymentGateway
         ];
 
         try {
-            // 🔄 Execute with retry and exponential backoff
-            $response = $this->executeWithRetry($url, $data, 'POST', $headers);
+            // 🔄 Execute with Circuit Breaker + retry and exponential backoff
+            $response = $this->executeWithCircuitBreaker($url, $data, 'POST', $headers);
 
             // IDPay returns 200 on success
             if (!$response['success'] || $response['http_code'] !== 200) {

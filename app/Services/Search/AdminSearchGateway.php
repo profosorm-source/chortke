@@ -218,17 +218,64 @@ final class AdminSearchGateway
 
         $this->applyAllowedFilters($table, $alias, $filters, $allowedFilters, $where, $params);
 
+        $relevanceSelect = '';
+        $qClean = trim(mb_substr($q, 0, 100));
+        
+        if ($qClean !== '') {
+            $scoreParts = [];
+            $exactKey = 'rel_exact_' . count($params);
+            $startKey = 'rel_start_' . count($params);
+            $anyKey   = 'rel_any_'   . count($params);
+            
+            $params[$exactKey] = $qClean;
+            $params[$startKey] = $qClean . '%';
+            $params[$anyKey]   = '%' . $qClean . '%';
+            
+            foreach ($columns as $col) {
+                if ($this->hasColumn($table, $col)) {
+                    $qualifiedCol = $this->qualified($alias, $col);
+                    $scoreParts[] = "(CASE 
+                        WHEN {$qualifiedCol} = :{$exactKey} THEN 10 
+                        WHEN {$qualifiedCol} LIKE :{$startKey} THEN 5 
+                        WHEN {$qualifiedCol} LIKE :{$anyKey} THEN 2 
+                        ELSE 0 
+                    END)";
+                }
+            }
+            
+            if ($joins !== '' && $this->tableExists('users')) {
+                foreach (['email', 'full_name', 'mobile'] as $userCol) {
+                    if ($this->hasColumn('users', $userCol)) {
+                        $qualifiedCol = $this->qualified('u', $userCol);
+                        $scoreParts[] = "(CASE 
+                            WHEN {$qualifiedCol} = :{$exactKey} THEN 10 
+                            WHEN {$qualifiedCol} LIKE :{$startKey} THEN 5 
+                            WHEN {$qualifiedCol} LIKE :{$anyKey} THEN 2 
+                            ELSE 0 
+                        END)";
+                    }
+                }
+            }
+            
+            if (!empty($scoreParts)) {
+                $relevanceSelect = ', (' . implode(' + ', $scoreParts) . ') AS relevance_score';
+            }
+        }
+
         $select = "{$alias}.*";
         if ($joins !== '') {
             $select .= $this->tableExists('users') ? ", u.full_name as user_name, u.email as user_email" : '';
         }
+        $select .= $relevanceSelect;
 
         $whereSql = implode(' AND ', $where);
-        $orderBy = $this->safeOrderBy($orderBy, $alias);
+        
+        $baseOrderBy = $this->safeOrderBy($orderBy, $alias);
+        $finalOrderBy = ($relevanceSelect !== '') ? "relevance_score DESC, {$baseOrderBy}" : $baseOrderBy;
 
         try {
             $total = (int) $this->db->fetchColumn("SELECT COUNT(*) FROM {$table} {$alias} {$joins} WHERE {$whereSql}", $params);
-            $items = $this->db->fetchAll("SELECT {$select} FROM {$table} {$alias} {$joins} WHERE {$whereSql} ORDER BY {$orderBy} LIMIT {$limit} OFFSET {$offset}", $params);
+            $items = $this->db->fetchAll("SELECT {$select} FROM {$table} {$alias} {$joins} WHERE {$whereSql} ORDER BY {$finalOrderBy} LIMIT {$limit} OFFSET {$offset}", $params);
             return ['items' => $items, 'total' => $total, 'facets' => []];
         } catch (\Throwable $e) {
             $this->logger->warning('search.read_query_failed', [
@@ -236,6 +283,32 @@ final class AdminSearchGateway
                 'error' => $e->getMessage(),
             ]);
             return ['items' => [], 'total' => 0, 'facets' => []];
+        }
+    }
+
+    private static array $ftsCache = [];
+
+    private function getFullTextGroups(string $table): array
+    {
+        if (isset(self::$ftsCache[$table])) {
+            return self::$ftsCache[$table];
+        }
+        
+        try {
+            $rows = $this->db->fetchAll("SHOW INDEX FROM `{$table}` WHERE Index_type = 'FULLTEXT'");
+            $groups = [];
+            foreach ($rows as $row) {
+                $keyName = $row->Key_name ?? '';
+                $colName = $row->Column_name ?? '';
+                if ($keyName !== '' && $colName !== '') {
+                    $groups[$keyName][] = $colName;
+                }
+            }
+            self::$ftsCache[$table] = $groups;
+            return $groups;
+        } catch (\Throwable) {
+            self::$ftsCache[$table] = [];
+            return [];
         }
     }
 
@@ -248,7 +321,30 @@ final class AdminSearchGateway
 
         $parts = [];
         $columns = array_values(array_unique($columns));
-        foreach ($columns as $column) {
+        
+        // 🚀 FULLTEXT Index optimization path (prevents Full Table Scans on 100K+ rows)
+        $ftsGroups = $this->getFullTextGroups($table);
+        $usedFtsColumns = [];
+
+        if (!empty($ftsGroups)) {
+            foreach ($ftsGroups as $indexName => $ftsCols) {
+                $intersect = array_intersect($columns, $ftsCols);
+                if (!empty($intersect)) {
+                    $key = 'fts_' . count($params);
+                    $qualifiedCols = array_map(fn($col) => $this->qualified($alias, $col), $ftsCols);
+                    
+                    // MATCH (col1, col2) AGAINST (:q IN BOOLEAN MODE)
+                    $parts[] = "MATCH(" . implode(', ', $qualifiedCols) . ") AGAINST(:{$key} IN BOOLEAN MODE)";
+                    $params[$key] = $q . '*';
+                    
+                    $usedFtsColumns = array_merge($usedFtsColumns, $ftsCols);
+                }
+            }
+        }
+
+        // Fallback LIKE prefix + substring scans for columns not indexed with FULLTEXT
+        $remainingColumns = array_diff($columns, $usedFtsColumns);
+        foreach ($remainingColumns as $column) {
             if (!$this->hasColumn($table, $column)) {
                 continue;
             }

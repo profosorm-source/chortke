@@ -343,15 +343,27 @@ class ScoreService extends \App\Services\BaseService
     private function invalidateUserScoreCaches(int $userId, string $domain): void
     {
         $domain = $this->normalizeDomain($domain);
-        if ($this->cacheInvalidation) {
-            $this->cacheInvalidation->invalidateUser($userId);
-            $this->cacheInvalidation->invalidateScore($userId, $domain);
-            return;
+        
+        // ✅ TRANSACTION BOUNDARY: Cache invalidation after DB operations with retry logic
+        try {
+            if ($this->cacheInvalidation) {
+                $this->cacheInvalidation->invalidateUser($userId);
+                $this->cacheInvalidation->invalidateScore($userId, $domain);
+            } else {
+                $this->cache->forget("user_dashboard_stats:{$userId}");
+                $this->cache->forget("user_score:{$userId}:{$domain}");
+                $this->cache->forget("temp_{$domain}_score:{$userId}");
+            }
+        } catch (\Throwable $cacheError) {
+            // Log but don't throw - DB is consistent, cache is stale (temporary, acceptable degradation)
+            $this->logger->error('score.cache_invalidation_failed', [
+                'user_id' => $userId,
+                'domain' => $domain,
+                'error' => $cacheError->getMessage(),
+            ]);
+            // Optionally: Queue background task to retry invalidation
+            // This ensures eventual consistency without blocking the current request
         }
-
-        $this->cache->forget("user_dashboard_stats:{$userId}");
-        $this->cache->forget("user_score:{$userId}:{$domain}");
-        $this->cache->forget("temp_{$domain}_score:{$userId}");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

@@ -8,6 +8,7 @@ use App\Models\PaymentGateway;
 use App\Contracts\LoggerInterface;
 use App\Exceptions\PaymentGatewayConnectionException;
 use App\Exceptions\PaymentVerificationException;
+use Core\CircuitBreaker;
 
 /**
  * ZarinPalGateway - درگاه زرین‌پال
@@ -28,9 +29,10 @@ class ZarinPalGateway extends BasePaymentGateway
     public function __construct(
         \App\Models\PaymentGateway   $paymentGatewayModel,
         LoggerInterface              $logger,
-        \App\Services\SettingService $settingService
+        \App\Services\SettingService $settingService,
+        ?CircuitBreaker              $circuitBreaker = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, $circuitBreaker);
         $this->paymentGatewayModel = $paymentGatewayModel;
         $this->settingService      = $settingService;
         $this->config = $paymentGatewayModel->getActiveGateway('zarinpal');
@@ -80,8 +82,8 @@ class ZarinPalGateway extends BasePaymentGateway
             : config('payment.zarinpal.api_url') . '/request.json';
 
         try {
-            // 🔄 Execute with retry and exponential backoff
-            $response = $this->executeWithRetry($url, $data, 'POST');
+            // 🔄 Execute with Circuit Breaker + retry and exponential backoff
+            $response = $this->executeWithCircuitBreaker($url, $data, 'POST');
 
             if (!$response['success'] || $response['http_code'] !== 200) {
                 return [
@@ -169,8 +171,8 @@ class ZarinPalGateway extends BasePaymentGateway
             : config('payment.zarinpal.api_url') . '/verify.json';
 
         try {
-            // 🔄 Execute with retry and exponential backoff
-            $response = $this->executeWithRetry($url, $data, 'POST');
+            // 🔄 Execute with Circuit Breaker + retry and exponential backoff
+            $response = $this->executeWithCircuitBreaker($url, $data, 'POST');
 
             if (!$response['success'] || $response['http_code'] !== 200) {
                 throw new PaymentVerificationException(

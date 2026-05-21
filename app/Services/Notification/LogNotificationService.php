@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Notification;
 
-use App\Adapters\LogNotificationAdapter;
+use App\Adapters\Notification\LogNotificationAdapter;
 use App\Contracts\LoggerInterface;
 
 class LogNotificationService extends \App\Services\BaseService

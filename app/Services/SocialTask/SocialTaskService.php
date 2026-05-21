@@ -116,15 +116,18 @@ class SocialTaskService extends \App\Services\BaseService
             self::EXCLUDED_PLATFORMS_FROM_SOCIAL
         );
 
+        // ✅ FIX N+1 QUERY: Fetch trust score once, not per task
+        $userTrustScore = $this->trust->get($userId);
+        
         foreach ($tasks as &$task) {
             $task->display_reward = $this->antiFraud->adjustedReward($userId, (float)$task->price_per_task);
-            $task->trust_display = $this->trust->get($userId);
+            $task->trust_display = $userTrustScore; // Reuse cached value, not N queries
         }
 
         return [
             'tasks' => $tasks,
             'restriction_level' => $restriction['level'],
-            'trust_score' => $this->trust->get($userId),
+            'trust_score' => $userTrustScore, // Use same cached value
         ];
     }
 
