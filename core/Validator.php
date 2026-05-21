@@ -36,15 +36,24 @@ class Validator
             throw new \InvalidArgumentException('Validation rules cannot be empty.');
         }
 
-    foreach ($this->rules as $field => $ruleString) {
-        $fieldRules = \explode('|', (string)$ruleString);
-        $value = $this->data[$field] ?? null;
+        foreach ($this->rules as $field => $ruleString) {
+            $fieldRules = \explode('|', (string)$ruleString);
+            $value = $this->data[$field] ?? null;
 
-        foreach ($fieldRules as $rule) {
-            $this->applyRule($field, $value, $rule);
+            $skipRemaining = false;
+            foreach ($fieldRules as $rule) {
+                if ($rule === 'nullable' && ($value === null || $value === '')) {
+                    $skipRemaining = true;
+                    break;
+                }
+                $this->applyRule($field, $value, $rule);
+            }
+
+            if ($skipRemaining) {
+                continue;
+            }
         }
     }
-}
 
     private function applyRule(string $field, mixed $value, string $rule): void
     {
@@ -151,6 +160,18 @@ class Validator
                 if ($value !== null && $value !== '' && !\in_array($value, [true, false, 1, 0, '1', '0', 'true', 'false'], true)) {
                     $this->addError($field, 'این فیلد باید boolean باشد');
                 }
+                break;
+
+            // ✅ جدید: string
+            case 'string':
+                if ($value !== null && $value !== '' && !\is_string($value)) {
+                    $this->addError($field, 'این فیلد باید متن باشد');
+                }
+                break;
+
+            // ✅ جدید: nullable
+            case 'nullable':
+                // Nullable fields are handled before applying other rules.
                 break;
 
             // ✅ جدید: array
