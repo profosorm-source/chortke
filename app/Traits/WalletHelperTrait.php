@@ -1457,5 +1457,17 @@ trait WalletHelperTrait
         $wallet = $this->walletModel->findByUserId($userId);
         return $wallet ? (bool)($wallet->is_frozen ?? 0) : false;
     }
+
+    private function invalidateWalletCaches(int $userId): void
+    {
+        if ($this->cacheInvalidation) {
+            $this->cacheInvalidation->invalidateWallet($userId);
+            return;
+        }
+
+        $this->cache->forget("wallet_balance:{$userId}");
+        $this->cache->forget("user_dashboard_stats:{$userId}");
+        $this->cache->forget("wallet_transactions_summary:{$userId}");
+    }
 }
 
