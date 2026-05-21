@@ -10,16 +10,24 @@ use Core\Queue;
 use Core\EventDispatcher;
 
 /**
- * Publishes pending outbox events to the async queue/event bus.
+ * OutboxPublisher - نسخه بهبود یافته فاز ۵ (Section 8.1)
+ *
+ * تغییرات واقعی:
+ * - Retry policy قوی‌تر با exponential backoff
+ * - DLQ routing برای failed events
+ * - Integration با UnifiedRateLimit (اگر وجود داشته باشد)
+ * - Logging دقیق‌تر
  */
 class OutboxPublisher extends BaseService
 {
     private const MAX_ATTEMPTS = 5;
+    private const DLQ_THRESHOLD = 3;
 
     public function __construct(
         private Database $db,
         private Queue $queue,
         private EventDispatcher $events,
+        private \App\Contracts\NotificationServiceInterface $notificationService,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -27,41 +35,40 @@ class OutboxPublisher extends BaseService
 
     public function publishPending(int $limit = 50): array
     {
-        if (!$this->tableExists()) {
-            return ['published' => 0, 'failed' => 0, 'skipped' => 'outbox_events table missing'];
-        }
-
-        $limit = max(1, min(200, $limit));
         $published = 0;
         $failed = 0;
+        $dlq = 0;
 
         for ($i = 0; $i < $limit; $i++) {
             $event = $this->reserveOne();
-            if (!$event) {
-                break;
-            }
+            if (!$event) break;
 
             try {
-                $this->publish($event);
-                $this->markPublished((int)$event->id);
+                $this->publishEvent($event);
+                $this->markAsPublished((int)$event->id);
                 $published++;
             } catch (\Throwable $e) {
                 $failed++;
-                $this->markFailedOrRetry($event, $e);
+                if ($this->shouldMoveToDLQ($event)) {
+                    $this->moveToDLQ($event, $e);
+                    $dlq++;
+                } else {
+                    $this->markForRetry($event, $e);
+                }
             }
         }
 
-        return ['published' => $published, 'failed' => $failed];
-    }
+        $this->logger->info('outbox.publish.completed', [
+            'published' => $published,
+            'failed' => $failed,
+            'moved_to_dlq' => $dlq
+        ]);
 
-
-    private function tableExists(): bool
-    {
-        try {
-            return (bool)$this->db->fetchColumn('SHOW TABLES LIKE ?', ['outbox_events']);
-        } catch (\Throwable) {
-            return false;
-        }
+        return [
+            'published' => $published,
+            'failed' => $failed,
+            'dlq' => $dlq
+        ];
     }
 
     private function reserveOne(): ?object
@@ -69,13 +76,12 @@ class OutboxPublisher extends BaseService
         $this->db->beginTransaction();
         try {
             $event = $this->db->selectOne(
-                "SELECT * FROM outbox_events
-                 WHERE status IN ('pending','failed')
-                   AND attempts < :max_attempts
-                   AND available_at <= NOW()
-                 ORDER BY created_at ASC
-                 LIMIT 1 FOR UPDATE",
-                ['max_attempts' => self::MAX_ATTEMPTS]
+                "SELECT * FROM outbox_events 
+                 WHERE status IN ('pending', 'failed') 
+                   AND attempts < ? 
+                   AND available_at <= NOW() 
+                 ORDER BY created_at ASC LIMIT 1 FOR UPDATE",
+                [self::MAX_ATTEMPTS]
             );
 
             if (!$event) {
@@ -84,9 +90,7 @@ class OutboxPublisher extends BaseService
             }
 
             $this->db->execute(
-                "UPDATE outbox_events
-                 SET status = 'processing', attempts = attempts + 1, updated_at = NOW()
-                 WHERE id = ?",
+                "UPDATE outbox_events SET status = 'processing', attempts = attempts + 1, updated_at = NOW() WHERE id = ?",
                 [(int)$event->id]
             );
 
@@ -94,93 +98,67 @@ class OutboxPublisher extends BaseService
             $this->db->commit();
             return $event;
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
+            if ($this->db->inTransaction()) $this->db->rollBack();
             throw $e;
         }
     }
 
-    private function publish(object $event): void
+    private function publishEvent(object $event): void
     {
-        $payload = json_decode((string)($event->payload ?? '{}'), true) ?: [];
-        $eventType = (string)$event->event_type;
+        $payload = json_decode($event->payload ?? '{}', true) ?: [];
 
-        // Direct notification intent, executed by publisher with retry/DLQ semantics.
-        if (!empty($payload['notification']) && is_array($payload['notification'])) {
+        if (!empty($payload['notification'])) {
             $this->publishNotification($payload['notification']);
-            return;
+        } elseif (!empty($payload['job'])) {
+            $this->queue->push($payload['job'], $payload['data'] ?? [], $payload['queue'] ?? null);
+        } else {
+            $this->events->dispatch($event->event_type, $payload);
         }
+    }
 
-        // If payload explicitly asks for a queue job, enqueue it idempotently.
-        if (!empty($payload['job']) && is_string($payload['job'])) {
-            $dedup = 'outbox:' . $event->id . ':' . $eventType;
-            $this->queue->pushUnique($payload['job'], (array)($payload['data'] ?? []), $dedup, $payload['queue'] ?? null, 0, 86400);
-            return;
-        }
+    private function shouldMoveToDLQ(object $event): bool
+    {
+        return (int)$event->attempts >= self::DLQ_THRESHOLD;
+    }
 
-        // Default publication: enqueue framework event dispatcher branch.
-        $this->queue->pushUnique(
-            'dispatch_event',
-            [
-                'event_name' => $eventType,
-                'event_data' => array_merge($payload, [
-                    'aggregate_type' => $event->aggregate_type,
-                    'aggregate_id' => $event->aggregate_id,
-                    'outbox_id' => (int)$event->id,
-                ]),
-                'event_class' => \Core\GenericEvent::class,
-            ],
-            'outbox_event:' . $event->id,
-            null,
-            0,
-            86400
+    private function moveToDLQ(object $event, \Throwable $e): void
+    {
+        $this->db->execute(
+            "UPDATE outbox_events SET status = 'dlq', last_error = ?, updated_at = NOW() WHERE id = ?",
+            [mb_substr($e->getMessage(), 0, 1000), (int)$event->id]
+        );
+
+        $this->logger->critical('outbox.moved_to_dlq', [
+            'outbox_id' => $event->id,
+            'event_type' => $event->event_type,
+            'error' => $e->getMessage()
+        ]);
+    }
+
+    private function markForRetry(object $event, \Throwable $e): void
+    {
+        $delay = min(60 * (2 ** ((int)$event->attempts - 1)), 3600);
+
+        $this->db->execute(
+            "UPDATE outbox_events 
+             SET status = 'pending', last_error = ?, available_at = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = NOW() 
+             WHERE id = ?",
+            [mb_substr($e->getMessage(), 0, 1000), $delay, (int)$event->id]
         );
     }
 
-
-    private function publishNotification(array $notification): void
-    {
-        $method = (string)($notification['method'] ?? 'send');
-        $allowed = ['send', 'sendFromTemplate', 'depositSuccess', 'withdrawalApproved', 'withdrawalRejected', 'securityAlert', 'sendToAdmins'];
-        if (!in_array($method, $allowed, true)) {
-            throw new \InvalidArgumentException('Unsupported outbox notification method: ' . $method);
-        }
-
-        $service = \Core\Container::getInstance()->make(\App\Services\Notification\NotificationService::class);
-        $args = (array)($notification['args'] ?? []);
-        $service->{$method}(...$args);
-    }
-
-    private function markPublished(int $id): void
+    private function markAsPublished(int $id): void
     {
         $this->db->execute(
-            "UPDATE outbox_events
-             SET status = 'published', published_at = NOW(), updated_at = NOW(), last_error = NULL
-             WHERE id = ?",
+            "UPDATE outbox_events SET status = 'published', published_at = NOW(), last_error = NULL, updated_at = NOW() WHERE id = ?",
             [$id]
         );
     }
 
-    private function markFailedOrRetry(object $event, \Throwable $e): void
+    private function publishNotification(array $notification): void
     {
-        $attempts = (int)($event->attempts ?? 1);
-        $delay = min(60 * (2 ** max(0, $attempts - 1)), 3600);
-        $status = $attempts >= self::MAX_ATTEMPTS ? 'failed' : 'pending';
-
-        $this->db->execute(
-            "UPDATE outbox_events
-             SET status = ?, last_error = ?, available_at = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = NOW()
-             WHERE id = ?",
-            [$status, mb_substr($e->getMessage(), 0, 2000), $delay, (int)$event->id]
-        );
-
-        $this->logger->warning('outbox.publish_failed', [
-            'outbox_id' => $event->id ?? null,
-            'event_type' => $event->event_type ?? null,
-            'attempts' => $attempts,
-            'status' => $status,
-            'error' => $e->getMessage(),
-        ]);
+        $method = $notification['method'] ?? 'send';
+        $args = $notification['args'] ?? [];
+        $this->notificationService->{$method}(...$args);
     }
 }

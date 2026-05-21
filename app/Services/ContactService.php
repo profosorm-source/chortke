@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Contracts\LoggerInterface;
 use App\Models\ContactMessage;
+use App\Validators\Requests\ContactMessageRequest;
 
 class ContactService extends \App\Services\BaseService
 {
@@ -77,11 +78,12 @@ class ContactService extends \App\Services\BaseService
             }
         }
 
-        // Validation logic
-        $errors = $this->validate($data);
-        if (!empty($errors)) {
-            return $this->errorResponse('لطفاً تمام فیلدها را به درستی پر کنید.', $errors, 422);
+        $request = new ContactMessageRequest($data);
+        if (!$request->validate()) {
+            return $this->errorResponse('لطفاً تمام فیلدها را به درستی پر کنید.', $request->errors(), 422);
         }
+
+        $data = $request->validated();
 
         try {
             $name = htmlspecialchars(trim((string)$data['name']), ENT_QUOTES, 'UTF-8');
@@ -153,32 +155,6 @@ class ContactService extends \App\Services\BaseService
     /**
      * اعتبارسنجی داده‌ها
      */
-    private function validate(array $data): array
-    {
-        $errors = [];
-
-        if (empty($data['name']) || mb_strlen($data['name']) < 3) {
-            $errors['name'] = 'نام باید حداقل ۳ کاراکتر باشد.';
-        }
-
-        if (empty($data['email']) || !filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
-            $errors['email'] = 'ایمیل معتبر الزامی است.';
-        }
-
-        if (empty($data['subject']) || mb_strlen($data['subject']) < 5) {
-            $errors['subject'] = 'موضوع باید حداقل ۵ کاراکتر باشد.';
-        }
-
-        if (empty($data['message']) || mb_strlen($data['message']) < 10) {
-            $errors['message'] = 'متن پیام باید حداقل ۱۰ کاراکتر باشد.';
-        }
-
-        if (!empty($data['message']) && mb_strlen($data['message']) > 5000) {
-            $errors['message'] = 'متن پیام نمی‌تواند بیش از ۵۰۰۰ کاراکتر باشد.';
-        }
-
-        return $errors;
-    }
 
     private function normalizeContactEmail(string $email): string
     {

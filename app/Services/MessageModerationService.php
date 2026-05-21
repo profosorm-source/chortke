@@ -508,11 +508,7 @@ extends \App\Services\BaseService
     {
         try {
             if (!$this->settingService) {
-                try {
-                    $this->settingService = \Core\Container::getInstance()->make(\App\Services\SettingService::class);
-                } catch (\Throwable $containerEx) {
-                    // Fallback in case container resolution is not bootstrapped in test
-                }
+                return '[خطا در دیکریپت - سرویس تنظیمات موجود نیست]';
             }
             
             $encryptionKey = $this->settingService ? $this->settingService->get('dm_encryption_key') : null;

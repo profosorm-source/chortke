@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\AuditTrail;
 use App\Services\UploadService;
 use App\Services\CurrencyService;
+use App\Validators\Requests\CreateManualDepositRequest;
 
 
 use App\Contracts\LoggerInterface;
@@ -54,50 +55,27 @@ class ManualDepositService extends \App\Services\BaseService
 
     public function create(int $userId, array $data, ?string $receiptPath): array
     {
-        $amount = isset($data['amount']) ? (string)$data['amount'] : '0';
-        if (!is_numeric($amount)) {
+        $request = new CreateManualDepositRequest($data);
+        if (!$request->validate()) {
             if (!empty($receiptPath)) {
                 try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
             }
-            return ['success' => false, 'message' => 'مبلغ نامعتبر است'];
+
+            return [
+                'success' => false,
+                'message' => 'اطلاعات واریز نامعتبر است',
+                'errors' => $request->errors(),
+            ];
         }
 
-        if (bccomp($amount, '10000', 4) < 0) {
-            if (!empty($receiptPath)) {
-                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
-            }
-            return ['success' => false, 'message' => 'حداقل مبلغ ۱۰,۰۰۰ تومان است'];
-        }
-
-        if (bccomp($amount, '100000000', 4) > 0) {
-            if (!empty($receiptPath)) {
-                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
-            }
-            return ['success' => false, 'message' => 'حداکثر مبلغ ۱۰۰,۰۰۰,۰۰۰ تومان است'];
-        }
-
-        $tracking = trim((string)($data['tracking_code'] ?? ''));
-        if (empty($tracking)) {
-            if (!empty($receiptPath)) {
-                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
-            }
-            return ['success' => false, 'message' => 'شماره پیگیری پرداخت الزامی است'];
-        }
-
+        $validated = $request->validated();
+        $amount = (string)$validated['amount'];
+        $tracking = trim((string)$validated['tracking_code']);
+        $dateStr = $validated['deposit_date'];
+        $timeStr = $validated['deposit_time'];
         $receiptHash = null;
         if (!empty($receiptPath) && \file_exists($receiptPath)) {
             $receiptHash = \hash_file('sha256', $receiptPath);
-        }
-
-        $dateStr = $data['deposit_date'] ?? '';
-        $timeStr = $data['deposit_time'] ?? '';
-
-        // Validate time format (HH:MM)
-        if (!preg_match('/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/', $timeStr)) {
-            if (!empty($receiptPath)) {
-                try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
-            }
-            return ['success' => false, 'message' => 'فرمت ساعت واریز نامعتبر است (باید HH:MM باشد)'];
         }
 
         try {
@@ -117,7 +95,7 @@ class ManualDepositService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'تاریخ واریز نامعتبر است'];
         }
 
-        $cardId = (int)($data['card_id'] ?? $data['bank_card_id'] ?? 0);
+        $cardId = (int)($validated['card_id'] ?? $validated['bank_card_id'] ?? 0);
         $card = null;
         if ($cardId > 0) {
             $card = $this->bankCardModel->findByIdAndUser($cardId, $userId);
@@ -216,7 +194,7 @@ class ManualDepositService extends \App\Services\BaseService
                 'bank_name'     => $card ? $card->bank_name : 'نامشخص',
                 'deposit_date'  => $dateStr,
                 'deposit_time'  => $timeStr,
-                'description'   => $data['user_description'] ?? null,
+                'description'   => $validated['user_description'] ?? null,
                 'status'        => 'pending',
             ]);
 

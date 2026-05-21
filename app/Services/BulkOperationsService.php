@@ -193,7 +193,7 @@ class BulkOperationsService extends \App\Services\BaseService
      * @return array
      */
     public function exportToCSV(
-        string $sql,
+        string|array $sqlOrRows,
         array $params = [],
         array $headers = [],
         string $filename = 'export'
@@ -211,8 +211,13 @@ class BulkOperationsService extends \App\Services\BaseService
                 mkdir($dir, 0755, true);
             }
 
-            $stmt = $this->db->query($sql, $params);
-            
+            $rows = null;
+            if (is_array($sqlOrRows)) {
+                $rows = $sqlOrRows;
+            } else {
+                $stmt = $this->db->query($sqlOrRows, $params);
+            }
+
             // ایجاد فایل CSV
             $file = fopen($filepath, 'w');
             
@@ -222,16 +227,31 @@ class BulkOperationsService extends \App\Services\BaseService
             $count = 0;
             $firstRow = true;
 
-            while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
-                if ($firstRow) {
-                    if (empty($headers)) {
-                        $headers = array_keys($row);
+            if ($rows !== null) {
+                foreach ($rows as $row) {
+                    $row = is_object($row) ? (array)$row : (array)$row;
+                    if ($firstRow) {
+                        if (empty($headers)) {
+                            $headers = array_keys($row);
+                        }
+                        fputcsv($file, $headers);
+                        $firstRow = false;
                     }
-                    fputcsv($file, $headers);
-                    $firstRow = false;
+                    fputcsv($file, array_values($row));
+                    $count++;
                 }
-                fputcsv($file, array_values($row));
-                $count++;
+            } else {
+                while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                    if ($firstRow) {
+                        if (empty($headers)) {
+                            $headers = array_keys($row);
+                        }
+                        fputcsv($file, $headers);
+                        $firstRow = false;
+                    }
+                    fputcsv($file, array_values($row));
+                    $count++;
+                }
             }
 
             fclose($file);

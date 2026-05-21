@@ -184,7 +184,7 @@ class SeoService extends \App\Services\BaseService
             // 2. محاسبه امتیاز
             $scores = $this->calculateEngagementScore($engagementData);
 
-            // 🛡️ گیت ضدتقلب مرکزی سئو (شامل Session tracking و Risk Decision)
+            // 🛡️ گیت ضدتقلب مرکزی سئو (شامل Session tracking و Risk Decision و تشخیص هوشمند تقلب)
             $risk = $this->fraudGuard->checkAction($userId, 'task.seo', [
                 'ad_id'           => $ad->id,
                 'execution_id'    => $executionId,
@@ -192,31 +192,24 @@ class SeoService extends \App\Services\BaseService
                 'engagement_data' => $engagementData
             ]);
 
-            if (!$risk['allowed']) {
-                $this->db->rollBack();
+            $seoFraud = $risk['details']['seo_fraud'] ?? null;
+            $isFraud = $seoFraud && !empty($seoFraud['is_fraud']);
+
+            if (empty($risk['allowed']) || $isFraud) {
+                $flags = $seoFraud['flags'] ?? ['blocked_by_security_policy'];
+                $this->executionModel->markAsFraud($executionId, $flags);
+                $this->fraudDetector->addToBlacklist($userId, implode(', ', $flags));
+                $this->db->commit();
+
                 $this->logger->warning('seo_task.blocked_by_fraud_guard', [
                     'user_id'      => $userId,
                     'execution_id' => $executionId,
-                    'reason'       => $risk['reason']
+                    'reason'       => $risk['reason'] ?? 'fraud_detected'
                 ]);
+
                 return [
                     'success'        => false,
-                    'message'        => 'تکمیل تسک به دلایل نظارتی مسدود شد.',
-                    'fraud_detected' => true,
-                ];
-            }
-
-            // 3. تشخیص تقلب
-            $fraudCheck = $this->fraudDetector->detect($userId, $ad->id, $engagementData);
-            
-            if ($fraudCheck['is_fraud']) {
-                $this->executionModel->markAsFraud($executionId, $fraudCheck['flags']);
-                $this->fraudDetector->addToBlacklist($userId, implode(', ', $fraudCheck['flags']));
-                $this->db->commit();
-                $this->logger->warning('seo_task.fraud_detected', ['user_id' => $userId, 'execution_id' => $executionId, 'flags' => $fraudCheck['flags']]);
-                return [
-                    'success' => false,
-                    'message' => 'تعامل شما معتبر تشخیص داده نشد',
+                    'message'        => $isFraud ? 'تعامل شما معتبر تشخیص داده نشد' : 'تکمیل تسک به دلایل نظارتی مسدود شد.',
                     'fraud_detected' => true,
                 ];
             }

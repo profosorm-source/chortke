@@ -8,6 +8,7 @@ use App\Models\DirectMessage;
 use Core\Redis;
 use Core\Database;
 use App\Services\SettingService;
+use App\Validators\Requests\SendDirectMessageRequest;
 
 use App\Contracts\LoggerInterface;
 /**
@@ -61,9 +62,16 @@ class DirectMessageService extends \App\Services\BaseService
         ?bool $isEncrypted = false
     ): array {
         try {
-            // اعتبارسنجی
-            if (empty(trim($message))) {
-                return ['error' => 'پیام نمی‌تواند خالی باشد'];
+            $request = new SendDirectMessageRequest([
+                'sender_id' => $senderId,
+                'recipient_id' => $recipientId,
+                'message' => $message,
+                'attachments' => $attachments,
+                'is_encrypted' => $isEncrypted,
+            ]);
+
+            if (!$request->validate()) {
+                return ['error' => $this->formatValidationErrors($request->errors())];
             }
 
             $maxLength = (int)$this->settingService->get('dm_max_message_length', self::MAX_MESSAGE_LENGTH);

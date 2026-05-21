@@ -38,26 +38,41 @@ class TicketService extends \App\Services\BaseService
     }
     
     /**
+     * Business Guard برای ایجاد تیکت (Single Source of Truth)
+     */
+    public function guardCanCreateTicket(int $userId, array $data): void
+    {
+        // جهت حفظ سازگاری با کدهای قدیمی که شاید پارامترهای جدید را نفرستند، مقادیر پیش‌فرض تعیین می‌کنیم
+        $payload = array_merge([
+            'category' => 'technical',
+            'priority' => 'normal',
+            'idempotency_key' => 'ticket_init_' . $userId . '_' . time(),
+        ], $data);
+
+        $request = new \App\Validators\Requests\CreateTicketRequest($payload);
+        if (!$request->validate()) {
+            $errors = $request->errors();
+            $firstError = is_array($errors) ? (reset($errors) ?: 'اطلاعات وارد شده نامعتبر است') : (string)$errors;
+            throw new \App\Exceptions\BusinessException($firstError);
+        }
+
+        if ($userId <= 0) {
+            throw new \App\Exceptions\BusinessException('شناسه کاربر نامعتبر است');
+        }
+    }
+
+    /**
      * ایجاد تیکت جدید
      */
     public function create(int $userId, array $data): array
     {
-        if (empty($data['subject']) || empty($data['message'])) {
+        try {
+            $this->guardCanCreateTicket($userId, $data);
+        } catch (\App\Exceptions\BusinessException $e) {
             return [
                 'success' => false,
-                'message' => 'موضوع و متن پیام تیکت الزامی می‌باشند.'
+                'message' => $e->getMessage()
             ];
-        }
-
-        // 🛡️ مقابله با سوءاستفاده: ارزیابی طول فیلدهای متنی
-        $subjectLen = mb_strlen((string)$data['subject'], 'UTF-8');
-        $messageLen = mb_strlen((string)$data['message'], 'UTF-8');
-        
-        if ($subjectLen < 5 || $subjectLen > 150) {
-            return ['success' => false, 'message' => 'موضوع تیکت باید بین ۵ تا ۱۵۰ کاراکتر باشد.'];
-        }
-        if ($messageLen < 10 || $messageLen > 5000) {
-            return ['success' => false, 'message' => 'متن پیام تیکت باید بین ۱۰ تا ۵۰۰۰ کاراکتر باشد.'];
         }
         
         // 🛡️ مقابله با سوءاستفاده: ریت لیمیت اتمیک ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم و Race Condition)

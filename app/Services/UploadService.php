@@ -580,7 +580,7 @@ class UploadService extends \App\Services\BaseService
     /**
      * ساخت آرایه خطا
      */
-    private function fail(string $message): array
+    protected function fail(string $message = '', array $errors = [], int $statusCode = 400): array
     {
         return [
             'success'  => false,

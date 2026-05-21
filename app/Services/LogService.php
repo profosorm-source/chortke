@@ -8,9 +8,9 @@ use App\Models\ActivityLog;
 use App\Models\PerformanceLog;
 use App\Models\SecurityLog;
 use App\Models\SystemLog;
+use App\Services\AuditTrail;
 use Core\Database;
 use App\Contracts\LoggerInterface;
-use Core\Container;
 
 /**
  * LogService — مغز سیستم لاگینگ
@@ -24,6 +24,7 @@ class LogService extends BaseService
     private PerformanceLog $performanceLog;
     private \Core\Session $session;
     private \Core\Redis $redis;
+    private ?AuditTrail $auditTrail;
     private string $requestId;
     private array $logBuffer = [];
     private const MAX_BUFFER_SIZE = 100;
@@ -50,7 +51,8 @@ class LogService extends BaseService
         SecurityLog $securityLog,
         PerformanceLog $performanceLog,
         \Core\Session $session,
-        \Core\Redis $redis
+        \Core\Redis $redis,
+        ?AuditTrail $auditTrail = null
     ) {
         // LogService dummy logger to prevent recursion
         parent::__construct(new class implements LoggerInterface {
@@ -72,6 +74,7 @@ class LogService extends BaseService
         $this->performanceLog = $performanceLog;
         $this->session = $session;
         $this->redis = $redis;
+        $this->auditTrail = $auditTrail;
         
         $this->logDir = dirname(__DIR__, 2) . '/storage/logs/';
         $this->requestId = $_SERVER['REQUEST_ID'] ?? bin2hex(random_bytes(16));
@@ -138,13 +141,13 @@ class LogService extends BaseService
 
         $this->addToBuffer('activity', $data);
 
-        // Record to AuditTrail lazily to break circular dependency
-        try {
-            $auditTrail = Container::getInstance()->make(\App\Services\AuditTrail::class);
-            $auditTrail->record($action, $userId, $this->sanitizeContext($context));
-        } catch (\Throwable $e) {
-            // Fail gracefully but log to emergency file to prevent evasion
-            $this->robustFallbackLog('audit_trail_evasion', [['action' => $action, 'user' => $userId]], $e->getMessage());
+        // Record to AuditTrail — injected via constructor to avoid Service Locator anti-pattern
+        if ($this->auditTrail) {
+            try {
+                $this->auditTrail->record($action, $userId, $this->sanitizeContext($context));
+            } catch (\Throwable $e) {
+                $this->robustFallbackLog('audit_trail_evasion', [['action' => $action, 'user' => $userId]], $e->getMessage());
+            }
         }
     }
 
