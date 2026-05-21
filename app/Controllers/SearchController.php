@@ -60,7 +60,11 @@ class SearchController extends BaseController
             return;
         }
 
-        $results = $this->searchService->searchAdmin($query, 5);
+        $page = max(1, (int)$this->request->get('page', 1));
+        $limit = max(1, min(50, (int)$this->request->get('limit', 5)));
+        $offset = ($page - 1) * $limit;
+
+        $results = $this->searchService->searchAdmin($query, $limit, $offset);
 
         // محاسبه تعداد کل نتایج
         $total = array_sum(array_map(fn($v) => is_array($v) ? count($v) : 0, $results));
@@ -107,7 +111,11 @@ class SearchController extends BaseController
             return;
         }
 
-        $results = $this->searchService->searchUser($query, $userId, 5);
+        $page = max(1, (int)$this->request->get('page', 1));
+        $limit = max(1, min(50, (int)$this->request->get('limit', 5)));
+        $offset = ($page - 1) * $limit;
+
+        $results = $this->searchService->searchUser($query, $userId, $limit, $offset);
         $total   = array_sum(array_map(fn($v) => is_array($v) ? count($v) : 0, $results));
         $results['total'] = $total;
 
@@ -155,14 +163,19 @@ class SearchController extends BaseController
             }
         }
 
-        $results = strlen($query) >= 2
-            ? $this->searchService->searchUser($query, $userId, 20)
-            : [];
+        $results = [];
+        $page = max(1, (int)$this->request->get('page', 1));
+        $perPage = 20;
+
+        if (strlen($query) >= 2) {
+            $results = $this->searchService->searchUser($query, $userId, $perPage, ($page - 1) * $perPage);
+        }
 
         view('user.search.results', [
             'title'   => 'نتایج جستجو',
             'query'   => htmlspecialchars($query),
             'results' => $results,
+            'page'    => $page,
         ]);
     }
 }

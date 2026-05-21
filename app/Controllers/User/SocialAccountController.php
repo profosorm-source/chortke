@@ -6,7 +6,7 @@ namespace App\Controllers\User;
 use App\Models\SocialAccount;
 use App\Services\SocialAccountService;
 use App\Services\UploadService;
-use Core\Validator;
+use App\Validators\Requests\SocialAccountRequest;
 use App\Services\ApiRateLimiter;
 use App\Controllers\User\BaseUserController;
 
@@ -70,23 +70,15 @@ class SocialAccountController extends BaseUserController
     {
                 
         $data = $this->request->body();
+        $request = new SocialAccountRequest($data);
 
-        $validator = new Validator($data, [
-            'platform'            => 'required|in:instagram,youtube,telegram,tiktok,twitter',
-            'username'            => 'required|string|min:2|max:255',
-            'profile_url'         => 'required|string|max:500',
-            'follower_count'      => 'required|numeric|min:0',
-            'following_count'     => 'numeric|min:0',
-            'post_count'          => 'required|numeric|min:0',
-            'account_age_months'  => 'required|numeric|min:0',
-        ]);
-
-        if ($validator->fails()) {
-            $this->session->setFlash('error', $validator->errors()[0] ?? 'اطلاعات ورودی نامعتبر است.');
+        if (!$request->validate()) {
+            $errors = $request->errors();
+            $this->session->setFlash('error', $errors[array_key_first($errors)][0] ?? 'اطلاعات ورودی نامعتبر است.');
             return redirect(url('/social-accounts/create'));
         }
 
-        $result = $this->service->register(user_id(), $data);
+        $result = $this->service->register(user_id(), $request->validated());
         ApiRateLimiter::enforce('social_account_add', (int)user_id(), true);
 
         if ($result['success']) {
@@ -126,33 +118,33 @@ class SocialAccountController extends BaseUserController
      */
     public function update()
     {
-                        $id = (int) $this->request->param('id');
-
+        $id = (int) $this->request->param('id');
         $data = $this->request->body();
 
-        $validator = new Validator($data, [
-            'username'            => 'required|string|min:2|max:255',
-            'profile_url'         => 'required|string|max:500',
-            'follower_count'      => 'required|numeric|min:0',
-            'following_count'     => 'numeric|min:0',
-            'post_count'          => 'required|numeric|min:0',
-            'account_age_months'  => 'required|numeric|min:0',
-        ]);
-
-        if ($validator->fails()) {
-            $this->session->setFlash('error', $validator->errors()[0] ?? 'اطلاعات نامعتبر.');
+        $request = new SocialAccountRequest($data);
+        if (!$request->validate()) {
+            $errors = $request->errors();
+            $this->session->setFlash('error', $errors[array_key_first($errors)][0] ?? 'اطلاعات ورودی نامعتبر است.');
             return redirect(url('/social-accounts/' . $id . '/edit'));
         }
 
-        $result = $this->service->updateByUser($id, user_id(), $data);
+        $data = $request->validated();
+        $account = (new SocialAccount())->find($id);
 
-        if ($result['success']) {
-            $this->session->setFlash('success', $result['message']);
+        if (!$account || $account->user_id !== user_id()) {
+            $this->session->setFlash('error', 'حساب مورد نظر پیدا نشد.');
             return redirect(url('/social-accounts'));
         }
 
-        $this->session->setFlash('error', $result['message']);
-        return redirect(url('/social-accounts/' . $id . '/edit'));
+        $success = (new SocialAccount())->update($id, $data);
+
+        if (!$success) {
+            $this->session->setFlash('error', 'بروزرسانی حساب انجام نشد.');
+            return redirect(url('/social-accounts/' . $id . '/edit'));
+        }
+
+        $this->session->setFlash('success', 'اطلاعات حساب با موفقیت ذخیره شد.');
+        return redirect(url('/social-accounts'));
     }
 
     /**

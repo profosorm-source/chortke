@@ -4,6 +4,7 @@ namespace App\Controllers\User;
 
 use App\Models\Ads;
 use App\Models\SeoExecution;
+use App\Services\AdvancedSearchService;
 use App\Services\SeoService;
 use App\Services\Shared\AnalyticsService;
 
@@ -14,18 +15,21 @@ class SeoController extends BaseUserController
 {
     private Ads $adModel;
     private SeoExecution $executionModel;
+    private AdvancedSearchService $searchService;
     private SeoService $seoService;
     private AnalyticsService $analytics;
 
     public function __construct(
         Ads $adModel,
         SeoExecution $executionModel,
+        AdvancedSearchService $searchService,
         SeoService $seoService,
         AnalyticsService $analytics
     ) {
         parent::__construct();
         $this->adModel = $adModel;
         $this->executionModel = $executionModel;
+        $this->searchService = $searchService;
         $this->seoService = $seoService;
         $this->analytics = $analytics;
     }
@@ -35,13 +39,13 @@ class SeoController extends BaseUserController
     {
         $userId = (int)user_id();
         $search = trim($this->request->get('search') ?? '');
-        
-        if ($search) {
-            // استفاده از متد متمرکز و بهینه‌شده در کلاس جدید Ads
-            $ads = $this->adModel->getActiveForSearch($search, 20);
-        } else {
-            $ads = $this->adModel->getActiveForSearch('', 20);
-        }
+        $page = max(1, (int)$this->request->get('page', 1));
+        $perPage = 20;
+        $offset = ($page - 1) * $perPage;
+
+        $result = $this->searchService->searchAdTasks($search, ['type' => 'seo', 'status' => 'active'], $perPage, $offset);
+        $ads = $result['items'] ?? [];
+        $total = $result['total'] ?? 0;
 
         // آمار کاربر
         $stats = $this->executionModel->getUserStats($userId);
@@ -55,6 +59,9 @@ class SeoController extends BaseUserController
                 'today' => $todayCount
             ],
             'search' => $search,
+            'page' => $page,
+            'totalPages' => (int)ceil($total / $perPage),
+            'total' => $total,
         ]);
     }
 
