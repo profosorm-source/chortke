@@ -11,9 +11,9 @@ namespace App\Contracts;
  */
 interface SearchServiceInterface
 {
-    public function searchAdmin(string $query, int $limit = 5): array;
+    public function searchAdmin(string $query, int $limit = 5, int $offset = 0): array;
     
-    public function searchUser(string $query, int $userId, int $limit = 5): array;
+    public function searchUser(string $query, int $userId, int $limit = 5, int $offset = 0): array;
     
     public function searchModules($modules, array $filters = [], int $limit = 20, int $offset = 0): array;
     
@@ -22,6 +22,7 @@ interface SearchServiceInterface
     public function searchBanners(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
     
     public function searchContent(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
+    public function searchContentForExport(string $q, array $filters = [], int $limit = 1000, int $offset = 0): array;
     
     public function searchTokens(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
     
@@ -34,4 +35,8 @@ interface SearchServiceInterface
     public function searchTickets(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
     
     public function searchInfluencers(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
+
+    public function searchAdminModule(string $module, string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
+
+    public function registeredAdminModules(): array;
 }
