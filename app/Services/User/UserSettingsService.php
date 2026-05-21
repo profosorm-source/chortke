@@ -65,19 +65,22 @@ class UserSettingsService extends \App\Services\BaseService
     ];
 
     private \Core\RateLimiter $rateLimiter;
+    private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
 
     public function __construct(
         Database $db,
         LoggerInterface $logger,
         User $userModel,
         Cache $cache,
-        \Core\RateLimiter $rateLimiter
+        \Core\RateLimiter $rateLimiter,
+        ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
         $this->cache = $cache;
         $this->userModel = $userModel;
         $this->rateLimiter = $rateLimiter;
+        $this->cacheInvalidation = $cacheInvalidation;
     }
 
     /**
@@ -297,7 +300,11 @@ class UserSettingsService extends \App\Services\BaseService
      */
     private function invalidateCache(int $userId): void
     {
-        $this->cache->forget(self::CACHE_PREFIX . $userId);
+        if ($this->cacheInvalidation) {
+            $this->cacheInvalidation->invalidateUser($userId);
+        } else {
+            $this->cache->forget(self::CACHE_PREFIX . $userId);
+        }
     }
 
     /**

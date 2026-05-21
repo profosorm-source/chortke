@@ -90,7 +90,7 @@ EOT;
      * این متد یک transaction واحد دارد و walletService را بدون transaction فراخوانی می‌کند.
      * برای تفکیک مسئولیت، باید walletService::_depositUnsafe استفاده شود.
      */
-        public function createInvestment(int $userId, array $data): array
+        public function createInvestment(int $userId, array $data, ?string $idempotencyKey = null): array
     {
         $amount = (float)($data['amount'] ?? 0);
 
@@ -109,98 +109,109 @@ EOT;
             return ['success' => false, 'message' => 'مبلغ سرمایه‌گذاری نامعتبر است'];
         }
 
-        $this->db->beginTransaction();
+        $payload = [
+            'user_id' => $userId,
+            'amount' => $amount,
+            'currency' => 'usdt',
+        ];
 
-        try {
-            // H-I2 Fix: Lock first and check if wallet exists inside transaction. Only create if not found.
-            $walletRecord = $this->db->selectOne("SELECT * FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
-            if (!$walletRecord) {
-                $this->walletService->getOrCreateWallet($userId);
-                $walletRecord = $this->db->selectOne("SELECT * FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
-            }
-            
-            if (!$walletRecord || (float)$walletRecord->usdt_balance < $amount) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'موجودی تتری کافی نیست'];
-            }
+        $explicitKey = $idempotencyKey !== null && $idempotencyKey !== ''
+            ? $idempotencyKey
+            : \Core\IdempotencyKey::generateFromPayload('investment_creation', $payload);
 
-            // H-I3: Check active investment with lock
-            $activeCount = $this->db->query("SELECT COUNT(*) FROM investments WHERE user_id = ? AND status = 'active' FOR UPDATE", [$userId])->fetchColumn();
-            if ($activeCount > 0) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'شما یک سرمایه‌گذاری فعال دارید'];
-            }
+        return $this->idempotent('investment.create', $userId, $payload, function () use (
+            $userId,
+            $amount,
+            $explicitKey,
+            $data
+        ) {
+            $this->db->beginTransaction();
 
-            $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('investment_creation', [
-                'user_id' => $userId,
-                'amount' => $amount,
-                'currency' => 'usdt'
-            ]);
-
-            // ۱. کسر موجودی کیف‌پول
-            $payResult = $this->walletService->pay(
-                $userId,
-                $amount,
-                'usdt',
-                [
-                    'type' => 'investment_creation',
-                    'description' => 'سرمایه‌گذاری جدید',
-                    'idempotency_key' => $idempotencyKey,
-                ]
-            );
-
-            if (empty($payResult['success'])) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در کسر موجودی: ' . ($payResult['message'] ?? '')];
-            }
-
-            // ۲. ثبت سرمایه‌گذاری
-            $investmentId = $this->investmentModel->create([
-                'user_id' => $userId,
-                'amount' => $amount,
-                'current_balance' => $amount,
-                'status' => \App\Models\Investment::STATUS_ACTIVE,
-                'transaction_id' => $payResult['transaction_id'] ?? null,
-            ]);
-            
-            $this->db->commit();
-
-            // ۳. پورسانت شبکه ارجاع (Referral) صندوق سرمایه گذاری (پس از موفقیت در commit اصلی)
             try {
-                $userRecord = $this->userService->findById($userId);
-                if ($userRecord && !empty($userRecord->referred_by)) {
-                    $this->referralService->processCommission((int)$userRecord->referred_by, $amount, 'usdt', [
-                        'action' => 'investment_creation',
-                        'investor_id' => $userId,
-                        'investment_id' => $investmentId
+                // H-I2 Fix: Lock first and check if wallet exists inside transaction. Only create if not found.
+                $walletRecord = $this->db->selectOne("SELECT * FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
+                if (!$walletRecord) {
+                    $this->walletService->getOrCreateWallet($userId);
+                    $walletRecord = $this->db->selectOne("SELECT * FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
+                }
+                
+                if (!$walletRecord || (float)$walletRecord->usdt_balance < $amount) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'موجودی تتری کافی نیست'];
+                }
+
+                // H-I3: Check active investment with lock
+                $activeCount = $this->db->query("SELECT COUNT(*) FROM investments WHERE user_id = ? AND status = 'active' FOR UPDATE", [$userId])->fetchColumn();
+                if ($activeCount > 0) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'شما یک سرمایه‌گذاری فعال دارید'];
+                }
+
+                // ۱. کسر موجودی کیف‌پول
+                $payResult = $this->walletService->pay(
+                    $userId,
+                    $amount,
+                    'usdt',
+                    [
+                        'type' => 'investment_creation',
+                        'description' => 'سرمایه‌گذاری جدید',
+                        'idempotency_key' => $explicitKey,
+                    ]
+                );
+
+                if (empty($payResult['success'])) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در کسر موجودی: ' . ($payResult['message'] ?? '')];
+                }
+
+                // ۲. ثبت سرمایه‌گذاری
+                $investmentId = $this->investmentModel->create([
+                    'user_id' => $userId,
+                    'amount' => $amount,
+                    'current_balance' => $amount,
+                    'status' => \App\Models\Investment::STATUS_ACTIVE,
+                    'transaction_id' => $payResult['transaction_id'] ?? null,
+                ]);
+                
+                $this->db->commit();
+
+                // ۳. پورسانت شبکه ارجاع (Referral) صندوق سرمایه گذاری (پس از موفقیت در commit اصلی)
+                try {
+                    $userRecord = $this->userService->findById($userId);
+                    if ($userRecord && !empty($userRecord->referred_by)) {
+                        $this->referralService->processCommission((int)$userRecord->referred_by, $amount, 'usdt', [
+                            'action' => 'investment_creation',
+                            'investor_id' => $userId,
+                            'investment_id' => $investmentId
+                        ]);
+                    }
+                } catch (\Throwable $commissionEx) {
+                    $this->logger->error('investment_commission_post_commit_failed', [
+                        'user_id' => $userId,
+                        'investment_id' => $investmentId,
+                        'error' => $commissionEx->getMessage()
                     ]);
                 }
-            } catch (\Throwable $commissionEx) {
-                $this->logger->error('investment_commission_post_commit_failed', [
-                    'user_id' => $userId,
+
+                $this->auditTrail->record('investment.created', $userId, [
                     'investment_id' => $investmentId,
-                    'error' => $commissionEx->getMessage()
+                    'amount' => $amount,
                 ]);
+
+                $this->notify($userId, 'سرمایه‌گذاری جدید', "سرمایه‌گذاری " . $this->currencyService->formatAmount($amount, 'usdt') . " با موفقیت ثبت شد.", 'investment_created');
+                $this->logger->info('investment_created', ['message' => "User {$userId} invested {$amount} USDT", 'id' => $investmentId]);
+
+                return ['success' => true, 'message' => 'سرمایه‌گذاری با موفقیت انجام شد'];
+
+            } catch (\Exception $e) {
+                $this->db->rollBack();
+                $this->logger->error('investment_create_failed', [
+                    'user_id' => $userId,
+                    'error' => $e->getMessage()
+                ]);
+                return ['success' => false, 'message' => 'خطای سیستمی در ثبت سرمایه‌گذاری'];
             }
-
-            $this->auditTrail->record('investment.created', $userId, [
-                'investment_id' => $investmentId,
-                'amount' => $amount,
-            ]);
-
-            $this->notify($userId, 'سرمایه‌گذاری جدید', "سرمایه‌گذاری " . $this->currencyService->formatAmount($amount, 'usdt') . " با موفقیت ثبت شد.", 'investment_created');
-            $this->logger->info('investment_created', ['message' => "User {$userId} invested {$amount} USDT", 'id' => $investmentId]);
-
-            return ['success' => true, 'message' => 'سرمایه‌گذاری با موفقیت انجام شد'];
-
-        } catch (\Exception $e) {
-            $this->db->rollBack();
-            $this->logger->error('investment_create_failed', [
-                'user_id' => $userId,
-                'error' => $e->getMessage()
-            ]);
-            return ['success' => false, 'message' => 'خطای سیستمی در ثبت سرمایه‌گذاری'];
-        }
+        }, $explicitKey);
     }
 
     /**

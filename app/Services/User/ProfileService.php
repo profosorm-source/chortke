@@ -21,7 +21,8 @@ class ProfileService extends \App\Services\BaseService
     public function __construct(
         private User $model,
         protected LoggerInterface $logger,
-        private ?Cache $cache = null
+        private ?Cache $cache = null,
+        private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
     }
@@ -99,9 +100,12 @@ class ProfileService extends \App\Services\BaseService
 
             $updateData['updated_at'] = date('Y-m-d H:i:s');
             $success = $this->model->update($userId, $updateData);
-
             if ($success) {
                 $this->model->commit();
+
+                if ($this->cacheInvalidation) {
+                    $this->cacheInvalidation->invalidateUser($userId);
+                }
 
                 $maskedData = [];
                 foreach ($updateData as $k => $v) {
@@ -150,8 +154,12 @@ class ProfileService extends \App\Services\BaseService
         $serialized = $this->serializeValue($value);
         $success = $this->model->upsertSetting($userId, $key, $serialized);
 
-        if ($success && $this->cache) {
-            $this->cache->forget(self::SETTINGS_CACHE_PREFIX . $userId);
+        if ($success) {
+            if ($this->cacheInvalidation) {
+                $this->cacheInvalidation->invalidateUser($userId);
+            } elseif ($this->cache) {
+                $this->cache->forget(self::SETTINGS_CACHE_PREFIX . $userId);
+            }
         }
 
         return $success;

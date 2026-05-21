@@ -106,7 +106,7 @@ class SettingService extends \App\Services\BaseService
 
             // 🚀 BUG FIX [H-06]: Pessimistic Locking (SELECT FOR UPDATE)
             // جلوگیری از Race Condition هنگام تغییر تنظیمات حساس توسط چند ادمین
-            $this->db->query("SELECT id FROM settings WHERE `key` = ? FOR UPDATE", [$key]);
+            $this->db->query("SELECT id FROM system_settings WHERE `key` = ? FOR UPDATE", [$key]);
 
             $ok = $this->model->set($key, $value);
             
@@ -151,7 +151,7 @@ class SettingService extends \App\Services\BaseService
             // 🚀 BUG FIX [H-06]: Locking multiple keys
             $keys = array_keys($settings);
             $placeholders = implode(',', array_fill(0, count($keys), '?'));
-            $this->db->query("SELECT id FROM settings WHERE `key` IN ($placeholders) FOR UPDATE", $keys);
+            $this->db->query("SELECT id FROM system_settings WHERE `key` IN ($placeholders) FOR UPDATE", $keys);
 
             $ok = $this->model->setMany($settings);
             

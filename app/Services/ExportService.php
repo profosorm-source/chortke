@@ -5,10 +5,17 @@ namespace App\Services;
 use App\Models\ExportData;
 
 use App\Contracts\LoggerInterface;
+use Core\Session;
+use App\Services\Shared\PolicyService;
+use App\Services\ApiRateLimiter;
+
 class ExportService extends \App\Services\BaseService
 {
     public function __construct(
         private ExportData $exportData,
+        private Session $session,
+        private PolicyService $policyService,
+        private ApiRateLimiter $rateLimiter,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -81,17 +88,14 @@ class ExportService extends \App\Services\BaseService
     private function authorizeExport(string $permission): void
     {
         try {
-            $session = \Core\Container::getInstance()->make(\Core\Session::class);
-            $userId = $session->get('user_id');
-            $policyService = \Core\Container::getInstance()->make(\App\Services\Shared\PolicyService::class);
+            $userId = $this->session->get('user_id');
             
-            if (!$userId || !$policyService->authorizeById($permission, $userId)) {
+            if (!$userId || !$this->policyService->authorizeById($permission, $userId)) {
                 throw new \Exception('Unauthorized export attempt');
             }
             
-            $rateLimiter = \Core\Container::getInstance()->make(\App\Services\ApiRateLimiter::class);
             $key = 'export:' . $userId . ':' . $permission;
-            if (!$rateLimiter->allow($key, 5, 3600)) { // 5 exports per hour
+            if (!$this->rateLimiter->allow($key, 5, 3600)) { // 5 exports per hour
                 throw new \Exception('Rate limit exceeded: Maximum 5 exports per hour');
             }
         } catch (\Throwable $e) {

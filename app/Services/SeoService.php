@@ -455,6 +455,18 @@ class SeoService extends \App\Services\BaseService
 
         if ($ok) {
             $this->logger->activity('seo_ad.approved', "آگهی SEO #{$adId} تایید شد", user_id(), ['ad_id' => $adId]);
+            try {
+                \Core\EventDispatcher::getInstance()->dispatch('seo_ad.approved', [
+                    'ad_id' => $adId,
+                    'module' => 'seo_ad',
+                    'type' => 'seo_ad'
+                ]);
+            } catch (\Throwable $evtErr) {
+                $this->logger->warning('seo_ad.approved.event_failed', [
+                    'ad_id' => $adId,
+                    'error' => $evtErr->getMessage()
+                ]);
+            }
         }
         return $ok;
     }
@@ -475,6 +487,18 @@ class SeoService extends \App\Services\BaseService
 
         if ($ok) {
             $this->logger->activity('seo_ad.rejected', "آگهی SEO #{$adId} رد شد", user_id(), ['ad_id' => $adId, 'reason' => $reason]);
+            try {
+                \Core\EventDispatcher::getInstance()->dispatch('seo_ad.rejected', [
+                    'ad_id' => $adId,
+                    'module' => 'seo_ad',
+                    'type' => 'seo_ad'
+                ]);
+            } catch (\Throwable $evtErr) {
+                $this->logger->warning('seo_ad.rejected.event_failed', [
+                    'ad_id' => $adId,
+                    'error' => $evtErr->getMessage()
+                ]);
+            }
         }
         return $ok;
     }
@@ -494,6 +518,18 @@ class SeoService extends \App\Services\BaseService
 
         if ($ok) {
             $this->logger->activity('seo_ad.paused', "آگهی SEO #{$adId} متوقف شد", user_id(), ['ad_id' => $adId]);
+            try {
+                \Core\EventDispatcher::getInstance()->dispatch('seo_ad.paused', [
+                    'ad_id' => $adId,
+                    'module' => 'seo_ad',
+                    'type' => 'seo_ad'
+                ]);
+            } catch (\Throwable $evtErr) {
+                $this->logger->warning('seo_ad.paused.event_failed', [
+                    'ad_id' => $adId,
+                    'error' => $evtErr->getMessage()
+                ]);
+            }
         }
         return $ok;
     }

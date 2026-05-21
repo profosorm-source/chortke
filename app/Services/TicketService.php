@@ -12,6 +12,7 @@ use App\Contracts\NotificationServiceInterface;
 
 class TicketService extends \App\Services\BaseService
 {
+    use \App\Traits\ValidationTrait;
     private Database $db;
     private Ticket $ticketModel;
     private TicketMessage $messageModel;
@@ -42,22 +43,31 @@ class TicketService extends \App\Services\BaseService
      */
     public function guardCanCreateTicket(int $userId, array $data): void
     {
-        // جهت حفظ سازگاری با کدهای قدیمی که شاید پارامترهای جدید را نفرستند، مقادیر پیش‌فرض تعیین می‌کنیم
-        $payload = array_merge([
-            'category' => 'technical',
-            'priority' => 'normal',
-            'idempotency_key' => 'ticket_init_' . $userId . '_' . time(),
-        ], $data);
-
-        $request = new \App\Validators\Requests\CreateTicketRequest($payload);
-        if (!$request->validate()) {
-            $errors = $request->errors();
-            $firstError = is_array($errors) ? (reset($errors) ?: 'اطلاعات وارد شده نامعتبر است') : (string)$errors;
-            throw new \App\Exceptions\BusinessException($firstError);
-        }
-
-        if ($userId <= 0) {
-            throw new \App\Exceptions\BusinessException('شناسه کاربر نامعتبر است');
+        // Use centralized validation pipeline
+        try {
+            $validated = $this->validateWith(
+                array_merge([
+                    'category' => 'technical',
+                    'priority' => 'normal',
+                    'idempotency_key' => 'ticket_init_' . $userId . '_' . time(),
+                ], $data),
+                [
+                    'subject'        => 'required|string|min:5|max:200',
+                    'description'    => 'required|string|min:20|max:5000',
+                    'category'       => 'required|in:technical,billing,account,other',
+                    'priority'       => 'required|in:low,normal,high,urgent',
+                    'idempotency_key' => 'required|string|min:10|max:128',
+                ],
+                null,
+                [
+                    'user_id' => [
+                        'callback' => fn() => $userId > 0,
+                        'message' => 'شناسه کاربر نامعتبر است'
+                    ]
+                ]
+            );
+        } catch (\App\Exceptions\BusinessException $e) {
+            throw $e;
         }
     }
 

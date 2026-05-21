@@ -1,12 +1,11 @@
 <?php
 
-declare(strict_types=1);
-
 namespace App\Services;
 
 use Core\Database;
-use App\Services\Notification\FcmService;
+use App\Services\Notification\NotificationService;
 use App\Contracts\LoggerInterface;
+use App\Contracts\CacheInterface;
 
 /**
  * AdNotificationDispatcher - Responsible for transmitting ad notification campaigns in the background.
@@ -15,7 +14,8 @@ class AdNotificationDispatcher extends \App\Services\BaseService
 {
     public function __construct(
         private Database $db,
-        private FcmService $fcmService,
+        private NotificationService $notificationService,
+        private CacheInterface $cache,
         private PerformanceOptimizationService $performanceService,
         LoggerInterface $logger
     ) {
@@ -31,9 +31,8 @@ class AdNotificationDispatcher extends \App\Services\BaseService
         
         // 🚀 BUG-09 Fix: Distributed Lock to prevent overlapping runs
         $lockKey = 'lock:ad_notification_process';
-        $redis = $this->performanceService->redis();
         
-        if ($redis && !$redis->set($lockKey, '1', ['nx', 'ex' => 300])) {
+        if (!$this->cache->set($lockKey, '1', 300)) {
             $this->logInfo('ad_process_locked', 'Another ad process is already running.');
             return $stats;
         }
@@ -45,16 +44,17 @@ class AdNotificationDispatcher extends \App\Services\BaseService
             );
 
             if (empty($activeAds)) {
-                if ($redis) $redis->del($lockKey);
+                $this->cache->delete($lockKey);
                 return $stats;
             }
 
             $adsUpdates = [];
+            $notificationQueue = []; // OUTBOX PATTERN: Store notifications to send after transaction
 
             foreach ($activeAds as $ad) {
                 $restrictions = json_decode($ad->restrictions ?? '', true) ?: [];
                 
-                // MED-03: بسازید query برای دریافت tokens با توجه به targeting restrictions
+                // MED-03: بسازید query برای دریافت کاربران با توجه به targeting restrictions
                 $where = ["ud.fcm_token IS NOT NULL", "LENGTH(ud.fcm_token) > 10", "u.status = 'active'"];
                 $params = [];
                 
@@ -84,12 +84,12 @@ class AdNotificationDispatcher extends \App\Services\BaseService
                 
                 $whereClause = implode(' AND ', $where);
                 
-                // دریافت tokens با offset (برای pagination تبلیغ)
+                // دریافت شناسه کاربران با offset (برای pagination تبلیغ)
                 $offset = (int) ($ad->impressions ?? 0);
                 $limit = 100;
                 
-                $tokenQuery = "SELECT ud.fcm_token FROM user_devices ud
-                             JOIN users u ON u.id = ud.user_id
+                $userQuery = "SELECT DISTINCT u.id FROM users u
+                             JOIN user_devices ud ON u.id = ud.user_id
                              WHERE {$whereClause}
                              ORDER BY ud.created_at DESC
                              LIMIT ? OFFSET ?";
@@ -97,59 +97,77 @@ class AdNotificationDispatcher extends \App\Services\BaseService
                 $params[] = $limit;
                 $params[] = $offset;
                 
-                $tokenRows = $this->db->fetchAll($tokenQuery, $params);
+                $userRows = $this->db->fetchAll($userQuery, $params);
 
-                if (empty($tokenRows)) {
-                    // هیچ دستگاه مطابق شرایط پیدا نشد یا تمام tokenها ارسال شد
+                if (empty($userRows)) {
+                    // هیچ کاربری مطابق شرایط پیدا نشد یا تمام تبلیغات ارسال شد
                     $adsUpdates[$ad->id] = ['status' => 'completed', 'impressions' => $ad->impressions];
                     continue;
                 }
 
-                $tokensSlice = array_column($tokenRows, 'fcm_token');
+                $userIds = array_map('intval', array_column($userRows, 'id'));
 
-                // 3. ارسال از طریق FCM
-                // MED-04 Fix: دریافت خروجی واقعی FCM جهت سنجش دقیق دیتای Impressions و بودجه
-                $result = $this->fcmService->sendToTokens(
-                    $tokensSlice,
-                    $ad->title,
-                    $restrictions['push_body'] ?? 'برای مشاهده کلیک کنید',
-                    ['ad_id' => $ad->id],
-                    $restrictions['image_path'] ?? null,
-                    $ad->link ?? '#'
-                );
-
-                if (!isset($result['success']) || !$result['success']) {
-                    $this->logWarning('fcm_send_failed', ['ad_id' => $ad->id]);
-                    continue;
-                }
-
-                // L-SRV-01 Fix: در صورت نامشخص بودن مقدار خروجی FCM، مقدار پیش‌فرض را 0 قرار دهید (نه کل قطاع توکن‌ها) جهت ممانعت از تخریب و تورم دیتای Impression
-                $sentSuccessfully = $result['sent'] ?? 0;
+                // OUTBOX: Queue notifications instead of sending directly
+                // This ensures notifications are only sent AFTER ads table is successfully updated
+                $notificationQueue[] = [
+                    'ad_id' => (int)$ad->id,
+                    'user_ids' => $userIds,
+                    'title' => $ad->title,
+                    'body' => $restrictions['push_body'] ?? 'برای مشاهده کلیک کنید',
+                    'link' => $ad->link ?? '#'
+                ];
                 
-                // 4. بروزرسانی impression و budget
+                // 4. بروزرسانی impression و budget (count will be updated after notifications sent successfully)
                 $adsUpdates[$ad->id] = [
-                    'impressions' => (int)$ad->impressions + $sentSuccessfully,
+                    'impressions' => (int)$ad->impressions + count($userIds), // Pre-calculate
                 ];
 
                 $stats['ads_processed']++;
-                $stats['total_sent'] += $sentSuccessfully;
+                $stats['total_sent'] += count($userIds);
                 
-                $this->logInfo('ad_push_delivered', ['ad_id' => $ad->id, 'count' => $sentSuccessfully]);
+                $this->logInfo('ad_push_queued', ['ad_id' => $ad->id, 'count' => count($userIds)]);
             }
 
-            // ✅ EFFICIENT STATE SAVING
+            // ✅ TRANSACTION: Update ads in DB atomically
             if (!empty($adsUpdates)) {
-                $this->performanceService->bulkUpdateWithCase(
-                    'ads',
-                    'id',
-                    $adsUpdates
-                );
+                $this->db->beginTransaction();
+                try {
+                    $this->performanceService->bulkUpdateWithCase(
+                        'ads',
+                        'id',
+                        $adsUpdates
+                    );
+                    $this->db->commit();
+                } catch (\Throwable $txnError) {
+                    $this->db->rollBack();
+                    $this->logError('ad_state_update_failed', $txnError->getMessage());
+                    throw $txnError;
+                }
+            }
+
+            // ✅ OUTBOX PATTERN: Send notifications AFTER transaction committed
+            // If notification fails, it's async and won't rollback the DB transaction
+            foreach ($notificationQueue as $notification) {
+                try {
+                    $sentCount = $this->notificationService->sendBulk(
+                        $notification['user_ids'],
+                        'marketing',
+                        $notification['title'],
+                        $notification['body'],
+                        ['ad_id' => $notification['ad_id']],
+                        $notification['link']
+                    );
+                    $this->logInfo('ad_push_delivered', ['ad_id' => $notification['ad_id'], 'count' => $sentCount]);
+                } catch (\Throwable $notifError) {
+                    // Log but don't fail - notifications are best-effort
+                    $this->logError('ad_notification_failed', ['ad_id' => $notification['ad_id'], 'error' => $notifError->getMessage()]);
+                }
             }
 
         } catch (\Throwable $e) {
             $this->logError('ad_push_cron_fail', $e->getMessage());
         } finally {
-            if ($redis) $redis->del($lockKey);
+            $this->cache->delete($lockKey);
         }
 
         return $stats;

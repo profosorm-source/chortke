@@ -126,7 +126,7 @@ class LotteryService extends \App\Services\BaseService
         }
     }
 
-    public function participate(int $userId, int $roundId): array
+    public function participate(int $userId, int $roundId, ?string $idempotencyKey = null): array
     {
         if (!$this->featureFlagService->isEnabled('lottery', $userId)) {
             return ['success' => false, 'message' => 'سیستم قرعه‌کشی موقتاً غیرفعال است.'];
@@ -154,82 +154,105 @@ class LotteryService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'شما قبلاً در این دوره شرکت کرده‌اید.'];
         }
 
-        $this->db->beginTransaction();
+        $payload = [
+            'user_id' => $userId,
+            'round_id' => $roundId,
+            'ticket_price' => $round->ticket_price,
+            'currency' => $round->currency,
+        ];
 
-        try {
-            // H12 Fix: اعمال قفل بدبینانه و چک سقف مجاز شرکت‌کنندگان در تراکنش
-            $roundLock = $this->db->query("SELECT id, max_tickets FROM lottery_rounds WHERE id = ? FOR UPDATE", [$roundId])->fetch(\PDO::FETCH_OBJ);
-            if (!$roundLock) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'دوره یافت نشد.'];
-            }
+        $explicitKey = $idempotencyKey !== null && $idempotencyKey !== ''
+            ? $idempotencyKey
+            : \Core\IdempotencyKey::generateFromPayload('lottery_participation', $payload);
 
-            $currentCount = (int)$this->db->query("SELECT COUNT(*) FROM lottery_participations WHERE round_id = ? AND is_deleted = 0", [$roundId])->fetchColumn();
-            $maxCeiling = (int)($roundLock->max_tickets ?? 10000);
+        return $this->idempotent('lottery.participate', $userId, $payload, function () use (
+            $userId,
+            $roundId,
+            $round,
+            $explicitKey
+        ) {
+            $this->db->beginTransaction();
 
-            if ($currentCount >= $maxCeiling) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'ظرفیت شرکت در این دوره تکمیل شده است.'];
-            }
-
-            $transactionId = null;
-            if ($round->ticket_price > 0) {
-                $result = $this->walletService->withdraw(
-                    $userId, 
-                    (float)$round->ticket_price, 
-                    $round->currency, 
-                    ['type' => 'lottery_entry', 'round_id' => $roundId, 'description' => "ورود به قرعه‌کشی: {$round->title}"]
-                );
-                
-                if (!$result['success']) {
+            try {
+                // H12 Fix: اعمال قفل بدبینانه و چک سقف مجاز شرکت‌کنندگان در تراکنش
+                $roundLock = $this->db->query("SELECT id, max_tickets FROM lottery_rounds WHERE id = ? FOR UPDATE", [$roundId])->fetch(\PDO::FETCH_OBJ);
+                if (!$roundLock) {
                     $this->db->rollBack();
-                    return ['success' => false, 'message' => 'موجودی کافی نیست. ' . ($result['message'] ?? '')];
+                    return ['success' => false, 'message' => 'دوره یافت نشد.'];
                 }
+
+                $currentCount = (int)$this->db->query("SELECT COUNT(*) FROM lottery_participations WHERE round_id = ? AND is_deleted = 0", [$roundId])->fetchColumn();
+                $maxCeiling = (int)($roundLock->max_tickets ?? 10000);
+
+                if ($currentCount >= $maxCeiling) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'ظرفیت شرکت در این دوره تکمیل شده است.'];
+                }
+
+                $transactionId = null;
+                if ($round->ticket_price > 0) {
+                    $result = $this->walletService->withdraw(
+                        $userId, 
+                        (float)$round->ticket_price, 
+                        $round->currency, 
+                        [
+                            'type' => 'lottery_entry',
+                            'round_id' => $roundId,
+                            'description' => "ورود به قرعه‌کشی: {$round->title}",
+                            'idempotency_key' => $explicitKey,
+                        ]
+                    );
+                    
+                    if (!$result['success']) {
+                        $this->db->rollBack();
+                        return ['success' => false, 'message' => 'موجودی کافی نیست. ' . ($result['message'] ?? '')];
+                    }
+                    
+                    $transactionId = $result['transaction_id'] ?? null;
+                }
+
+                $code = $this->generateUniqueCode($roundId);
                 
-                $transactionId = $result['transaction_id'] ?? null;
-            }
+                if (!$code) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در تولید کد یکتا.'];
+                }
 
-            $code = $this->generateUniqueCode($roundId);
-            
-            if (!$code) {
+                $participationId = $this->participationModel->create([
+                    'round_id' => $roundId,
+                    'user_id' => $userId,
+                    'ticket_number' => $code,
+                    'chance_score' => LotteryParticipation::DEFAULT_CHANCE,
+                    'price_paid' => $round->ticket_price,
+                    'currency' => $round->currency,
+                    'status' => 'active',
+                ]);
+
+                if (!$participationId) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در ثبت مشارکت.'];
+                }
+
+                $this->db->commit();
+
+                $this->notify($userId, 'ثبت‌نام موفق', "شما با موفقیت در قرعه‌کشی «{$round->title}» شرکت کردید.\n\nکد: {$code}\nشانس: " . LotteryParticipation::DEFAULT_CHANCE, 'lottery_joined');
+
+                $this->logger->info('lottery_participation', ['message' => "User {$userId} joined round #{$roundId}, code: {$code}"]);
+
+                return [
+                    'success' => true,
+                    'message' => 'با موفقیت ثبت‌نام شدید!',
+                    'code' => $code,
+                    'chance_score' => LotteryParticipation::DEFAULT_CHANCE,
+                    'participation_id' => $participationId,
+                ];
+
+            } catch (\Throwable $e) {
                 $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در تولید کد یکتا.'];
+                $this->logger->error('lottery_participation_error', ['message' => $e->getMessage()]);
+                return ['success' => false, 'message' => 'خطای سیستمی.'];
             }
-
-            $participationId = $this->participationModel->create([
-                'round_id' => $roundId,
-                'user_id' => $userId,
-                'ticket_number' => $code,
-                'chance_score' => LotteryParticipation::DEFAULT_CHANCE,
-                'price_paid' => $round->ticket_price,
-                'currency' => $round->currency,
-                'status' => 'active',
-            ]);
-
-            if (!$participationId) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در ثبت مشارکت.'];
-            }
-
-            $this->db->commit();
-
-            $this->notify($userId, 'ثبت‌نام موفق', "شما با موفقیت در قرعه‌کشی «{$round->title}» شرکت کردید.\n\nکد: {$code}\nشانس: " . LotteryParticipation::DEFAULT_CHANCE, 'lottery_joined');
-
-            $this->logger->info('lottery_participation', ['message' => "User {$userId} joined round #{$roundId}, code: {$code}"]);
-
-            return [
-                'success' => true,
-                'message' => 'با موفقیت ثبت‌نام شدید!',
-                'code' => $code,
-                'chance_score' => LotteryParticipation::DEFAULT_CHANCE,
-                'participation_id' => $participationId,
-            ];
-
-        } catch (\Throwable $e) {
-            $this->db->rollBack();
-            $this->logger->error('lottery_participation_error', ['message' => $e->getMessage()]);
-            return ['success' => false, 'message' => 'خطای سیستمی.'];
-        }
+        }, $explicitKey);
     }
 
     private function generateUniqueCode(int $roundId): ?string

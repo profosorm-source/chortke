@@ -7,16 +7,19 @@ namespace App\Services;
 use App\Contracts\LoggerInterface;
 use App\Traits\ClientInfoTrait;
 use Core\Exceptions\ValidationException;
+use Core\IdempotencyKey;
 
 abstract class BaseService
 {
     use ClientInfoTrait;
 
     protected LoggerInterface $logger;
+    protected ?IdempotencyKey $idempotencyKey;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, ?IdempotencyKey $idempotencyKey = null)
     {
         $this->logger = $logger;
+        $this->idempotencyKey = $idempotencyKey;
     }
 
     protected function logInfo(string $event, array $context = []): void
@@ -198,13 +201,10 @@ abstract class BaseService
         callable $callback,
         ?string $explicitKey = null
     ): mixed {
-        try {
-            $service = \Core\Container::getInstance()->make(\Core\IdempotencyKey::class);
-        } catch (\Throwable $e) {
-            $this->logger->warning('idempotency.unavailable_fallback', [
+        if (!$this->idempotencyKey) {
+            $this->logger->warning('idempotency.unavailable_no_injection', [
                 'scope' => $scope,
                 'actor_id' => $actorId,
-                'error' => $e->getMessage(),
             ]);
             return $callback();
         }
@@ -212,9 +212,9 @@ abstract class BaseService
         if ($explicitKey !== null && $explicitKey !== '') {
             $key = $explicitKey;
         } else {
-            $key = $service->keyFromPayload($scope, $payload);
+            $key = $this->idempotencyKey->keyFromPayload($scope, $payload);
         }
 
-        return $service->run($scope, $actorId, $key, $callback, $payload);
+        return $this->idempotencyKey->run($scope, $actorId, $key, $callback, $payload);
     }
 }

@@ -7,7 +7,7 @@ use App\Models\User;
 use App\Models\AccountDeletionLog;
 use Core\Database;
 use App\Contracts\LoggerInterface;
-use App\Services\CustomTaskService;
+use App\Services\CustomTask\AdminCustomTaskService;
 use Core\EventDispatcher;
 use App\Services\DistributedLockService;
 
@@ -21,7 +21,7 @@ class AccountDeletionService extends \App\Services\BaseService
     private User $userModel;
     private AccountDeletionLog $deletionLogModel;
     private Database $db;
-    private CustomTaskService $customTaskService;
+    private AdminCustomTaskService $customTaskService;
     private EventDispatcher $eventDispatcher;
     private Wallet $walletModel;
     private DistributedLockService $lockService;
@@ -32,7 +32,7 @@ class AccountDeletionService extends \App\Services\BaseService
         AccountDeletionLog $deletionLogModel,
         Database $db,
         LoggerInterface $logger,
-        CustomTaskService $customTaskService,
+        AdminCustomTaskService $customTaskService,
         EventDispatcher $eventDispatcher,
         Wallet $walletModel,
         DistributedLockService $lockService,

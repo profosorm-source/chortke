@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\AdSystemContract;
+use App\Contracts\AdsRepositoryInterface;
 use App\Contracts\LoggerInterface;
+use Core\Database;
 use RuntimeException;
 
 /**
@@ -17,11 +19,15 @@ use RuntimeException;
 class AdSystemManager extends \App\Services\BaseService
 {
     private array $adapters = [];
+    private AdsRepositoryInterface $adsRepository;
+    private Database $db;
 
-    public function __construct(array $adapters, LoggerInterface $logger)
+    public function __construct(array $adapters, LoggerInterface $logger, AdsRepositoryInterface $adsRepository, Database $db)
     {
         parent::__construct($logger);
         $this->adapters = $adapters;
+        $this->adsRepository = $adsRepository;
+        $this->db = $db;
     }
 
     /**
@@ -126,12 +132,11 @@ class AdSystemManager extends \App\Services\BaseService
      */
     public function getUserAds(int $userId): array
     {
-        $adModel = new \App\Models\Ads();
-        $ads = $adModel->where('user_id', '=', $userId)
+        $ads = $this->adsRepository->where('user_id', '=', $userId)
             ->whereNull('deleted_at')
             ->orderBy('created_at', 'DESC')
             ->get();
-            
+
         return $ads ?? [];
     }
 
@@ -140,8 +145,7 @@ class AdSystemManager extends \App\Services\BaseService
      */
     public function getAdSummary(int $userId): array
     {
-        $adModel = new \App\Models\Ads();
-        $summary = $adModel->where('user_id', '=', $userId)
+        $summary = $this->adsRepository->where('user_id', '=', $userId)
             ->whereNull('deleted_at')
             ->select(['id', 'budget', 'impressions', 'clicks'])
             ->get() ?? [];
@@ -159,12 +163,11 @@ class AdSystemManager extends \App\Services\BaseService
      */
     public function getAdExecutions(int $adId, string $type): array
     {
-        $db = \Core\Database::getInstance();
         $executions = [];
         
         switch ($type) {
             case 'social_task':
-                $executions = $db->table('social_task_executions as e')
+                $executions = $this->db->table('social_task_executions as e')
                     ->select('e.id', 'e.status', 'e.created_at', 'u.full_name as executor')
                     ->join('users u', 'u.id', '=', 'e.executor_id', 'LEFT')
                     ->where('e.ad_id', '=', $adId)
@@ -174,7 +177,7 @@ class AdSystemManager extends \App\Services\BaseService
                 break;
             
             case 'seo':
-                $executions = $db->table('seo_executions as e')
+                $executions = $this->db->table('seo_executions as e')
                     ->select('e.id', 'e.status', 'e.created_at', 'u.full_name as executor')
                     ->join('users u', 'u.id', '=', 'e.user_id', 'LEFT')
                     ->where('e.ad_id', '=', $adId)
@@ -184,7 +187,7 @@ class AdSystemManager extends \App\Services\BaseService
                 break;
 
             case 'custom_task':
-                $executions = $db->table('custom_task_submissions as e')
+                $executions = $this->db->table('custom_task_submissions as e')
                     ->select('e.id', 'e.status', 'e.created_at', 'u.full_name as executor')
                     ->join('users u', 'u.id', '=', 'e.user_id', 'LEFT')
                     ->where('e.task_id', '=', $adId)
@@ -202,15 +205,14 @@ class AdSystemManager extends \App\Services\BaseService
      */
     public function toggleAdStatus(int $adId, int $userId): array
     {
-        $adModel = new \App\Models\Ads();
-        $ad = $adModel->find($adId);
+        $ad = $this->adsRepository->find($adId);
         
         if (!$ad || (int)$ad->user_id !== $userId) {
             return ['success' => false, 'message' => 'آگهی متعلق به شما یافت نشد.'];
         }
 
         $newActive = (int)$ad->is_active === 1 ? 0 : 1;
-        $adModel->update($adId, ['is_active' => $newActive]);
+        $this->adsRepository->update($adId, ['is_active' => $newActive]);
 
         $msg = $newActive ? 'آگهی مجدداً فعال شد.' : 'آگهی به صورت موقت متوقف شد.';
         return ['success' => true, 'message' => $msg, 'is_active' => $newActive];

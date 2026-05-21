@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\LoggerInterface;
+use App\Contracts\EmailServiceInterface;
 use App\Models\EmailQueue;
 use App\Models\NotificationPreference;
 use App\Models\Setting;
@@ -23,7 +24,7 @@ use Core\Queue;
  *  2. فایل .env  — پشتیبان
  *  3. مقدار پیش‌فرض — آخرین راه‌حل
  */
-class EmailService extends \App\Services\BaseService
+class EmailService extends \App\Services\BaseService implements EmailServiceInterface
 {
     private User                   $userModel;
     private SettingService         $settingService;

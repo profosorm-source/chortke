@@ -459,17 +459,39 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
             ]);
         }
 
+        // ✅ TRANSACTION BOUNDARY: Award XP BEFORE commit to ensure atomicity
+        // If XP fails, entire order completion rolls back (wallet stays in escrow)
+        $xpAwarded = false;
+        if ($profile) {
+            try {
+                // Award XP while still in transaction - financial consistency first
+                $this->xpEngine->awardXP((int)$order->influencer_user_id, 'youtube', 'influencer_order_completed', (int)$order->id);
+                $xpAwarded = true;
+            } catch (\Throwable $t) {
+                // XP failure causes rollback - wallet never leaves escrow if XP fails
+                $this->db->rollBack();
+                $this->logger->error('xp_award_failed_rollback', ['order_id' => $orderId, 'error' => $t->getMessage()]);
+                throw new \Exception('XP Award failed - transaction rolled back: ' . $t->getMessage());
+            }
+        }
+
         $this->db->commit();
 
-        $this->notificationService->send(
-            (int)$order->influencer_user_id,
-            'influencer_order_completed',
-            'سفارش تکمیل شد — درآمد واریز شد',
-            "مبلغ " . number_format((float)$order->influencer_earning) . " به کیف پول شما واریز شد.",
-            ['order_id' => $orderId],
-            url('/influencer'),
-            'مشاهده پروفایل'
-        );
+        // ✅ POST-TRANSACTION: Send notifications and audit logs AFTER commit
+        // These are informational and don't affect financial state
+        try {
+            $this->notificationService->send(
+                (int)$order->influencer_user_id,
+                'influencer_order_completed',
+                'سفارش تکمیل شد — درآمد واریز شد',
+                "مبلغ " . number_format((float)$order->influencer_earning) . " به کیف پول شما واریز شد.",
+                ['order_id' => $orderId],
+                url('/influencer'),
+                'مشاهده پروفایل'
+            );
+        } catch (\Throwable $e) {
+            $this->logger->error('notification_send_failed', ['order_id' => $orderId, 'error' => $e->getMessage()]);
+        }
 
         $this->auditTrail->record('influencer.order.completed', $actorId, [
     'channel' => 'influencer',
@@ -478,20 +500,18 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
     'amount' => $order->influencer_earning,
     'actor_type' => $actorType,
     'actor_id' => $isSystemAction ? null : $actorId,
+    'xp_awarded' => $xpAwarded,
 ], $actorId);
 
         if ($profile) {
-            $this->reputationService->scoreOrderCompleted(
-                (int)$profile->id,
-                (int)$order->influencer_user_id,
-                $orderId
-            );
-
-            // تخصیص امتیاز تجربه (XP) گیمیفای شده به اینفلوئنسر
             try {
-                $this->xpEngine->awardXP((int)$order->influencer_user_id, 'youtube', 'influencer_order_completed', (int)$order->id);
-            } catch (\Throwable $t) {
-                $this->logger->error('xp_error', ['error' => $t->getMessage()]);
+                $this->reputationService->scoreOrderCompleted(
+                    (int)$profile->id,
+                    (int)$order->influencer_user_id,
+                    $orderId
+                );
+            } catch (\Throwable $e) {
+                $this->logger->error('reputation_score_failed', ['order_id' => $orderId, 'error' => $e->getMessage()]);
             }
         }
 

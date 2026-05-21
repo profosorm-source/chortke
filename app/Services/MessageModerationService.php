@@ -8,6 +8,7 @@ use App\Models\InteractionModel;
 use App\Models\MessageModerationModel;
 use Core\Database;
 use App\Contracts\LoggerInterface;
+use App\Contracts\NotificationServiceInterface;
 class MessageModerationService
 extends \App\Services\BaseService
 {
@@ -16,6 +17,7 @@ extends \App\Services\BaseService
     private MessageModerationModel $moderationModel;
     private \Core\Cache $cache;
     private ?\App\Services\SettingService $settingService;
+    private NotificationServiceInterface $notificationService;
 
     public function __construct(
         Database $db, 
@@ -23,6 +25,7 @@ extends \App\Services\BaseService
         InteractionModel $interactionModel, 
         MessageModerationModel $moderationModel,
         \Core\Cache $cache,
+        NotificationServiceInterface $notificationService,
         ?\App\Services\SettingService $settingService = null
     ) {
         parent::__construct($logger);
@@ -30,6 +33,7 @@ extends \App\Services\BaseService
         $this->interactionModel = $interactionModel;
         $this->moderationModel = $moderationModel;
         $this->cache = $cache;
+        $this->notificationService = $notificationService;
         $this->settingService = $settingService;
     }
 
@@ -285,14 +289,13 @@ extends \App\Services\BaseService
         }
 
         // 🛡️ CRITICAL-16: Alert the user via an in-app notification when a warning is issued
-        $notificationModel = new \App\Models\Notification($this->db);
-        $notificationModel->create([
-            'user_id' => $userId,
-            'type' => \App\Models\Notification::TYPE_SECURITY,
-            'title' => 'اخطار مدیریت پیام‌ها',
-            'message' => 'کاربر گرامی، شما یک اخطار به دلیل گزارش‌های دریافتی از پیام‌هایتان دریافت کرده‌اید (' . $count . '/3). لطفاً قوانین سایت را رعایت کنید.',
-            'priority' => \App\Models\Notification::PRIORITY_HIGH,
-        ]);
+        $this->notificationService->send(
+            userId: $userId,
+            type: \App\Models\Notification::TYPE_SECURITY,
+            title: 'اخطار مدیریت پیام‌ها',
+            message: 'کاربر گرامی، شما یک اخطار به دلیل گزارش‌های دریافتی از پیام‌هایتان دریافت کرده‌اید (' . $count . '/3). لطفاً قوانین سایت را رعایت کنید.',
+            priority: \App\Models\Notification::PRIORITY_HIGH
+        );
 
         if ($count >= 3) {
             $this->banUser($userId, $adminId, $reportId);
@@ -339,14 +342,13 @@ extends \App\Services\BaseService
         }
 
         // 🛡️ CRITICAL-16: Alert the user via an in-app notification when they are banned
-        $notificationModel = new \App\Models\Notification($this->db);
-        $notificationModel->create([
-            'user_id' => $userId,
-            'type' => \App\Models\Notification::TYPE_SECURITY,
-            'title' => 'مسدودسازی حساب کاربری',
-            'message' => 'حساب کاربری شما به دلیل نقض مکرر قوانین در سیستم پیام‌رسانی مسدود شد.',
-            'priority' => \App\Models\Notification::PRIORITY_URGENT,
-        ]);
+        $this->notificationService->send(
+            userId: $userId,
+            type: \App\Models\Notification::TYPE_SECURITY,
+            title: 'مسدودسازی حساب کاربری',
+            message: 'حساب کاربری شما به دلیل نقض مکرر قوانین در سیستم پیام‌رسانی مسدود شد.',
+            priority: \App\Models\Notification::PRIORITY_URGENT
+        );
 
         $this->cache->forget('message_moderation_stats_v2');
     }

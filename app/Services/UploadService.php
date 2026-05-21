@@ -6,6 +6,7 @@ namespace App\Services;
 use Core\Database;
 
 use App\Contracts\LoggerInterface;
+use App\Contracts\UploadServiceInterface;
 use App\Services\SettingService;
 /**
  * UploadService — آپلود کاملاً امن (فقط تصویر)
@@ -41,7 +42,7 @@ use App\Services\SettingService;
  *   if (!$result['success']) { ... }
  *   $path = $result['path'];  // 'folder-name/abc123def456789012.jpg'
  */
-class UploadService extends \App\Services\BaseService
+class UploadService extends \App\Services\BaseService implements UploadServiceInterface
 {
     // ── MIME های مجاز (سفیدلیست کامل) ──────────────────────────────────────
     public const IMAGE_MIMES = [

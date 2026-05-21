@@ -22,6 +22,7 @@ class OutboxPublisher extends BaseService
 {
     private const MAX_ATTEMPTS = 5;
     private const DLQ_THRESHOLD = 3;
+    private const MAX_RETRY_DELAY_SECONDS = 3600;
 
     public function __construct(
         private Database $db,
@@ -137,7 +138,11 @@ class OutboxPublisher extends BaseService
 
     private function markForRetry(object $event, \Throwable $e): void
     {
-        $delay = min(60 * (2 ** ((int)$event->attempts - 1)), 3600);
+        $attempts = max(1, (int)$event->attempts);
+        $baseDelay = 60; // 1 minute base to avoid aggressive retries
+        $delay = min(self::MAX_RETRY_DELAY_SECONDS, $baseDelay * (2 ** ($attempts - 1)));
+        $jitter = random_int(5, 30);
+        $delay += $jitter;
 
         $this->db->execute(
             "UPDATE outbox_events 

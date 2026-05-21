@@ -11,6 +11,9 @@ use App\Contracts\WalletServiceInterface;
 use App\Contracts\NotificationServiceInterface;
 use App\Services\User\UserService;
 use App\Services\Shared\ReferralService;
+use App\Services\XPEngine;
+use App\Services\User\UserScoreService;
+use App\Services\Shared\RatingService;
 use Core\Cache;
 use Core\TransactionWrapper;
 use Core\EventDispatcher;
@@ -48,6 +51,9 @@ class ContentService extends \App\Services\BaseService
     private TransactionWrapper $transactionWrapper;
     private EventDispatcher $eventDispatcher;
     private SettingService $settingService;
+    private XPEngine $xpEngine;
+    private UserScoreService $userScoreService;
+    private RatingService $ratingService;
     private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
     // متن تعهدنامه
     private const AGREEMENT_TEXT = <<<EOT
@@ -79,6 +85,9 @@ EOT;
         LoggerInterface $logger,
         Cache $cache,
         SettingService $settingService,
+        XPEngine $xpEngine,
+        UserScoreService $userScoreService,
+        RatingService $ratingService,
         ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
@@ -93,6 +102,9 @@ EOT;
         $this->eventDispatcher = $eventDispatcher;
         $this->cache = $cache;
         $this->settingService = $settingService;
+        $this->xpEngine = $xpEngine;
+        $this->userScoreService = $userScoreService;
+        $this->ratingService = $ratingService;
         $this->cacheInvalidation = $cacheInvalidation;
     }
 
@@ -224,6 +236,62 @@ EOT;
                 'approved_by' => $adminId,
             ]);
 
+            // 🏆 Award XP to content creator
+            try {
+                $this->xpEngine->awardXP(
+                    (int)$submission->user_id,
+                    'content',
+                    'content_approved',
+                    (int)$submissionId
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('content.approval.xp_failed', [
+                    'user_id' => $submission->user_id,
+                    'submission_id' => $submissionId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+
+            // 📊 Record approval score event
+            try {
+                $this->userScoreService->applyEventDelta(
+                    (int)$submission->user_id,
+                    'activity',
+                    10.0,  // Base points for content approval
+                    'content_approved',
+                    [
+                        'submission_id' => $submissionId,
+                        'title' => $submission->title,
+                        'approved_by' => $adminId
+                    ]
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('content.approval.score_event_failed', [
+                    'user_id' => $submission->user_id,
+                    'submission_id' => $submissionId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+
+            // 📝 Create initial rating record (for content quality tracking)
+            try {
+                $this->ratingService->rate(
+                    raterId: $adminId,
+                    ratedId: (int)$submission->user_id,
+                    refType: 'content_submission',
+                    refId: $submissionId,
+                    rating: 5,  // Default high rating for approved content
+                    review: 'محتوای تأیید‌شده از طرف ادمین',
+                    ratedType: 'user'
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('content.approval.rating_failed', [
+                    'user_id' => $submission->user_id,
+                    'submission_id' => $submissionId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+
             // Send notification
             $this->sendNotification(
                 $submission->user_id,
@@ -256,6 +324,103 @@ EOT;
                 'line'          => $e->getLine(),
             ]);
             return $this->errorResponse('خطا در تأیید محتوا.');
+        }
+    }
+
+    /**
+     * ثبت نظر و امتیاز برای محتوای منتشرشده (از طرف کاربران)
+     * 
+     * @param int $userId ID کاربر داری‌الرتبه
+     * @param int $submissionId ID محتوا
+     * @param int $rating امتیاز (1-5)
+     * @param string|null $review متن نظر
+     * @return array
+     */
+    public function rateContent(int $userId, int $submissionId, int $rating, ?string $review = null): array
+    {
+        try {
+            // Validation
+            if ($rating < 1 || $rating > 5) {
+                return $this->errorResponse('امتیاز باید بین ۱ تا ۵ باشد.');
+            }
+
+            $submission = $this->submissionModel->find($submissionId);
+            if (!$submission) {
+                return $this->errorResponse('محتوا یافت نشد.');
+            }
+
+            // Prevent self-rating
+            if ((int)$submission->user_id === $userId) {
+                return $this->errorResponse('نمی‌توانید برای محتوای خود نظر دهید.');
+            }
+
+            // Sanitize review
+            if ($review !== null) {
+                $review = $this->sanitizeText($review);
+            }
+
+            // Record rating through shared rating service
+            $ratingResult = $this->ratingService->rate(
+                raterId: $userId,
+                ratedId: (int)$submission->user_id,
+                refType: 'content_submission',
+                refId: $submissionId,
+                rating: $rating,
+                review: $review,
+                ratedType: 'user'
+            );
+
+            if (!$ratingResult) {
+                return $this->errorResponse('امتیاز ثبت نشد. شاید قبلاً نظر دادید.');
+            }
+
+            // Award XP to rater for engagement
+            try {
+                $this->xpEngine->awardXP(
+                    $userId,
+                    'content',
+                    'content_rated',
+                    $submissionId
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('content.rating.xp_failed', [
+                    'user_id' => $userId,
+                    'submission_id' => $submissionId
+                ]);
+            }
+
+            // Record engagement score event
+            try {
+                $this->userScoreService->applyEventDelta(
+                    $userId,
+                    'activity',
+                    2.0,  // Small points for rating
+                    'content_rated',
+                    ['submission_id' => $submissionId, 'rating' => $rating]
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('content.rating.score_event_failed', [
+                    'user_id' => $userId,
+                    'submission_id' => $submissionId
+                ]);
+            }
+
+            $this->logInfo('content.rated', [
+                'rater_id' => $userId,
+                'creator_id' => $submission->user_id,
+                'submission_id' => $submissionId,
+                'rating' => $rating
+            ]);
+
+            return $this->successResponse('نظر شما با موفقیت ثبت شد.');
+
+        } catch (\Throwable $e) {
+            $this->logError('content.rating.failed', [
+                'user_id' => $userId,
+                'submission_id' => $submissionId,
+                'error' => $e->getMessage()
+            ]);
+            return $this->errorResponse('خطا در ثبت نظر.');
         }
     }
 
@@ -475,6 +640,61 @@ EOT;
     }
 
     /**
+     * ایجاد درآمد محتوا (ادمین) - wrapper with idempotency support
+     * 
+     * @param array $data
+     * @param int $adminId
+     * @param string|null $idempotencyKey
+     * @return array
+     */
+    public function createRevenue(array $data, int $adminId, ?string $idempotencyKey = null): array
+    {
+        try {
+            $submissionId = (int)($data['submission_id'] ?? 0);
+            if ($submissionId <= 0) {
+                return $this->errorResponse('ID محتوا نامعتبر است.');
+            }
+
+            $totalRevenue = (float)($data['total_revenue'] ?? 0);
+            if ($totalRevenue <= 0) {
+                return $this->errorResponse('مبلغ درآمد باید بیشتر از صفر باشد.');
+            }
+
+            $period = trim((string)($data['period'] ?? ''));
+            if (empty($period)) {
+                return $this->errorResponse('دوره درآمد الزامی است.');
+            }
+
+            $payload = [
+                'submission_id' => $submissionId,
+                'admin_id' => $adminId,
+                'period' => $period,
+                'total_revenue' => $totalRevenue,
+            ];
+
+            $explicitKey = $idempotencyKey !== null && $idempotencyKey !== ''
+                ? $idempotencyKey
+                : \Core\IdempotencyKey::generateFromPayload('content_revenue_creation', $payload);
+
+            return $this->idempotent('content.createRevenue', $adminId, $payload, function () use (
+                $submissionId,
+                $adminId,
+                $data
+            ) {
+                return $this->recordRevenue($submissionId, $adminId, $data);
+            }, $explicitKey);
+
+        } catch (\Throwable $e) {
+            $this->logError('content.createRevenue.failed', [
+                'submission_id' => (int)($data['submission_id'] ?? 0),
+                'admin_id' => $adminId,
+                'error' => $e->getMessage(),
+            ]);
+            return $this->errorResponse('خطا در ثبت درآمد.');
+        }
+    }
+
+    /**
      * پرداخت درآمد به کیف پول کاربر (ادمین)
      * 
      * @param int $revenueId
@@ -512,7 +732,8 @@ EOT;
                         'درآمد محتوا - دوره %s - %s',
                         $revenue->period,
                         $this->escapeText($revenue->video_title ?? '')
-                    )
+                    ),
+                    'idempotency_key' => "content_revenue_payment_{$revenueId}",
                 ]
             );
 

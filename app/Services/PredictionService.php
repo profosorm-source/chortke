@@ -51,7 +51,7 @@ class PredictionService extends \App\Services\BaseService
     /**
      * @throws \RuntimeException|\InvalidArgumentException
      */
-    public function placeBet(int $userId, int $gameId, string $prediction, float $amount): array
+    public function placeBet(int $userId, int $gameId, string $prediction, float $amount, ?string $idempotencyKey = null): array
     {
         // اعتبارسنجی اولیه (قبل از transaction)
         if (!in_array($prediction, ['home', 'away', 'draw'], true)) {
@@ -62,78 +62,98 @@ class PredictionService extends \App\Services\BaseService
             throw new \InvalidArgumentException('مبلغ شرط باید بیشتر از صفر باشد.');
         }
 
-        try {
-            $this->db->beginTransaction();
+        $payload = [
+            'user_id' => $userId,
+            'game_id' => $gameId,
+            'prediction' => $prediction,
+            'amount' => $amount,
+        ];
 
-            // P-3 Fix: Lock game and check deadline using authoritative database NOW() time to prevent TOCTOU race conditions
-            $game = $this->db->fetch(
-                "SELECT *, CASE WHEN bet_deadline > NOW() THEN 1 ELSE 0 END as is_deadline_valid 
-                 FROM prediction_games 
-                 WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
-                [$gameId]
-            );
+        $explicitKey = $idempotencyKey !== null && $idempotencyKey !== ''
+            ? $idempotencyKey
+            : \Core\IdempotencyKey::generateFromPayload('prediction_place_bet', $payload);
 
-            if (!$game) {
-                throw new \RuntimeException('بازی یافت نشد.');
-            }
-            if ($game->status !== 'open') {
-                throw new \RuntimeException('این بازی برای شرط‌بندی باز نیست.');
-            }
-            if (!(bool)($game->is_deadline_valid ?? false)) {
-                throw new \RuntimeException('مهلت ثبت شرط تمام شده است.');
-            }
-            if ($amount < (float)$game->min_bet_usdt) {
-                throw new \InvalidArgumentException("حداقل مبلغ شرط {$game->min_bet_usdt} USDT است.");
-            }
-            if ($amount > (float)$game->max_bet_usdt) {
-                throw new \InvalidArgumentException("حداکثر مبلغ شرط {$game->max_bet_usdt} USDT است.");
-            }
+        return $this->idempotent('prediction.placeBet', $userId, $payload, function () use (
+            $userId,
+            $gameId,
+            $prediction,
+            $amount,
+            $explicitKey
+        ) {
+            try {
+                $this->db->beginTransaction();
 
-            // بررسی شرط تکراری — با FOR UPDATE داخل transaction
-            if ($this->betModel->userHasBetForUpdate($userId, $gameId)) {
-                throw new \RuntimeException('شما قبلاً در این بازی شرط‌بندی کرده‌اید.');
-            }
+                // P-3 Fix: Lock game and check deadline using authoritative database NOW() time to prevent TOCTOU race conditions
+                $game = $this->db->fetch(
+                    "SELECT *, CASE WHEN bet_deadline > NOW() THEN 1 ELSE 0 END as is_deadline_valid 
+                     FROM prediction_games 
+                     WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+                    [$gameId]
+                );
 
-            // کسر موجودی از کیف پول
-            $debitResult = $this->walletService->withdraw(
-                $userId,
-                $amount,
-                'usdt',
-                [
-                    'type'        => 'prediction_bet',
-                    'description' => "شرط بازی #{$gameId}: {$game->title}",
+                if (!$game) {
+                    throw new \RuntimeException('بازی یافت نشد.');
+                }
+                if ($game->status !== 'open') {
+                    throw new \RuntimeException('این بازی برای شرط‌بندی باز نیست.');
+                }
+                if (!(bool)($game->is_deadline_valid ?? false)) {
+                    throw new \RuntimeException('مهلت ثبت شرط تمام شده است.');
+                }
+                if ($amount < (float)$game->min_bet_usdt) {
+                    throw new \InvalidArgumentException("حداقل مبلغ شرط {$game->min_bet_usdt} USDT است.");
+                }
+                if ($amount > (float)$game->max_bet_usdt) {
+                    throw new \InvalidArgumentException("حداکثر مبلغ شرط {$game->max_bet_usdt} USDT است.");
+                }
+
+                // بررسی شرط تکراری — با FOR UPDATE داخل transaction
+                if ($this->betModel->userHasBetForUpdate($userId, $gameId)) {
+                    throw new \RuntimeException('شما قبلاً در این بازی شرط‌بندی کرده‌اید.');
+                }
+
+                // کسر موجودی از کیف پول
+                $debitResult = $this->walletService->withdraw(
+                    $userId,
+                    $amount,
+                    'usdt',
+                    [
+                        'type'        => 'prediction_bet',
+                        'description' => "شرط بازی #{$gameId}: {$game->title}",
+                        'game_id'     => $gameId,
+                        'idempotency_key' => $explicitKey,
+                    ]
+                );
+
+                if (!$debitResult['success']) {
+                    throw new \RuntimeException($debitResult['message'] ?? 'موجودی کافی نیست.');
+                }
+
+                // ثبت شرط
+                $bet = $this->betModel->create([
+                    'user_id'     => $userId,
                     'game_id'     => $gameId,
-                ]
-            );
+                    'prediction'  => $prediction,
+                    'amount_usdt' => $amount,
+                ]);
 
-            if (!$debitResult['success']) {
-                throw new \RuntimeException($debitResult['message'] ?? 'موجودی کافی نیست.');
+                if (!$bet) {
+                    throw new \RuntimeException('خطا در ثبت شرط. لطفاً دوباره تلاش کنید.');
+                }
+
+                $this->db->commit();
+
+                return [
+                    'success' => true,
+                    'bet_id'  => $bet->id,
+                    'message' => 'شرط‌بندی با موفقیت ثبت شد.',
+                ];
+
+            } catch (\Exception $e) {
+                $this->db->rollBack();
+                throw $e;
             }
-
-            // ثبت شرط
-            $bet = $this->betModel->create([
-                'user_id'     => $userId,
-                'game_id'     => $gameId,
-                'prediction'  => $prediction,
-                'amount_usdt' => $amount,
-            ]);
-
-            if (!$bet) {
-                throw new \RuntimeException('خطا در ثبت شرط. لطفاً دوباره تلاش کنید.');
-            }
-
-            $this->db->commit();
-
-            return [
-                'success' => true,
-                'bet_id'  => $bet->id,
-                'message' => 'شرط‌بندی با موفقیت ثبت شد.',
-            ];
-
-        } catch (\Exception $e) {
-            $this->db->rollBack();
-            throw $e;
-        }
+        }, $explicitKey);
     }
 
     // ─────────────────────────────────────────────────────────────────
