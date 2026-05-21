@@ -66,12 +66,21 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
                 'image' => $cFile
             ];
 
-            curl_setopt($ch, CURLOPT_URL, $this->apiUrl);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 15); // هوش مصنوعی شاید کمی زمان ببرد
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // برای تست لوکال با خودمیزبان
+            // Comprehensive timeout configuration for AI processing
+            $timeout = (int)config('services.deepface.timeout', 30);  // AI might need longer
+            $connectTimeout = max(3, (int)floor($timeout / 4));
+
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $this->apiUrl,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $postData,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => $timeout,                    // Total timeout for AI analysis
+                CURLOPT_CONNECTTIMEOUT => $connectTimeout,      // Connection timeout
+                CURLOPT_DNS_CACHE_TIMEOUT => 120,               // Cache DNS
+                CURLOPT_SSL_VERIFYPEER => false,                // For local self-hosted testing
+                CURLOPT_FAILONERROR => false,                   // Don't fail silently
+            ]);
 
             if ($this->apiToken) {
                 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -82,8 +91,27 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
             $runner = function () use ($ch) {
                 $raw = curl_exec($ch);
                 $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $curlErr = curl_errno($ch);
+                $curlErrMsg = curl_error($ch);
+
+                // Handle curl-level errors (connection timeouts, DNS failures, etc.)
+                if ($curlErr !== 0) {
+                    throw new \Core\Exceptions\TransientException(
+                        "درخواست AI انجام نشد: {$curlErrMsg} (کد: {$curlErr})"
+                    );
+                }
+
+                // Handle HTTP-level errors
+                if ($code >= 500 || $code === 408 || $code === 504) {
+                    throw new \Core\Exceptions\TransientException(
+                        "سرویس AI پاسخ نداد (HTTP {$code})"
+                    );
+                }
+
                 if ($code !== 200 || !$raw) {
-                    throw new \Core\Exceptions\TransientException("Invalid AI service response (HTTP {$code})");
+                    throw new \Core\Exceptions\TransientException(
+                        "Invalid AI service response (HTTP {$code})"
+                    );
                 }
                 return [$raw, $code];
             };

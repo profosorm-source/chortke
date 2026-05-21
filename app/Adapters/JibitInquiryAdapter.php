@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Adapters;
 
+use App\Contracts\CircuitBreakerInterface;
 use App\Contracts\LoggerInterface;
 
 /**
@@ -17,13 +18,13 @@ class JibitInquiryAdapter implements BankInquiryAdapter
     private string $baseUrl = 'https://api.jibit.ir/v1/';
     private LoggerInterface $logger;
     private \Core\Cache $cache;
-    private \Core\CircuitBreaker $circuitBreaker;
+    private CircuitBreakerInterface $circuitBreaker;
 
-    public function __construct(LoggerInterface $logger, \Core\Cache $cache)
+    public function __construct(LoggerInterface $logger, \Core\Cache $cache, CircuitBreakerInterface $circuitBreaker)
     {
         $this->logger = $logger;
         $this->cache  = $cache;
-        $this->circuitBreaker = new \Core\CircuitBreaker($cache);
+        $this->circuitBreaker = $circuitBreaker;
         // دریافت متغیرهای اتصال از .env
         $this->apiKey = config('services.jibit.api_key');
         $this->apiSecret = config('services.jibit.api_secret');
@@ -134,7 +135,7 @@ class JibitInquiryAdapter implements BankInquiryAdapter
     }
 
     /**
-     * اجرای درخواست خام با CURL
+     * اجرای درخواست خام با CURL - with comprehensive timeout and error handling
      */
     private function makeRequest(string $method, string $endpoint, array $data = [], ?string $token = null): ?array
     {
@@ -150,9 +151,18 @@ class JibitInquiryAdapter implements BankInquiryAdapter
             $headers[] = 'Authorization: Bearer ' . $token;
         }
 
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        // Comprehensive timeout handling to prevent hanging requests
+        $timeout = (int)config('services.jibit.timeout', 10);
+        $connectTimeout = max(2, (int)floor($timeout / 3));
+
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $timeout,                    // Total timeout
+            CURLOPT_CONNECTTIMEOUT => $connectTimeout,      // Connection timeout
+            CURLOPT_DNS_CACHE_TIMEOUT => 120,               // Cache DNS for 2 minutes
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_FAILONERROR => false,                   // Don't fail silently on HTTP errors
+        ]);
 
         if ($method === 'POST') {
             curl_setopt($ch, CURLOPT_POST, true);
@@ -163,10 +173,31 @@ class JibitInquiryAdapter implements BankInquiryAdapter
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErr = curl_errno($ch);
+        $curlErrMsg = curl_error($ch);
         curl_close($ch);
 
-        if ($httpCode >= 200 && $httpCode < 300) {
+        // Handle curl errors (connection timeouts, etc.)
+        if ($curlErr !== 0) {
+            $this->logger->warning('jibit.request.curl_error', [
+                'endpoint' => $endpoint,
+                'error_code' => $curlErr,
+                'error_msg' => $curlErrMsg,
+                'timeout' => $timeout,
+            ]);
+            throw new \RuntimeException("درخواست بانکی انجام نشد: {$curlErrMsg} (کد: {$curlErr})");
+        }
+
+        if ($httpCode >= 200 && $httpCode < 300 && $response) {
             return json_decode($response, true);
+        }
+
+        if ($httpCode >= 500) {
+            throw new \RuntimeException("سرویس بانکی در دسترس نیست (HTTP {$httpCode})");
+        }
+
+        if ($httpCode === 408 || $httpCode === 504) {
+            throw new \RuntimeException("مهلت اتصال به سرویس بانکی تمام شد (HTTP {$httpCode})");
         }
 
         return json_decode($response, true) ?: null;

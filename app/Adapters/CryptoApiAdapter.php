@@ -462,14 +462,28 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                 ]
             ]);
 
+            $timeout = (int)$this->settingService->get('solana_api_timeout', 15);
+            $connectTimeout = max(2, (int)floor($timeout / 3));
+
             $ch = \curl_init($rpcUrl);
-            \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            \curl_setopt($ch, CURLOPT_POST, true);
-            \curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            \curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $payload,
+                CURLOPT_TIMEOUT => $timeout,                    // Total timeout
+                CURLOPT_CONNECTTIMEOUT => $connectTimeout,      // Connection timeout
+                CURLOPT_DNS_CACHE_TIMEOUT => 120,               // Cache DNS
+                CURLOPT_FAILONERROR => false,                   // Don't fail silently
+            ]);
             \curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-            \curl_setopt($ch, CURLOPT_TIMEOUT, 15);
             $response = \curl_exec($ch);
+            $curlErr = \curl_errno($ch);
+            $curlErrMsg = \curl_error($ch);
             \curl_close($ch);
+
+            if ($curlErr !== 0) {
+                return ['status' => 'error', 'reason' => "خطا در اتصال به Solana RPC: {$curlErrMsg}"];
+            }
 
             if (!$response) {
                 return ['status' => 'error', 'reason' => 'خطا در اتصال به Solana RPC'];

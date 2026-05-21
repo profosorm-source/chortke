@@ -6,6 +6,7 @@ namespace App\Adapters;
 
 use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
+use App\Contracts\ValidatorFactoryInterface;
 use App\Models\Ads;
 use App\Services\WalletService;
 use Core\Database;
@@ -22,9 +23,10 @@ class NotificationAdAdapter extends AdapterBase implements AdSystemContract
         private WalletService $walletService,
         private Database $db,
         LoggerInterface $logger,
-        SettingService $settingService
+        SettingService $settingService,
+        ValidatorFactoryInterface $validatorFactory
     ) {
-        parent::__construct($logger, $settingService);
+        parent::__construct($logger, $settingService, $validatorFactory);
     }
 
     public function getType(): string { return 'notification'; }

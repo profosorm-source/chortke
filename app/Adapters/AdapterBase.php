@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Adapters;
 
 use App\Contracts\LoggerInterface;
+use App\Contracts\ValidatorFactoryInterface;
 use Core\Exceptions\ValidationException;
 use App\Services\SettingService;
 
@@ -24,11 +25,13 @@ abstract class AdapterBase
 
     protected LoggerInterface $logger;
     protected SettingService $settingService;
+    protected ?ValidatorFactoryInterface $validatorFactory;
 
-    public function __construct(LoggerInterface $logger, SettingService $settingService)
+    public function __construct(LoggerInterface $logger, SettingService $settingService, ?ValidatorFactoryInterface $validatorFactory = null)
     {
         $this->logger = $logger;
         $this->settingService = $settingService;
+        $this->validatorFactory = $validatorFactory;
     }
 
     /**
@@ -39,7 +42,9 @@ abstract class AdapterBase
     {
         // 1. اگر مستقیماً آرایه‌ای از Rules ارسال شده، خودکار با Validator سیستمی ولیدیت کن
         if (is_array($rulesOrUpdate)) {
-            $validator = new \Core\Validator($data, $rulesOrUpdate);
+            $validator = $this->validatorFactory
+                ? $this->validatorFactory->make($data, $rulesOrUpdate)
+                : new \Core\Validator($data, $rulesOrUpdate);
             if (!$validator->passes()) {
                 throw new ValidationException($validator->errors());
             }

@@ -6,6 +6,7 @@ namespace App\Adapters;
 
 use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
+use App\Contracts\ValidatorFactoryInterface;
 use Core\Database;
 use App\Services\SettingService;
 use App\Constants\PercentageConstants;
@@ -21,9 +22,10 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
         private \App\Services\WalletService $walletService,
         private Database $db,
         LoggerInterface $logger,
-        SettingService $settingService
+        SettingService $settingService,
+        ValidatorFactoryInterface $validatorFactory
     ) {
-        parent::__construct($logger, $settingService);
+        parent::__construct($logger, $settingService, $validatorFactory);
     }
 
     public function getType(): string 
