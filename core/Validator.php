@@ -8,6 +8,9 @@ class Validator
     protected array $data = [];
     protected array $rules = [];
     protected array $errors = [];
+    protected array $customValidations = [];
+    protected ?callable $authorizationCheck = null;
+    protected array $messages = [];
 
     private ?Database $db = null;
 
@@ -375,5 +378,175 @@ class Validator
     public function all(): array
     {
         return $this->data;
+    }
+
+    // ============================================================
+    // Pipeline Methods - برای chain-able fluent validation
+    // ============================================================
+
+    /**
+     * Set custom error messages for fields
+     * 
+     * @param array $messages Custom messages
+     * @return self
+     */
+    public function messages(array $messages): self
+    {
+        $this->messages = $messages;
+        return $this;
+    }
+
+    /**
+     * Add a custom validation rule (callback-based)
+     * 
+     * @param string $field Field name
+     * @param callable $callback Validation callback (receives field value, returns bool)
+     * @param string $errorMessage Error message if validation fails
+     * @return self
+     */
+    public function custom(string $field, callable $callback, string $errorMessage): self
+    {
+        $this->customValidations[$field] = [
+            'callback' => $callback,
+            'message' => $errorMessage
+        ];
+        return $this;
+    }
+
+    /**
+     * Set an authorization check (runs before validation)
+     * 
+     * @param callable $callback Authorization check (returns bool)
+     * @return self
+     */
+    public function authorize(callable $callback): self
+    {
+        $this->authorizationCheck = $callback;
+        return $this;
+    }
+
+    /**
+     * Run validation and return result array (no exception)
+     * 
+     * @return array ['valid' => bool, 'data' => array|null, 'errors' => array, 'message' => string]
+     */
+    public function result(): array
+    {
+        // Step 1: Authorization check
+        if ($this->authorizationCheck !== null) {
+            try {
+                if (!($this->authorizationCheck)()) {
+                    return [
+                        'valid' => false,
+                        'data' => null,
+                        'errors' => ['authorization' => 'درخواست غیرمجاز'],
+                        'message' => 'شما دسترسی لازم برای این عملیات را ندارید'
+                    ];
+                }
+            } catch (\Throwable $e) {
+                return [
+                    'valid' => false,
+                    'data' => null,
+                    'errors' => ['authorization' => $e->getMessage()],
+                    'message' => 'خطا در بررسی دسترسی: ' . $e->getMessage()
+                ];
+            }
+        }
+
+        // Step 2: Run standard rules validation if rules are set
+        if (!empty($this->rules)) {
+            try {
+                $this->validate($this->rules);
+            } catch (\InvalidArgumentException $e) {
+                return [
+                    'valid' => false,
+                    'data' => null,
+                    'errors' => [],
+                    'message' => $e->getMessage()
+                ];
+            }
+        }
+
+        // If standard validation failed, return errors
+        if (!empty($this->errors)) {
+            return [
+                'valid' => false,
+                'data' => null,
+                'errors' => $this->errors,
+                'message' => 'اطلاعات ورودی نامعتبر است'
+            ];
+        }
+
+        // Step 3: Run custom validations
+        if (!empty($this->customValidations)) {
+            foreach ($this->customValidations as $field => $validation) {
+                try {
+                    $value = $this->data[$field] ?? null;
+                    if (!($validation['callback'])($value)) {
+                        $this->addError($field, $validation['message']);
+                    }
+                } catch (\Throwable $e) {
+                    $this->addError($field, 'خطا در بررسی: ' . $e->getMessage());
+                }
+            }
+
+            if (!empty($this->errors)) {
+                return [
+                    'valid' => false,
+                    'data' => null,
+                    'errors' => $this->errors,
+                    'message' => 'اطلاعات ورودی نامعتبر است'
+                ];
+            }
+        }
+
+        return [
+            'valid' => true,
+            'data' => $this->data,
+            'errors' => [],
+            'message' => ''
+        ];
+    }
+
+    /**
+     * Validate and throw BusinessException on failure
+     * 
+     * @return array Validated data
+     * @throws \App\Exceptions\BusinessException If validation fails
+     */
+    public function validateOrFail(): array
+    {
+        $result = $this->result();
+        if (!$result['valid']) {
+            $errorMessage = $result['message'];
+            if (!empty($result['errors'])) {
+                $firstError = reset($result['errors']);
+                $errorMessage = is_string($firstError) ? $firstError : $result['message'];
+            }
+            throw new \App\Exceptions\BusinessException($errorMessage);
+        }
+        return $result['data'];
+    }
+
+    /**
+     * Check if validation passed (alias for !fails())
+     * 
+     * @return bool
+     */
+    public function passes(): bool
+    {
+        return !$this->fails();
+    }
+
+    /**
+     * Static factory for fluent interface
+     * 
+     * @param array $data Input data
+     * @param array $rules Validation rules
+     * @return self
+     */
+    public static function create(array $data, array $rules = []): self
+    {
+        return new self($data, $rules);
     }
 }
