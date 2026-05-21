@@ -258,8 +258,8 @@ class BannerController extends BaseAdminController
 
     public function stats()
     {
-        // استفاده از Service برای دریافت آمار
-        $stats = $this->searchService->getBannerStats();
+        // استفاده از BannerService برای دریافت آمار بنرها
+        $stats = $this->bannerService->getStats();
         $placements = $this->placement->allWithBannerCount();
         return view('admin.banners.stats', compact('stats', 'placements'));
     }

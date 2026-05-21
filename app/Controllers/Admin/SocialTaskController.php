@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Admin;
 
+use App\Services\AdvancedSearchService;
 use App\Services\SocialTask\SocialTaskService;
 use App\Services\SocialTask\TrustScoreService;
 use App\Services\SocialTask\RatingService;
@@ -13,6 +14,7 @@ use Core\Database;
 
 class SocialTaskController extends BaseAdminController
 {
+    private AdvancedSearchService $searchService;
     private SocialTaskService      $service;
     private TrustScoreService      $trust;
     private RatingService          $ratingService;
@@ -22,6 +24,7 @@ class SocialTaskController extends BaseAdminController
     private AuditTrail $auditTrail;
 
     public function __construct(
+        AdvancedSearchService  $searchService,
         SocialTaskService      $service,
         TrustScoreService      $trust,
         RatingService          $ratingService,
@@ -31,6 +34,7 @@ class SocialTaskController extends BaseAdminController
         AuditTrail             $auditTrail
     ) {
         parent::__construct();
+        $this->searchService = $searchService;
         $this->service       = $service;
         $this->trust         = $trust;
         $this->ratingService = $ratingService;
@@ -48,14 +52,22 @@ class SocialTaskController extends BaseAdminController
     {
         $page    = max(1, (int)($this->request->get('page') ?? 1));
         $limit   = 30;
+        $offset  = ($page - 1) * $limit;
         $filters = [
             'status'   => $this->request->get('status')   ?? '',
             'platform' => $this->request->get('platform') ?? '',
             'search'   => $this->request->get('search')   ?? '',
         ];
 
-        [$ads, $total] = $this->service->getAdsForAdmin($filters, $limit, ($page - 1) * $limit);
-        $stats         = $this->service->getAdStatsForAdmin();
+        if (!empty($filters['search'])) {
+            $result = $this->searchService->searchAdTasks($filters['search'], array_merge($filters, ['type' => 'social_task']), $limit, $offset);
+            $ads = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+        } else {
+            [$ads, $total] = $this->service->getAdsForAdmin($filters, $limit, $offset);
+        }
+
+        $stats = $this->service->getAdStatsForAdmin();
 
         view('admin.social-tasks.index', [
             'title'      => 'مدیریت آگهی‌های اجتماعی',

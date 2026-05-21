@@ -269,29 +269,9 @@ class ContentController extends BaseAdminController
             $params[] = $filters['platform'];
         }
 
-        if (!empty($filters['search'])) {
-            $where[] = '(cs.title LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)';
-            $search = '%' . $filters['search'] . '%';
-            $params[] = $search;
-            $params[] = $search;
-            $params[] = $search;
-        }
-
-        $sql = "SELECT 
-                    cs.id,
-                    u.full_name as user_name,
-                    u.email as user_email,
-                    cs.title,
-                    cs.platform,
-                    cs.video_url,
-                    cs.category,
-                    cs.status,
-                    cs.created_at,
-                    cs.approved_at
-                FROM content_submissions cs
-                JOIN users u ON cs.user_id = u.id
-                WHERE " . implode(' AND ', $where) . "
-                ORDER BY cs.created_at DESC";
+        $search = trim($_GET['search'] ?? '');
+        $result = $this->searchService->searchContentForExport($search, $filters, 5000, 0);
+        $items = $result['items'] ?? [];
 
         $headers = [
             'شناسه',
@@ -307,8 +287,7 @@ class ContentController extends BaseAdminController
         ];
 
         $result = $this->bulkService->exportToCSV(
-            $sql,
-            $params,
+            $items,
             $headers,
             'content_export'
         );

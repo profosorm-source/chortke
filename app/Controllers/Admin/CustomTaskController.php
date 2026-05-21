@@ -5,6 +5,7 @@ namespace App\Controllers\Admin;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
 use App\Models\InteractionModel;
+use App\Services\AdvancedSearchService;
 use App\Services\CustomTaskService;
 use App\Services\Analytics\AnalyticsService;
 use App\Services\Shared\DisputeService;
@@ -13,6 +14,7 @@ use App\Controllers\Admin\BaseAdminController;
 
 class CustomTaskController extends BaseAdminController
 {
+    private AdvancedSearchService $searchService;
     private CustomTaskService $customTaskService;
     private AnalyticsService $analyticsService;
     private WalletService $walletService;
@@ -22,6 +24,7 @@ class CustomTaskController extends BaseAdminController
     private InteractionModel $interactionModel;
 
     public function __construct(
+        AdvancedSearchService $searchService,
         CustomTaskService $customTaskService,
         AnalyticsService $analyticsService,
         WalletService $walletService,
@@ -31,6 +34,7 @@ class CustomTaskController extends BaseAdminController
         InteractionModel $interactionModel
     ) {
         parent::__construct();
+        $this->searchService = $searchService;
         $this->customTaskService = $customTaskService;
         $this->analyticsService = $analyticsService;
         $this->walletService = $walletService;
@@ -56,8 +60,14 @@ class CustomTaskController extends BaseAdminController
         $limit = 30;
         $offset = ($page - 1) * $limit;
 
-        $tasks = $this->adsModel->adminList('custom_task', $filters['status'] ?? '', $limit, $offset);
-        $total = $this->adsModel->adminCount('custom_task', $filters['status'] ?? '');
+        if (!empty($filters['search'])) {
+            $result = $this->searchService->searchAdTasks($filters['search'], array_merge($filters, ['type' => 'custom_task']), $limit, $offset);
+            $tasks = $result['items'] ?? [];
+            $total = $result['total'] ?? 0;
+        } else {
+            $tasks = $this->adsModel->adminList('custom_task', $filters['status'] ?? '', $limit, $offset);
+            $total = $this->adsModel->adminCount('custom_task', $filters['status'] ?? '');
+        }
 
         return view('admin.custom-tasks.index', [
             'tasks' => $tasks,

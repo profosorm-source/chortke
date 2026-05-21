@@ -8,7 +8,7 @@ use App\Models\LotteryParticipation;
 use App\Models\LotteryDailyNumber;
 use App\Models\LotteryChanceLog;
 use App\Services\LotteryService;
-use Core\Validator;
+use App\Validators\Requests\LotteryRoundRequest;
 use App\Controllers\Admin\BaseAdminController;
 
 class LotteryController extends BaseAdminController
@@ -72,52 +72,17 @@ class LotteryController extends BaseAdminController
 
     public function store()
     {
-                $input = \json_decode(\file_get_contents('php://input'), true) ?? $_POST;
+        $input = \json_decode(\file_get_contents('php://input'), true) ?? $_POST;
 
-        $validator = new Validator($input, [
-            'title' => 'required|min:3|max:255',
-            'type' => 'required|in:weekly,monthly',
-            'entry_fee' => 'required|numeric|min:0',
-            'prize_amount' => 'required|numeric|min:0',
-            'duration_days' => 'required|numeric|min:1|max:31',
-            'start_date' => 'required',
-            'end_date' => 'required',
-        ]);
-
-        if ($validator->fails()) {
-            return $this->response->json(['success' => false, 'errors' => $validator->errors()], 422);
+        $request = new LotteryRoundRequest($input);
+        if (!$request->validate()) {
+            return $this->response->json(['success' => false, 'errors' => $request->errors()], 422);
         }
 
-        $data = $validator->data();
-        $result = $this->lotteryService->createRound(user_id(), (array)$data);
+        $data = $request->validated();
+        $result = $this->lotteryService->createRound(user_id(), $data);
 
         return $this->response->json($result, $result['success'] ? 200 : 422);
-    }
-
-    public function show()
-    {
-                $id = (int)$this->request->param('id');
-
-        $roundModel = $this->lotteryRoundModel;
-        $participationModel = $this->lotteryParticipationModel;
-        $dailyModel = $this->lotteryDailyNumberModel;
-
-        $round = $this->lotteryService->getRound($id);
-        if (!$round) return view('errors.404');
-
-        $participants = $this->lotteryService->getRoundParticipants($id, 100);
-        $participantCount = $this->lotteryService->countRoundParticipants($id);
-        $dailyNumbers = $this->lotteryService->getRoundDailyNumbers($id);
-        $distribution = $this->lotteryService->getChanceDistribution($id);
-
-        return view('admin.lottery.show', [
-            'user' => user(),
-            'round' => $round,
-            'participants' => $participants,
-            'participantCount' => $participantCount,
-            'dailyNumbers' => $dailyNumbers,
-            'distribution' => $distribution,
-        ]);
     }
 
     public function generateNumbers()
