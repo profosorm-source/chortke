@@ -72,12 +72,30 @@ class BankCardController extends BaseUserController
     {
         $userId = $this->userId();
         $input = $this->request->all();
+
+        $validator = \Core\Validator::create($input, [
+            'card_number' => 'required|string|min:16|max:16',
+            'cardholder_name' => 'required|string|min:3|max:100',
+            'sheba' => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            $errors = $validator->errors();
+            $firstError = reset($errors);
+            $msg = is_array($firstError) ? reset($firstError) : $firstError;
+            $this->session->setFlash('error', $msg ?: 'اطلاعات ورودی نامعتبر است.');
+            $this->session->setFlash('old', $input);
+            $this->response->redirect(url('bank-cards/create'));
+            return;
+        }
+
+        $validatedData = $validator->data();
         
         // Convert request format to service expected payload
         $payload = [
-            'card_number' => $input['card_number'] ?? '',
-            'card_holder' => $input['cardholder_name'] ?? '',
-            'iban' => $input['sheba'] ?? ''
+            'card_number' => $validatedData['card_number'] ?? '',
+            'card_holder' => $validatedData['cardholder_name'] ?? '',
+            'iban' => $validatedData['sheba'] ?? ''
         ];
 
         $result = $this->bankCardService->create($userId, $payload);

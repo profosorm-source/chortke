@@ -81,8 +81,23 @@ class LotteryController extends BaseUserController
     public function join()
     {
         $input = \json_decode(\file_get_contents('php://input'), true) ?? $_POST;
-        $roundId = (int)($input['round_id'] ?? 0);
-        $idempotencyKey = trim((string)($input['idempotency_key'] ?? '')) ?: null;
+
+        $validator = \Core\Validator::create($input, [
+            'round_id' => 'required|numeric|min:1',
+            'idempotency_key' => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return $this->response->json([
+                'success' => false,
+                'message' => 'اطلاعات ورودی نامعتبر است.',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        $data = $validator->data();
+        $roundId = (int)($data['round_id'] ?? 0);
+        $idempotencyKey = trim((string)($data['idempotency_key'] ?? '')) ?: null;
 
         $result = $this->lotteryService->participate(user_id(), $roundId, $idempotencyKey);
         ApiRateLimiter::enforce('lottery_participate', (int)user_id(), true);
@@ -92,14 +107,24 @@ class LotteryController extends BaseUserController
 
     public function vote()
     {
-                $input = \json_decode(\file_get_contents('php://input'), true) ?? $_POST;
+        $input = \json_decode(\file_get_contents('php://input'), true) ?? $_POST;
 
-        $roundId = (int)($input['round_id'] ?? 0);
-        $votedNumber = (int)($input['voted_number'] ?? -1);
+        $validator = \Core\Validator::create($input, [
+            'round_id' => 'required|numeric|min:1',
+            'voted_number' => 'required|integer|min:0|max:9',
+        ]);
 
-        if ($votedNumber < 0 || $votedNumber > 9) {
-            return $this->response->json(['success' => false, 'message' => 'عدد نامعتبر.'], 422);
+        if ($validator->fails()) {
+            return $this->response->json([
+                'success' => false,
+                'message' => 'اطلاعات ورودی نامعتبر است.',
+                'errors'  => $validator->errors(),
+            ], 422);
         }
+
+        $data = $validator->data();
+        $roundId = (int)($data['round_id'] ?? 0);
+        $votedNumber = (int)($data['voted_number'] ?? -1);
 
         $result = $this->lotteryService->vote(user_id(), $roundId, $votedNumber);
         ApiRateLimiter::enforce('lottery_vote', (int)user_id(), true);

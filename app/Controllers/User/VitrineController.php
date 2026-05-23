@@ -136,53 +136,35 @@ class VitrineController extends BaseUserController
         $userId = (int) user_id();
         $data   = $this->request->body();
 
-        // ✅ Required fields validation
-        $required = ['title', 'description', 'category', 'price_usdt'];
-        foreach ($required as $field) {
-            if (empty(trim($data[$field] ?? ''))) {
-                $this->session->setFlash('error', 'لطفاً همه فیلدهای ضروری را پر کنید.');
-                redirect(url('/vitrine/' . ($data['listing_type'] === 'buy' ? 'wanted/create' : 'sell/create')));
-                return;
-            }
-        }
+        $request = new \App\Validators\Requests\CreateVitrineListingRequest($data);
 
-        // ✅ Length validation
-        if (mb_strlen(trim($data['title'])) < 5 || mb_strlen(trim($data['title'])) > 200) {
-            $this->session->setFlash('error', 'عنوان آگهی باید بین ۵ تا ۲۰۰ کاراکتر باشد.');
-            redirect(url('/vitrine/sell/create'));
+        if (!$request->validate()) {
+            $errors = $request->errors();
+            $firstError = reset($errors);
+            $msg = is_array($firstError) ? reset($firstError) : $firstError;
+            $this->session->setFlash('error', $msg ?: 'اطلاعات ورودی نامعتبر است.');
+            redirect(url('/vitrine/' . (($data['listing_type'] ?? '') === 'buy' ? 'wanted/create' : 'sell/create')));
             return;
         }
 
-        if (mb_strlen(trim($data['description'])) < 20 || mb_strlen(trim($data['description'])) > 5000) {
-            $this->session->setFlash('error', 'توضیحات آگهی باید بین ۲۰ تا ۵۰۰۰ کاراکتر باشد.');
-            redirect(url('/vitrine/sell/create'));
-            return;
-        }
-
-        // ✅ Price validation
-        $price = (float)($data['price_usdt'] ?? 0);
+        $validatedData = $request->validated();
+        $price = (float)($validatedData['price_usdt'] ?? 0);
         $minPrice = (float)setting('vitrine_min_price', 1);
         $maxPrice = (float)setting('vitrine_max_price', 100000);
 
-        if ($price <= 0) {
-            $this->session->setFlash('error', 'قیمت باید بیشتر از ۰ باشد.');
-            redirect(url('/vitrine/sell/create'));
-            return;
-        }
-
         if ($price < $minPrice || $price > $maxPrice) {
             $this->session->setFlash('error', "قیمت باید بین {$minPrice} و {$maxPrice} USDT باشد.");
-            redirect(url('/vitrine/sell/create'));
+            redirect(url('/vitrine/' . (($validatedData['listing_type'] ?? '') === 'buy' ? 'wanted/create' : 'sell/create')));
             return;
         }
 
         // ✅ Store raw data (Escaping should be done in the View layer)
         $result = $this->service->createListing($userId, [
-            'listing_type'   => in_array($data['listing_type'] ?? 'sell', ['sell', 'buy'], true) ? $data['listing_type'] : 'sell',
-            'category'       => $data['category'] ?? '',
-            'platform'       => $data['platform'] ?? '',
-            'title'          => trim($data['title']),
-            'description'    => trim($data['description']),
+            'listing_type'   => in_array($validatedData['listing_type'] ?? 'sell', ['sell', 'buy'], true) ? $validatedData['listing_type'] : 'sell',
+            'category'       => $validatedData['category'] ?? '',
+            'platform'       => $validatedData['platform'] ?? '',
+            'title'          => trim($validatedData['title']),
+            'description'    => trim($validatedData['description']),
             'specs'          => !empty($data['specs']) ? trim($data['specs']) : null,
             'username'       => !empty($data['username']) ? trim($data['username']) : null,
             'member_count'   => max(0, (int)($data['member_count'] ?? 0)),
@@ -196,7 +178,7 @@ class VitrineController extends BaseUserController
             redirect(url('/vitrine/my-listings'));
         } else {
             $this->session->setFlash('error', $result['message'] ?? 'خطا در ثبت آگهی.');
-            redirect(url('/vitrine/sell/create'));
+            redirect(url('/vitrine/' . (($validatedData['listing_type'] ?? '') === 'buy' ? 'wanted/create' : 'sell/create')));
         }
     }
 

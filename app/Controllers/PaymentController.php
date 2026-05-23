@@ -6,7 +6,6 @@ use App\Services\Payment\PaymentService;
 use App\Services\WalletService;
 use App\Services\ReconciliationService;
 use App\Controllers\BaseController;
-use App\Validators\Requests\WalletDepositRequest;
 use Core\Exceptions\ValidationException;
 use Core\Exceptions\NotFoundException;
 use Core\Exceptions\BusinessException;
@@ -51,15 +50,23 @@ class PaymentController extends BaseController
             'idempotency_key' => $this->request->input('idempotency_key'),
         ];
 
-        // اعتبارسنجی با FormRequest
-        $request = new WalletDepositRequest($data);
-        if (!$request->validate()) {
-            $this->session->setFlash('error', $request->errors()[0] ?? 'داده‌های ورودی نامعتبر است');
+        // اعتبارسنجی با Core\Validator
+        $validator = \Core\Validator::create($data, [
+            'gateway' => 'required|string|in:zarinpal,idpay,nextpay',
+            'amount' => 'required|numeric|min:1000',
+            'idempotency_key' => 'required|string|min:10|max:128',
+        ]);
+
+        if ($validator->fails()) {
+            $errors = $validator->errors();
+            $firstError = reset($errors);
+            $msg = is_array($firstError) ? reset($firstError) : $firstError;
+            $this->session->setFlash('error', $msg ?: 'داده‌های ورودی نامعتبر است');
             $this->response->redirect(url('wallet/deposit'));
             return;
         }
 
-        $validated = $request->validated();
+        $validated = $validator->data();
 
         try {
             $amount = (float)$validated['amount'];

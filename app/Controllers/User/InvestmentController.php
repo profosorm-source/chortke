@@ -107,10 +107,10 @@ class InvestmentController extends BaseUserController
     {
         $input = $this->request->json() ?? $this->request->all();
 
-        $validator = $this->validatorFactory()->make($input, [
-            'amount'           => 'required|numeric|min:1',
-            'risk_accepted'    => 'required',
-            'idempotency_key'  => 'nullable|string|min:10|max:128',
+        $validator = \Core\Validator::create($input, [
+            'amount'          => 'required|numeric|min:1',
+            'risk_accepted'   => 'required',
+            'idempotency_key' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -140,7 +140,7 @@ class InvestmentController extends BaseUserController
     {
         $input = $this->request->json() ?? $this->request->all();
 
-        $validator = $this->validatorFactory()->make($input, [
+        $validator = \Core\Validator::create($input, [
             'withdrawal_type' => 'required|in:profit_only,full_close',
         ]);
 
@@ -152,8 +152,10 @@ class InvestmentController extends BaseUserController
             ], 422);
         }
 
+        $data = $validator->data();
+
         $result = $this->investmentService->requestWithdrawal(user_id(), [
-            'withdrawal_type' => $validator->data()['withdrawal_type'],
+            'withdrawal_type' => $data['withdrawal_type'],
         ]);
 
         return $this->response->json($result, $result['success'] ? 200 : 422);

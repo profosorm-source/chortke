@@ -116,6 +116,19 @@ class InfluencerController extends BaseUserController
         $userId = (int) user_id();
         $data   = $this->request->body();
 
+        $request = new \App\Validators\Requests\StoreInfluencerProfileRequest($data);
+
+        if (!$request->validate()) {
+            $errors = $request->errors();
+            $firstError = reset($errors);
+            $msg = is_array($firstError) ? reset($firstError) : $firstError;
+            $this->session->setFlash('error', $msg ?: 'اطلاعات ورودی نامعتبر است.');
+            redirect(url('/influencer/register'));
+            return;
+        }
+
+        $validatedData = $request->validated();
+
         // ✅ File upload validation
         if (!empty($_FILES['profile_image']['name'])) {
             $validation = $this->validateProfileImage($_FILES['profile_image']);
@@ -127,7 +140,7 @@ class InfluencerController extends BaseUserController
             
             $up = $this->upload->upload($_FILES['profile_image'], 'influencer');
             if ($up['success']) {
-                $data['profile_image'] = $up['path'];
+                $validatedData['profile_image'] = $up['path'];
             } else {
                 $this->session->setFlash('error', $up['error'] ?? 'خطا در آپلود تصویر.');
                 redirect(url('/influencer/register'));
@@ -136,11 +149,11 @@ class InfluencerController extends BaseUserController
         }
 
         $existing = $this->profileModel->findByUserId($userId);
-        $platform = $data['platform'] ?? 'instagram';
+        $platform = $validatedData['platform'] ?? 'instagram';
 
         // Filter and whitelist safe fields to prevent mass assignment (C-12)
         $allowed = ['platform', 'username', 'bio', 'category', 'follower_count', 'profile_image'];
-        $clean = array_intersect_key($data, array_flip($allowed));
+        $clean = array_intersect_key($validatedData, array_flip($allowed));
 
         $merged   = array_merge($clean, $this->extractPrices($data, $platform), ['user_id' => $userId]);
 
@@ -494,17 +507,34 @@ class InfluencerController extends BaseUserController
 
     public function storeOrder(): void
     {
-        try {
-            $userId       = (int) user_id();
-            $influencerId = (int)($this->request->post('influencer_id') ?? 0);
-            $data         = $this->request->body();
+        $userId       = (int) user_id();
+        $influencerId = (int)($this->request->post('influencer_id') ?? 0);
+        $data         = $this->request->body();
 
+        $validator = \Core\Validator::create($data, [
+            'influencer_id' => 'required|numeric|min:1',
+            'order_type' => 'required|in:story,post',
+            'duration_hours' => 'required|numeric|min:1',
+        ]);
+
+        if ($validator->fails()) {
+            $errors = $validator->errors();
+            $firstError = reset($errors);
+            $msg = is_array($firstError) ? reset($firstError) : $firstError;
+            $this->session->setFlash('error', $msg ?: 'اطلاعات ورودی نامعتبر است.');
+            redirect(url('/influencer/ads/create?influencer_id=' . $influencerId));
+            return;
+        }
+
+        $validatedData = $validator->data();
+
+        try {
             if (!empty($_FILES['brief_file']['name'])) {
                 $up = $this->upload->upload($_FILES['brief_file'], 'inf-brief');
-                if ($up['success']) $data['media_path'] = $up['path'];
+                if ($up['success']) $validatedData['media_path'] = $up['path'];
             }
 
-            $result = $this->promotionService->createOrder($userId, $influencerId, $data);
+            $result = $this->promotionService->createOrder($userId, $influencerId, $validatedData);
             $this->session->setFlash($result['success'] ? 'success' : 'error', $result['message']);
             redirect($result['success']
                 ? url('/influencer/ads/my-orders')

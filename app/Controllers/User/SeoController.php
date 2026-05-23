@@ -6,7 +6,7 @@ use App\Models\Ads;
 use App\Models\SeoExecution;
 use App\Services\Search\SearchOrchestrator;
 use App\Services\SeoService;
-use App\Services\Shared\AnalyticsService;
+use App\Services\Shared\DashboardStatsService;
 
 /**
  * SeoController — انجام تسک‌های SEO توسط کاربران (Workers)
@@ -17,14 +17,14 @@ class SeoController extends BaseUserController
     private SeoExecution $executionModel;
     private SearchOrchestrator $searchService;
     private SeoService $seoService;
-    private AnalyticsService $analytics;
+    private DashboardStatsService $analytics;
 
     public function __construct(
         Ads $adModel,
         SeoExecution $executionModel,
         SearchOrchestrator $searchService,
         SeoService $seoService,
-        AnalyticsService $analytics
+        DashboardStatsService $analytics
     ) {
         parent::__construct();
         $this->adModel = $adModel;
@@ -190,5 +190,53 @@ class SeoController extends BaseUserController
             'execution' => $execution,
             'ad' => $ad,
         ]);
+    }
+
+    /** ثبت گزارش برای تسک سئو (AJAX) */
+    public function report(): void
+    {
+        $executionId = (int)$this->request->param('id');
+        $userId = (int)user_id();
+        $body = $this->request->body();
+        $reason = trim($body['reason'] ?? '');
+        $description = trim($body['description'] ?? '');
+
+        if (empty($reason)) {
+            $this->response->json(['success' => false, 'message' => 'دلیل گزارش الزامی است']);
+            return;
+        }
+
+        $execution = $this->executionModel->findByUser($executionId, $userId);
+        if (!$execution) {
+            $this->response->json(['success' => false, 'message' => 'تسک یافت نشد']);
+            return;
+        }
+
+        $result = $this->seoService->reportTask($userId, $execution->ad_id, $reason, $description);
+        $this->response->json($result);
+    }
+
+    /** ثبت امتیاز برای تسک سئو (AJAX) */
+    public function rate(): void
+    {
+        $executionId = (int)$this->request->param('id');
+        $userId = (int)user_id();
+        $body = $this->request->body();
+        $stars = (int)($body['stars'] ?? 0);
+        $comment = trim($body['comment'] ?? '');
+
+        if ($stars < 1 || $stars > 5) {
+            $this->response->json(['success' => false, 'message' => 'امتیاز نامعتبر است']);
+            return;
+        }
+
+        $execution = $this->executionModel->findByUser($executionId, $userId);
+        if (!$execution) {
+            $this->response->json(['success' => false, 'message' => 'تسک یافت نشد']);
+            return;
+        }
+
+        $result = $this->seoService->rateTask($userId, $execution->ad_id, $stars, $comment);
+        $this->response->json($result);
     }
 }

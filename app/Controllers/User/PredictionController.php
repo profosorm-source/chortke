@@ -74,11 +74,29 @@ class PredictionController extends BaseUserController
     // ─── ثبت شرط ──────────────────────────────────────────────────────
     public function placeBet(): void
     {
-        $userId     = (int)user_id();
-        $gameId     = (int)$this->request->param('id');
-        $prediction = trim((string)($this->request->post('prediction') ?? ''));
-        $amount     = (float)($this->request->post('amount_usdt') ?? 0);
-        $idempotencyKey = trim((string)($this->request->post('idempotency_key') ?? '')) ?: null;
+        $userId = (int)user_id();
+        $gameId = (int)$this->request->param('id');
+        $input = $this->request->all();
+
+        $validator = \Core\Validator::create($input, [
+            'prediction' => 'required|in:home,away,draw',
+            'amount_usdt' => 'required|numeric|min:0.01',
+            'idempotency_key' => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            $this->response->json([
+                'success' => false,
+                'message' => 'اطلاعات ورودی نامعتبر است.',
+                'errors'  => $validator->errors(),
+            ], 422);
+            return;
+        }
+
+        $data = $validator->data();
+        $prediction = trim((string)($data['prediction'] ?? ''));
+        $amount     = (float)($data['amount_usdt'] ?? 0);
+        $idempotencyKey = trim((string)($data['idempotency_key'] ?? '')) ?: null;
 
         try {
             $result = $this->predictionService->placeBet($userId, $gameId, $prediction, $amount, $idempotencyKey);

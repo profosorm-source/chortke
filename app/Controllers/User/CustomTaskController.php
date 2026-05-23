@@ -9,7 +9,6 @@ use App\Services\Analytics\AnalyticsService;
 use App\Services\UploadService;
 use App\Validators\Requests\CreateCustomTaskRequest;
 use App\Validators\Requests\SubmitCustomTaskProofRequest;
-use App\Validators\Requests\RateCustomTaskRequest;
 use App\Controllers\User\BaseUserController;
 use App\Models\Ads;
 use Core\Logger;
@@ -123,12 +122,17 @@ class CustomTaskController extends BaseUserController
         $userId = $this->userId();
         $body = json_decode(file_get_contents('php://input'), true) ?? [];
 
-        $request = new RateCustomTaskRequest($body);
-        if (!$request->validate()) {
+        $validator = \Core\Validator::create($body, [
+            'submission_id' => 'required|integer|min:1',
+            'rating'        => 'required|integer|min:1|max:5',
+            'feedback'      => 'nullable|string|min:5|max:1000',
+        ]);
+
+        if ($validator->fails()) {
             $this->response->json([
                 'success' => false,
                 'message' => 'خطای اعتبارسنجی',
-                'errors' => $request->errors()
+                'errors' => $validator->errors()
             ], 422);
             return;
         }
@@ -136,7 +140,7 @@ class CustomTaskController extends BaseUserController
         $result = $this->moderationService->rateSubmission(
             (int)$body['submission_id'],
             $userId,
-            $request->validated()
+            $validator->data()
         );
 
         $this->response->json($result, $result['success'] ? 200 : 422);

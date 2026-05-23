@@ -4,7 +4,9 @@ namespace App\Controllers\Api;
 
 use App\Services\SocialTask\SocialTaskService;
 use App\Services\SocialTask\SilentAntiFraudService;
-use App\Services\SocialTask\TrustScoreService;
+use App\Services\Gamification\TrustService;
+use App\Enums\ModuleContext;
+use App\Services\User\UserService;
 
 /**
  * SocialTaskApiController - API برای سیستم وظایف اجتماعی
@@ -36,17 +38,20 @@ class SocialTaskApiController extends BaseApiController
 {
     private SocialTaskService      $service;
     private SilentAntiFraudService $antiFraud;
-    private TrustScoreService      $trust;
+    private TrustService           $trust;
+    private UserService            $userService;
 
     public function __construct(
         SocialTaskService      $service,
         SilentAntiFraudService $antiFraud,
-        TrustScoreService      $trust
+        TrustService           $trust,
+        UserService            $userService
     ) {
         parent::__construct();
-        $this->service   = $service;
-        $this->antiFraud = $antiFraud;
-        $this->trust     = $trust;
+        $this->service     = $service;
+        $this->antiFraud   = $antiFraud;
+        $this->trust       = $trust;
+        $this->userService = $userService;
     }
 
     // ═════════════════════════════════════════════════════════════
@@ -406,8 +411,9 @@ class SocialTaskApiController extends BaseApiController
     {
         $user = $this->currentUser();
 
-        $trust   = $this->trust->get($user->id);
-        $weekly  = $this->trust->getWeeklyStats($user->id);
+        $userObj = $this->userService->findById($user->id);
+        $trust   = $userObj ? $this->trust->getTrustScore($userObj, ModuleContext::SOCIAL_TASKS) : 50.0;
+        $weekly  = []; // To be implemented with new score analytics
 
         $this->success([
             'trust_score'  => $trust,

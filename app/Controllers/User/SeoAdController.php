@@ -5,7 +5,7 @@ namespace App\Controllers\User;
 use App\Models\Ads;
 use App\Models\SeoExecution;
 use App\Contracts\WalletServiceInterface;
-use App\Services\Shared\AnalyticsService;
+use App\Services\Shared\DashboardStatsService;
 use App\Services\SeoPayoutService;
 use App\Services\AdSystemManager;
 
@@ -17,7 +17,7 @@ class SeoAdController extends BaseUserController
     private Ads $model;
     private SeoExecution $executionModel;
     private WalletServiceInterface $wallet;
-    private AnalyticsService $analytics;
+    private DashboardStatsService $analytics;
     private SeoPayoutService $payoutService;
     private AdSystemManager $adManager;
 
@@ -25,7 +25,7 @@ class SeoAdController extends BaseUserController
         Ads $m,
         SeoExecution $e,
         WalletServiceInterface $w,
-        AnalyticsService $a,
+        DashboardStatsService $a,
         SeoPayoutService $p,
         AdSystemManager $adManager
     ) {
