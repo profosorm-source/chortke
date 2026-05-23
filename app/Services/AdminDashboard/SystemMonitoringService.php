@@ -111,6 +111,15 @@ class SystemMonitoringService extends \App\Services\BaseService
                 $dbStatus = 'محدودشده';
             }
 
+            // ۶. وضعیت صف‌ها (Queue Status Dashboard)
+            $queueStats = [];
+            try {
+                $queueService = \Core\Container::getInstance()->make(\Core\Queue::class);
+                $queueStats = $queueService->getQueueStatusReport();
+            } catch (\Throwable) {
+                // fail-safe fallback
+            }
+
             return [
                 'cpu_usage' => round($cpuLoad, 2),
                 'memory' => [
@@ -130,6 +139,7 @@ class SystemMonitoringService extends \App\Services\BaseService
                     'status' => $dbStatus,
                     'connections' => 'Hidden', // H21 Fix: پنهان‌سازی اطلاعات تکنیکال دیتابیس جهت مقابله با Timing Attack
                 ],
+                'queues' => $queueStats,
                 'php_version' => 'Hidden', // H22 Fix: ممانعت از افشای نسخه مفسر PHP جهت حفظ محرمانگی سرور
                 'server_software' => 'Hidden', // محافظت در برابر فاش شدن نوع سرور
             ];

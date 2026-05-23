@@ -2,7 +2,7 @@
 
 namespace App\Services\AntiFraud;
 
-use App\Services\User\UserScoreService;
+use App\Services\AntiFraud\FraudScoreService;
 use Core\Database;
 
 use App\Contracts\LoggerInterface;
@@ -10,12 +10,12 @@ class RiskDecisionService extends \App\Services\BaseService
 {
     private Database $db;
     private RiskPolicyService $policyService;
-    private UserScoreService $scoreService;
+    private FraudScoreService $scoreService;
 
     public function __construct(
         Database $db,
         RiskPolicyService $policyService,
-        UserScoreService $scoreService,
+        FraudScoreService $scoreService,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);

@@ -15,6 +15,8 @@ use Core\Database;
 use App\Contracts\LoggerInterface;
 use App\Services\OutboxService;
 
+use App\Services\StateMachineService;
+
 class CryptoDepositService extends \App\Services\BaseService
 {
     private const ALLOWED_NETWORKS = ['TRC20', 'BNB20', 'ERC20', 'TON', 'SOL'];
@@ -29,6 +31,9 @@ class CryptoDepositService extends \App\Services\BaseService
     private ReconciliationService $reconciliationService;
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
     private ?OutboxService $outbox;
+    private StateMachineService $stateMachine;
+
+    private \Core\EventDispatcher $eventDispatcher;
 
     public function __construct(
         Database $db,
@@ -41,7 +46,9 @@ class CryptoDepositService extends \App\Services\BaseService
         SettingService $settingService,
         ReconciliationService $reconciliationService,
         \App\Services\AntiFraud\FraudGuardService $fraudGuard,
-        ?OutboxService $outbox = null
+        ?StateMachineService $stateMachine = null,
+        ?OutboxService $outbox = null,
+        ?\Core\EventDispatcher $eventDispatcher = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -53,7 +60,9 @@ class CryptoDepositService extends \App\Services\BaseService
         $this->settingService = $settingService;
         $this->reconciliationService = $reconciliationService;
         $this->fraudGuard = $fraudGuard;
+        $this->stateMachine = $stateMachine ?? new StateMachineService($logger, $db);
         $this->outbox = $outbox;
+        $this->eventDispatcher = $eventDispatcher ?? \Core\EventDispatcher::getInstance();
     }
 
     /**
@@ -238,17 +247,8 @@ class CryptoDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'واریز یافت نشد'];
             }
 
-            // State Machine check for approve
-            $allowedTransitions = [
-                'pending' => ['auto_verified', 'manual_review', 'rejected'],
-                'manual_review' => ['verified', 'rejected'],
-                'auto_verified' => [],
-                'verified' => [],
-                'rejected' => [],
-            ];
-
             $currentStatus = $deposit->verification_status ?? 'pending';
-            if (!in_array('verified', $allowedTransitions[$currentStatus] ?? [])) {
+            if (!$this->stateMachine->canTransition('crypto_deposit', $currentStatus, 'verified')) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => "تغییر وضعیت از وضعیت فعلی ({$currentStatus}) به verified مجاز نیست"];
             }
@@ -307,6 +307,16 @@ class CryptoDepositService extends \App\Services\BaseService
             ]);
 
             $this->db->commit();
+
+            $this->eventDispatcher->dispatch('crypto.deposit.confirmed', [
+                'deposit_id' => $depositId,
+                'user_id' => (int)$deposit->user_id,
+                'amount' => $deposit->amount,
+                'network' => $deposit->network,
+                'tx_hash' => $deposit->tx_hash,
+                'admin_id' => $adminId,
+                'auto_verified' => false
+            ]);
 
             // MED-27: Fix severe application crash (TypeError) by ensuring correct string inputs to notification engines
             if (!$this->outbox) {
@@ -384,16 +394,7 @@ class CryptoDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'واریز یافت نشد'];
             }
 
-            // State Machine check for reject
-            $allowedTransitions = [
-                'pending' => ['auto_verified', 'manual_review', 'rejected'],
-                'manual_review' => ['verified', 'rejected'],
-                'auto_verified' => [],
-                'verified' => [],
-                'rejected' => [],
-            ];
-
-            if (!in_array('rejected', $allowedTransitions[$lockedStatus] ?? [])) {
+            if (!$this->stateMachine->canTransition('crypto_deposit', $lockedStatus, 'rejected')) {
                 $this->db->rollBack();
                 return ['success' => false, 'message' => "تغییر وضعیت از وضعیت فعلی ({$lockedStatus}) به rejected مجاز نیست"];
             }
@@ -522,18 +523,9 @@ class CryptoDepositService extends \App\Services\BaseService
             return $this->moveToManualReview($depositId, 'تعداد تلاشهای بررسی بیش از حد مجاز');
         }
 
-        // State Machine validation
-        $allowedTransitions = [
-            'pending' => ['auto_verified', 'manual_review', 'rejected'],
-            'manual_review' => ['verified', 'rejected'],
-            'auto_verified' => [],
-            'verified' => [],
-            'rejected' => [],
-        ];
-
         $currentStatus = $d->verification_status ?? 'pending';
         // If current state is terminal (cannot transition to anything)
-        if (empty($allowedTransitions[$currentStatus])) {
+        if ($this->stateMachine->isTerminalState('crypto_deposit', $currentStatus)) {
             $this->logger->warning('crypto.verify.terminal_state', [
                 'deposit_id' => $depositId,
                 'status' => $currentStatus
@@ -557,7 +549,7 @@ class CryptoDepositService extends \App\Services\BaseService
             if ($deadline->getTimestamp() < $now->getTimestamp()) {
                 // اگر هنوز pending است => reject timeout
                 if ($d->verification_status === 'pending') {
-                    if (in_array('rejected', $allowedTransitions[$currentStatus] ?? [])) {
+                    if ($this->stateMachine->canTransition('crypto_deposit', $currentStatus, 'rejected')) {
                         $this->depositModel->updateStatus($depositId, 'rejected', null, 'مهلت بررسی خودکار (۳۰ دقیقه) تمام شد');
 
                         // Audit Log
@@ -632,15 +624,7 @@ class CryptoDepositService extends \App\Services\BaseService
                 }
 
                 // Verify transition is permitted from current status (C-02, C-13)
-                $allowedTransitions = [
-                    'pending' => ['auto_verified', 'manual_review', 'rejected'],
-                    'manual_review' => ['verified', 'rejected'],
-                    'auto_verified' => [],
-                    'verified' => [],
-                    'rejected' => [],
-                ];
-
-                if (!in_array('auto_verified', $allowedTransitions[$lockedStatus] ?? [])) {
+                if (!$this->stateMachine->canTransition('crypto_deposit', $lockedStatus, 'auto_verified')) {
                     $this->db->rollBack();
                     return ['auto' => false, 'message' => "تغییر وضعیت به auto_verified از وضعیت فعلی ({$lockedStatus}) مجاز نیست"];
                 }
@@ -711,6 +695,16 @@ class CryptoDepositService extends \App\Services\BaseService
                     ]);
 
                     $this->db->commit();
+
+                    $this->eventDispatcher->dispatch('crypto.deposit.confirmed', [
+                        'deposit_id' => $depositId,
+                        'user_id' => (int)$d->user_id,
+                        'amount' => $d->amount,
+                        'network' => $d->network,
+                        'tx_hash' => $d->tx_hash,
+                        'admin_id' => null,
+                        'auto_verified' => true
+                    ]);
 
                     // Notify user on auto-verify success (H-03/H-06)
                     if (!$this->outbox) {
@@ -819,15 +813,7 @@ class CryptoDepositService extends \App\Services\BaseService
 
         $currentStatus = $d->verification_status ?? 'pending';
 
-        $allowedTransitions = [
-            'pending' => ['auto_verified', 'manual_review', 'rejected'],
-            'manual_review' => ['verified', 'rejected'],
-            'auto_verified' => [],
-            'verified' => [],
-            'rejected' => [],
-        ];
-
-        if (in_array('manual_review', $allowedTransitions[$currentStatus] ?? [])) {
+        if ($this->stateMachine->canTransition('crypto_deposit', $currentStatus, 'manual_review')) {
             $this->depositModel->updateStatus($depositId, 'manual_review', null, $reason);
 
             // Audit Log
