@@ -463,6 +463,50 @@ class Container
     }
 
     /**
+     * CORE-030: پاکسازی تمامی نمونه‌های سینگلتون برای آزادکردن حافظه در پروسه‌های طولانی‌مدت
+     * به استثنای نمونه‌های هسته سیستم که نباید دوباره مقداردهی یا تخریب شوند.
+     */
+    public function flushSingletonInstances(array $keep = []): void
+    {
+        $defaultKeep = [
+            self::class,
+            \Core\Database::class,
+            \Core\Queue::class,
+            \Core\Cache::class,
+            \Core\EventDispatcher::class,
+            \App\Contracts\LoggerInterface::class,
+        ];
+        $keep = array_merge($defaultKeep, $keep);
+
+        foreach ($this->singletons as $abstract => $instance) {
+            if ($instance === null) {
+                continue;
+            }
+
+            $shouldKeep = false;
+            foreach ($keep as $keepClass) {
+                if ($abstract === $keepClass || $instance instanceof $keepClass) {
+                    $shouldKeep = true;
+                    break;
+                }
+            }
+
+            if (!$shouldKeep) {
+                $this->singletons[$abstract] = null;
+            }
+        }
+    }
+
+    /**
+     * پاکسازی کامل کش رفلکشن کانتینر
+     */
+    public function flushReflectionCache(): void
+    {
+        $this->reflectionCache = [];
+        $this->reflectionCacheUsage = [];
+    }
+
+    /**
      * Periodic cleanup for reflection cache to prevent memory leaks in long-running processes
      */
     public function cleanupReflectionCache(): void

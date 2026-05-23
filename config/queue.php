@@ -1,6 +1,9 @@
 <?php
 
 return [
+    'driver' => env('QUEUE_DRIVER', 'database'),
+    'visibility_timeout' => (int)env('QUEUE_VISIBILITY_TIMEOUT', 90),
+
     'allowed_jobs' => [
         \App\Jobs\ApplyWeeklyProfitLossJob::class,
         \App\Jobs\LogPerformanceJob::class,

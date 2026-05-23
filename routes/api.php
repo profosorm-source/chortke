@@ -5,6 +5,7 @@ use App\Controllers\Api\UserController as ApiUserController;
 use App\Controllers\Api\WalletController as ApiWalletController;
 use App\Controllers\Api\SocialTaskApiController;
 use App\Controllers\Api\InfluencerController as ApiInfluencerController;
+use App\Controllers\Api\InteractionApiController;
 use App\Middleware\ApiAuthMiddleware;
 
 $r = app()->router;
@@ -131,6 +132,15 @@ $r->group(['prefix' => '/api/v1'], function ($r) {
     $r->group(['prefix' => '/verification', 'middleware' => [ApiAuthMiddleware::class . ':verification.write']], function ($r) {
         $r->post('/generate-code', [\App\Controllers\Api\VerificationController::class, 'generateCode']);
         $r->post('/submit-proof', [\App\Controllers\Api\VerificationController::class, 'submitProof']);
+    });
+
+    /**
+     * INTERACTIONS (Polymorphic Likes, Ratings, Reports)
+     */
+    $r->group(['prefix' => '/interactions', 'middleware' => [ApiAuthMiddleware::class . ':user.write']], function ($r) {
+        $r->post('/favorite/toggle', [InteractionApiController::class, 'toggleFavorite']);
+        $r->post('/rate', [InteractionApiController::class, 'rate']);
+        $r->post('/report', [InteractionApiController::class, 'report']);
     });
 
     /**

@@ -403,6 +403,9 @@ $r->get('/admin/users/{id}/scores/history',         [ScoreManagementController::
 // ── مانیتورینگ سیستم (Sentry) ────────────────────────────────────────
 $r->get('/admin/sentry',                              [SentryAdminController::class, 'index'],            $admin);
 $r->get('/admin/sentry/issues',                       [SentryAdminController::class, 'issues'],           $admin);
+$r->get('/admin/sentry/failed-jobs',                   [SentryAdminController::class, 'failedJobs'],       $admin);
+$r->get('/admin/sentry/outbox-dlq',                    [SentryAdminController::class, 'outboxDLQ'],       $admin);
+$r->get('/admin/sentry/failed-jobs/{id}',              [SentryAdminController::class, 'failedJobDetails'], $admin);
 $r->get('/admin/sentry/issues/{id}',                  [SentryAdminController::class, 'issueDetails'],     $admin);
 $r->get('/admin/sentry/performance',                  [SentryAdminController::class, 'performance'],      $admin);
 $r->get('/admin/sentry/analytics',                    [SentryAdminController::class, 'analytics'],        $admin);
@@ -412,6 +415,8 @@ $r->get('/admin/sentry/audit',                        [SentryAdminController::cl
 // Sentry API endpoints
 $r->post('/admin/sentry/issues/{id}/resolve',         [SentryAdminController::class, 'resolveIssue'],     $admin);
 $r->post('/admin/sentry/issues/{id}/mute',            [SentryAdminController::class, 'muteIssue'],        $admin);
+$r->post('/admin/sentry/failed-jobs/{id}/retry',      [SentryAdminController::class, 'retryFailedJob'],   $admin);
+$r->post('/admin/sentry/failed-jobs/{id}/forget',     [SentryAdminController::class, 'forgetFailedJob'],  $admin);
 $r->post('/admin/sentry/alerts/{id}/acknowledge',     [SentryAdminController::class, 'acknowledgeAlert'], $admin);
 $r->get('/admin/sentry/api/chart-data',               [SentryAdminController::class, 'getChartData'],     $admin);
 $r->get('/admin/sentry/api/health',                   [SentryAdminController::class, 'healthCheck'],      $admin);

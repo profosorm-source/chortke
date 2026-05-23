@@ -264,6 +264,7 @@ $container->singleton(App\Models\AdvancedAnalytics::class);
 
 // ========== Analytics Services (Consolidated) ==========
 $container->singleton(\App\Services\Analytics\AnalyticsService::class);
+$container->singleton(\App\Services\Shared\DashboardStatsService::class);
 
 
 $container->singleton(\App\Models\SecurityModel::class);
@@ -861,7 +862,9 @@ $container->singleton(\App\Services\FeatureFlagService::class, function($c) {
 $container->singleton(\Core\RateLimiter::class, function($c) {
     return new \Core\RateLimiter(
         $c->make(\Core\Cache::class),
-        $c->make(\Core\EventDispatcher::class)
+        $c->make(\Core\EventDispatcher::class),
+        $c->make(\App\Services\AntiFraud\RateLimitingService::class),
+        $c->make(\Core\Logger::class)
     );
 });
 
@@ -1062,7 +1065,14 @@ $container->singleton('event.bootstrap', function($c) {
 });
 
 // Boot event listeners immediately so closures are registered.
-$container->make('event.bootstrap');
+try {
+    $container->make('event.bootstrap');
+} catch (\Throwable $e) {
+    if (PHP_SAPI !== 'cli') {
+        throw $e;
+    }
+    error_log('[Chortke] Event bootstrap failed: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+}
 
 // ─── DashboardQueryService (with Performance tracking) ─────────────────────────
 $container->singleton(\App\Services\AdminDashboard\DashboardQueryService::class);
@@ -1624,7 +1634,8 @@ $container->singleton(\App\Services\InvestmentService::class, function($c) {
         $c->make(\Core\Queue::class),
         $c->make(\App\Services\SettingService::class),
         $c->make(\App\Services\PerformanceOptimizationService::class),
-        $c->make(\App\Contracts\CurrencyServiceInterface::class)
+        $c->make(\App\Contracts\CurrencyServiceInterface::class),
+        $c->make(\App\Services\Cache\CacheInvalidationService::class)
     );
 });
 
@@ -1888,7 +1899,9 @@ $container->singleton(\App\Services\Notification\NotificationAnalyticsService::c
 $container->singleton(\App\Services\Notification\NotificationPreferenceService::class, function($c) {
     return new \App\Services\Notification\NotificationPreferenceService(
         $c->make(\App\Models\NotificationPreference::class),
-        $c->make(\App\Contracts\LoggerInterface::class)
+        $c->make(\Core\Cache::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
+        $c->make(\App\Services\Cache\CacheInvalidationService::class)
     );
 });
 
@@ -1910,7 +1923,7 @@ $container->singleton(\App\Services\Notification\NotificationTracker::class, fun
 
 $container->singleton(\App\Services\Notification\SmsNotificationService::class, function($c) {
     return new \App\Services\Notification\SmsNotificationService(
-        $c->make(\App\Adapters\SmsNotificationAdapter::class),
+        $c->make(\App\Adapters\Notification\SmsNotificationAdapter::class),
         $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
@@ -2113,13 +2126,16 @@ try {
     // ⚙️ تغییر Feature Flag بحرانی: Alert فوری ادمین (تکمیل Listener ناقص)
     $dispatcher->listen('feature.critical_changed', \App\Listeners\AlertAdminOnCriticalFeatureChange::class);
 
-} catch (\Throwable $e) {
-    if (function_exists('logger')) {
-        logger()->error('bootstrap.events_registration_failed', [
-            'channel' => 'event',
-            'error' => $e->getMessage()
-        ]);
+    // ثبت تصویر وضعیت شنونده‌های اولیه برای پاکسازی حافظه در فرآیندهای طولانی
+    if (method_exists($dispatcher, 'snapshotBootstrapState')) {
+        $dispatcher->snapshotBootstrapState();
     }
+
+} catch (\Throwable $e) {
+    if (PHP_SAPI !== 'cli') {
+        throw $e;
+    }
+    error_log('[Chortke] Events registration failed: ' . $e->getMessage());
 }
 
 // Application — باید آخرین خط باشد

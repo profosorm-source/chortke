@@ -10,6 +10,7 @@ class EventDispatcher
 {
     private static $instance = null;
     private $listeners = [];
+    private array $bootstrapListeners = [];
     private Queue $queue;
 
     public function __construct(Queue $queue)
@@ -51,6 +52,13 @@ class EventDispatcher
         if (!isset($this->listeners[$eventName])) {
             $this->listeners[$eventName] = [];
         }
+
+        // بررسی یکتا بودن Listener برای جلوگیری از تجمع حافظه (Memory Leak)
+        foreach ($this->listeners[$eventName] as $existing) {
+            if ($existing['listener'] === $listener) {
+                return; // از قبل ثبت شده است، دوباره ثبت نکن
+            }
+        }
         
         $this->listeners[$eventName][] = [
             'listener' => $listener,
@@ -61,6 +69,24 @@ class EventDispatcher
         usort($this->listeners[$eventName], function($a, $b) {
             return $b['priority'] <=> $a['priority'];
         });
+    }
+
+    /**
+     * ثبت شنوندگان پایه به عنوان مرجع برای ریست کردن (Snapshot)
+     */
+    public function snapshotBootstrapState(): void
+    {
+        $this->bootstrapListeners = $this->listeners;
+    }
+
+    /**
+     * ریست کردن تمامی شنونده‌ها به حالت پیش‌فرضِ اولیه‌ی بوت‌استرپ
+     */
+    public function restoreBootstrapState(): void
+    {
+        if (!empty($this->bootstrapListeners)) {
+            $this->listeners = $this->bootstrapListeners;
+        }
     }
 
     /**

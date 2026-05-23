@@ -82,6 +82,46 @@ class ExternalServiceException extends InfrastructureException
 {
 }
 
+class InsufficientBalanceException extends BusinessException
+{
+    public function __construct(string $message = 'موجودی حساب کافی نیست', int $code = 400)
+    {
+        parent::__construct($message, $code);
+    }
+}
+
+class EntityNotFoundException extends NotFoundException
+{
+    public function __construct(string $message = 'موجودیت مورد نظر یافت نشد', int $code = 404)
+    {
+        parent::__construct($message, $code);
+    }
+}
+
+class RateLimitExceededException extends AppException
+{
+    public function __construct(string $message = 'تعداد درخواست‌ها بیش از حد مجاز است', int $code = 429)
+    {
+        parent::__construct($message, $code);
+    }
+}
+
+class FraudDetectedException extends SecurityException
+{
+    public function __construct(string $message = 'فعالیت مشکوک شناسایی شد', int $code = 403)
+    {
+        parent::__construct($message, $code);
+    }
+}
+
+class InvalidStateException extends BusinessException
+{
+    public function __construct(string $message = 'وضعیت درخواست نامعتبر است', int $code = 409)
+    {
+        parent::__construct($message, $code);
+    }
+}
+
 /**
  * Section 8.4 — Failure classification for external adapters.
  *

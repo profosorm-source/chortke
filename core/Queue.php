@@ -7,9 +7,9 @@ namespace Core;
 use DateTime;
 
 /**
- * Queue System - سیستم صف مبتنی بر دیتابیس
+ * Queue System - سیستم صف دوگانه‌سوز (مبتنی بر Redis با Fallback به دیتابیس)
  *
- * جدول queues:
+ * جدول queues (برای حالت دیتابیس):
  * - id (primary key)
  * - queue (نام صف)
  * - payload (داده JSON)
@@ -24,9 +24,79 @@ class Queue
     private string $defaultQueue = 'default';
     private int $maxAttempts = 5;
 
+    // تنظیمات و کلاینت Redis
+    private ?\Redis $redis = null;
+    private bool $useRedis = false;
+    private string $redisPrefix = 'chortke:queue';
+
     public function __construct(Database $db)
     {
         $this->db = $db;
+        $this->initRedis();
+    }
+
+    /**
+     * راه‌اندازی اتصال Redis در صورت تنظیم درایور به redis
+     */
+    private function initRedis(): void
+    {
+        try {
+            $driver = config('queue.driver', 'database');
+            if ($driver === 'redis') {
+                $cache = \Core\Cache::getInstance();
+                if ($cache->driver() === 'redis') {
+                    $this->redis = $cache->redis();
+                    $this->useRedis = $this->redis !== null;
+                    $prefix = config('redis.prefix', 'chortke');
+                    $this->redisPrefix = "{$prefix}:queue";
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->useRedis = false;
+            if (function_exists('logger')) {
+                logger()->warning('queue.redis_init_failed', ['error' => $e->getMessage()]);
+            }
+        }
+    }
+
+    /**
+     * اضافه کردن job به صف
+     */
+    private function resolveQueueName(string $job, ?string $queue = null): string
+    {
+        if ($queue !== null && $queue !== '') {
+            return $queue;
+        }
+
+        $jobClass = trim($job, '\\');
+
+        $mapping = [
+            // notifications
+            'App\\Jobs\\SendEmailJob' => 'notifications',
+            'App\\Jobs\\SendBulkNotificationJob' => 'notifications',
+            'App\\Jobs\\PersistBulkInAppNotificationJob' => 'notifications',
+            
+            // analytics
+            'App\\Jobs\\AggregateAnalyticsJob' => 'analytics',
+            'App\\Jobs\\ScoreRecalculationJob' => 'analytics',
+            'App\\Jobs\\LogPerformanceJob' => 'analytics',
+            'App\\Jobs\\UpdateFraudScoreJob' => 'analytics',
+            
+            // maintenance
+            'App\\Jobs\\EscrowTimeoutJob' => 'maintenance',
+            'App\\Jobs\\CacheWarmupJob' => 'maintenance',
+            'App\\Jobs\\NotificationCleanupJob' => 'maintenance',
+            'App\\Jobs\\VitrineListingExpiryJob' => 'maintenance',
+            'App\\Jobs\\InfluencerOrderTimeoutJob' => 'maintenance',
+            'App\\Jobs\\SocialTaskApprovalReminderJob' => 'maintenance',
+            'App\\Jobs\\PredictionGameSettlementJob' => 'maintenance',
+            
+            // high_priority
+            'App\\Jobs\\ApplyWeeklyProfitLossJob' => 'high_priority',
+            'App\\Jobs\\InvestmentProfitDistributionJob' => 'high_priority',
+        ];
+
+        return $mapping[$jobClass] ?? $this->defaultQueue;
     }
 
     /**
@@ -34,7 +104,7 @@ class Queue
      */
     public function push(string $job, array $data = [], ?string $queue = null, int $delay = 0): bool
     {
-        $queue = $queue ?: $this->defaultQueue;
+        $queue = $this->resolveQueueName($job, $queue);
         $availableAt = $delay > 0 ? time() + $delay : time();
 
         // 🚀 Real-time delta-buffering to eliminate propagation delay/race conditions during async updates!
@@ -62,6 +132,50 @@ class Queue
             }
         }
 
+        // اگر Redis فعال باشد، تلاش برای درج در صف Redis
+        if ($this->useRedis) {
+            try {
+                // دریافت شناسه عددی و اتمیک یکتا برای سازگاری کامل با شناسه دیتابیس
+                $jobId = (int) $this->redis->incr("{$this->redisPrefix}:job_id_counter");
+
+                $payload = [
+                    'job' => $job,
+                    'data' => $data,
+                    'meta' => [
+                        'correlation_id' => $_SERVER['REQUEST_ID'] ?? ($_SERVER['HTTP_X_REQUEST_ID'] ?? null),
+                    ],
+                ];
+
+                $jobData = [
+                    'id' => $jobId,
+                    'queue' => $queue,
+                    'payload' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+                    'attempts' => 0,
+                    'available_at' => $availableAt,
+                    'created_at' => time(),
+                    'reserved_at' => null,
+                ];
+
+                // ذخیره متادیتا با انقضای ۷ روز
+                $this->redis->setEx("{$this->redisPrefix}:job:{$jobId}", 86400 * 7, json_encode($jobData));
+
+                // اضافه کردن به صف مرتب‌شده (Pending Sorted Set) با اسکور زمان دسترسی
+                $this->redis->zAdd("{$this->redisPrefix}:{$queue}:pending", $availableAt, (string)$jobId);
+
+                return true;
+            } catch (\Throwable $e) {
+                if (function_exists('logger')) {
+                    logger()->error('queue.redis.push_failed_falling_back', [
+                        'job' => $job,
+                        'queue' => $queue,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+                // در صورت بروز خطا در Redis، به صف دیتابیس سوئیچ می‌کند
+            }
+        }
+
+        // سیستم صف مبتنی بر دیتابیس (Fallback)
         $result = $this->db->table('queues')->insert([
             'queue' => $queue,
             'payload' => json_encode([
@@ -93,7 +207,7 @@ class Queue
         int $delay = 0,
         int $uniqueForSeconds = 86400
     ): bool {
-        $queue = $queue ?: $this->defaultQueue;
+        $queue = $this->resolveQueueName($job, $queue);
         $dedupKey = trim($dedupKey);
 
         if ($dedupKey === '') {
@@ -122,10 +236,121 @@ class Queue
         }
     }
 
+    /**
+     * برداشتن جاب از صف با پشتیبانی از اولویت‌بندی
+     */
     public function pop(?string $queue = null): ?array
     {
-        $queue = $queue ?: $this->defaultQueue;
+        if ($queue === null) {
+            $priorities = ['high_priority', 'default', 'notifications', 'analytics', 'maintenance'];
+            foreach ($priorities as $q) {
+                $job = $this->popSingleQueue($q);
+                if ($job) {
+                    return $job;
+                }
+            }
+            return null;
+        }
 
+        return $this->popSingleQueue($queue);
+    }
+
+    /**
+     * برداشتن جاب از یک صف مشخص
+     */
+    private function popSingleQueue(string $queue): ?array
+    {
+        if ($this->useRedis) {
+            try {
+                $now = time();
+                $visibilityTimeout = (int)config('queue.visibility_timeout', 90);
+                $reservedUntil = $now + $visibilityTimeout;
+
+                // ۱. مکانیزم Self-healing خودکار برای جاب‌های منقضی شده در وضعیت reserved
+                // بازگرداندن جاب‌هایی که زمان رزروشان سر رسیده است به صف آماده جهت جلوگیری از استاک شدن
+                $expiredScript = <<<LUA
+                    local pendingKey = KEYS[1]
+                    local reservedKey = KEYS[2]
+                    local now = tonumber(ARGV[1])
+                    
+                    local expiredJobs = redis.call('zRangeByScore', reservedKey, 0, now)
+                    for i, jobId in ipairs(expiredJobs) do
+                        redis.call('zRem', reservedKey, jobId)
+                        redis.call('zAdd', pendingKey, now, jobId)
+                    end
+                    return #expiredJobs
+LUA;
+                $this->redis->eval(
+                    $expiredScript,
+                    ["{$this->redisPrefix}:{$queue}:pending", "{$this->redisPrefix}:{$queue}:reserved", $now],
+                    2
+                );
+
+                // ۲. برداشتن اتمیک جاب آماده به کمک اسکریپت لونا و انتقال آن به لیست رزرو شده
+                $popScript = <<<LUA
+                    local pendingKey = KEYS[1]
+                    local reservedKey = KEYS[2]
+                    local now = tonumber(ARGV[1])
+                    local reservedUntil = tonumber(ARGV[2])
+
+                    local jobs = redis.call('zRangeByScore', pendingKey, 0, now, 'LIMIT', 0, 1)
+                    if #jobs > 0 then
+                        local jobId = jobs[1]
+                        redis.call('zRem', pendingKey, jobId)
+                        redis.call('zAdd', reservedKey, reservedUntil, jobId)
+                        return jobId
+                    end
+                    return nil
+LUA;
+                $jobId = $this->redis->eval(
+                    $popScript,
+                    ["{$this->redisPrefix}:{$queue}:pending", "{$this->redisPrefix}:{$queue}:reserved", $now, $reservedUntil],
+                    2
+                );
+
+                if (!$jobId) {
+                    return null;
+                }
+
+                $jobId = (int)$jobId;
+
+                // ۳. خواندن اطلاعات کامل جاب
+                $jobDataJson = $this->redis->get("{$this->redisPrefix}:job:{$jobId}");
+                if (!$jobDataJson) {
+                    // در صورت از بین رفتن متادیتا، جاب را از لیست رزرو شده حذف کرده و تلاش مجدد می‌کنیم
+                    $this->redis->zRem("{$this->redisPrefix}:{$queue}:reserved", (string)$jobId);
+                    return $this->popSingleQueue($queue);
+                }
+
+                $jobData = json_decode($jobDataJson, true);
+                $newAttempts = (int)($jobData['attempts'] ?? 0) + 1;
+
+                // به‌روزرسانی تعداد تلاش‌ها و زمان رزرو
+                $jobData['attempts'] = $newAttempts;
+                $jobData['reserved_at'] = $now;
+                $this->redis->setEx("{$this->redisPrefix}:job:{$jobId}", 86400 * 7, json_encode($jobData));
+
+                $payload = json_decode($jobData['payload'], true) ?? [];
+
+                return [
+                    'id' => $jobId,
+                    'job' => $payload['job'] ?? '',
+                    'data' => $payload['data'] ?? [],
+                    'meta' => $payload['meta'] ?? [],
+                    'attempts' => $newAttempts
+                ];
+            } catch (\Throwable $e) {
+                if (function_exists('logger')) {
+                    logger()->error('queue.redis.pop_failed_falling_back', [
+                        'queue' => $queue,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+                // در صورت بروز هر خطایی، به عنوان Fallback سراغ دیتابیس می‌رود
+            }
+        }
+
+        // حالت دیتابیس (Standard Mode / Fallback)
         try {
             $this->db->beginTransaction();
 
@@ -193,6 +418,29 @@ class Queue
      */
     public function delete(int $id): bool
     {
+        if ($this->useRedis) {
+            try {
+                $jobDataJson = $this->redis->get("{$this->redisPrefix}:job:{$id}");
+                if ($jobDataJson) {
+                    $jobData = json_decode($jobDataJson, true);
+                    $queue = $jobData['queue'] ?? 'default';
+
+                    $this->redis->zRem("{$this->redisPrefix}:{$queue}:pending", (string)$id);
+                    $this->redis->zRem("{$this->redisPrefix}:{$queue}:reserved", (string)$id);
+                    $this->redis->del("{$this->redisPrefix}:job:{$id}");
+                    return true;
+                }
+            } catch (\Throwable $e) {
+                if (function_exists('logger')) {
+                    logger()->error('queue.redis.delete_failed', [
+                        'id' => $id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+
+        // دیتابیس
         $result = $this->db->table('queues')
             ->where('id', '=', $id)
             ->delete();
@@ -201,10 +449,48 @@ class Queue
     }
 
     /**
-     * بازگرداندن job به صف (برای retry)
+     * بازگرداندن job به صف (برای retry با تاخیر نمایی)
      */
     public function release(int $id, int $delay = 0): bool
     {
+        if ($this->useRedis) {
+            try {
+                $jobDataJson = $this->redis->get("{$this->redisPrefix}:job:{$id}");
+                if ($jobDataJson) {
+                    $jobData = json_decode($jobDataJson, true);
+                    $queue = $jobData['queue'] ?? 'default';
+                    $attempts = (int)($jobData['attempts'] ?? 1);
+
+                    if ($delay === 0) {
+                        $baseDelay = 60; // 60 seconds
+                        $exponential = $baseDelay * pow(2, $attempts - 1);
+                        $jitter = rand(5, 45);
+                        $delay = (int) min($exponential + $jitter, 14400); // Max 4 hours
+                    }
+
+                    $availableAt = time() + $delay;
+
+                    $jobData['reserved_at'] = null;
+                    $jobData['available_at'] = $availableAt;
+
+                    // به‌روزرسانی متادیتا و بازگرداندن از reserved به pending با امتیاز زمان جدید
+                    $this->redis->setEx("{$this->redisPrefix}:job:{$id}", 86400 * 7, json_encode($jobData));
+                    $this->redis->zRem("{$this->redisPrefix}:{$queue}:reserved", (string)$id);
+                    $this->redis->zAdd("{$this->redisPrefix}:{$queue}:pending", $availableAt, (string)$id);
+
+                    return true;
+                }
+            } catch (\Throwable $e) {
+                if (function_exists('logger')) {
+                    logger()->error('queue.redis.release_failed', [
+                        'id' => $id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+
+        // دیتابیس
         if ($delay === 0) {
             // Calculate delay based on attempts
             $job = $this->db->selectOne("SELECT attempts FROM queues WHERE id = :id", ['id' => $id]);
@@ -229,7 +515,7 @@ class Queue
     }
 
     /**
-     * پاک کردن jobهای قدیمی
+     * پاک کردن jobهای قدیمی دیتابیس (فقط برای حالت دیتابیس لازم است؛ در Redis انقضا خودکار است)
      */
     public function clean(int $days = 7): int
     {
@@ -247,6 +533,21 @@ class Queue
     {
         $queue = $queue ?: $this->defaultQueue;
 
+        if ($this->useRedis) {
+            try {
+                $pending = $this->redis->zCard("{$this->redisPrefix}:{$queue}:pending");
+                $reserved = $this->redis->zCard("{$this->redisPrefix}:{$queue}:reserved");
+                return (int)($pending + $reserved);
+            } catch (\Throwable $e) {
+                if (function_exists('logger')) {
+                    logger()->error('queue.redis.size_failed', [
+                        'queue' => $queue,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+
         return (int) $this->db->table('queues')
             ->where('queue', '=', $queue)
             ->count();
@@ -260,34 +561,57 @@ class Queue
         try {
             $this->db->beginTransaction();
 
-            // ۱. دریافت اطلاعات جاب برای کپی به DLQ
-            $job = $this->db->selectOne("SELECT * FROM queues WHERE id = :id", ['id' => $id]);
-            if (!$job) {
-                $this->db->commit();
-                return false;
+            $queueName = 'default';
+            $payloadStr = '';
+
+            // ۱. دریافت اطلاعات جاب
+            if ($this->useRedis) {
+                try {
+                    $jobDataJson = $this->redis->get("{$this->redisPrefix}:job:{$id}");
+                    if ($jobDataJson) {
+                        $jobData = json_decode($jobDataJson, true);
+                        $queueName = $jobData['queue'] ?? 'default';
+                        $payloadStr = $jobData['payload'] ?? '';
+                    }
+                } catch (\Throwable $e) {
+                    if (function_exists('logger')) {
+                        logger()->error('queue.redis.fail_read_failed', ['id' => $id, 'error' => $e->getMessage()]);
+                    }
+                }
             }
 
-            // ۲. درج در جدول failed_jobs
+            if (empty($payloadStr)) {
+                // تلاش برای خواندن از جدول queues دیتابیس
+                $job = $this->db->selectOne("SELECT * FROM queues WHERE id = :id", ['id' => $id]);
+                if (!$job) {
+                    $this->db->commit();
+                    return false;
+                }
+                $queueName = $job->queue;
+                $payloadStr = $job->payload;
+            }
+
+            // ۲. درج در جدول failed_jobs (DLQ متمرکز)
             $exceptionStr = get_class($exception) . ': ' . $exception->getMessage() . "\n" . $exception->getTraceAsString();
 
-            // Critical logger call for poison message / DLQ movement
+            // لاگ کردن رویداد به عنوان یک خطا در poison message
             if (function_exists('logger')) {
                 logger()->critical('queue_job_failed_dlq_moved', [
                     'job_id' => $id,
-                    'queue' => $job->queue,
-                    'payload' => $job->payload,
+                    'queue' => $queueName,
+                    'payload' => $payloadStr,
                     'error' => $exception->getMessage()
                 ]);
             }
 
             $this->db->table('failed_jobs')->insert([
-                'queue' => $job->queue,
-                'payload' => $job->payload,
+                'queue' => $queueName,
+                'payload' => $payloadStr,
                 'exception' => $exceptionStr,
                 'failed_at' => date('Y-m-d H:i:s')
             ]);
 
-            // ۳. حذف از جدول اصلی صف‌ها
+            // ۳. حذف از صف اصلی
             $this->delete($id);
 
             $this->db->commit();
@@ -307,14 +631,11 @@ class Queue
     }
 
     // =========================================================================
-    // Section 8.5 / 8.7 — DLQ housekeeping helpers
+    // Section 8.5 / 8.7 — DLQ housekeeping helpers (سازگار با هر دو حالت صف)
     // =========================================================================
 
     /**
-     * حذف failed_jobs قدیمی‌تر از $days روز (به‌صورت اختیاری فقط برای یک queue).
-     * برای جلوگیری از قفل طولانی، در batchهای کوچک حذف می‌کند.
-     *
-     * @return int تعداد رکوردهای حذف‌شده
+     * حذف failed_jobs قدیمی‌تر از $days روز
      */
     public function purgeFailedJobsOlderThan(int $days, ?string $queue = null, int $batch = 500): int
     {
@@ -324,7 +645,7 @@ class Queue
         $totalDeleted = 0;
         $safety = 0;
 
-        while ($safety++ < 1000) { // hard cap: at most 1000 * batch rows in one call
+        while ($safety++ < 1000) {
             $sql = "DELETE FROM failed_jobs
                     WHERE failed_at < DATE_SUB(NOW(), INTERVAL ? DAY)";
             $params = [$days];
@@ -347,7 +668,7 @@ class Queue
     }
 
     /**
-     * شمارش failed_jobs (به‌صورت اختیاری filter بر اساس queue).
+     * شمارش failed_jobs
      */
     public function countFailedJobs(?string $queue = null): int
     {
@@ -362,12 +683,7 @@ class Queue
     }
 
     /**
-     * بازگرداندن دسته‌ای از failed_jobs به صف اصلی (re-queue).
-     * Idempotent از این جهت که هر row فقط یک بار delete می‌شود و در همان transaction push می‌گردد.
-     *
-     * @param string|null $queue  محدودسازی به یک queue (مثل failed_notifications)
-     * @param int $limit حداکثر تعداد retry در یک اجرا
-     * @return array{requeued:int, skipped:int, errors:int}
+     * بازگرداندن دسته‌ای از failed_jobs به صف اصلی (re-queue)
      */
     public function retryFailedJobsBatch(?string $queue = null, int $limit = 100): array
     {
@@ -424,5 +740,81 @@ class Queue
             }
         }
         return $stats;
+    }
+
+    /**
+     * دریافت آمار لحظه‌ای از وضعیت تمام صف‌های دارای اولویت و DLQ
+     */
+    public function getQueueStatusReport(): array
+    {
+        $queues = ['high_priority', 'default', 'notifications', 'analytics', 'maintenance'];
+        $report = [];
+
+        foreach ($queues as $q) {
+            $total = 0;
+            $pending = 0;
+            $delayed = 0;
+            $running = 0;
+            $failed = 0;
+
+            if ($this->useRedis) {
+                try {
+                    $now = time();
+                    $pendingCount = (int)$this->redis->zCount("{$this->redisPrefix}:{$q}:pending", "-inf", (string)$now);
+                    $delayedCount = (int)$this->redis->zCount("{$this->redisPrefix}:{$q}:pending", "(" . $now, "+inf");
+                    $runningCount = (int)$this->redis->zCard("{$this->redisPrefix}:{$q}:reserved");
+
+                    $total = $pendingCount + $delayedCount + $runningCount;
+                    $pending = $pendingCount;
+                    $delayed = $delayedCount;
+                    $running = $runningCount;
+
+                    $failedRow = $this->db->selectOne("SELECT COUNT(*) AS c FROM failed_jobs WHERE queue = :queue", ['queue' => $q]);
+                    $failed = (int)($failedRow->c ?? 0);
+                } catch (\Throwable $e) {
+                    if (function_exists('logger')) {
+                        logger()->error('queue.redis.status_report_failed', ['queue' => $q, 'error' => $e->getMessage()]);
+                    }
+                    $this->useRedis = false; // سوئیچ به دیتابیس به عنوان Fallback
+                }
+            }
+
+            if (!$this->useRedis) {
+                $totalRow = $this->db->selectOne("SELECT COUNT(*) AS c FROM queues WHERE queue = :queue", ['queue' => $q]);
+                $total = (int)($totalRow->c ?? 0);
+
+                $pendingRow = $this->db->selectOne("SELECT COUNT(*) AS c FROM queues WHERE queue = :queue AND available_at <= NOW() AND reserved_at IS NULL", ['queue' => $q]);
+                $pending = (int)($pendingRow->c ?? 0);
+
+                $delayedRow = $this->db->selectOne("SELECT COUNT(*) AS c FROM queues WHERE queue = :queue AND available_at > NOW() AND reserved_at IS NULL", ['queue' => $q]);
+                $delayed = (int)($delayedRow->c ?? 0);
+
+                $runningRow = $this->db->selectOne("SELECT COUNT(*) AS c FROM queues WHERE queue = :queue AND reserved_at IS NOT NULL", ['queue' => $q]);
+                $running = (int)($runningRow->c ?? 0);
+
+                $failedRow = $this->db->selectOne("SELECT COUNT(*) AS c FROM failed_jobs WHERE queue = :queue", ['queue' => $q]);
+                $failed = (int)($failedRow->c ?? 0);
+            }
+
+            $report[$q] = [
+                'total_jobs' => $total,
+                'pending_jobs' => $pending,
+                'delayed_jobs' => $delayed,
+                'running_jobs' => $running,
+                'failed_jobs' => $failed,
+                'status' => $running > 10 ? 'congested' : ($total > 0 ? 'active' : 'idle')
+            ];
+        }
+
+        // آمار کلی شکست‌ها
+        $totalFailedRow = $this->db->selectOne("SELECT COUNT(*) AS c FROM failed_jobs");
+        $totalFailed = (int)($totalFailedRow->c ?? 0);
+
+        $report['meta'] = [
+            'total_failed_dlq' => $totalFailed,
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+
+        return $report;
     }
 }

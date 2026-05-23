@@ -26,6 +26,8 @@ class Scheduler
     /** @var string مسیر فایل lock */
     private string $lockDir;
 
+    private bool $forceRegisterJobs = false;
+
     /** @var Logger */
     private Logger $logger;
 
@@ -51,6 +53,12 @@ class Scheduler
         return $this->addJob('every_minute', $callback, $name, 60);
     }
 
+    /** هر N ثانیه */
+    public function everySeconds(int $seconds, callable $callback, string $name = ''): self
+    {
+        return $this->addJob("every_{$seconds}_seconds", $callback, $name, $seconds);
+    }
+
     /** هر N دقیقه */
     public function everyMinutes(int $minutes, callable $callback, string $name = ''): self
     {
@@ -67,7 +75,7 @@ class Scheduler
     public function hourlyAt(int $minute, callable $callback, string $name = ''): self
     {
         $now = (int)date('i');
-        if ($now !== $minute) {
+        if (!$this->forceRegisterJobs && $now !== $minute) {
             return $this;
         }
         return $this->addJob("hourly_at_{$minute}", $callback, $name, 3600);
@@ -79,7 +87,7 @@ class Scheduler
         [$h, $m] = explode(':', $time);
         $nowH = (int)date('H');
         $nowM = (int)date('i');
-        if ($nowH !== (int)$h || $nowM !== (int)$m) {
+        if (!$this->forceRegisterJobs && ($nowH !== (int)$h || $nowM !== (int)$m)) {
             return $this;
         }
         return $this->addJob("daily_{$time}", $callback, $name, 86400);
@@ -92,7 +100,7 @@ class Scheduler
         $nowDay = date('l');   // Monday, Tuesday, ...
         $nowH   = (int)date('H');
         $nowM   = (int)date('i');
-        if (strtolower($nowDay) !== strtolower($day) || $nowH !== (int)$h || $nowM !== (int)$m) {
+        if (!$this->forceRegisterJobs && (strtolower($nowDay) !== strtolower($day) || $nowH !== (int)$h || $nowM !== (int)$m)) {
             return $this;
         }
         return $this->addJob("weekly_{$day}_{$time}", $callback, $name, 604800);
@@ -105,7 +113,7 @@ class Scheduler
         $nowDay = (int)date('j');
         $nowH   = (int)date('H');
         $nowM   = (int)date('i');
-        if ($nowDay !== $dayOfMonth || $nowH !== (int)$h || $nowM !== (int)$m) {
+        if (!$this->forceRegisterJobs && ($nowDay !== $dayOfMonth || $nowH !== (int)$h || $nowM !== (int)$m)) {
             return $this;
         }
         return $this->addJob("monthly_{$dayOfMonth}_{$time}", $callback, $name, 2592000);
@@ -216,6 +224,11 @@ class Scheduler
     // ==========================================
     //  private helpers
     // ==========================================
+
+    public function forceRegisterJobs(bool $force = true): void
+    {
+        $this->forceRegisterJobs = $force;
+    }
 
     private function addJob(string $key, callable $callback, string $name, int $intervalSeconds): self
     {

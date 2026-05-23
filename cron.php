@@ -48,27 +48,56 @@ require_once __DIR__ . '/bootstrap/app.php';
 $container = Container::getInstance();
 
 // ==========================================
-//  File Lock — جلوگیری از اجرای همزمان cron (مشکل #9)
+//  Distributed Lock — جلوگیری از اجرای همزمان cron در multi-node
 // ==========================================
-$lockDir = BASE_PATH . '/storage/logs';
-if (!is_dir($lockDir)) {
-    @mkdir($lockDir, 0775, true);
+$redis = null;
+$distributedLockKey = 'cron:distributed_lock';
+$distributedLockToken = bin2hex(random_bytes(12));
+$lockAcquired = false;
+
+try {
+    $redis = $container->make(\Core\Redis::class);
+} catch (\Throwable $e) {
+    $redis = null;
 }
 
-$lockFile = $lockDir . '/cron.lock';
-$lockHandle = @fopen($lockFile, 'c');
-
-if ($lockHandle === false) {
-    echo '[' . date('Y-m-d H:i:s') . "] [ERROR] Unable to open/create lock file: {$lockFile}.\n";
-    if (defined('INTERNAL_APP_CRON_TRIGGER')) return;
-    exit(1);
+if ($redis instanceof \Core\Redis && $redis->isAvailable()) {
+    try {
+        $lockAcquired = $redis->getClient()->set($distributedLockKey, $distributedLockToken, ['nx', 'ex' => 900]);
+        if (!$lockAcquired) {
+            echo '[' . date('Y-m-d H:i:s') . "] [SKIP] cron.php already running on another node — exiting.\n";
+            if (defined('INTERNAL_APP_CRON_TRIGGER')) return;
+            exit(0);
+        }
+    } catch (\Throwable $e) {
+        $lockAcquired = false;
+    }
 }
 
-if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
-    fclose($lockHandle);
-    echo '[' . date('Y-m-d H:i:s') . "] [SKIP] cron.php already running — exiting.\n";
-    if (defined('INTERNAL_APP_CRON_TRIGGER')) return;
-    exit(0);
+// Fallback to local file lock if Redis is unavailable
+$lockHandle = null;
+$lockFile = null;
+if (!$lockAcquired) {
+    $lockDir = BASE_PATH . '/storage/logs';
+    if (!is_dir($lockDir)) {
+        @mkdir($lockDir, 0775, true);
+    }
+
+    $lockFile = $lockDir . '/cron.lock';
+    $lockHandle = @fopen($lockFile, 'c');
+
+    if ($lockHandle === false) {
+        echo '[' . date('Y-m-d H:i:s') . "] [ERROR] Unable to open/create lock file: {$lockFile}.\n";
+        if (defined('INTERNAL_APP_CRON_TRIGGER')) return;
+        exit(1);
+    }
+
+    if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
+        fclose($lockHandle);
+        echo '[' . date('Y-m-d H:i:s') . "] [SKIP] cron.php already running — exiting.\n";
+        if (defined('INTERNAL_APP_CRON_TRIGGER')) return;
+        exit(0);
+    }
 }
 
 // ==========================================
@@ -91,16 +120,32 @@ if ($dryRun) {
 }
 
 // آزادسازی قفل پس از پایان اسکریپت
-register_shutdown_function(function () use ($lockHandle, $lockFile) {
-    flock($lockHandle, LOCK_UN);
-    fclose($lockHandle);
-    @unlink($lockFile);
+register_shutdown_function(function () use ($redis, $distributedLockKey, $distributedLockToken, $lockHandle, $lockFile) {
+    if ($redis instanceof \Core\Redis && $redis->isAvailable()) {
+        try {
+            $currentValue = $redis->getClient()->get($distributedLockKey);
+            if ($currentValue === $distributedLockToken) {
+                $redis->getClient()->del($distributedLockKey);
+            }
+        } catch (\Throwable $e) {
+            // If Redis cleanup fails, don't break shutdown sequence
+        }
+    }
+
+    if (isset($lockHandle) && $lockHandle !== null) {
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+        @unlink($lockFile);
+    }
 });
 
 // ==========================================
 //  تعریف وظایف
 // ==========================================
 $scheduler = $container->make(\Core\Scheduler::class);
+if ($onlyJob !== null) {
+    $scheduler->forceRegisterJobs(true);
+}
 
 /**
  * ─────────────────────────────────────────
@@ -169,9 +214,19 @@ $scheduler->everyMinute(function () {
             \App\Jobs\ApplyWeeklyProfitLossJob::class,
             \App\Jobs\LogPerformanceJob::class,
             \App\Jobs\SendBulkNotificationJob::class,
-            \App\Jobs\PersistBulkInAppNotificationJob::class, 
+            \App\Jobs\PersistBulkInAppNotificationJob::class,
             \App\Jobs\SendEmailJob::class,
             \App\Jobs\UpdateFraudScoreJob::class,
+            \App\Jobs\InvestmentProfitDistributionJob::class,
+            \App\Jobs\NotificationCleanupJob::class,
+            \App\Jobs\EscrowTimeoutJob::class,
+            \App\Jobs\CacheWarmupJob::class,
+            \App\Jobs\ScoreRecalculationJob::class,
+            \App\Jobs\PredictionGameSettlementJob::class,
+            \App\Jobs\VitrineListingExpiryJob::class,
+            \App\Jobs\InfluencerOrderTimeoutJob::class,
+            \App\Jobs\SocialTaskApprovalReminderJob::class,
+            \App\Jobs\AggregateAnalyticsJob::class,
         ];
 
         if (!in_array($jobClass, $allowedJobs, true)) {
@@ -723,6 +778,13 @@ $scheduler->weekly('Sunday', '05:00', function () {
     return ['new_users' => $newUsers, 'tx_volume' => $txVolume];
 }, 'weekly_kpi_report');
 
+// توزیع سود/ضرر سرمایه‌گذاری هفتگی با استفاده از آخرین ترید بسته‌شده و تنظیمات پیش‌فرض
+$scheduler->weekly('Sunday', '05:10', function () use ($container) {
+    $job = $container->make(\App\Jobs\InvestmentProfitDistributionJob::class);
+    $job->handle();
+    return ['status' => 'ok'];
+}, 'investment_profit_distribution');
+
 // ==========================================
 //  SocialTask Jobs
 // ==========================================
@@ -855,6 +917,50 @@ $scheduler->daily('04:00', function () use ($container) {
     }
 }, 'process_scheduled_tasks');
 
+/**
+ * هر ساعت: آزادسازی خودکار escrow های منقضی شده
+ */
+$scheduler->hourly(function () use ($container) {
+    $job = $container->make(\App\Jobs\EscrowTimeoutJob::class);
+    $job->handle();
+    return ['status' => 'ok'];
+}, 'escrow_timeout_release');
+
+/**
+ * روزانه: پاکسازی اعلان‌های قدیمی
+ */
+$scheduler->daily('04:10', function () use ($container) {
+    $job = $container->make(\App\Jobs\NotificationCleanupJob::class);
+    $job->handle();
+    return ['status' => 'ok'];
+}, 'notification_cleanup');
+
+/**
+ * هر ساعت: انقضای لیست ویترین و آزادسازی Holdهای منقضی شده
+ */
+$scheduler->hourly(function () use ($container) {
+    $job = $container->make(\App\Jobs\VitrineListingExpiryJob::class);
+    $job->handle();
+    return ['status' => 'ok'];
+}, 'vitrine_listing_expiry');
+
+/**
+ * روزانه: ریزش امتیاز کاربران غایب
+ */
+$scheduler->daily('02:20', function () use ($container) {
+    $cronService = $container->make(\App\Services\CronService::class);
+    return $cronService->applyInactivityScoreDecay();
+}, 'inactivity_score_decay');
+
+/**
+ * روزانه: به‌روزرسانی لیست Tor Exit Nodes
+ */
+$scheduler->daily('04:20', function () use ($container) {
+    $command = $container->make(\App\Commands\UpdateTorExitNodesCommand::class);
+    $command->run([]);
+    return ['status' => 'ok'];
+}, 'update_tor_exit_nodes');
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // نوتیفیکیشن — Scheduling & Analytics
@@ -921,6 +1027,18 @@ $scheduler->hourly(function () use ($container) {
 
     return $stats;
 }, 'notification_analytics');
+
+// اجرای OutboxPublisher هر X ثانیه (قابل تنظیم توسط ادمین)
+$scheduler->everySeconds((int)setting('outbox_publish_interval', 60), function () {
+    // توضیح: OutboxPublisher مسئول ارسال رویدادهای ذخیره‌شده در جدول Outbox به سیستم پیام‌رسان است.
+    // کاهش این مقدار باعث ارسال سریع‌تر پیام‌ها می‌شود اما بار سرور را افزایش می‌دهد.
+    $command = 'php ' . BASE_PATH . '/cli.php outbox:publish --limit=100';
+    exec($command, $output, $exitCode);
+    if ($exitCode !== 0) {
+        logger()->error('cron.outbox_publish.failed', ['output' => $output, 'exit_code' => $exitCode]);
+    }
+    return ['output' => $output, 'exit_code' => $exitCode];
+}, 'outbox_publisher');
 
 if ($dryRun) {
     echo "وظایف ثبت‌شده - اجرا نشدند (dry-run mode)\n";

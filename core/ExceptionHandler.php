@@ -763,15 +763,47 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                     $exception->getMessage() ?: 'احراز هویت لازم است'
                 );
             } elseif ($exception instanceof \Core\Exceptions\SecurityException) {
-                // ✅ Fix L1: هندل کردن SecurityException برای CSRF و سایر تهدیدات امنیتی
-                $contract = \App\Contracts\ErrorContract::internalError(
-                    $exception->getMessage() ?: 'بررسی امنیتی ناموفق'
-                );
-                http_response_code(403);
+                if ($exception instanceof \Core\Exceptions\FraudDetectedException) {
+                    $contract = \App\Contracts\ErrorContract::fraudDetected(
+                        $exception->getMessage() ?: 'فعالیت مشکوک شناسایی شد'
+                    );
+                } else {
+                    $contract = \App\Contracts\ErrorContract::forbidden(
+                        $exception->getMessage() ?: 'بررسی امنیتی ناموفق'
+                    );
+                }
             } elseif ($exception instanceof \Core\Exceptions\NotFoundException) {
                 $contract = \App\Contracts\ErrorContract::notFound(
                     $exception->getMessage() ?: 'منبع یافت نشد'
                 );
+            } elseif ($exception instanceof \Core\Exceptions\InsufficientBalanceException) {
+                $contract = \App\Contracts\ErrorContract::insufficientFunds(
+                    $exception->getMessage() ?: 'موجودی حساب کافی نیست'
+                );
+            } elseif ($exception instanceof \Core\Exceptions\RateLimitExceededException) {
+                $contract = \App\Contracts\ErrorContract::rateLimited(
+                    $exception->getMessage() ?: 'تعداد درخواست‌ها بیش از حد مجاز است'
+                );
+            } elseif ($exception instanceof \Core\Exceptions\InvalidStateException) {
+                $contract = \App\Contracts\ErrorContract::conflict(
+                    $exception->getMessage() ?: 'وضعیت درخواست نامعتبر است'
+                );
+            } elseif ($exception instanceof \App\Exceptions\SessionException) {
+                $contract = new \App\Contracts\ErrorContract(
+                    419,
+                    'SESSION_ERROR',
+                    $exception->getMessage() ?: 'نشست کاربری نامعتبر یا منقضی شده است'
+                );
+            } elseif ($exception instanceof \App\Exceptions\PaymentGatewayException) {
+                $code = $exception->getCode() ?: 500;
+                $contract = new \App\Contracts\ErrorContract(
+                    $code,
+                    'PAYMENT_GATEWAY_ERROR',
+                    $exception->getMessage() ?: 'خطا در ارتباط با درگاه پرداخت'
+                );
+                if ($exception instanceof \App\Exceptions\PaymentVerificationException && $exception->getDetails()) {
+                    $contract = $contract->withDetails($exception->getDetails());
+                }
             } elseif ($exception instanceof \Core\Exceptions\BusinessException) {
                 $contract = \App\Contracts\ErrorContract::internalError(
                     $exception->getMessage() ?: 'خطای بیزینسی'
@@ -798,12 +830,26 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 $statusCode = 401;
                 $message = $exception->getMessage() ?: 'احراز هویت لازم است';
             } elseif ($exception instanceof \Core\Exceptions\SecurityException) {
-                // ✅ Fix L1: هندل SecurityException در fallback
                 $statusCode = 403;
-                $message = $exception->getMessage() ?: 'بررسی امنیتی ناموفق';
+                $message = $exception->getMessage() ?: ($exception instanceof \Core\Exceptions\FraudDetectedException ? 'فعالیت مشکوک شناسایی شد' : 'بررسی امنیتی ناموفق');
             } elseif ($exception instanceof \Core\Exceptions\NotFoundException) {
                 $statusCode = 404;
                 $message = $exception->getMessage() ?: 'آدرس یا منبع یافت نشد';
+            } elseif ($exception instanceof \Core\Exceptions\InsufficientBalanceException) {
+                $statusCode = 400;
+                $message = $exception->getMessage() ?: 'موجودی حساب کافی نیست';
+            } elseif ($exception instanceof \Core\Exceptions\RateLimitExceededException) {
+                $statusCode = 429;
+                $message = $exception->getMessage() ?: 'تعداد درخواست‌ها بیش از حد مجاز است';
+            } elseif ($exception instanceof \Core\Exceptions\InvalidStateException) {
+                $statusCode = 409;
+                $message = $exception->getMessage() ?: 'وضعیت درخواست نامعتبر است';
+            } elseif ($exception instanceof \App\Exceptions\SessionException) {
+                $statusCode = 419;
+                $message = $exception->getMessage() ?: 'نشست کاربری نامعتبر یا منقضی شده است';
+            } elseif ($exception instanceof \App\Exceptions\PaymentGatewayException) {
+                $statusCode = $exception->getCode() ?: 500;
+                $message = $exception->getMessage() ?: 'خطا در ارتباط با درگاه پرداخت';
             } else {
                 $debug = (bool) config('app.debug', false);
                 $message = $debug 
