@@ -70,20 +70,28 @@ class PredictionController extends BaseAdminController
     {
         $data = $this->request->body();
 
-        // اعتبارسنجی
-        $errors = $this->validateGameData($data);
-        if (!empty($errors)) {
+        $request = new \App\Validators\Requests\CreatePredictionGameRequest($data);
+
+        if (!$request->validate()) {
+            $errors = [];
+            foreach ($request->errors() as $fieldErrors) {
+                foreach ((array)$fieldErrors as $err) {
+                    $errors[] = $err;
+                }
+            }
             $this->session->setFlash('errors', $errors);
             $this->session->setFlash('old', $data);
             redirect(url('/admin/prediction/create'));
             return;
         }
 
-        $game = $this->gameModel->create(array_merge($data, [
+        $validatedData = $request->validated();
+
+        $game = $this->gameModel->create(array_merge($validatedData, [
             'created_by'         => (int)user_id(),
-            'min_bet_usdt'       => (float)($data['min_bet_usdt'] ?? 1),
-            'max_bet_usdt'       => (float)($data['max_bet_usdt'] ?? 1000),
-            'commission_percent' => (float)($data['commission_percent'] ?? setting('prediction_commission_percent', 5)),
+            'min_bet_usdt'       => (float)($validatedData['min_bet_usdt'] ?? 1),
+            'max_bet_usdt'       => (float)($validatedData['max_bet_usdt'] ?? 1000),
+            'commission_percent' => (float)($validatedData['commission_percent'] ?? setting('prediction_commission_percent', 5)),
         ]));
 
         if (!$game) {
@@ -212,8 +220,15 @@ class PredictionController extends BaseAdminController
 
         // Validate only if there are fields requiring validation
         if (isset($data['title']) || isset($data['team_home']) || isset($data['team_away']) || isset($data['match_date']) || isset($data['bet_deadline'])) {
-            $errors = $this->validateGameData(array_merge((array)$game, $data));
-            if (!empty($errors)) {
+            $merged = array_merge((array)$game, $data);
+            $request = new \App\Validators\Requests\CreatePredictionGameRequest($merged);
+            if (!$request->validate()) {
+                $errors = [];
+                foreach ($request->errors() as $fieldErrors) {
+                    foreach ((array)$fieldErrors as $err) {
+                        $errors[] = $err;
+                    }
+                }
                 $this->response->json(['success' => false, 'errors' => $errors]);
                 return;
             }
@@ -227,54 +242,5 @@ class PredictionController extends BaseAdminController
         ]);
     }
 
-    // ─── validation ───────────────────────────────────────────────────
-    private function validateGameData(array $d): array
-    {
-        $errors = [];
 
-        if (empty(trim($d['title'] ?? ''))) {
-            $errors[] = 'عنوان بازی الزامی است.';
-        }
-        if (empty(trim($d['team_home'] ?? ''))) {
-            $errors[] = 'نام تیم خانه الزامی است.';
-        }
-        if (empty(trim($d['team_away'] ?? ''))) {
-            $errors[] = 'نام تیم مهمان الزامی است.';
-        }
-        if (empty($d['match_date'])) {
-            $errors[] = 'تاریخ بازی الزامی است.';
-        }
-        if (empty($d['bet_deadline'])) {
-            $errors[] = 'ددلاین شرط‌بندی الزامی است.';
-        }
-        if (!empty($d['match_date']) && !empty($d['bet_deadline'])) {
-            if (strtotime($d['bet_deadline']) >= strtotime($d['match_date'])) {
-                $errors[] = 'ددلاین شرط‌بندی باید قبل از زمان بازی باشد.';
-            }
-            if (strtotime($d['bet_deadline']) <= time()) {
-                $errors[] = 'ددلاین شرط‌بندی باید در آینده باشد.';
-            }
-        }
-
-        $minBet = (float)($d['min_bet_usdt'] ?? 0);
-        $maxBet = (float)($d['max_bet_usdt'] ?? 0);
-
-        if ($minBet <= 0) {
-            $errors[] = 'حداقل مبلغ شرط باید بیشتر از صفر باشد.';
-        }
-        if ($maxBet <= 0 || $maxBet < $minBet) {
-            $errors[] = 'حداکثر مبلغ شرط باید بیشتر از حداقل باشد.';
-        }
-
-        $commission = (float)($d['commission_percent'] ?? 5);
-        if ($commission < 0 || $commission > 30) {
-            $errors[] = 'درصد کمیسیون باید بین ۰ و ۳۰ باشد.';
-        }
-
-        if (!array_key_exists($d['sport_type'] ?? '', self::SPORT_TYPES)) {
-            $errors[] = 'نوع ورزش نامعتبر است.';
-        }
-
-        return $errors;
-    }
 }

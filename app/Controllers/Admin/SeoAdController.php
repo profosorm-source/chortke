@@ -2,7 +2,7 @@
 namespace App\Controllers\Admin;
 use App\Models\Ads;
 use App\Models\SeoExecution;
-use App\Services\Shared\AnalyticsService;
+use App\Services\Shared\DashboardStatsService;
 
 /**
  * Admin — مدیریت آگهی‌های SEO
@@ -11,13 +11,13 @@ class SeoAdController extends BaseAdminController
 {
     private Ads $model;
     private SeoExecution $executionModel;
-    private AnalyticsService $analytics;
+    private DashboardStatsService $analytics;
     private \App\Services\SeoService $seoService;
 
     public function __construct(
         Ads $m, 
         SeoExecution $e,
-        AnalyticsService $a,
+        DashboardStatsService $a,
         \App\Services\SeoService $s
     ) {
         parent::__construct();

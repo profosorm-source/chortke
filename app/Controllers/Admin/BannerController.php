@@ -71,13 +71,20 @@ class BannerController extends BaseAdminController
         // CORE-036: CSRF Protection
         $this->validateCsrf();
 
-        $title = trim($this->request->input('title', ''));
-        $placement = trim($this->request->input('placement', ''));
+        $input = $this->request->all();
+        $request = new \App\Validators\Requests\CreateBannerRequest($input);
 
-        if (empty($title) || empty($placement)) {
-            $this->session->setFlash('error', 'عنوان و جایگاه الزامی است');
+        if (!$request->validate()) {
+            $errors = $request->errors();
+            $firstError = reset($errors);
+            $msg = is_array($firstError) ? reset($firstError) : $firstError;
+            $this->session->setFlash('error', $msg ?: 'اطلاعات ورودی نامعتبر است.');
             return redirect('/admin/banners/create');
         }
+
+        $validatedData = $request->validated();
+        $title = trim($validatedData['title']);
+        $placement = trim($validatedData['placement']);
 
         // استفاده از UploadService (Sprint 6)
         $imagePath = null;
@@ -92,11 +99,7 @@ class BannerController extends BaseAdminController
             }
         }
 
-        $link = $this->request->input('link', '');
-        if (!empty($link) && (!filter_var($link, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $link))) {
-            $this->session->setFlash('error', 'لینک معتبر نیست (باید با http یا https شروع شود)');
-            return redirect('/admin/banners/create');
-        }
+        $link = $validatedData['link'] ?? '';
 
         $data = [
             'type' => 'banner', // اجبار نوع متمرکز
@@ -149,11 +152,19 @@ class BannerController extends BaseAdminController
             return redirect('/admin/banners');
         }
 
-        $link = $this->request->input('link', '');
-        if (!empty($link) && (!filter_var($link, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $link))) {
-            $this->session->setFlash('error', 'لینک معتبر نیست (باید با http یا https شروع شود)');
+        $input = $this->request->all();
+        $request = new \App\Validators\Requests\CreateBannerRequest($input);
+
+        if (!$request->validate()) {
+            $errors = $request->errors();
+            $firstError = reset($errors);
+            $msg = is_array($firstError) ? reset($firstError) : $firstError;
+            $this->session->setFlash('error', $msg ?: 'اطلاعات ورودی نامعتبر است.');
             return redirect('/admin/banners/edit?id=' . $id);
         }
+
+        $validatedData = $request->validated();
+        $link = $validatedData['link'] ?? '';
 
         // استفاده از UploadService (Sprint 6)
         $imagePath = null;
@@ -169,9 +180,9 @@ class BannerController extends BaseAdminController
         }
 
         $data = [
-            'title' => $this->request->input('title', ''),
+            'title' => trim($validatedData['title']),
             'link' => $link,
-            'placement' => $this->request->input('placement', ''),
+            'placement' => trim($validatedData['placement']),
             'category' => $this->request->input('category'),
             'sort_order' => (int)$this->request->input('sort_order', 0),
             'is_active' => (int)$this->request->input('is_active', 1),

@@ -4,7 +4,9 @@ namespace App\Controllers\Admin;
 
 use App\Services\Search\SearchOrchestrator;
 use App\Services\SocialTask\SocialTaskService;
-use App\Services\SocialTask\TrustScoreService;
+use App\Services\Gamification\TrustService;
+use App\Enums\ModuleContext;
+use App\Services\User\UserService;
 use App\Services\SocialTask\RatingService;
 use App\Services\SocialTask\SilentAntiFraudService;
 use App\Services\WalletService;
@@ -16,7 +18,8 @@ class SocialTaskController extends BaseAdminController
 {
     private SearchOrchestrator $searchService;
     private SocialTaskService      $service;
-    private TrustScoreService      $trust;
+    private TrustService           $trust;
+    private UserService            $userService;
     private RatingService          $ratingService;
     private SilentAntiFraudService $antiFraud;
     private WalletService          $wallet;
@@ -24,9 +27,10 @@ class SocialTaskController extends BaseAdminController
     private AuditTrail $auditTrail;
 
     public function __construct(
-        SearchOrchestrator  $searchService,
+        SearchOrchestrator     $searchService,
         SocialTaskService      $service,
-        TrustScoreService      $trust,
+        TrustService           $trust,
+        UserService            $userService,
         RatingService          $ratingService,
         SilentAntiFraudService $antiFraud,
         WalletService          $wallet,
@@ -37,6 +41,7 @@ class SocialTaskController extends BaseAdminController
         $this->searchService = $searchService;
         $this->service       = $service;
         $this->trust         = $trust;
+        $this->userService   = $userService;
         $this->ratingService = $ratingService;
         $this->antiFraud     = $antiFraud;
         $this->wallet        = $wallet;
@@ -229,7 +234,7 @@ class SocialTaskController extends BaseAdminController
             'title'        => 'جزئیات اجرا #' . $id,
             'exec'         => $exec,
             'behaviorData' => $behaviorData,
-            'trustScore'   => $this->trust->get((int)$exec->executor_id),
+            'trustScore'   => ($u = $this->userService->findById((int)$exec->executor_id)) ? $this->trust->getTrustScore($u, ModuleContext::SOCIAL_TASKS) : 50.0,
             'restriction'  => $this->antiFraud->getRestrictionLevel((int)$exec->executor_id),
         ]);
     }
@@ -366,8 +371,9 @@ class SocialTaskController extends BaseAdminController
     public function userTrust(): void
     {
         $userId  = (int)$this->request->param('id');
-        $trust   = $this->trust->get($userId);
-        $weekly  = $this->trust->getWeeklyStats($userId);
+        $userObj = $this->userService->findById($userId);
+        $trust   = $userObj ? $this->trust->getTrustScore($userObj, ModuleContext::SOCIAL_TASKS) : 50.0;
+        $weekly  = []; // To be implemented with Score analytics
         $history = $this->service->getTrustHistoryForAdmin($userId);
         $restriction = $this->antiFraud->getRestrictionLevel($userId);
 
