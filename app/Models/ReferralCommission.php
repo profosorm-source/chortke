@@ -6,7 +6,9 @@ use Core\Model;
 use Core\Database;
 
 class ReferralCommission extends Model {
-private function fetchOne(string $sql, array $params = []): ?object
+    protected static string $table = 'referral_commissions';
+
+    private function fetchOne(string $sql, array $params = []): ?object
     {
         $stmt = $this->db->query($sql, $params);
         if (!$stmt) return null;

@@ -6,7 +6,9 @@ use Core\Model;
 use Core\Database;
 
 class KYCVerification extends Model {
-/**
+    protected static string $table = 'kyc_verifications';
+
+    /**
      * ایجاد درخواست KYC جدید
      * خروجی: id یا false
      */

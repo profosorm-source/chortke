@@ -5,6 +5,7 @@ namespace App\Models;
 use Core\Model;
 use Core\Database;
 
+#[\AllowDynamicProperties]
 /**
  * FeatureFlag Model - Pure Data Access Layer
  * 
@@ -13,6 +14,8 @@ use Core\Database;
  */
 class FeatureFlag extends Model 
 {
+    protected static string $table = 'feature_flags';
+
     private array $cachedFeatures = [];
     private bool $loaded = false;
     

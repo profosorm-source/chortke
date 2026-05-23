@@ -35,7 +35,7 @@ class Investment extends Model {
         // مقدارهای پیش‌فرض
         $data['created_at'] = $data['created_at'] ?? $now;
         $data['updated_at'] = $data['updated_at'] ?? $now;
-        $data['deleted_at'] = null;  // ❌ SECURITY: Never from user input
+        unset($data['deleted_at']);  // ❌ SECURITY: Never from user input
 
         if (!isset($data['status'])) {
             $data['status'] = self::STATUS_ACTIVE;
@@ -77,7 +77,7 @@ class Investment extends Model {
     public function find(int $id): ?object
     {
         $stmt = $this->db->query(
-            "SELECT * FROM investments WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+            "SELECT * FROM investments WHERE id = ? AND (deleted_at IS NULL OR deleted_at = 0) LIMIT 1",
             [$id]
         );
 
@@ -91,7 +91,7 @@ class Investment extends Model {
             "SELECT i.*, u.full_name as user_name, u.email as user_email
               FROM investments i
               JOIN users u ON i.user_id = u.id
-              WHERE i.id = ? AND i.deleted_at IS NULL
+              WHERE i.id = ? AND (i.deleted_at IS NULL OR i.deleted_at = 0)
               LIMIT 1",
             [$id]
         );
@@ -107,7 +107,7 @@ class Investment extends Model {
     {
         $stmt = $this->db->query(
             "SELECT * FROM investments
-              WHERE user_id = ? AND status = ? AND deleted_at IS NULL
+              WHERE user_id = ? AND status = ? AND (deleted_at IS NULL OR deleted_at = 0)
               ORDER BY created_at DESC LIMIT 1",
             [$userId, self::STATUS_ACTIVE]
         );
@@ -131,7 +131,7 @@ class Investment extends Model {
 
         $stmt = $this->db->prepare(
             "SELECT * FROM investments
-             WHERE user_id = :user_id AND deleted_at IS NULL
+             WHERE user_id = :user_id AND (deleted_at IS NULL OR deleted_at = 0)
              ORDER BY created_at DESC
              LIMIT :limit OFFSET :offset"
         );
@@ -146,7 +146,7 @@ class Investment extends Model {
     public function countByUser(int $userId): int
     {
         $stmt = $this->db->query(
-            "SELECT COUNT(*) as total FROM investments WHERE user_id = ? AND deleted_at IS NULL",
+            "SELECT COUNT(*) as total FROM investments WHERE user_id = ? AND (deleted_at IS NULL OR deleted_at = 0)",
             [$userId]
         );
 
@@ -165,7 +165,7 @@ class Investment extends Model {
         $sql = "SELECT i.*, u.full_name as user_name, u.email as user_email
                 FROM investments i
                 JOIN users u ON i.user_id = u.id
-                WHERE i.deleted_at IS NULL";
+                WHERE (i.deleted_at IS NULL OR i.deleted_at = 0)";
 
         $params = [];
 
@@ -202,7 +202,7 @@ class Investment extends Model {
         $sql = "SELECT COUNT(*) as total
                 FROM investments i
                 JOIN users u ON i.user_id = u.id
-                WHERE i.deleted_at IS NULL";
+                WHERE (i.deleted_at IS NULL OR i.deleted_at = 0)";
 
         $params = [];
 
@@ -261,7 +261,7 @@ class Investment extends Model {
 
         $values[] = $id;
 
-        $sql = "UPDATE investments SET " . \implode(', ', $fields) . " WHERE id = ? AND deleted_at IS NULL";
+        $sql = "UPDATE investments SET " . \implode(', ', $fields) . " WHERE id = ? AND (deleted_at IS NULL OR deleted_at = 0)";
 
         $stmt = $this->db->query($sql, $values);
 
@@ -346,11 +346,26 @@ class Investment extends Model {
                 COALESCE(SUM(CASE WHEN status = 'active' THEN current_balance ELSE 0 END), 0) as total_balance,
                 COALESCE(SUM(total_profit), 0) as total_profit_all,
                 COALESCE(SUM(total_loss), 0) as total_loss_all
-            FROM investments WHERE deleted_at IS NULL"
+            FROM investments WHERE (deleted_at IS NULL OR deleted_at = 0)"
         );
 
         $row = $stmt ? $stmt->fetch(\PDO::FETCH_OBJ) : null;
         return $row ?: (object)[];
+    }
+
+    public function findInIdsForUpdate(array $ids): array
+    {
+        if (empty($ids)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $this->db->query(
+            "SELECT * FROM investments WHERE id IN ($placeholders) AND (deleted_at IS NULL OR deleted_at = 0) FOR UPDATE",
+            $ids
+        );
+
+        return $stmt ? $stmt->fetchAll(\PDO::FETCH_OBJ) : [];
     }
 
     /**
@@ -361,7 +376,9 @@ class Investment extends Model {
         $query = $this->db->table('investments as i')
             ->select('i.*', 'u.full_name as user_name', 'u.email as user_email')
             ->leftJoin('users as u', 'u.id', '=', 'i.user_id')
-            ->whereNull('i.deleted_at');
+            ->where(function($q) {
+                $q->whereNull('i.deleted_at')->orWhere('i.deleted_at', '=', 0);
+            });
 
         if (!empty($q)) {
             $query = $this->applySearch($query, $q);

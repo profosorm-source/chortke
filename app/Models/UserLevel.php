@@ -71,7 +71,7 @@ class UserLevel extends Model {
 
         $allowed = [
             'name', 'icon', 'color', 'sort_order',
-            'min_active_days', 'min_completed_tasks', 'min_total_earning', 'min_total_earning_usdt',
+            'min_score',
             'purchase_price_irt', 'purchase_price_usdt', 'purchase_duration_days',
             'earning_bonus_percent', 'referral_bonus_percent', 'daily_task_limit_bonus',
             'withdrawal_limit_bonus', 'priority_support', 'special_badge', 'is_active',
@@ -132,19 +132,16 @@ class UserLevel extends Model {
     /**
      * بالاترین سطح قابل دسترسی با فعالیت
      */
-    public function getEligibleLevel(int $activeDays, int $completedTasks, float $totalEarning, float $totalEarningUsdt): ?object
+    public function getEligibleLevel(float $totalScore): ?object
     {
         $stmt = $this->db->prepare("
             SELECT * FROM user_levels 
             WHERE is_active = 1
-            AND min_active_days <= ?
-            AND min_completed_tasks <= ?
-            AND min_total_earning <= ?
-            AND min_total_earning_usdt <= ?
+            AND min_score <= ?
             ORDER BY sort_order DESC
             LIMIT 1
         ");
-        $stmt->execute([$activeDays, $completedTasks, $totalEarning, $totalEarningUsdt]);
+        $stmt->execute([$totalScore]);
         $result = $stmt->fetch(\PDO::FETCH_OBJ);
         return $result ?: null;
     }
@@ -177,15 +174,13 @@ class UserLevel extends Model {
     {
         $stmt = $this->db->prepare("
             INSERT INTO user_levels (
-                name, slug, icon, color, sort_order,
-                min_active_days, min_completed_tasks, min_total_earning, min_total_earning_usdt,
+                name, slug, icon, color, sort_order, min_score,
                 purchase_price_irt, purchase_price_usdt, purchase_duration_days,
                 earning_bonus_percent, referral_bonus_percent, daily_task_limit_bonus,
                 withdrawal_limit_bonus, priority_support, special_badge, is_active,
                 created_at, updated_at
             ) VALUES (
-                ?, ?, ?, ?, ?,
-                ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?, ?,
@@ -199,10 +194,7 @@ class UserLevel extends Model {
             $data['icon'] ?? 'workspace_premium',
             $data['color'] ?? '#c0c0c0',
             $data['sort_order'] ?? 0,
-            $data['min_active_days'] ?? 0,
-            $data['min_completed_tasks'] ?? 0,
-            $data['min_total_earning'] ?? 0,
-            $data['min_total_earning_usdt'] ?? 0,
+            $data['min_score'] ?? 0,
             $data['purchase_price_irt'] ?? 0,
             $data['purchase_price_usdt'] ?? 0,
             $data['purchase_duration_days'] ?? 30,

@@ -6,6 +6,8 @@ use Core\Model;
 use Core\Database;
 
 class InvestmentWithdrawal extends Model {
+    protected static string $table = 'investment_withdrawals';
+
     public const STATUS_PENDING   = 'pending';
     public const STATUS_APPROVED  = 'approved';
     public const STATUS_COMPLETED = 'completed';

@@ -6,6 +6,8 @@ use Core\Model;
 use Core\Database;
 
 class TradingRecord extends Model {
+    protected static string $table = 'trading_records';
+
     public const STATUS_OPEN = 'open';
     public const STATUS_CLOSED = 'closed';
     public const STATUS_STOPPED = 'stopped';

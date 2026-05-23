@@ -6,6 +6,8 @@ use Core\Model;
 use Core\Database;
 
 class InvestmentProfit extends Model {
+    protected static string $table = 'investment_profits';
+
     /**
      * ایجاد رکورد سود/ضرر
      * خروجی: id یا null
