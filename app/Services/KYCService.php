@@ -23,6 +23,8 @@ class KYCService extends \App\Services\BaseService
     private \App\Adapters\KycFaceVerificationAdapter $aiAdapter;
     private \Core\Encryption $encryption;
 
+    private \Core\EventDispatcher $eventDispatcher;
+
     public function __construct(
         KYCVerification      $kycModel,
         User                 $userModel,
@@ -32,7 +34,8 @@ class KYCService extends \App\Services\BaseService
         \App\Adapters\KycFaceVerificationAdapter $aiAdapter,
         LoggerInterface      $logger,
         \Core\Encryption     $encryption,
-        ?NotificationService $notificationService = null
+        ?NotificationService $notificationService = null,
+        ?\Core\EventDispatcher $eventDispatcher = null
     ) {
         parent::__construct($logger);
         $this->kycModel            = $kycModel;
@@ -43,6 +46,7 @@ class KYCService extends \App\Services\BaseService
         $this->aiAdapter           = $aiAdapter;
         $this->encryption          = $encryption;
         $this->notificationService = $notificationService;
+        $this->eventDispatcher     = $eventDispatcher ?? \Core\EventDispatcher::getInstance();
     }
 
     /**
@@ -236,6 +240,13 @@ class KYCService extends \App\Services\BaseService
 
         $this->db->commit();
 
+        $this->eventDispatcher->dispatch('kyc.status_changed', [
+            'kyc_id' => (int)$kycId,
+            'user_id' => $userId,
+            'old_status' => null,
+            'new_status' => !empty($photoshopCheck['suspicious']) ? 'under_review' : 'pending'
+        ]);
+
         return [
             'success' => true,
             'message' => 'درخواست احراز هویت ثبت شد',
@@ -313,6 +324,14 @@ class KYCService extends \App\Services\BaseService
         ], $adminId);
 
         $this->db->commit();
+
+        $this->eventDispatcher->dispatch('kyc.status_changed', [
+            'kyc_id' => $kycId,
+            'user_id' => (int)$kyc->user_id,
+            'old_status' => $kyc->status,
+            'new_status' => 'verified',
+            'admin_id' => $adminId
+        ]);
 
         try {
             if ($this->notificationService && method_exists($this->notificationService, 'sendKYCApproved')) {
@@ -409,6 +428,15 @@ class KYCService extends \App\Services\BaseService
         ], $adminId);
 
         $this->db->commit();
+
+        $this->eventDispatcher->dispatch('kyc.status_changed', [
+            'kyc_id' => $kycId,
+            'user_id' => (int)$kyc->user_id,
+            'old_status' => $kyc->status,
+            'new_status' => 'rejected',
+            'reason' => $reason,
+            'admin_id' => $adminId
+        ]);
 
         // نوتیف خارج از transaction
         try {

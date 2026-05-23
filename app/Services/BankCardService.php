@@ -13,7 +13,6 @@ class BankCardService extends \App\Services\BaseService
     private \App\Adapters\BankInquiryAdapter $inquiryAdapter;
     private \Core\Encryption $encryption;
     private \Core\Database $db;
-    private \Core\IdempotencyKey $idempotencyKey;
 
     public function __construct(
         \App\Models\BankCard $model,

@@ -23,7 +23,7 @@ class QueueWorker extends BaseService
         parent::__construct($logger);
     }
 
-    public function work(?string $queueName = null, int $limit = 10, ?array $allowedJobs = null): array
+    public function work(?string $queueName = null, int $limit = 10, ?array $allowedJobs = null, int $maxConcurrency = 4): array
     {
         $processed = 0;
         $failed = 0;
@@ -31,22 +31,107 @@ class QueueWorker extends BaseService
         $limit = max(1, min(500, $limit));
         $allowedJobs ??= $this->defaultAllowedJobs();
 
+        $canFork = function_exists('pcntl_fork') && !stristr(PHP_OS, 'win');
+        $activeChildren = [];
+
         for ($i = 0; $i < $limit; $i++) {
+            if ($canFork) {
+                // Reap exited children
+                foreach ($activeChildren as $pid => $childJob) {
+                    $res = pcntl_waitpid($pid, $status, WNOHANG);
+                    if ($res == -1 || $res > 0) {
+                        if ($res > 0) {
+                            $exitCode = pcntl_wexitstatus($status);
+                            if ($exitCode === 0) {
+                                $processed++;
+                            } else {
+                                $failed++;
+                            }
+                        }
+                        unset($activeChildren[$pid]);
+                    }
+                }
+
+                // If concurrency limit is reached, wait for at least one child to finish
+                while (count($activeChildren) >= $maxConcurrency) {
+                    $pid = pcntl_waitpid(-1, $status);
+                    if ($pid > 0) {
+                        $exitCode = pcntl_wexitstatus($status);
+                        if ($exitCode === 0) {
+                            $processed++;
+                        } else {
+                            $failed++;
+                        }
+                        unset($activeChildren[$pid]);
+                    } else {
+                        break;
+                    }
+                }
+            }
+
             $job = $this->queue->pop($queueName);
             if (!$job) {
                 break;
             }
 
-            try {
-                $this->handleJob($job, $allowedJobs);
-                $this->queue->delete((int) $job['id']);
-                $processed++;
-            } catch (\Throwable $e) {
-                $failed++;
-                $this->handleFailure($job, $e);
-            } finally {
-                if (method_exists(Container::getInstance(), 'flushScoped')) {
-                    Container::getInstance()->flushScoped();
+            if ($canFork) {
+                $pid = pcntl_fork();
+                if ($pid == -1) {
+                    // Fork failed, fallback to synchronous handling
+                    $this->logger->error('queue.fork_failed_falling_back', ['job_id' => $job['id']]);
+                    try {
+                        $this->handleJob($job, $allowedJobs);
+                        $this->queue->delete((int) $job['id']);
+                        $processed++;
+                    } catch (\Throwable $e) {
+                        $failed++;
+                        $this->handleFailure($job, $e);
+                    } finally {
+                        $this->performMemoryCleanup();
+                    }
+                } elseif ($pid === 0) {
+                    // Child Process
+                    try {
+                        $this->handleJob($job, $allowedJobs);
+                        $this->queue->delete((int) $job['id']);
+                        exit(0);
+                    } catch (\Throwable $e) {
+                        $this->handleFailure($job, $e);
+                        exit(1);
+                    }
+                } else {
+                    // Parent Process: track child
+                    $activeChildren[$pid] = $job;
+                }
+            } else {
+                // Synchronous processing fallback (Windows / no pcntl)
+                try {
+                    $this->handleJob($job, $allowedJobs);
+                    $this->queue->delete((int) $job['id']);
+                    $processed++;
+                } catch (\Throwable $e) {
+                    $failed++;
+                    $this->handleFailure($job, $e);
+                } finally {
+                    $this->performMemoryCleanup();
+                }
+            }
+        }
+
+        // Parent wait for all remaining children to finish
+        if ($canFork && !empty($activeChildren)) {
+            while (count($activeChildren) > 0) {
+                $pid = pcntl_waitpid(-1, $status);
+                if ($pid > 0) {
+                    $exitCode = pcntl_wexitstatus($status);
+                    if ($exitCode === 0) {
+                        $processed++;
+                    } else {
+                        $failed++;
+                    }
+                    unset($activeChildren[$pid]);
+                } else {
+                    break;
                 }
             }
         }
@@ -121,11 +206,27 @@ class QueueWorker extends BaseService
                 return;
             }
 
-            $this->queue->release((int) $job['id']);
+            // Calculate customized retry delay if defined on the job handler
+            $delay = 0;
+            if (class_exists($jobClass)) {
+                try {
+                    $handler = Container::getInstance()->make($jobClass);
+                    if (method_exists($handler, 'retryAfter')) {
+                        $delay = (int) $handler->retryAfter($attempts);
+                    } elseif (property_exists($handler, 'backoff')) {
+                        $delay = (int) $handler->backoff;
+                    }
+                } catch (\Throwable $inspectErr) {
+                    // Fail-safe to default exponential delay if instantiation fails
+                }
+            }
+
+            $this->queue->release((int) $job['id'], $delay);
             $this->logger->warning('queue_job_released_retry', [
                 'job_id' => $job['id'] ?? null,
                 'job' => $jobClass,
                 'attempts' => $attempts,
+                'delay_applied' => $delay,
             ]);
         } catch (\Throwable $failError) {
             $this->logger->critical('queue_failure_handler_failed', [
@@ -156,5 +257,43 @@ class QueueWorker extends BaseService
             \App\Jobs\SocialTaskApprovalReminderJob::class,
             \App\Jobs\AggregateAnalyticsJob::class,
         ];
+    }
+
+    /**
+     * پاکسازی کامل حافظه پس از اجرای هر جاب در پروسه‌های طولانی (Long-running Queue Workers)
+     */
+    private function performMemoryCleanup(): void
+    {
+        $container = Container::getInstance();
+
+        // ۱. پاکسازی آبجکت‌های Scoped
+        if (method_exists($container, 'flushScoped')) {
+            $container->flushScoped();
+        }
+
+        // ۲. پاکسازی نمونه‌های سینگلتون اضافی برای ممانعت از نشت حافظه
+        if (method_exists($container, 'flushSingletonInstances')) {
+            $container->flushSingletonInstances();
+        }
+
+        // ۳. پاکسازی کش رفلکشن کانتینر
+        if (method_exists($container, 'cleanupReflectionCache')) {
+            $container->cleanupReflectionCache();
+        }
+
+        // ۴. بازگردانی وضعیت شنونده‌های رویداد به حالت اولیه بوت‌استرپ
+        if ($container->has(EventDispatcher::class)) {
+            try {
+                $dispatcher = $container->make(EventDispatcher::class);
+                if (method_exists($dispatcher, 'restoreBootstrapState')) {
+                    $dispatcher->restoreBootstrapState();
+                }
+            } catch (\Throwable $ignored) {}
+        }
+
+        // ۵. اجرای رفتگر برای بازپس‌گیری حافظه‌های چرخه‌ای
+        if (function_exists('gc_collect_cycles')) {
+            gc_collect_cycles();
+        }
     }
 }

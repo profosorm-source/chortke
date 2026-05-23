@@ -11,9 +11,9 @@ use App\Contracts\WalletServiceInterface;
 use App\Contracts\NotificationServiceInterface;
 use App\Services\User\UserService;
 use App\Services\Shared\ReferralService;
-use App\Services\XPEngine;
-use App\Services\User\UserScoreService;
-use App\Services\Shared\RatingService;
+use App\Services\Gamification\XpService;
+use App\Enums\ModuleContext;
+use App\Models\User;
 use Core\Cache;
 use Core\TransactionWrapper;
 use Core\EventDispatcher;
@@ -51,9 +51,7 @@ class ContentService extends \App\Services\BaseService
     private TransactionWrapper $transactionWrapper;
     private EventDispatcher $eventDispatcher;
     private SettingService $settingService;
-    private XPEngine $xpEngine;
-    private UserScoreService $userScoreService;
-    private RatingService $ratingService;
+    private XpService $xpService;
     private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
     // متن تعهدنامه
     private const AGREEMENT_TEXT = <<<EOT
@@ -85,9 +83,7 @@ EOT;
         LoggerInterface $logger,
         Cache $cache,
         SettingService $settingService,
-        XPEngine $xpEngine,
-        UserScoreService $userScoreService,
-        RatingService $ratingService,
+        XpService $xpService,
         ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
@@ -102,9 +98,7 @@ EOT;
         $this->eventDispatcher = $eventDispatcher;
         $this->cache = $cache;
         $this->settingService = $settingService;
-        $this->xpEngine = $xpEngine;
-        $this->userScoreService = $userScoreService;
-        $this->ratingService = $ratingService;
+        $this->xpService = $xpService;
         $this->cacheInvalidation = $cacheInvalidation;
     }
 
@@ -238,11 +232,11 @@ EOT;
 
             // 🏆 Award XP to content creator
             try {
-                $this->xpEngine->awardXP(
+                $this->xpService->award(
                     (int)$submission->user_id,
-                    'content',
-                    'content_approved',
-                    (int)$submissionId
+                    ModuleContext::YOUTUBE_TASKS,
+                    2.0,
+                    "content_approved_{$submissionId}"
                 );
             } catch (\Throwable $e) {
                 $this->logger->warning('content.approval.xp_failed', [
@@ -376,30 +370,14 @@ EOT;
 
             // Award XP to rater for engagement
             try {
-                $this->xpEngine->awardXP(
+                $this->xpService->award(
                     $userId,
-                    'content',
-                    'content_rated',
-                    $submissionId
+                    ModuleContext::YOUTUBE_TASKS,
+                    1.0,
+                    "content_rated_{$submissionId}"
                 );
             } catch (\Throwable $e) {
                 $this->logger->warning('content.rating.xp_failed', [
-                    'user_id' => $userId,
-                    'submission_id' => $submissionId
-                ]);
-            }
-
-            // Record engagement score event
-            try {
-                $this->userScoreService->applyEventDelta(
-                    $userId,
-                    'activity',
-                    2.0,  // Small points for rating
-                    'content_rated',
-                    ['submission_id' => $submissionId, 'rating' => $rating]
-                );
-            } catch (\Throwable $e) {
-                $this->logger->warning('content.rating.score_event_failed', [
                     'user_id' => $userId,
                     'submission_id' => $submissionId
                 ]);

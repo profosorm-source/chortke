@@ -30,7 +30,6 @@ class WithdrawalService extends PaymentBaseService
     private BankCardService $bankCardService;
     private OutboxService $outbox;
     private ReconciliationService $reconciliation;
-    private IdempotencyKey $idempotencyKey;
     private AuditTrail $auditTrail;
     private Withdrawal $model;
 
@@ -47,7 +46,7 @@ class WithdrawalService extends PaymentBaseService
         Withdrawal $model,
         LoggerInterface $logger
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, $idempotencyKey);
         $this->db = $db;
         $this->kycService = $kycService;
         $this->wallet = $wallet;
@@ -55,7 +54,6 @@ class WithdrawalService extends PaymentBaseService
         $this->bankCardService = $bankCardService;
         $this->outbox = $outbox;
         $this->reconciliation = $reconciliation;
-        $this->idempotencyKey = $idempotencyKey;
         $this->auditTrail = $auditTrail;
         $this->model = $model;
     }

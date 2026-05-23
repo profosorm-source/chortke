@@ -42,7 +42,6 @@ class VitrineService extends \App\Services\BaseService
         private readonly SettingService     $settings,
         private readonly UserService        $userService,
         private readonly ReferralService     $referralService,
-        private readonly \App\Services\Shared\RatingService $ratingService,
     ) {
         parent::__construct($logger);
     }

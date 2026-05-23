@@ -6,8 +6,10 @@ namespace App\Services;
 
 use App\Models\Escrow;
 use Core\Database;
+use Core\IdempotencyKey;
 use App\Contracts\LoggerInterface;
 use App\Services\LedgerService;
+use App\Services\StateMachineService;
 
 /**
  * EscrowService - تسویه‌ مرکزی برای تمام ماژول‌های مالی
@@ -24,17 +26,25 @@ class EscrowService extends \App\Services\BaseService
     private Escrow   $escrowModel;
     private Database $db;
     private LedgerService $ledgerService;
+    private StateMachineService $stateMachine;
+    private \Core\EventDispatcher $eventDispatcher;
 
     public function __construct(
         Escrow $escrowModel,
         Database $db,
         LoggerInterface $logger,
-        LedgerService $ledgerService
+        IdempotencyKey $idempotencyKey,
+        LedgerService $ledgerService,
+        ?StateMachineService $stateMachine = null,
+        ?\Core\EventDispatcher $eventDispatcher = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, $idempotencyKey);
         $this->escrowModel = $escrowModel;
         $this->db          = $db;
         $this->ledgerService = $ledgerService;
+        $this->idempotencyKey = $idempotencyKey;
+        $this->stateMachine = $stateMachine ?? new StateMachineService($logger, $db);
+        $this->eventDispatcher = $eventDispatcher ?? \Core\EventDispatcher::getInstance();
     }
 
     /**
@@ -49,44 +59,85 @@ class EscrowService extends \App\Services\BaseService
         string $amount,
         string $currency = 'USDT'
     ): array {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException('holdFunds must be called inside an active transaction');
-        }
-
-        // ✅ Check if escrow already exists
-        $existing = $this->escrowModel->findByOrderId($orderId, $orderType, 'refunded');
-
-        if ($existing) {
-            return ['ok' => false, 'error' => 'Escrow already exists for this order'];
-        }
-
-        // ✅ Validate amount
-        if (bccomp($amount, '0', 8) <= 0) {
-            return ['ok' => false, 'error' => 'Invalid amount'];
-        }
-
-        $escrowId = $this->escrowModel->createEscrow(
+        $idempotencyKey = hash('sha256', implode('|', [
             $orderId,
             $orderType,
             $buyerId,
             $sellerId,
             $amount,
-            $currency
+            $currency,
+        ]));
+
+        return $this->idempotent(
+            'escrow.holdFunds',
+            $buyerId,
+            [
+                'order_id'   => $orderId,
+                'order_type' => $orderType,
+                'buyer_id'   => $buyerId,
+                'seller_id'  => $sellerId,
+                'amount'     => $amount,
+                'currency'   => $currency,
+            ],
+            function () use (
+                $orderId,
+                $orderType,
+                $buyerId,
+                $sellerId,
+                $amount,
+                $currency
+            ) {
+                if (!$this->db->inTransaction()) {
+                    throw new \RuntimeException('holdFunds must be called inside an active transaction');
+                }
+
+                // ✅ Check if escrow already exists
+                $existing = $this->escrowModel->findByOrderId($orderId, $orderType, 'refunded');
+
+                if ($existing) {
+                    return ['ok' => false, 'error' => 'Escrow already exists for this order'];
+                }
+
+                // ✅ Validate amount
+                if (bccomp($amount, '0', 8) <= 0) {
+                    return ['ok' => false, 'error' => 'Invalid amount'];
+                }
+
+                $escrowId = $this->escrowModel->createEscrow(
+                    $orderId,
+                    $orderType,
+                    $buyerId,
+                    $sellerId,
+                    $amount,
+                    $currency
+                );
+
+                if (!$escrowId) {
+                    throw new \Exception('Failed to create escrow record');
+                }
+
+                $this->logger->info('escrow.hold_requested', [
+                    'order_id' => $orderId,
+                    'order_type' => $orderType,
+                    'amount' => $amount,
+                    'buyer_id' => $buyerId,
+                    'seller_id' => $sellerId,
+                ]);
+
+                $this->eventDispatcher->dispatch('escrow.state_changed', [
+                    'escrow_id' => (int)$escrowId,
+                    'order_id' => $orderId,
+                    'order_type' => $orderType,
+                    'old_status' => null,
+                    'new_status' => 'pending',
+                    'amount' => $amount,
+                    'currency' => $currency
+                ]);
+
+                return ['ok' => true, 'escrow_id' => (int)$escrowId];
+            },
+            $idempotencyKey
         );
-
-        if (!$escrowId) {
-            throw new \Exception('Failed to create escrow record');
-        }
-
-        $this->logger->info('escrow.hold_requested', [
-            'order_id' => $orderId,
-            'order_type' => $orderType,
-            'amount' => $amount,
-            'buyer_id' => $buyerId,
-            'seller_id' => $sellerId,
-        ]);
-
-        return ['ok' => true, 'escrow_id' => (int)$escrowId];
     }
 
     /**
@@ -106,6 +157,11 @@ class EscrowService extends \App\Services\BaseService
             return ['ok' => false, 'error' => 'Escrow not found or already confirmed'];
         }
 
+        // Validate state transition
+        if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'in_escrow')) {
+            return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to in_escrow"];
+        }
+
         // ✅ Update status
         $result = $this->escrowModel->confirmHold((int)$escrow->id);
 
@@ -117,6 +173,16 @@ class EscrowService extends \App\Services\BaseService
             'escrow_id' => $escrow->id,
             'order_id' => $orderId,
             'amount' => $escrow->amount,
+        ]);
+
+        $this->eventDispatcher->dispatch('escrow.state_changed', [
+            'escrow_id' => (int)$escrow->id,
+            'order_id' => (int)$escrow->order_id,
+            'order_type' => $escrow->order_type,
+            'old_status' => $escrow->status,
+            'new_status' => 'in_escrow',
+            'amount' => $escrow->amount,
+            'currency' => $escrow->currency
         ]);
 
         return ['ok' => true, 'escrow_id' => (int)$escrow->id];
@@ -150,6 +216,11 @@ class EscrowService extends \App\Services\BaseService
             return ['ok' => false, 'error' => 'Escrow not found or cannot be released'];
         }
 
+        // Validate state transition
+        if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'released')) {
+            return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to released"];
+        }
+
         // ✅ Update escrow status
         $result = $this->escrowModel->releaseFunds($escrowId, $releasedBy);
 
@@ -176,6 +247,17 @@ class EscrowService extends \App\Services\BaseService
             'order_id' => $escrow->order_id,
             'amount' => $escrow->amount,
             'seller_id' => $sellerId,
+        ]);
+
+        $this->eventDispatcher->dispatch('escrow.state_changed', [
+            'escrow_id' => $escrowId,
+            'order_id' => (int)$escrow->order_id,
+            'order_type' => $escrow->order_type,
+            'old_status' => $escrow->status,
+            'new_status' => 'released',
+            'amount' => $escrow->amount,
+            'currency' => $escrow->currency,
+            'released_by' => $releasedBy
         ]);
 
         return ['ok' => true, 'amount' => $escrow->amount];
@@ -237,6 +319,18 @@ class EscrowService extends \App\Services\BaseService
                 ['escrow_id' => $escrowId, 'released_by' => 'seller', 'reason' => $reason]
             );
 
+            $this->eventDispatcher->dispatch('escrow.state_changed', [
+                'escrow_id' => $escrowId,
+                'order_id' => (int)$escrow->order_id,
+                'order_type' => $escrow->order_type,
+                'old_status' => $escrow->status,
+                'new_status' => 'partial',
+                'amount' => $escrow->amount,
+                'currency' => $escrow->currency,
+                'released_amount' => $releaseAmount,
+                'reason' => $reason
+            ]);
+
             return ['ok' => true, 'released' => $releaseAmount, 'remaining' => $remaining];
         }
 
@@ -262,6 +356,11 @@ class EscrowService extends \App\Services\BaseService
 
         if (!$escrow) {
             return ['ok' => false, 'error' => 'Escrow not found or cannot be refunded'];
+        }
+
+        // Validate state transition
+        if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'refunded')) {
+            return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to refunded"];
         }
 
         // ✅ Prevent double refund
@@ -297,6 +396,18 @@ class EscrowService extends \App\Services\BaseService
             'reason' => $reason,
         ]);
 
+        $this->eventDispatcher->dispatch('escrow.state_changed', [
+            'escrow_id' => $escrowId,
+            'order_id' => (int)$escrow->order_id,
+            'order_type' => $escrow->order_type,
+            'old_status' => $escrow->status,
+            'new_status' => 'refunded',
+            'amount' => $escrow->amount,
+            'currency' => $escrow->currency,
+            'initiated_by' => $initiatedBy,
+            'reason' => $reason
+        ]);
+
         return ['ok' => true, 'amount' => $escrow->amount, 'refund_id' => $escrowId];
     }
 
@@ -310,11 +421,44 @@ class EscrowService extends \App\Services\BaseService
             throw new \RuntimeException('markAsDisputed must be called inside an active transaction');
         }
 
+        $escrow = $this->getStatus($escrowId);
+        if (!$escrow) {
+            return ['ok' => false, 'error' => 'Escrow not found'];
+        }
+
+        // Validate state transition
+        if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'disputed')) {
+            return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to disputed"];
+        }
+
         $result = $this->escrowModel->markDisputed($escrowId, $reason);
 
         if (!$result) {
             return ['ok' => false, 'error' => 'Failed to mark as disputed'];
         }
+
+        $this->eventDispatcher->dispatch('escrow.state_changed', [
+            'escrow_id' => $escrowId,
+            'order_id' => (int)$escrow->order_id,
+            'order_type' => $escrow->order_type,
+            'old_status' => $escrow->status,
+            'new_status' => 'disputed',
+            'amount' => $escrow->amount,
+            'currency' => $escrow->currency,
+            'reason' => $reason
+        ]);
+
+        $this->eventDispatcher->dispatch('dispute.created', [
+            'escrow_id' => $escrowId,
+            'order_id' => (int)$escrow->order_id,
+            'order_type' => $escrow->order_type,
+            'buyer_id' => (int)$escrow->buyer_id,
+            'seller_id' => (int)$escrow->seller_id,
+            'amount' => $escrow->amount,
+            'currency' => $escrow->currency,
+            'reason' => $reason,
+            'created_at' => date('Y-m-d H:i:s')
+        ]);
 
         $this->logger->info('escrow.disputed', ['escrow_id' => $escrowId, 'reason' => $reason]);
         return ['ok' => true];
@@ -374,6 +518,20 @@ class EscrowService extends \App\Services\BaseService
                 ['escrow_id' => $escrowId, 'released_by' => $initiatedBy]
             );
         }
+
+        $this->eventDispatcher->dispatch('escrow.state_changed', [
+            'escrow_id' => $escrowId,
+            'order_id' => (int)$escrow->order_id,
+            'order_type' => $escrow->order_type,
+            'old_status' => $escrow->status,
+            'new_status' => $status,
+            'amount' => $escrow->amount,
+            'currency' => $escrow->currency,
+            'verdict' => $verdict,
+            'refund_amount' => $refundAmount,
+            'release_amount' => $releaseAmount,
+            'resolved_by' => $initiatedBy
+        ]);
 
         return ['ok' => true];
     }

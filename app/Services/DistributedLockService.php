@@ -404,11 +404,29 @@ LUA;
         foreach ($files as $file) {
             if (!file_exists($file)) continue;
             
-            $data = json_decode(file_get_contents($file), true);
+            $fp = @fopen($file, 'c+');
+            if (!$fp) {
+                continue;
+            }
             
-            if ($data && $data['expires_at'] < $now) {
-                unlink($file);
+            if (!flock($fp, LOCK_EX)) {
+                fclose($fp);
+                continue;
+            }
+            
+            $content = stream_get_contents($fp);
+            $data = !empty($content) ? json_decode($content, true) : null;
+            
+            if ($data && isset($data['expires_at']) && $data['expires_at'] < $now) {
+                ftruncate($fp, 0);
+                fflush($fp);
+                flock($fp, LOCK_UN);
+                fclose($fp);
+                @unlink($file);
                 $cleaned++;
+            } else {
+                flock($fp, LOCK_UN);
+                fclose($fp);
             }
         }
         

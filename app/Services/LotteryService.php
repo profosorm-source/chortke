@@ -16,6 +16,7 @@ use App\Models\LotteryVote;
 use App\Models\LotteryChanceLog;
 use Core\Database;
 use Core\Cache;
+use App\Services\Cache\CacheInvalidationService;
 
 class LotteryService extends \App\Services\BaseService
 {
@@ -29,6 +30,7 @@ class LotteryService extends \App\Services\BaseService
     private LotteryChanceLog $chanceLogModel;
     private FeatureFlagService $featureFlagService;
     private \App\Services\AuditTrail $auditTrail;
+    private CacheInvalidationService $cacheInvalidation;
 
     private const MATCH_TYPES = ['value', 'position', 'value_position', 'signal'];
     private const MAX_CODE_GENERATION_ATTEMPTS = 100;
@@ -49,7 +51,8 @@ class LotteryService extends \App\Services\BaseService
         FeatureFlagService $featureFlagService,
         Cache $cache,
         LoggerInterface $logger,
-        \App\Services\AuditTrail $auditTrail
+        \App\Services\AuditTrail $auditTrail,
+        CacheInvalidationService $cacheInvalidation
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -63,6 +66,7 @@ class LotteryService extends \App\Services\BaseService
         $this->featureFlagService = $featureFlagService;
         $this->cache = $cache;
         $this->auditTrail = $auditTrail;
+        $this->cacheInvalidation = $cacheInvalidation;
     }
 
     public function createRound(int $adminId, array $data): array
@@ -129,29 +133,29 @@ class LotteryService extends \App\Services\BaseService
     public function participate(int $userId, int $roundId, ?string $idempotencyKey = null): array
     {
         if (!$this->featureFlagService->isEnabled('lottery', $userId)) {
-            return ['success' => false, 'message' => 'سیستم قرعه‌کشی موقتاً غیرفعال است.'];
+            throw new \Core\Exceptions\InvalidStateException('سیستم قرعه‌کشی موقتاً غیرفعال است.');
         }
 
         if (!$this->checkRateLimit($userId, 'participate', 10, 3600)) {
-            return ['success' => false, 'message' => 'تعداد تلاش‌های شما بیش از حد مجاز است.'];
+            throw new \Core\Exceptions\RateLimitExceededException('تعداد تلاش‌های شما بیش از حد مجاز است.');
         }
 
         $round = $this->roundModel->find($roundId);
         if (!$round || $round->status !== LotteryRound::STATUS_ACTIVE) {
-            return ['success' => false, 'message' => 'دوره قرعه‌کشی فعال نیست.'];
+            throw new \Core\Exceptions\EntityNotFoundException('دوره قرعه‌کشی فعال نیست.');
         }
 
         $now = time();
         if ($now < strtotime($round->start_date)) {
-            return ['success' => false, 'message' => 'زمان شروع دوره هنوز فرا نرسیده است.'];
+            throw new \Core\Exceptions\InvalidStateException('زمان شروع دوره هنوز فرا نرسیده است.');
         }
         
         if ($now > strtotime($round->end_date)) {
-            return ['success' => false, 'message' => 'زمان ثبت‌نام به پایان رسیده است.'];
+            throw new \Core\Exceptions\InvalidStateException('زمان ثبت‌نام به پایان رسیده است.');
         }
 
         if ($this->participationModel->isParticipating($userId, $roundId)) {
-            return ['success' => false, 'message' => 'شما قبلاً در این دوره شرکت کرده‌اید.'];
+            throw new \Core\Exceptions\InvalidStateException('شما قبلاً در این دوره شرکت کرده‌اید.');
         }
 
         $payload = [
@@ -178,7 +182,7 @@ class LotteryService extends \App\Services\BaseService
                 $roundLock = $this->db->query("SELECT id, max_tickets FROM lottery_rounds WHERE id = ? FOR UPDATE", [$roundId])->fetch(\PDO::FETCH_OBJ);
                 if (!$roundLock) {
                     $this->db->rollBack();
-                    return ['success' => false, 'message' => 'دوره یافت نشد.'];
+                    throw new \Core\Exceptions\EntityNotFoundException('دوره یافت نشد.');
                 }
 
                 $currentCount = (int)$this->db->query("SELECT COUNT(*) FROM lottery_participations WHERE round_id = ? AND is_deleted = 0", [$roundId])->fetchColumn();
@@ -186,7 +190,7 @@ class LotteryService extends \App\Services\BaseService
 
                 if ($currentCount >= $maxCeiling) {
                     $this->db->rollBack();
-                    return ['success' => false, 'message' => 'ظرفیت شرکت در این دوره تکمیل شده است.'];
+                    throw new \Core\Exceptions\InvalidStateException('ظرفیت شرکت در این دوره تکمیل شده است.');
                 }
 
                 $transactionId = null;
@@ -205,7 +209,7 @@ class LotteryService extends \App\Services\BaseService
                     
                     if (!$result['success']) {
                         $this->db->rollBack();
-                        return ['success' => false, 'message' => 'موجودی کافی نیست. ' . ($result['message'] ?? '')];
+                        throw new \Core\Exceptions\InsufficientBalanceException('موجودی کافی نیست. ' . ($result['message'] ?? ''));
                     }
                     
                     $transactionId = $result['transaction_id'] ?? null;
@@ -215,7 +219,7 @@ class LotteryService extends \App\Services\BaseService
                 
                 if (!$code) {
                     $this->db->rollBack();
-                    return ['success' => false, 'message' => 'خطا در تولید کد یکتا.'];
+                    throw new \Core\Exceptions\BusinessException('خطا در تولید کد یکتا.');
                 }
 
                 $participationId = $this->participationModel->create([
@@ -234,6 +238,8 @@ class LotteryService extends \App\Services\BaseService
                 }
 
                 $this->db->commit();
+
+                $this->cacheInvalidation->invalidateWallet($userId);
 
                 $this->notify($userId, 'ثبت‌نام موفق', "شما با موفقیت در قرعه‌کشی «{$round->title}» شرکت کردید.\n\nکد: {$code}\nشانس: " . LotteryParticipation::DEFAULT_CHANCE, 'lottery_joined');
 
@@ -692,6 +698,8 @@ class LotteryService extends \App\Services\BaseService
 
             $this->db->commit();
 
+            $this->cacheInvalidation->invalidateWallet((int)$winner->user_id);
+
             // Pay prize AFTER commit so a wallet failure cannot roll back the winner record.
             // The idempotency_key guarantees no double-payment on retry.
             if ($round->prize_amount > 0) {
@@ -783,6 +791,12 @@ class LotteryService extends \App\Services\BaseService
             $this->roundModel->update($roundId, ['status' => LotteryRound::STATUS_CANCELLED]);
 
             $this->db->commit();
+
+            foreach ($participants as $p) {
+                if ($p && isset($p->user_id)) {
+                    $this->cacheInvalidation->invalidateWallet((int)$p->user_id);
+                }
+            }
             $this->clearCache('active_round');
 
             $this->logger->info('lottery_cancelled', ['message' => "Round {$roundId} by admin {$adminId}"]);

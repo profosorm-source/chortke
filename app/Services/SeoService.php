@@ -6,14 +6,12 @@ namespace App\Services;
 
 use App\Models\Ads;
 use App\Models\SeoExecution;
-use App\Services\User\UserScoreService;
 use App\Services\SeoPayoutService;
 use App\Services\AntiFraud\SeoFraudDetector;
 use App\Contracts\WalletServiceInterface;
 use App\Services\Shared\ReferralService;
 use Core\Database;
 use App\Services\SettingService;
-
 use App\Contracts\LoggerInterface;
 use App\Models\User;
 
@@ -22,26 +20,26 @@ class SeoService extends \App\Services\BaseService
     private SettingService $settingService;
     private Ads $adModel;
     private SeoExecution $executionModel;
-    private UserScoreService $scoreService;
     private SeoPayoutService $payoutService;
     private SeoFraudDetector $fraudDetector;
     private WalletServiceInterface $walletService;
     private ReferralService $referralService;
     private Database $db;
-    private \App\Services\Shared\RatingService $ratingService;
+    private \App\Services\Interaction\RatingService $ratingService;
+    private \App\Services\Interaction\ReportService $reportService;
     private User $userModel;
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
 
     public function __construct(
         Ads $adModel,
         SeoExecution $executionModel,
-        UserScoreService $scoreService,
         SeoPayoutService $payoutService,
         SeoFraudDetector $fraudDetector,
         WalletServiceInterface $walletService,
         ReferralService $referralService,
         Database $db,
-        \App\Services\Shared\RatingService $ratingService,
+        \App\Services\Interaction\RatingService $ratingService,
+        \App\Services\Interaction\ReportService $reportService,
         LoggerInterface $logger,
         User $userModel,
         SettingService $settingService,
@@ -51,13 +49,13 @@ class SeoService extends \App\Services\BaseService
         $this->settingService = $settingService;
         $this->adModel = $adModel;
         $this->executionModel = $executionModel;
-        $this->scoreService = $scoreService;
         $this->payoutService = $payoutService;
         $this->fraudDetector = $fraudDetector;
         $this->walletService = $walletService;
         $this->referralService = $referralService;
         $this->db = $db;
         $this->ratingService = $ratingService;
+        $this->reportService = $reportService;
         $this->userModel = $userModel;
         $this->fraudGuard = $fraudGuard;
     }
@@ -391,13 +389,14 @@ class SeoService extends \App\Services\BaseService
         }
 
         try {
-            $ok = $this->ratingService->report([
-                'reporter_id' => $reporterId,
-                'ref_type' => 'seo_task',
-                'ref_id' => $adId,
-                'reason' => $reason,
-                'description' => $description
-            ]);
+            $ok = $this->reportService->submit(
+                $reporterId,
+                'seo_task',
+                $adId,
+                \App\Enums\ModuleContext::GLOBAL,
+                $reason,
+                $description
+            );
 
             if (!$ok) {
                 return ['success' => false, 'message' => 'خطا در ثبت گزارش'];
@@ -424,11 +423,10 @@ class SeoService extends \App\Services\BaseService
         try {
             $ok = $this->ratingService->rate(
                 $raterId,
-                (int)$ad->user_id,
                 'seo_task',
                 $adId,
-                $stars,
-                $comment
+                \App\Enums\ModuleContext::GLOBAL,
+                $stars
             );
 
             if (!$ok) {

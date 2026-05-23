@@ -10,6 +10,8 @@ use App\Models\PredictionBet;
 use Core\Database;
 
 use App\Contracts\LoggerInterface;
+use App\Services\StateMachineService;
+
 /**
  * PredictionService — منطق اصلی سیستم پیش‌بینی
  *
@@ -27,6 +29,7 @@ class PredictionService extends \App\Services\BaseService
     private PredictionBet $betModel;
     private WalletServiceInterface $walletService;
     private \App\Services\AuditTrail $auditTrail;
+    private StateMachineService $stateMachine;
 
     public function __construct(
         Database      $db,
@@ -34,7 +37,8 @@ class PredictionService extends \App\Services\BaseService
         PredictionBet  $betModel,
         WalletServiceInterface  $walletService,
         LoggerInterface       $logger,
-        \App\Services\AuditTrail $auditTrail
+        \App\Services\AuditTrail $auditTrail,
+        ?StateMachineService $stateMachine = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -42,6 +46,7 @@ class PredictionService extends \App\Services\BaseService
         $this->betModel = $betModel;
         $this->walletService = $walletService;
         $this->auditTrail = $auditTrail;
+        $this->stateMachine = $stateMachine ?? new StateMachineService($logger, $db);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -112,8 +117,9 @@ class PredictionService extends \App\Services\BaseService
                     throw new \RuntimeException('شما قبلاً در این بازی شرط‌بندی کرده‌اید.');
                 }
 
-                // کسر موجودی از کیف پول
-                $debitResult = $this->walletService->withdraw(
+                // کسر موجودی از کیف پول با استفاده از withdrawInTransaction
+                // تا عملیات برداشت و ایجاد شرط در یک تراکنش مشترک باقی بماند.
+                $debitResult = $this->walletService->withdrawInTransaction(
                     $userId,
                     $amount,
                     'usdt',
@@ -185,6 +191,10 @@ class PredictionService extends \App\Services\BaseService
             }
             if (!in_array($game->status, ['open', 'closed'], true)) {
                 throw new \RuntimeException('این بازی قابل تسویه نیست (وضعیت فعلی: ' . $game->status . ')');
+            }
+
+            if (!$this->stateMachine->canTransition('prediction_game', $game->status, 'finished')) {
+                throw new \RuntimeException('تغییر وضعیت بازی به finished مجاز نیست.');
             }
             // P-4 Fix: Authoritatively acquire exclusive settle-lock on winners_paid immediately.
             // If another admin settles concurrently, one will have affectedRows = 0 and rollback instantly.
@@ -331,6 +341,10 @@ class PredictionService extends \App\Services\BaseService
             }
             if (!in_array($game->status, ['open', 'closed'], true)) {
                 throw new \RuntimeException('فقط بازی‌های باز یا بسته قابل لغو هستند.');
+            }
+
+            if (!$this->stateMachine->canTransition('prediction_game', $game->status, 'cancelled')) {
+                throw new \RuntimeException('تغییر وضعیت بازی به cancelled مجاز نیست.');
             }
 
             // لغو بازی

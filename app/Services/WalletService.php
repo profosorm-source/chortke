@@ -28,10 +28,9 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
     private SettingService $settingService;
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
     private \Core\Cache $cache;
-    private ?CacheInvalidationService $cacheInvalidation;
+    private CacheInvalidationService $cacheInvalidation;
     private ?OutboxService $outbox;
     private array $supportedCurrencies = ['irt', 'usdt'];
-    private \Core\IdempotencyKey $idempotencyKey;
 
     public function __construct(
         Database $db,
@@ -45,14 +44,13 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         SettingService $settingService,
         \App\Services\AntiFraud\FraudGuardService $fraudGuard,
         \Core\Cache $cache,
-        ?CacheInvalidationService $cacheInvalidation = null,
+        CacheInvalidationService $cacheInvalidation,
         ?OutboxService $outbox = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, $idempotencyKey);
         $this->db = $db;
         $this->walletModel = $walletModel;
         $this->transactionModel = $transactionModel;
-        $this->idempotencyKey = $idempotencyKey;
         $this->auditTrail = $auditTrail;
         $this->ledgerService = $ledgerService;
         $this->lockService = $lockService;

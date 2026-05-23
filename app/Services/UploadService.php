@@ -671,4 +671,58 @@ class UploadService extends \App\Services\BaseService implements UploadServiceIn
             return null;
         }
     }
+
+    /**
+     * getFile - Retrieve and validate uploaded file.
+     */
+    public function getFile(string $path): array
+    {
+        $realPath = $this->getPath($path);
+        if ($realPath === null || !file_exists($realPath) || !is_file($realPath)) {
+            return ['success' => false, 'file' => null, 'error' => 'File not found'];
+        }
+        return [
+            'success' => true,
+            'file' => (object)[
+                'path' => $realPath,
+                'size' => filesize($realPath),
+                'mime' => finfo_file(finfo_open(FILEINFO_MIME_TYPE), $realPath)
+            ],
+            'error' => null
+        ];
+    }
+
+    /**
+     * read - Get content of the file.
+     */
+    public function read(string $path): ?string
+    {
+        $realPath = $this->getPath($path);
+        if ($realPath === null || !file_exists($realPath) || !is_file($realPath)) {
+            return null;
+        }
+        return file_get_contents($realPath) ?: null;
+    }
+
+    /**
+     * write - Write content to file.
+     */
+    public function write(string $path, string $content): bool
+    {
+        $relativePath = $this->normalizeRelativePath($path);
+        if ($relativePath === null) {
+            return false;
+        }
+        $folder = explode('/', $relativePath, 2)[0] ?? '';
+        $isPublic = $this->isPublicFolder($folder);
+        $baseDir = $isPublic ? $this->publicRoot : $this->storageRoot;
+        $fullPath = $baseDir . $relativePath;
+        $dir = dirname($fullPath);
+        if (!is_dir($dir)) {
+            if (!mkdir($dir, 0750, true)) {
+                return false;
+            }
+        }
+        return file_put_contents($fullPath, $content) !== false;
+    }
 }

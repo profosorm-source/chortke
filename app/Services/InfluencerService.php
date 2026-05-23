@@ -11,8 +11,11 @@ use Core\Database;
 use App\Services\AuditTrail;
 use App\Contracts\LoggerInterface;
 use App\Services\SettingService;
-use App\Services\XPEngine;
+use App\Services\Gamification\XpService;
+use App\Enums\ModuleContext;
+use App\Models\User;
 use App\Services\Shared\ReferralService;
+use App\Services\Cache\CacheInvalidationService;
 
 class InfluencerService extends \App\Services\BaseService
 {
@@ -27,8 +30,8 @@ class InfluencerService extends \App\Services\BaseService
     private AuditTrail                 $auditTrail;
     private InfluencerReputationService $reputationService;
     private SettingService             $settingService;
-    private \App\Services\Shared\RatingService $ratingService;
-    private XPEngine                   $xpEngine;
+    private XpService                  $xpService;
+    private CacheInvalidationService   $cacheInvalidation;
 
     public function __construct(
         Database                    $db,
@@ -40,9 +43,9 @@ class InfluencerService extends \App\Services\BaseService
         StoryOrder                  $orderModel,
         InfluencerReputationService $reputationService,
         SettingService             $settingService,
-        \App\Services\Shared\RatingService $ratingService,
         LoggerInterface             $logger,
-        XPEngine                   $xpEngine
+        XpService                  $xpService,
+        CacheInvalidationService   $cacheInvalidation
     ) {
         parent::__construct($logger);
         $this->db                  = $db;
@@ -54,8 +57,8 @@ class InfluencerService extends \App\Services\BaseService
         $this->orderModel          = $orderModel;
         $this->reputationService   = $reputationService;
         $this->settingService      = $settingService;
-        $this->ratingService       = $ratingService;
-        $this->xpEngine            = $xpEngine;
+        $this->xpService           = $xpService;
+        $this->cacheInvalidation   = $cacheInvalidation;
     }
 
     // ══════════════════════════════════════════════════════
@@ -221,6 +224,8 @@ class InfluencerService extends \App\Services\BaseService
             ]);
 
             $this->db->commit();
+
+            $this->cacheInvalidation->invalidateWallet($customerId);
 
             $this->notificationService->send(
                 (int)$profile->user_id,
@@ -465,7 +470,11 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
         if ($profile) {
             try {
                 // Award XP while still in transaction - financial consistency first
-                $this->xpEngine->awardXP((int)$order->influencer_user_id, 'youtube', 'influencer_order_completed', (int)$order->id);
+                $user = new User($this->db);
+                $user = $user->find((int)$order->influencer_user_id);
+                if ($user) {
+                    $this->xpService->award($user, ModuleContext::YOUTUBE_TASKS, 2.0, "influencer_order_{$order->id}");
+                }
                 $xpAwarded = true;
             } catch (\Throwable $t) {
                 // XP failure causes rollback - wallet never leaves escrow if XP fails
@@ -476,6 +485,8 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
         }
 
         $this->db->commit();
+
+        $this->cacheInvalidation->invalidateWallet((int)$order->influencer_user_id);
 
         // ✅ POST-TRANSACTION: Send notifications and audit logs AFTER commit
         // These are informational and don't affect financial state
@@ -580,6 +591,11 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
         ]);
 
         $this->db->commit();
+
+        $this->cacheInvalidation->invalidateWallet((int)$order->customer_id);
+        if ($refundPercent < 100) {
+            $this->cacheInvalidation->invalidateWallet((int)$order->influencer_user_id);
+        }
 
         $this->notificationService->send(
             (int)$order->customer_id,
@@ -728,6 +744,8 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
         ]);
 
         $this->db->commit();
+
+        $this->cacheInvalidation->invalidateWallet((int)$order->customer_id);
 
     } catch (\Exception $e) {
         $this->db->rollBack();

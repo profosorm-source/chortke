@@ -93,6 +93,71 @@ class StateMachineService extends \App\Services\BaseService
         'cancelled' => [],
     ];
 
+    /**
+     * CustomTask state machine
+     */
+    private const CUSTOM_TASK_TRANSITIONS = [
+        'pending'   => ['active', 'rejected'],
+        'active'    => ['paused', 'completed', 'cancelled'],
+        'paused'    => ['active', 'cancelled'],
+        'cancelled' => [],
+        'rejected'  => [],
+        'completed' => [],
+    ];
+
+    /**
+     * CustomTaskSubmission state machine
+     */
+    private const CUSTOM_TASK_SUBMISSION_TRANSITIONS = [
+        'submitted' => ['approved', 'rejected', 'disputed'],
+        'approved'  => [],
+        'rejected'  => [],
+        'disputed'  => ['approved', 'rejected'],
+    ];
+
+    /**
+     * Investment state machine
+     */
+    private const INVESTMENT_TRANSITIONS = [
+        'active'    => ['frozen', 'closed', 'suspended'],
+        'frozen'    => ['active', 'closed'],
+        'closed'    => [],
+        'suspended' => ['active', 'closed'],
+    ];
+
+    /**
+     * PredictionGame state machine
+     */
+    private const PREDICTION_GAME_TRANSITIONS = [
+        'open'      => ['closed', 'finished', 'cancelled'],
+        'closed'    => ['finished', 'cancelled'],
+        'finished'  => [],
+        'cancelled' => [],
+    ];
+
+    /**
+     * Escrow state machine
+     */
+    private const ESCROW_TRANSITIONS = [
+        'pending'   => ['in_escrow', 'cancelled'],
+        'in_escrow' => ['released', 'refunded', 'disputed'],
+        'disputed'  => ['released', 'refunded'],
+        'released'  => [],
+        'refunded'  => [],
+        'cancelled' => [],
+    ];
+
+    /**
+     * CryptoDeposit state machine
+     */
+    private const CRYPTO_DEPOSIT_TRANSITIONS = [
+        'pending'       => ['auto_verified', 'manual_review', 'rejected'],
+        'manual_review' => ['verified', 'rejected'],
+        'auto_verified' => [],
+        'verified'      => [],
+        'rejected'      => [],
+    ];
+
     private \Core\Database $db;
 
     public function __construct(LoggerInterface $logger, \Core\Database $db)
@@ -163,14 +228,20 @@ class StateMachineService extends \App\Services\BaseService
     public function getAllowedTransitions(string $entity, string $currentStatus): array
     {
         return match($entity) {
-            'social_ad'            => self::SOCIAL_AD_TRANSITIONS[$currentStatus] ?? [],
-            'vitrine_listing'      => self::VITRINE_TRANSITIONS[$currentStatus] ?? [],
-            'influencer_profile'   => self::INFLUENCER_TRANSITIONS[$currentStatus] ?? [],
-            'dispute'              => self::DISPUTE_TRANSITIONS[$currentStatus] ?? [],
-            'withdrawal'           => self::WITHDRAWAL_TRANSITIONS[$currentStatus] ?? [],
-            'kyc'                  => self::KYC_TRANSITIONS[$currentStatus] ?? [],
-            'lottery'              => self::LOTTERY_TRANSITIONS[$currentStatus] ?? [],
-            default                => []
+            'social_ad'              => self::SOCIAL_AD_TRANSITIONS[$currentStatus] ?? [],
+            'vitrine_listing'        => self::VITRINE_TRANSITIONS[$currentStatus] ?? [],
+            'influencer_profile'     => self::INFLUENCER_TRANSITIONS[$currentStatus] ?? [],
+            'dispute'                => self::DISPUTE_TRANSITIONS[$currentStatus] ?? [],
+            'withdrawal'             => self::WITHDRAWAL_TRANSITIONS[$currentStatus] ?? [],
+            'kyc'                    => self::KYC_TRANSITIONS[$currentStatus] ?? [],
+            'lottery'                => self::LOTTERY_TRANSITIONS[$currentStatus] ?? [],
+            'custom_task'            => self::CUSTOM_TASK_TRANSITIONS[$currentStatus] ?? [],
+            'custom_task_submission' => self::CUSTOM_TASK_SUBMISSION_TRANSITIONS[$currentStatus] ?? [],
+            'investment'             => self::INVESTMENT_TRANSITIONS[$currentStatus] ?? [],
+            'prediction_game'        => self::PREDICTION_GAME_TRANSITIONS[$currentStatus] ?? [],
+            'escrow'                 => self::ESCROW_TRANSITIONS[$currentStatus] ?? [],
+            'crypto_deposit'         => self::CRYPTO_DEPOSIT_TRANSITIONS[$currentStatus] ?? [],
+            default                  => []
         };
     }
 
