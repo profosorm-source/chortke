@@ -6,83 +6,42 @@ namespace App\Contracts;
 
 /**
  * EmailServiceInterface — قرارداد سرویس ارسال ایمیل
- * 
- * این interface سرویس ارسال ایمیل را انتزاعی می‌کند و امکان:
- * - تست‌های واحد (Mock)
- * - پیاده‌سازی‌های جایگزین (مثلاً SmsService)
- * - تغییر ارائه‌دهنده ایمیل
- * 
- * را فراهم می‌آورد.
  */
 interface EmailServiceInterface
 {
     /**
      * ارسال فوری ایمیل (بدون صف)
      * 
-     * برای ایمیل‌های حیاتی مثل:
-     * - تأیید حساب
-     * - بازیابی رمز عبور
-     * - هشدارهای امنیتی
-     * 
-     * @param string $to آدرس ایمیل گیرنده
+     * @param string $toEmail آدرس ایمیل گیرنده
+     * @param string $toName نام گیرنده
      * @param string $subject موضوع ایمیل
-     * @param string $body بدن ایمیل (HTML)
-     * @param array $headers هدرهای اضافی
-     * @return array ['success' => bool, 'message_id' => ?string, 'error' => ?string]
+     * @param string $bodyHtml بدن ایمیل (HTML)
+     * @return bool
      */
     public function sendDirect(
-        string $to,
+        string $toEmail,
+        string $toName,
         string $subject,
-        string $body,
-        array $headers = []
-    ): array;
+        string $bodyHtml
+    ): bool;
 
     /**
      * ارسال ایمیل به صف (پردازش async)
      * 
-     * برای ایمیل‌های عادی مثل:
-     * - خوش‌آمد
-     * - اطلاع‌رسانی برداشت
-     * - نتایج قرعه
-     * 
-     * @param string $to آدرس ایمیل گیرنده
-     * @param string $subject موضوع ایمیل
-     * @param string $body بدن ایمیل (HTML)
-     * @param array $metadata متادیتای اضافی
-     * @return bool
-     */
-    public function enqueue(
-        string $to,
-        string $subject,
-        string $body,
-        array $metadata = []
-    ): bool;
-
-    /**
-     * ارسال ایمیل به کاربر (lookup شناسه)
-     * 
      * @param int $userId شناسه کاربر
      * @param string $subject موضوع ایمیل
-     * @param string $body بدن ایمیل (HTML)
-     * @return bool
+     * @param string $bodyHtml بدن ایمیل (HTML)
+     * @param string|null $bodyText بدن متنی (اختیاری)
+     * @param string $priority اولویت ارسال
+     * @param string|null $scheduledAt زمان ارسال برنامه‌ریزی شده
+     * @return string|int|null
      */
-    public function sendToUser(
-        int $userId,
-        string $subject,
-        string $body
-    ): bool;
-
-    /**
-     * ارسال template ایمیل
-     * 
-     * @param string $to آدرس ایمیل
-     * @param string $template نام template
-     * @param array $variables متغیرهای template
-     * @return bool
-     */
-    public function sendTemplate(
-        string $to,
-        string $template,
-        array $variables = []
-    ): bool;
+    public function enqueue(
+        int     $userId,
+        string  $subject,
+        string  $bodyHtml,
+        ?string $bodyText    = null,
+        string  $priority    = 'normal',
+        ?string $scheduledAt = null
+    ): string|int|null;
 }

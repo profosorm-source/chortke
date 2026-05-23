@@ -39,4 +39,8 @@ interface SearchServiceInterface
     public function searchAdminModule(string $module, string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
 
     public function registeredAdminModules(): array;
+
+    public function quickSearchAds(string $q, ?int $userId, int $limit): array;
+
+    public function quickSearchSubmissions(string $q, ?int $userId, int $limit): array;
 }
