@@ -320,4 +320,45 @@ class DashboardStatsService extends \App\Services\BaseService
     {
         return $this->notificationService->getAnalyticsFunnelStats();
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // System Metrics (Prometheus / Health Checks)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    public function getRecentRequestsCount(int $minutes = 5): int
+    {
+        try {
+            return (int)$this->db->query("SELECT COUNT(*) FROM activity_logs WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)", [$minutes])->fetchColumn();
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
+
+    public function getRecentErrorsCount(string $level = 'error', int $minutes = 5): int
+    {
+        try {
+            return (int)$this->db->query("SELECT COUNT(*) FROM system_logs WHERE level = ? AND created_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)", [$level, $minutes])->fetchColumn();
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
+
+    public function getActiveUsersCount(): int
+    {
+        try {
+            return (int)$this->db->query("SELECT COUNT(*) FROM users WHERE status = 1")->fetchColumn();
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
+
+    public function isDatabaseUp(): bool
+    {
+        try {
+            $this->db->query("SELECT 1");
+            return true;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
 }

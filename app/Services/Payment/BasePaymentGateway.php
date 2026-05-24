@@ -260,7 +260,7 @@ abstract class BasePaymentGateway extends BaseService implements PaymentGatewayI
                 'Accept: application/json',
                 'User-Agent: ChortkePaymentClient/1.0'
             ];
-            $allHeaders = array_merge($defaultHeaders, $headers);
+            $allHeaders = array_merge($defaultHeaders, trace_headers(), $headers);
             \curl_setopt($ch, CURLOPT_HTTPHEADER, $allHeaders);
 
             // Execute request

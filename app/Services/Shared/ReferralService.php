@@ -92,41 +92,37 @@ class ReferralService extends \App\Services\BaseService
         }
 
         try {
-            $this->db->beginTransaction();
+            return $this->transaction(function() use ($referrerId, $amount, $currency, $commission, $percentage, $context) {
+                $this->db->query('SELECT id FROM users WHERE id = ? FOR UPDATE', [$referrerId]);
 
-            // H-R1: Lock referrer row to serialize commission creation for this account.
-            $this->db->query('SELECT id FROM users WHERE id = ? FOR UPDATE', [$referrerId]);
+                $commissionIdempotencyKey = $context['idempotency_key'] ?? "referral_{$referrerId}_" . hash('sha256', json_encode($context));
 
-            $commissionIdempotencyKey = $context['idempotency_key'] ?? "referral_{$referrerId}_" . hash('sha256', json_encode($context));
+                $existingCommission = $this->commissionModel->findByIdempotencyKey($commissionIdempotencyKey);
+                if ($existingCommission) {
+                    return ['success' => true, 'commission' => (float)$existingCommission->commission_amount, 'duplicate' => true];
+                }
 
-            $existingCommission = $this->commissionModel->findByIdempotencyKey($commissionIdempotencyKey);
-            if ($existingCommission) {
-                $this->db->commit();
-                return ['success' => true, 'commission' => (float)$existingCommission->commission_amount, 'duplicate' => true];
-            }
+                $this->commissionModel->create([
+                    'referrer_id' => $referrerId,
+                    'amount' => $amount,
+                    'commission_amount' => $commission,
+                    'currency' => $currency,
+                    'status' => 'paid',
+                    'idempotency_key' => $commissionIdempotencyKey,
+                    'context' => json_encode(array_merge($context, [
+                        'percentage' => $percentage,
+                    ])),
+                ]);
 
-            $this->commissionModel->create([
-                'referrer_id' => $referrerId,
-                'amount' => $amount,
-                'commission_amount' => $commission,
-                'currency' => $currency,
-                'status' => 'paid', // H-R5 Fix: Status should be 'paid' if we are depositing now
-                'idempotency_key' => $commissionIdempotencyKey,
-                'context' => json_encode(array_merge($context, [
-                    'percentage' => $percentage,
-                ])),
-            ]);
+                $this->walletService->depositInTransaction($referrerId, (float)$commission, $currency, [
+                    'type' => 'referral_commission',
+                    'description' => 'کمیسیون معرفی',
+                    'idempotency_key' => $commissionIdempotencyKey,
+                ]);
 
-            $this->walletService->depositInTransaction($referrerId, (float)$commission, $currency, [
-                'type' => 'referral_commission',
-                'description' => 'کمیسیون معرفی',
-                'idempotency_key' => $commissionIdempotencyKey,
-            ]);
-
-            $this->db->commit();
-            return ['success' => true, 'commission' => $commission];
+                return ['success' => true, 'commission' => $commission];
+            });
         } catch (\Exception $e) {
-            $this->db->rollBack();
             $this->logger->error('commission_error', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => $e->getMessage()];
         }
@@ -193,42 +189,38 @@ class ReferralService extends \App\Services\BaseService
         $commission = bcmul((string)$amount, bcdiv((string)$percentage, '100', 8), 2);
 
         try {
-            $this->db->beginTransaction();
+            return $this->transaction(function() use ($referrerId, $amount, $currency, $commission, $percentage, $module, $referredUserId, $context) {
+                $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$referrerId]);
 
-            // H14 Fix: قفل بدبینانه روی سطر معرف جهت پیشگیری از بن‌بست دیتابیس و بروز خطای تراکنشی در پورسانت‌های همزمان
-            $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$referrerId]);
+                $commissionIdempotencyKey = $context['idempotency_key'] ?? "referral_{$referrerId}_modular_" . hash('sha256', json_encode($context));
 
-            $commissionIdempotencyKey = $context['idempotency_key'] ?? "referral_{$referrerId}_modular_" . hash('sha256', json_encode($context));
+                $existingCommission = $this->commissionModel->findByIdempotencyKey($commissionIdempotencyKey);
+                if ($existingCommission) {
+                    return ['success' => true, 'commission' => (float)$existingCommission->commission_amount, 'percentage' => $percentage, 'duplicate' => true];
+                }
 
-            $existingCommission = $this->commissionModel->findByIdempotencyKey($commissionIdempotencyKey);
-            if ($existingCommission) {
-                $this->db->commit();
-                return ['success' => true, 'commission' => (float)$existingCommission->commission_amount, 'percentage' => $percentage, 'duplicate' => true];
-            }
+                $this->commissionModel->create([
+                    'referrer_id' => $referrerId,
+                    'amount' => $amount,
+                    'commission_amount' => $commission,
+                    'currency' => $currency,
+                    'status' => 'paid',
+                    'idempotency_key' => $commissionIdempotencyKey,
+                    'context' => json_encode(array_merge($context, [
+                        'module' => $module,
+                        'percentage' => $percentage,
+                        'referred_user_id' => $referredUserId
+                    ])),
+                ]);
 
-            $this->commissionModel->create([
-                'referrer_id' => $referrerId,
-                'amount' => $amount,
-                'commission_amount' => $commission,
-                'currency' => $currency,
-                'status' => 'paid', // H-R5 Fix: Consistent status
-                'idempotency_key' => $commissionIdempotencyKey,
-                'context' => json_encode(array_merge($context, [
-                    'module' => $module,
-                    'percentage' => $percentage,
-                    'referred_user_id' => $referredUserId
-                ])),
-            ]);
+                $this->walletService->depositInTransaction($referrerId, (float)$commission, $currency, [
+                    'type' => 'referral_commission',
+                    'idempotency_key' => $commissionIdempotencyKey,
+                ]);
 
-            $this->walletService->depositInTransaction($referrerId, (float)$commission, $currency, [
-                'type' => 'referral_commission',
-                'idempotency_key' => $commissionIdempotencyKey,
-            ]);
-
-            $this->db->commit();
-            return ['success' => true, 'commission' => $commission, 'percentage' => $percentage];
+                return ['success' => true, 'commission' => $commission, 'percentage' => $percentage];
+            });
         } catch (\Exception $e) {
-            $this->db->rollBack();
             $this->logger->error('modular_commission_error', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => $e->getMessage()];
         }
@@ -508,15 +500,14 @@ class ReferralService extends \App\Services\BaseService
         if (!$commission || $commission->status !== 'pending') return false;
 
         try {
-            $this->db->beginTransaction();
-            if (!$this->commissionModel->updateStatus($commissionId, 'cancelled')) {
-                throw new \RuntimeException('Unable to cancel referral commission');
-            }
-            $this->auditTrail->log('commission_cancelled', 'لغو کمیسیون توسط ادمین', ['commission_id' => $commissionId, 'reason' => $reason]);
-            $this->db->commit();
+            $this->transaction(function() use ($commissionId, $reason) {
+                if (!$this->commissionModel->updateStatus($commissionId, 'cancelled')) {
+                    throw new \RuntimeException('Unable to cancel referral commission');
+                }
+                $this->auditTrail->log('commission_cancelled', 'لغو کمیسیون توسط ادمین', ['commission_id' => $commissionId, 'reason' => $reason]);
+            });
             return true;
         } catch (\Throwable $e) {
-            $this->db->rollBack();
             $this->logger->error('referral.cancel_failed', ['commission_id' => $commissionId, 'error' => $e->getMessage()]);
             return false;
         }
@@ -550,19 +541,18 @@ class ReferralService extends \App\Services\BaseService
                         continue;
                     }
 
-                    $this->db->beginTransaction();
-                    $deposit = $this->walletService->deposit((int)$commission->referrer_id, (float)$commission->commission_amount, $currency, [
-                        'type' => 'referral_commission',
-                        'idempotency_key' => "referral_{$commission->id}_{$commission->referrer_id}",
-                    ]);
+                    $this->transaction(function() use ($commission, $currency) {
+                        $deposit = $this->walletService->deposit((int)$commission->referrer_id, (float)$commission->commission_amount, $currency, [
+                            'type' => 'referral_commission',
+                            'idempotency_key' => "referral_{$commission->id}_{$commission->referrer_id}",
+                        ]);
 
-                    if (empty($deposit['success'])) throw new \RuntimeException('Wallet deposit failed');
+                        if (empty($deposit['success'])) throw new \RuntimeException('Wallet deposit failed');
 
-                    $this->commissionModel->updateStatus((int)$commission->id, 'paid', $deposit['transaction_id'] ?? null);
-                    $this->db->commit();
+                        $this->commissionModel->updateStatus((int)$commission->id, 'paid', $deposit['transaction_id'] ?? null);
+                    });
                     $results['success']++;
                 } catch (\Throwable $e) {
-                    $this->db->rollBack();
                     $results['failed']++;
                     $this->logger->error('referral.batch_pay_failed', ['commission_id' => $commission->id ?? null, 'error' => $e->getMessage()]);
                 }

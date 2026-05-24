@@ -21,7 +21,6 @@ abstract class BaseSearchProvider extends \App\Services\BaseService
     protected const CACHE_TTL_MINUTES = 5;
     protected const DEFAULT_LIMIT = 20;
     protected const MAX_LIMIT = 100;
-    protected const MODULES = ['social_task', 'influencer', 'vitrine', 'custom_task', 'investment', 'prediction', 'lottery', 'content', 'coupon', 'ticket', 'seo_ad', 'direct_message'];
 
     public function __construct(
         AdvancedSearch $searchModel,

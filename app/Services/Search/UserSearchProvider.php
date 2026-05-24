@@ -19,14 +19,15 @@ class UserSearchProvider extends BaseSearchProvider
     }
 
     /**
-     * جستجوی سراسری توسط یک کاربر (محدود به داده‌های همان کاربر)
+     * جستجوی سراسری کاربر روی تمام بخش‌های مرتبط با او (Global User Search)
      */
     public function searchUser(string $query, int $userId, int $limit = 5, int $offset = 0): array
     {
-        $this->logSearch('user', $query, $userId);
+        $this->logSearch('user_global', $query, $userId);
 
         $cacheKey = "global_search_user:{$userId}:" . md5($query . ':' . $limit . ':' . $offset);
         $tags = $this->searchTags('search:user', "search:user:{$userId}");
+        
         $cached = $this->cacheGet($cacheKey, $tags);
         if ($cached !== null) {
             return $cached;
@@ -34,75 +35,68 @@ class UserSearchProvider extends BaseSearchProvider
 
         $q = $this->sanitize($query);
         if (mb_strlen($q, 'UTF-8') < 2) {
-            return $this->emptyUserResult();
+            return ['total' => 0];
         }
 
-        $results = [
-            'transactions'    => $this->searchUserTransactions($q, $userId, $limit),
-            'tickets'         => $this->searchUserTickets($q, $userId, $limit),
-            'ads'             => $this->searchUserAds($q, $userId, $limit),
-            'tasks'           => $this->searchUserTasks($q, $userId, $limit, $offset),
-            'vitrines'        => $this->searchUserVitrines($q, $userId, $limit, $offset),
-            'contents'        => $this->searchUserContents($q, $userId, $limit, $offset),
-            'direct_messages' => $this->searchUserDirectMessages($q, $userId, $limit, $offset),
+        // لیست تمام ماژول‌هایی که یک کاربر مجاز است جستجو کند (پوشش تمام Missing Domains)
+        $domains = [
+            'transactions', 'tickets', 'ads', 'tasks', 'vitrines', 'contents', 'direct_messages',
+            'withdrawals', 'manual_deposits', 'crypto_deposits', 'referrals', 'kyc', 'bank_cards', 
+            'user_levels', 'score_history', 'notifications', 'audit_trail'
         ];
 
-        $total = array_sum(array_map('count', $results));
+        $results = [];
+        $total = 0;
+
+        foreach ($domains as $domain) {
+            // مقادیر limit را کوچک در نظر می‌گیریم تا سرچ سراسری سریع باشد
+            $domainResult = $this->searchDomain($domain, $q, $userId, [], $limit, $offset);
+            if (!empty($domainResult['items'])) {
+                $results[$domain] = $domainResult['items'];
+                $total += count($domainResult['items']);
+            }
+        }
+
         $results['total'] = $total;
 
-        $this->cacheSetSeconds($cacheKey, $results, $this->getCacheTTL('user_tasks'), $tags);
+        $ttl = (int) config('search.cache_ttl', 900);
+        $this->cacheSetSeconds($cacheKey, $results, $ttl, $tags);
 
         return $results;
     }
 
-    private function emptyUserResult(): array
+    /**
+     * جستجوی سراسری توسط یک کاربر در یک دامین خاص (مثلا withdrawals, tickets, ...)
+     * @param string $domain نام دامین (module/table)
+     * @param string $query عبارت جستجو
+     * @param int $userId شناسه کاربر
+     * @param array $filters فیلترهای اضافی
+     * @param int $limit تعداد
+     * @param int $offset صفحه
+     */
+    public function searchDomain(string $domain, string $query, int $userId, array $filters = [], int $limit = 20, int $offset = 0): array
     {
-        return [
-            'transactions'    => [],
-            'tickets'         => [],
-            'ads'             => [],
-            'tasks'           => [],
-            'vitrines'        => [],
-            'contents'        => [],
-            'direct_messages' => [],
-            'total'           => 0,
-        ];
-    }
+        $this->logSearch("user_{$domain}", $query, $userId);
 
-    // Internal delegators
+        $filters['user_id'] = $userId; // 🔒 Force scope to the specific user
+        
+        $cacheKey = $this->generateCacheKey("user_{$domain}_{$userId}", $filters, $limit, $offset) . ':' . md5($query);
+        $tags = $this->searchTags("search:user", "search:user:{$userId}", "search:domain:{$domain}");
+        
+        $cached = $this->cacheGet($cacheKey, $tags);
+        if ($cached !== null) {
+            return $cached;
+        }
 
-    private function searchUserTransactions(string $q, int $userId, int $limit): array
-    {
-        return $this->gateway->searchTransactions($q, $userId, $limit);
-    }
+        $q = $this->sanitize($query);
+        
+        // Use the centralized Gateway for all read operations, ensuring full-text/index usage, unified pagination, and consistent filtering
+        $results = app(\App\Services\Search\AdminSearchGateway::class)->searchRegistered($domain, $q, $filters, $limit, $offset);
 
-    private function searchUserTickets(string $q, int $userId, int $limit): array
-    {
-        return $this->gateway->searchTickets($q, $userId, $limit);
-    }
+        // Standardize TTL to 15 minutes (900 seconds) since we have event-driven invalidation, but keeps a fallback window
+        $ttl = (int) config('search.cache_ttl', 900);
+        $this->cacheSetSeconds($cacheKey, $results, $ttl, $tags);
 
-    private function searchUserAds(string $q, int $userId, int $limit): array
-    {
-        return $this->gateway->searchAds($q, $userId, $limit);
-    }
-
-    private function searchUserTasks(string $q, int $userId, int $limit, int $offset): array
-    {
-        return $this->gateway->searchTasks($q, $userId, $limit, $offset);
-    }
-
-    private function searchUserVitrines(string $q, int $userId, int $limit, int $offset): array
-    {
-        return $this->gateway->searchVitrines($q, $userId, $limit, $offset);
-    }
-
-    private function searchUserContents(string $q, int $userId, int $limit, int $offset): array
-    {
-        return $this->gateway->searchContents($q, $userId, $limit, $offset);
-    }
-
-    private function searchUserDirectMessages(string $q, int $userId, int $limit, int $offset): array
-    {
-        return $this->gateway->searchDirectMessages($q, $userId, $limit, $offset);
+        return $results;
     }
 }

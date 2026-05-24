@@ -346,19 +346,18 @@ class DisputeService extends \App\Services\BaseService
         // Auto determine role
         $role = ((int)$dispute->user_id === $userId) ? 'creator' : 'opponent';
 
-        $this->db->beginTransaction();
         try {
-            $ok = $this->disputeModel->addMessage($disputeId, $userId, $message, $attachment, $role);
-            if (!$ok) throw new \Exception('خطا در ثبت پیام');
-
-            $this->db->query("UPDATE disputes SET updated_at = NOW() WHERE id = ?", [$disputeId]);
-            
-            $this->logger->info('dispute.message_added', ['dispute_id' => $disputeId, 'user_id' => $userId, 'role' => $role]);
-            
-            $this->db->commit();
-            return ['success' => true];
+            return $this->transaction(function() use ($disputeId, $userId, $message, $attachment, $role) {
+                $ok = $this->disputeModel->addMessage($disputeId, $userId, $message, $attachment, $role);
+                if (!$ok) throw new \Exception('خطا در ثبت پیام');
+    
+                $this->db->query("UPDATE disputes SET updated_at = NOW() WHERE id = ?", [$disputeId]);
+                
+                $this->logger->info('dispute.message_added', ['dispute_id' => $disputeId, 'user_id' => $userId, 'role' => $role]);
+                
+                return ['success' => true];
+            });
         } catch (\Throwable $e) {
-            $this->db->rollBack();
             return ['success' => false, 'message' => $e->getMessage()];
         }
     }
@@ -440,26 +439,5 @@ class DisputeService extends \App\Services\BaseService
         // ارسال نوتیف به ادمین یا طرف مقابل
     }
 
-    /**
-     * Wrap closures within atomic database transactions.
-     */
-    private function transaction(callable $callback): mixed
-    {
-        $started = !$this->db->inTransaction();
-        if ($started) {
-            $this->db->beginTransaction();
-        }
-        try {
-            $result = $callback();
-            if ($started) {
-                $this->db->commit();
-            }
-            return $result;
-        } catch (\Throwable $e) {
-            if ($started && $this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            throw $e;
-        }
-    }
+
 }

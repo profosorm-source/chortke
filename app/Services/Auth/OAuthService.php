@@ -723,6 +723,24 @@ class OAuthService extends \App\Services\BaseService
         return ['success' => $ok, 'message' => $ok ? 'حساب با موفقیت متصل شد.' : 'خطا در اتصال حساب.'];
     }
 
+    public function linkSocialAccountSafe(int $userId, string $provider, array $userData): array
+    {
+        $this->db->beginTransaction();
+        try {
+            $result = $this->linkSocialAccount($userId, $provider, $userData);
+            if ($result['success']) {
+                $this->db->commit();
+            } else {
+                $this->db->rollBack();
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            $this->logger->error('oauth.linkSocialAccountSafe_failed', ['error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'خطای سیستمی در اتصال حساب'];
+        }
+    }
+
     public function unlinkSocialAccount(int $userId, string $provider): array
     {
         $ok = $this->db->table('social_accounts')

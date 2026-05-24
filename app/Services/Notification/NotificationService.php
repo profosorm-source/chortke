@@ -24,18 +24,11 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
     public function __construct(
         private Notification $model,
-        private NotificationDispatcher $dispatcher,
-        private FcmService $fcmService,
-        protected LoggerInterface $logger,
-        private RateLimiter $rateLimiter,
+        private NotificationPolicyService $policyService,
         private NotificationTemplateService $templateService,
-        private NotificationPreferenceService $preferenceService,
         private NotificationTracker $tracker,
-        private NotificationAnalyticsService $analyticsService,
-        private SettingService $settingService,
-        private \Core\Queue $queue, // 🚀 UPG-03: تزریق مکانیزم صف سیستم
-        private ?EmailService $emailService = null,
-        private ?SmsNotificationService $smsService = null,
+        private \Core\Queue $queue,
+        protected LoggerInterface $logger,
         private ?\App\Services\OutboxService $outbox = null
     ) {
         parent::__construct($logger);
@@ -140,14 +133,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
      */
     private function resolveScheduledTime(int $userId, string $priority, ?string $scheduledAt): ?string
     {
-        if ($scheduledAt === null && $priority !== Notification::PRIORITY_URGENT) {
-            if ($this->preferenceService->isInDndMode($userId)) {
-                $deferredTime = $this->preferenceService->getNextDndEndTime($userId);
-                $this->logger->info('notif.dnd_deferred', ['user_id' => $userId, 'scheduled_at' => $deferredTime]);
-                return $deferredTime;
-            }
-        }
-        return $scheduledAt;
+        return $this->policyService->resolveScheduledTime($userId, $priority, $scheduledAt);
     }
 
     /**
@@ -159,7 +145,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         ?string $imageUrl, ?string $groupKey, ?string $scheduledAt
     ): ?int {
         try {
-            if (!$this->preferenceService->isInAppEnabled($userId, $type)) {
+            if (!$this->policyService->canSendInApp($userId, $type)) {
                 return null;
             }
 
@@ -197,7 +183,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         int $userId, string $type, string $title, string $message, ?array $data,
         ?string $actionUrl, ?string $imageUrl, ?string $scheduledAt, ?int $notifId
     ): void {
-        if ($scheduledAt !== null || !$this->preferenceService->isPushEnabled($userId, $type)) {
+        if ($scheduledAt !== null || !$this->policyService->canSendPush($userId, $type)) {
             return;
         }
 
@@ -222,7 +208,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             ];
 
             $this->queue->pushUnique(
-                \App\Jobs\SendBulkNotificationJob::class,
+                \App\Jobs\ProcessNotificationJob::class,
                 $payload,
                 'notif:fcm:' . $messageId . ':' . $userId,
                 null,
@@ -286,11 +272,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
     private function checkRateLimit(int $userId): bool
     {
-        $key = "notif_rl_user_{$userId}";
-        $max = (int)$this->settingService->get('notif_rate_max_hour', self::RATE_MAX_PER_USER_PER_HOUR);
-        $window = (int)$this->settingService->get('notif_rate_window_minutes', self::RATE_WINDOW_MINUTES);
-
-        return $this->rateLimiter->attempt($key, $max, $window);
+        return $this->policyService->checkRateLimit($userId);
     }
 
     public function sendFromTemplate(
@@ -413,13 +395,23 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             return ['sent' => 0, 'skipped' => 0];
         }
 
-        // 🚀 BUG-10 Fix: Pre-fetch preferences to avoid N+1 queries in background jobs
-        $this->preferenceService->prefetchPreferences($userIds);
+        $this->policyService->prefetchPreferences($userIds);
 
         // HIGH-02: 1. Push Dispatch Offloading to System Queue (Fully Async)
         try {
-            // Evaluates FCM channel chunking (100 users/job) safely behind the scenes.
-            $this->dispatcher->dispatchBulk('fcm', $userIds, $title, $message, $data, null, $actionUrl);
+            $this->queue->pushUnique(
+                \App\Jobs\ProcessNotificationJob::class,
+                [
+                    'channel' => 'fcm',
+                    'user_ids' => $userIds,
+                    'title' => $title,
+                    'message' => $message,
+                    'data' => $data,
+                    'action_url' => $actionUrl,
+                ],
+                'notif:bulk:fcm:' . md5(json_encode($userIds) . $title),
+                null, 0, 86400
+            );
         } catch (\Throwable $e) {
             $this->logger->error('notif.bulk_async_offload_failed', ['error' => $e->getMessage()]);
         }
@@ -596,17 +588,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         ];
     }
 
-    // --- Proxy Calls to Preference Service ---
-
-    public function getPreferences(int $userId): object
-    {
-        return $this->preferenceService->getPreferences($userId);
-    }
-
-    public function updatePreferences(int $userId, array $data): bool
-    {
-        return $this->preferenceService->updatePreferences($userId, $data);
-    }
+    // متدهای مدیریت ترجیحات (Preferences) به NotificationPreferenceService منتقل شدند.
 
     // --- Proxy Calls to Template Service ---
 
@@ -635,44 +617,11 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         return $this->templateService->deleteTemplateOverride($key);
     }
 
-    // --- Proxy Calls to Analytics Service ---
-
-    public function getAnalyticsOverview(int $days = 30): array
-    {
-        return $this->analyticsService->getAnalyticsOverview($days);
-    }
-
-    public function getAnalyticsByType(int $days = 30): array
-    {
-        return $this->analyticsService->getAnalyticsByType($days);
-    }
-
-    public function getAnalyticsDailyTrend(int $days = 30): array
-    {
-        return $this->analyticsService->getAnalyticsDailyTrend($days);
-    }
-
-    public function getAnalyticsSegmentStats(int $days = 30): array
-    {
-        return $this->analyticsService->getAnalyticsSegmentStats($days);
-    }
-
-    public function getAnalyticsFunnelStats(int $days = 30): array
-    {
-        return $this->analyticsService->getAnalyticsFunnelStats($days);
-    }
-
-    public function getAnalyticsFatigueReport(int $threshold = 20): array
-    {
-        return $this->analyticsService->getAnalyticsFatigueReport($threshold);
-    }
+    // متدهای مربوط به آمار (Analytics) به NotificationAnalyticsService منتقل شدند.
 
     // --- Common/Shortcut Methods ---
 
-    public function saveUserToken(int $userId, string $token, string $platform = 'web'): bool
-    {
-        return $this->fcmService->saveUserToken($userId, $token, $platform);
-    }
+    // متد saveUserToken به FcmService منتقل شد.
 
     public function findForUser(int $notificationId, int $userId): ?object
     {
@@ -774,7 +723,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         }
 
         // 1. Prefetch preferences for all admins in a single database request
-        $this->preferenceService->prefetchPreferences($adminIds);
+        $this->policyService->prefetchPreferences($adminIds);
 
         $actionUrl = $data['action_url'] ?? null;
         $actionText = $data['action_text'] ?? null;
@@ -802,8 +751,8 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             $allowedAdminIds[] = $adminId;
 
             // In-app check
-            if ($this->preferenceService->isInAppEnabled($adminId, $type)) {
-                $scheduledAt = $this->resolveScheduledTime($adminId, $priority, null);
+            if ($this->policyService->canSendInApp($adminId, $type)) {
+                $scheduledAt = $this->policyService->resolveScheduledTime($adminId, $priority, null);
                 
                 $inAppRecords[] = [
                     'user_id' => $adminId,
@@ -812,7 +761,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
             }
 
             // Push check
-            if ($this->preferenceService->isPushEnabled($adminId, $type)) {
+            if ($this->policyService->canSendPush($adminId, $type)) {
                 $pushAdminIds[] = $adminId;
             }
         }
@@ -871,7 +820,19 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         // 4. Perform BULK FCM PUSH DISPATCH
         if (!empty($pushAdminIds)) {
             try {
-                $this->dispatcher->dispatchBulk('fcm', $pushAdminIds, $title, $message, $data, null, $actionUrl);
+                $this->queue->pushUnique(
+                    \App\Jobs\ProcessNotificationJob::class,
+                    [
+                        'channel' => 'fcm',
+                        'user_ids' => $pushAdminIds,
+                        'title' => $title,
+                        'message' => $message,
+                        'data' => $data,
+                        'action_url' => $actionUrl,
+                    ],
+                    'notif:admins_fcm:' . md5($title . implode(',', $pushAdminIds)),
+                    null, 0, 86400
+                );
             } catch (\Throwable $e) {
                 $this->logger->error('notif.admins_bulk_push_failed', ['error' => $e->getMessage()]);
                 throw $e;
@@ -923,14 +884,16 @@ class NotificationService extends \App\Services\BaseService implements Notificat
     private function sendSecuritySms(int $userId, string $message): void
     {
         try {
-            $prefs = $this->preferenceService->getPreferences($userId);
-            if (isset($prefs->sms_notifications) && !$prefs->sms_notifications) return;
-
-            if ($this->smsService) {
-                $this->smsService->sendSecurityAlertToUser($userId, $message);
-            } else {
-                $this->dispatcher->dispatch('sms', $userId, 'هشدار امنیتی', $message);
-            }
+            $this->queue->pushUnique(
+                \App\Jobs\ProcessNotificationJob::class,
+                [
+                    'channel' => 'sms',
+                    'user_ids' => [$userId],
+                    'sms_type' => 'security',
+                    'message' => $message,
+                ],
+                'notif:sms_sec:' . $userId . '_' . time()
+            );
         } catch (\Throwable $e) {
             $this->logger->warning('notif.sms_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }
@@ -939,14 +902,17 @@ class NotificationService extends \App\Services\BaseService implements Notificat
     private function sendWithdrawalSms(int $userId, float $amount, string $currency): void
     {
         try {
-            $prefs = $this->preferenceService->getPreferences($userId);
-            if (isset($prefs->sms_notifications) && !$prefs->sms_notifications) return;
-
-            if ($this->smsService) {
-                $this->smsService->sendWithdrawalAlertToUser($userId, $amount, $currency);
-            } else {
-                $this->dispatcher->dispatch('sms', $userId, 'برداشت تأیید شد', "برداشت {$amount} {$currency} تأیید شد");
-            }
+            $this->queue->pushUnique(
+                \App\Jobs\ProcessNotificationJob::class,
+                [
+                    'channel' => 'sms',
+                    'user_ids' => [$userId],
+                    'sms_type' => 'withdrawal',
+                    'amount' => $amount,
+                    'currency' => $currency,
+                ],
+                'notif:sms_withdraw:' . $userId . '_' . time()
+            );
         } catch (\Throwable $e) {
             $this->logger->warning('notif.sms_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }
@@ -954,6 +920,6 @@ class NotificationService extends \App\Services\BaseService implements Notificat
 
     public function prefetchPreferences(array $userIds): void
     {
-        $this->preferenceService->prefetchPreferences($userIds);
+        $this->policyService->prefetchPreferences($userIds);
     }
 }

@@ -16,16 +16,24 @@ use Core\Database;
 final class AdminSearchGateway
 {
     /** @var array<string, array{table:string, alias:string, columns:array, joins?:string, filters?:array, order?:string, deleted?:string|null, type?:string|null}> */
-    private array $registry = [
         'bank_cards' => ['table' => 'bank_cards', 'alias' => 'bc', 'columns' => ['card_number', 'sheba', 'bank_name', 'status'], 'joins' => 'LEFT JOIN users u ON u.id = bc.user_id', 'filters' => ['status', 'user_id'], 'order' => 'bc.created_at DESC'],
         'kyc' => ['table' => 'kyc_verifications', 'alias' => 'kyc', 'columns' => ['national_id', 'status', 'rejection_reason'], 'joins' => 'LEFT JOIN users u ON u.id = kyc.user_id', 'filters' => ['status', 'user_id'], 'order' => 'kyc.created_at DESC'],
         'manual_deposits' => ['table' => 'manual_deposits', 'alias' => 'd', 'columns' => ['tracking_code', 'status', 'transaction_id'], 'joins' => 'LEFT JOIN users u ON u.id = d.user_id LEFT JOIN bank_cards c ON c.id = d.card_id', 'filters' => ['status', 'user_id'], 'order' => 'd.created_at DESC'],
         'crypto_deposits' => ['table' => 'crypto_deposits', 'alias' => 'd', 'columns' => ['tx_hash', 'network', 'verification_status', 'transaction_id'], 'joins' => 'LEFT JOIN users u ON u.id = d.user_id', 'filters' => ['verification_status', 'status', 'network', 'user_id'], 'order' => 'd.created_at DESC'],
+        'withdrawals' => ['table' => 'withdrawals', 'alias' => 'w', 'columns' => ['tracking_code', 'transaction_id', 'status', 'currency'], 'joins' => 'LEFT JOIN users u ON u.id = w.user_id LEFT JOIN bank_cards c ON c.id = w.card_id', 'filters' => ['status', 'currency', 'user_id'], 'order' => 'w.created_at DESC'],
+        'transactions' => ['table' => 'transactions', 'alias' => 't', 'columns' => ['transaction_id', 'description', 'gateway_transaction_id', 'ref_id', 'idempotency_key'], 'joins' => 'LEFT JOIN users u ON u.id = t.user_id', 'filters' => ['status', 'type', 'currency', 'user_id'], 'order' => 't.created_at DESC'],
+        'tickets' => ['table' => 'tickets', 'alias' => 't', 'columns' => ['subject', 'ticket_id', 'status', 'priority'], 'joins' => 'LEFT JOIN users u ON u.id = t.user_id LEFT JOIN ticket_categories tc ON tc.id = t.category_id', 'filters' => ['status', 'priority', 'category_id', 'assigned_to', 'user_id'], 'order' => 't.updated_at DESC'],
+        'ads' => ['table' => 'ads', 'alias' => 'a', 'columns' => ['title', 'description', 'keyword', 'type', 'platform'], 'joins' => 'LEFT JOIN users u ON u.id = a.user_id', 'filters' => ['type', 'status', 'task_type', 'platform', 'category', 'user_id'], 'order' => 'a.created_at DESC'],
+        'tasks' => ['table' => 'custom_task_submissions', 'alias' => 's', 'columns' => ['status'], 'joins' => 'LEFT JOIN ads a ON a.id = s.task_id LEFT JOIN users u ON u.id = s.worker_id', 'filters' => ['status', 'worker_id', 'user_id'], 'order' => 's.created_at DESC'],
+        'vitrines' => ['table' => 'vitrine_listings', 'alias' => 'vl', 'columns' => ['title', 'description', 'username'], 'joins' => 'LEFT JOIN users u ON u.id = vl.user_id', 'filters' => ['status', 'user_id'], 'order' => 'vl.created_at DESC', 'deleted' => 'vl.deleted_at IS NULL'],
+        'contents' => ['table' => 'content_submissions', 'alias' => 'cs', 'columns' => ['title', 'description', 'video_url', 'category', 'platform'], 'joins' => 'LEFT JOIN users u ON u.id = cs.user_id', 'filters' => ['status', 'platform', 'category', 'user_id'], 'order' => 'cs.created_at DESC', 'deleted' => 'cs.is_deleted = 0'],
+        'user_levels' => ['table' => 'user_level_history', 'alias' => 'ul', 'columns' => ['reason'], 'joins' => 'LEFT JOIN users u ON u.id = ul.user_id', 'filters' => ['old_level', 'new_level', 'user_id'], 'order' => 'ul.created_at DESC'],
+        'score_history' => ['table' => 'score_history', 'alias' => 'sh', 'columns' => ['reason', 'source_type'], 'joins' => 'LEFT JOIN users u ON u.id = sh.user_id', 'filters' => ['source_type', 'user_id'], 'order' => 'sh.created_at DESC'],
         'coupons' => ['table' => 'coupons', 'alias' => 'c', 'columns' => ['code', 'name', 'description', 'status'], 'filters' => ['status'], 'order' => 'c.created_at DESC'],
         'referrals' => ['table' => 'referral_commissions', 'alias' => 'r', 'columns' => ['status', 'level'], 'joins' => 'LEFT JOIN users u ON u.id = r.user_id', 'filters' => ['status', 'user_id'], 'order' => 'r.created_at DESC'],
         'lottery' => ['table' => 'lottery_rounds', 'alias' => 'lr', 'columns' => ['title', 'status', 'description'], 'filters' => ['status'], 'order' => 'lr.created_at DESC'],
         'prediction' => ['table' => 'prediction_games', 'alias' => 'pg', 'columns' => ['title', 'description', 'status'], 'filters' => ['status'], 'order' => 'pg.created_at DESC'],
-        'direct_messages' => ['table' => 'direct_messages', 'alias' => 'dm', 'columns' => ['message', 'subject', 'status'], 'filters' => ['status', 'sender_id', 'receiver_id'], 'order' => 'dm.created_at DESC'],
+        'direct_messages' => ['table' => 'direct_messages', 'alias' => 'dm', 'columns' => ['message', 'subject', 'status'], 'filters' => ['status', 'sender_id', 'receiver_id', 'user_id'], 'order' => 'dm.created_at DESC'],
         'security_logs' => ['table' => 'security_logs', 'alias' => 'sl', 'columns' => ['event_type', 'message', 'ip_address', 'user_agent'], 'filters' => ['event_type', 'severity', 'user_id'], 'order' => 'sl.created_at DESC'],
         'audit_trail' => ['table' => 'audit_trail', 'alias' => 'at', 'columns' => ['action', 'description', 'ip_address', 'metadata'], 'filters' => ['user_id', 'action'], 'order' => 'at.created_at DESC'],
         'settings' => ['table' => 'system_settings', 'alias' => 's', 'columns' => ['key', 'value', 'description', 'group'], 'filters' => ['group'], 'order' => 's.updated_at DESC'],
@@ -372,7 +380,9 @@ final class AdminSearchGateway
             }
         }
 
-        // Fallback LIKE prefix + substring scans for columns not indexed with FULLTEXT
+        // Fallback LIKE prefix scan for columns not indexed with FULLTEXT
+        // SECURITY/PERFORMANCE: Changed from '%q%' to 'q%' to allow B-Tree index utilization!
+        // This resolves the full table scan bottleneck reported in search optimization phase.
         $remainingColumns = array_diff($columns, $usedFtsColumns);
         foreach ($remainingColumns as $column) {
             if (!$this->hasColumn($table, $column)) {
@@ -380,7 +390,7 @@ final class AdminSearchGateway
             }
             $key = 'q_' . count($params);
             $parts[] = $this->qualified($alias, $column) . " LIKE :{$key} ESCAPE '\\\\'";
-            $params[$key] = '%' . $this->escapeLike($q) . '%';
+            $params[$key] = $this->escapeLike($q) . '%'; // PREFIX LIKE
         }
 
         if ($includeUser && $this->tableExists('users')) {
@@ -390,7 +400,7 @@ final class AdminSearchGateway
                 }
                 $key = 'q_' . count($params);
                 $parts[] = $this->qualified('u', $userColumn) . " LIKE :{$key} ESCAPE '\\\\'";
-                $params[$key] = '%' . $this->escapeLike($q) . '%';
+                $params[$key] = $this->escapeLike($q) . '%'; // PREFIX LIKE
             }
         }
 

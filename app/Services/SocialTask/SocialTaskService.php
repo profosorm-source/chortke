@@ -51,19 +51,15 @@ class SocialTaskService extends \App\Services\BaseService
         private TrustService $trust,
         private SilentAntiFraudService $antiFraud,
         private WalletServiceInterface $wallet,
-        private NotificationServiceInterface $notification,
+        private \Core\EventDispatcher $events,
         private RateLimitPolicy $rateLimiter,
         protected LoggerInterface $logger,
         private FinancialEscrowService $escrow,
-        private StateMachineService $stateMachine,
-        private WebSocketService $webSocket,
-        private InteractionRatingService $interactionRatingService,
-        private ?ReferralService $referralService = null,
         private UserService $userService,
         private SettingService $settingService,
         private ?CameraVerificationService $cameraVerification = null,
         private ?\App\Services\AntiFraud\FraudGuardService $fraudGuard = null,
-        private ?OutboxService $outbox = null,
+        private ?\App\Services\OutboxService $outbox = null,
         private ?SocialTaskAnalyticsModel $analyticsModel = null
     ) {
         // 🛡️ H11 Fix: Pass logger to parent constructor instead of using uninitialized $this->logger
@@ -163,47 +159,43 @@ class SocialTaskService extends \App\Services\BaseService
     public function adminCancelAd(int $adminId, int $adId): array
     {
         try {
-            $this->model->beginTransaction();
-            $ad = $this->model->getAdById($adId, true);
-
-            if (!$ad) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'تبلیغ یافت نشد'];
-            }
-
-            if (in_array($ad->status, ['completed', 'cancelled'], true)) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'این تبلیغ قابل لغو نیست'];
-            }
-
-            $refund   = (float)($ad->remaining_budget ?? 0);
-            // MED-23: Dynamically check ad currency to accurately handle both IRT and USDT campaign budgets
-            $currency = (string)($ad->currency ?? 'irt');
-
-            if ($refund > 0) {
-                $idempotencyKey = "social_ad_cancel_refund_{$adId}";
-                $walletResult = $this->wallet->deposit((int)$ad->user_id, (string)$refund, $currency, [
-                    'type' => 'social_ad_refund',
-                    'description' => "Refund for cancelled social ad #{$adId}",
-                    'idempotency_key' => $idempotencyKey,
-                    'gateway' => 'social_ad_refund',
-                    'gateway_transaction_id' => 'refund_' . $adId,
-                    'ref_id' => $adId,
-                    'ref_type' => 'social_ad',
-                ]);
-
-                if (empty($walletResult['success'])) {
-                    $this->model->rollBack();
-                    return ['success' => false, 'message' => $walletResult['message'] ?? 'خطا در بازگشت وجه'];
+            return $this->transaction(function() use ($adId, $adminId) {
+                $ad = $this->model->getAdById($adId, true);
+    
+                if (!$ad) {
+                    return ['success' => false, 'message' => 'تبلیغ یافت نشد'];
                 }
-            }
-
-            $this->model->updateAdStatus($adId, 'cancelled');
-            $this->model->commit();
-
-            return ['success' => true, 'message' => 'تبلیغ لغو شد', 'refund' => $refund, 'currency' => $currency];
+    
+                if (in_array($ad->status, ['completed', 'cancelled'], true)) {
+                    return ['success' => false, 'message' => 'این تبلیغ قابل لغو نیست'];
+                }
+    
+                $refund   = (float)($ad->remaining_budget ?? 0);
+                // MED-23: Dynamically check ad currency to accurately handle both IRT and USDT campaign budgets
+                $currency = (string)($ad->currency ?? 'irt');
+    
+                if ($refund > 0) {
+                    $idempotencyKey = "social_ad_cancel_refund_{$adId}";
+                    $walletResult = $this->wallet->deposit((int)$ad->user_id, (string)$refund, $currency, [
+                        'type' => 'social_ad_refund',
+                        'description' => "Refund for cancelled social ad #{$adId}",
+                        'idempotency_key' => $idempotencyKey,
+                        'gateway' => 'social_ad_refund',
+                        'gateway_transaction_id' => 'refund_' . $adId,
+                        'ref_id' => $adId,
+                        'ref_type' => 'social_ad',
+                    ]);
+    
+                    if (empty($walletResult['success'])) {
+                        return ['success' => false, 'message' => $walletResult['message'] ?? 'خطا در بازگشت وجه'];
+                    }
+                }
+    
+                $this->model->updateAdStatus($adId, 'cancelled');
+    
+                return ['success' => true, 'message' => 'تبلیغ لغو شد', 'refund' => $refund, 'currency' => $currency];
+            });
         } catch (\Throwable $e) {
-            $this->model->rollBack();
             return ['success' => false, 'message' => 'خطا در لغو تبلیغ: ' . $e->getMessage()];
         }
     }
@@ -241,27 +233,38 @@ class SocialTaskService extends \App\Services\BaseService
             $reason = trim($reason);
             if ($reason === '') return ['success' => false, 'message' => 'دلیل override الزامی است'];
 
-            $this->model->beginTransaction();
-            $exec = $this->model->getExecutionById($executionId, true);
+            return $this->transaction(function() use ($executionId, $decision, $reason, $adminId) {
+                $exec = $this->model->getExecutionById($executionId, true);
 
-            if (!$exec) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'اجرا یافت نشد'];
-            }
+                if (!$exec) {
+                    return ['success' => false, 'message' => 'اجرا یافت نشد'];
+                }
 
-            $this->model->updateExecutionStatus($executionId, $decision, [
-                'decision' => $decision,
-                'override_reason' => $reason,
-                'reviewed_by' => $adminId,
-                'reviewed_at' => date('Y-m-d H:i:s')
-            ]);
+                $this->model->updateExecutionStatus($executionId, $decision, [
+                    'decision' => $decision,
+                    'override_reason' => $reason,
+                    'overridden_by' => $adminId,
+                    'overridden_at' => date('Y-m-d H:i:s')
+                ]);
 
-            $this->model->commit();
-            return ['success' => true, 'message' => 'تصمیم با موفقیت override شد', 'old_decision' => $exec->decision ?? null, 'new_decision' => $decision];
+                if (in_array($decision, ['approved', 'soft_approved'], true)) {
+                    $ad = $this->model->getAdById((int)$exec->ad_id);
+                    if ($ad) {
+                        $payout = (float)$ad->payout_amount;
+                        $currency = $ad->currency ?? 'irt';
+                        $this->wallet->depositInTransaction((int)$exec->executor_id, $payout, $currency, [
+                            'type' => 'task_reward',
+                            'description' => "Reward for manual override approval task #{$executionId}",
+                            'idempotency_key' => "task_reward_{$executionId}_override"
+                        ]);
+                    }
+                }
+
+                return ['success' => true, 'message' => 'تصمیم با موفقیت override شد', 'old_decision' => $exec->decision ?? null, 'new_decision' => $decision];
+            });
         } catch (\Throwable $e) {
-            $this->model->rollBack();
             $this->logger->error('social.admin_override_execution_failed', [
-                'adS_id' => $adminId,
+                'admin_id' => $adminId,
                 'execution_id' => $executionId,
                 'error' => $e->getMessage()
             ]);
@@ -335,48 +338,43 @@ class SocialTaskService extends \App\Services\BaseService
         }
 
         try {
-            $this->model->beginTransaction();
-            // قفل کردن ردیف با FOR UPDATE برای جلوگیری از Race Condition
-            $ad = $this->model->getAdById($adId, true);
-
-            if (!$ad || $ad->status !== 'active' || $ad->remaining_count <= 0) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'تسک موجود نیست یا ظرفیت تکمیل شده'];
-            }
-
-            // چک کردن اینکه قبلا انجام نشده باشد
-            $existing = $this->model->getExecutionWithAd($adId, $userId);
-            if ($existing && !in_array($existing->status, ['expired', 'cancelled', 'rejected'], true)) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'شما قبلاً این تسک را انجام داده‌اید یا در حال انجام آن هستید'];
-            }
-
-            // M36 Fix: جایگزینی فراخوانی ریت‌لیمیتر قدیمی با سیستم جدید و استاندارد سیاست محدودیت
-            if (!$this->rateLimiter->check('task_submit', $userId)) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'محدودیت تعداد تسک در ساعت'];
-            }
-
-            $expectedTimeMap = $this->settingService->get('social_task_expected_times', self::DEFAULT_TASK_EXPECTED_TIME);
-            $expectedTime = $expectedTimeMap[$ad->task_type] ?? 60;
-
-            if ($this->model->decrementAdSlots($adId) < 1) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'ظرفیت تکمیل شده'];
-            }
-
-            $execId = $this->model->createExecution([
-                'ad_id' => $adId,
-                'executor_id' => $userId,
-                'ip_address' => $context['ip'] ?? '',
-                'user_agent' => $context['user_agent'] ?? '',
-                'expected_time' => $expectedTime
-            ]);
-
-            $this->model->commit();
-            return ['success' => true, 'execution_id' => $execId, 'expected_time' => $expectedTime, 'target_url' => $ad->target_url, 'task_type' => $ad->task_type];
+            return $this->transaction(function() use ($userId, $adId, $context) {
+                // قفل کردن ردیف با FOR UPDATE برای جلوگیری از Race Condition
+                $ad = $this->model->getAdById($adId, true);
+    
+                if (!$ad || $ad->status !== 'active' || $ad->remaining_count <= 0) {
+                    return ['success' => false, 'message' => 'تسک موجود نیست یا ظرفیت تکمیل شده'];
+                }
+    
+                // چک کردن اینکه قبلا انجام نشده باشد
+                $existing = $this->model->getExecutionWithAd($adId, $userId);
+                if ($existing && !in_array($existing->status, ['expired', 'cancelled', 'rejected'], true)) {
+                    return ['success' => false, 'message' => 'شما قبلاً این تسک را انجام داده‌اید یا در حال انجام آن هستید'];
+                }
+    
+                // M36 Fix: جایگزینی فراخوانی ریت‌لیمیتر قدیمی با سیستم جدید و استاندارد سیاست محدودیت
+                if (!$this->rateLimiter->check('task_submit', $userId)) {
+                    return ['success' => false, 'message' => 'محدودیت تعداد تسک در ساعت'];
+                }
+    
+                $expectedTimeMap = $this->settingService->get('social_task_expected_times', self::DEFAULT_TASK_EXPECTED_TIME);
+                $expectedTime = $expectedTimeMap[$ad->task_type] ?? 60;
+    
+                if ($this->model->decrementAdSlots($adId) < 1) {
+                    return ['success' => false, 'message' => 'ظرفیت تکمیل شده'];
+                }
+    
+                $execId = $this->model->createExecution([
+                    'ad_id' => $adId,
+                    'executor_id' => $userId,
+                    'ip_address' => $context['ip'] ?? '',
+                    'user_agent' => $context['user_agent'] ?? '',
+                    'expected_time' => $expectedTime
+                ]);
+    
+                return ['success' => true, 'execution_id' => $execId, 'expected_time' => $expectedTime, 'target_url' => $ad->target_url, 'task_type' => $ad->task_type];
+            });
         } catch (\Throwable $e) {
-            $this->model->rollBack();
             $this->logger->error('social.start_execution_failed', [
                 'user_id' => $userId,
                 'ad_id' => $adId,
@@ -423,145 +421,139 @@ class SocialTaskService extends \App\Services\BaseService
         $payload['proof_text'] = trim((string)($payload['proof_text'] ?? ''));
 
         try {
-            $this->model->beginTransaction();
-            $exec = $this->model->getExecutionWithAd($executionId, $userId, true);
-
-            if (!$exec) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'رکورد اجرا یافت نشد'];
-            }
-
-            if ($exec->status !== 'pending') {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'وضعیت اجرا برای ارسال معتبر نیست'];
-            }
-
-            $proofUrl  = $payload['proof_url']  ?? '';
-            $proofText = $payload['proof_text'] ?? '';
-
-            // 🛡️ گیت متمرکز ضدتقلب (شامل بررسی کپی بودن ویدئو و الگوهای رفتاری سیستمی)
-            if ($this->fraudGuard) {
-                $risk = $this->fraudGuard->checkAction($userId, 'task.social', [
-                    'task_id'          => (int)($exec->ad_id ?? 0),
-                    'execution_id'     => $executionId,
-                    'video_hash'       => $payload['video_hash'] ?? null,
-                    'behavior_signals' => $payload['behavior_signals'] ?? []
-                ]);
-
-                if (!$risk['allowed']) {
-                    $this->model->rollBack();
-                    $this->logger->warning('social.task_submission_blocked_by_fraud_guard', [
-                        'user_id'      => $userId,
-                        'execution_id' => $executionId,
-                        'reason'       => $risk['reason']
+            return $this->transaction(function() use ($executionId, $userId, $payload, $proofUrl, $proofText) {
+                $exec = $this->model->getExecutionWithAd($executionId, $userId, true);
+    
+                if (!$exec) {
+                    return ['success' => false, 'message' => 'رکورد اجرا یافت نشد'];
+                }
+    
+                if ($exec->status !== 'pending') {
+                    return ['success' => false, 'message' => 'وضعیت اجرا برای ارسال معتبر نیست'];
+                }
+    
+                // 🛡️ گیت متمرکز ضدتقلب (شامل بررسی کپی بودن ویدئو و الگوهای رفتاری سیستمی)
+                if ($this->fraudGuard) {
+                    $risk = $this->fraudGuard->checkAction($userId, 'task.social', [
+                        'task_id'          => (int)($exec->ad_id ?? 0),
+                        'execution_id'     => $executionId,
+                        'video_hash'       => $payload['video_hash'] ?? null,
+                        'behavior_signals' => $payload['behavior_signals'] ?? []
                     ]);
-                    return ['success' => false, 'message' => 'ثبت نتیجه تسک به دلیل هشدارهای سیستمی مسدود شد.'];
+    
+                    if (!$risk['allowed']) {
+                        $this->logger->warning('social.task_submission_blocked_by_fraud_guard', [
+                            'user_id'      => $userId,
+                            'execution_id' => $executionId,
+                            'reason'       => $risk['reason']
+                        ]);
+                        return ['success' => false, 'message' => 'ثبت نتیجه تسک به دلیل هشدارهای سیستمی مسدود شد.'];
+                    }
                 }
-            }
-
-            $score = $this->antiFraud->scoreExecution($exec, $payload);
-            
-            // Capture Fraud in Real-Time via CameraVerification if signals are suspicious
-            $behaviorSignals = (array)($payload['behavior_signals'] ?? []);
-            $requireCamera = false;
-            try {
-                if ($this->cameraVerification && $this->cameraVerification->isRequired((int)$executionId, (float)($score['task_score'] ?? 0), $behaviorSignals)) {
-                    $requireCamera = true;
-                }
-            } catch (\Throwable $e) {
-                $this->logger->warning('camera_verification.check_failed_fallback_allowed', [
-                    'execution_id' => $executionId,
-                    'error' => $e->getMessage()
-                ]);
-            }
-
-            if ($requireCamera) {
+    
+                $score = $this->antiFraud->scoreExecution($exec, $payload);
+                
+                // Capture Fraud in Real-Time via CameraVerification if signals are suspicious
+                $behaviorSignals = (array)($payload['behavior_signals'] ?? []);
+                $requireCamera = false;
                 try {
-                    $this->cameraVerification->createRequest((int)$executionId, $userId);
-                    $this->model->updateExecutionStatus($executionId, 'pending_camera_verification', [
-                        'anti_fraud_score' => (float)($score['task_score'] ?? 0),
-                        'proof_url'        => $proofUrl !== '' ? $proofUrl : null,
-                        'proof_text'       => $proofText !== '' ? $proofText : null,
-                    ]);
-                    $this->model->commit();
-
-                    return [
-                        'success' => true,
-                        'status'  => 'pending_camera_verification',
-                        'message' => 'تسک شما مشکوک تشخیص داده شد. لطفاً با استفاده از دوربین هویت تصویری خود را تأیید کنید تا پاداش آزاد شود.',
-                        'score'   => $score['task_score'] ?? 0,
-                    ];
+                    if ($this->cameraVerification && $this->cameraVerification->isRequired((int)$executionId, (float)($score['task_score'] ?? 0), $behaviorSignals)) {
+                        $requireCamera = true;
+                    }
                 } catch (\Throwable $e) {
-                    $this->logger->error('camera_verification.create_request_failed_fallback_bypass', [
+                    $this->logger->warning('camera_verification.check_failed_fallback_allowed', [
                         'execution_id' => $executionId,
                         'error' => $e->getMessage()
                     ]);
-                    // Fallback to normal decision flow because camera verification is temporarily down
                 }
-            }
-
-            $decision = $this->antiFraud->decisionFromScore($score);
-
-            $finalStatus = ($decision['decision'] ?? '') === 'reject' ? 'rejected' : 'approved';
-            $rewardPaid = 0;
-            $rewardAmount = 0.0;
-
-            if (!empty($decision['pay_reward'])) {
-                $rewardAmount = (float)$this->antiFraud->adjustedReward($userId, (float)$exec->price_per_task);
-                // Dynamically resolve execution currency context
-                $currency = (string)($exec->currency ?? 'irt');
-
-                if ($rewardAmount > 0) {
-                    $pay = $this->wallet->deposit($userId, (string)$rewardAmount, $currency, [
-                        'type' => 'social_task_reward',
-                        'execution_id' => $executionId,
-                        'ad_id' => (int)$exec->ad_id,
-                        'task_type' => $exec->task_type ?? null,
-                        'decision' => $decision['decision'] ?? null,
-                        'risk_score' => $score['score'] ?? null,
-                    ]);
-
-                    if (empty($pay['success'])) {
-                        $this->model->rollBack();
-                        return ['success' => false, 'message' => $pay['message'] ?? 'خطا در پرداخت پاداش'];
+    
+                if ($requireCamera) {
+                    try {
+                        $this->cameraVerification->createRequest((int)$executionId, $userId);
+                        $this->model->updateExecutionStatus($executionId, 'pending_camera_verification', [
+                            'anti_fraud_score' => (float)($score['task_score'] ?? 0),
+                            'proof_url'        => $proofUrl !== '' ? $proofUrl : null,
+                            'proof_text'       => $proofText !== '' ? $proofText : null,
+                        ]);
+    
+                        return [
+                            'success' => true,
+                            'status'  => 'pending_camera_verification',
+                            'message' => 'تسک شما مشکوک تشخیص داده شد. لطفاً با استفاده از دوربین هویت تصویری خود را تأیید کنید تا پاداش آزاد شود.',
+                            'score'   => $score['task_score'] ?? 0,
+                        ];
+                    } catch (\Throwable $e) {
+                        $this->logger->error('camera_verification.create_request_failed_fallback_bypass', [
+                            'execution_id' => $executionId,
+                            'error' => $e->getMessage()
+                        ]);
+                        // Fallback to normal decision flow because camera verification is temporarily down
                     }
-                    $rewardPaid = 1;
-                    
-                    // بررسی ارجاع دهنده (معرف) و پرداخت کمیسیون
-                    // HIGH-07: Fully decouple direct DB layer dependencies by consuming injected UserService
-                    $userRecord = $this->userService->findById($userId);
-                    if ($userRecord && !empty($userRecord->referred_by)) {
-                        if ($this->referralService) {
-                            $this->referralService->processCommission((int)$userRecord->referred_by, $rewardAmount, $currency, [
-                                'action' => 'social_task_reward',
-                                'executor_id' => $userId,
-                                'execution_id' => $executionId
-                            ]);
+                }
+    
+                $decision = $this->antiFraud->decisionFromScore($score);
+    
+                $finalStatus = ($decision['decision'] ?? '') === 'reject' ? 'rejected' : 'approved';
+                $rewardPaid = 0;
+                $rewardAmount = 0.0;
+    
+                if (!empty($decision['pay_reward'])) {
+                    $rewardAmount = (float)$this->antiFraud->adjustedReward($userId, (float)$exec->price_per_task);
+                    // Dynamically resolve execution currency context
+                    $currency = (string)($exec->currency ?? 'irt');
+    
+                    if ($rewardAmount > 0) {
+                        // Use depositInTransaction to ensure it's part of our database transaction wrapper
+                        $pay = $this->wallet->depositInTransaction($userId, (string)$rewardAmount, $currency, [
+                            'type' => 'social_task_reward',
+                            'execution_id' => $executionId,
+                            'ad_id' => (int)$exec->ad_id,
+                            'task_type' => $exec->task_type ?? null,
+                            'decision' => $decision['decision'] ?? null,
+                            'risk_score' => $score['score'] ?? null,
+                        ]);
+    
+                        if (empty($pay['success'])) {
+                            return ['success' => false, 'message' => $pay['message'] ?? 'خطا در پرداخت پاداش'];
                         }
+                        $rewardPaid = 1;
+                        
+                        $this->events->dispatchAsync('social_task.reward_paid', [
+                            'executor_id' => $userId,
+                            'execution_id' => $executionId,
+                            'reward_amount' => $rewardAmount,
+                            'currency' => $currency
+                        ]);
                     }
                 }
-            }
-
-            $this->model->updateExecutionStatus($executionId, $finalStatus, [
-                'proof_url' => $proofUrl !== '' ? $proofUrl : null,
-                'proof_text' => $proofText !== '' ? $proofText : null,
-                'anti_fraud_score' => (float)($score['score'] ?? 0),
-                'reward_paid' => $rewardPaid,
-                'reward_amount' => $rewardAmount
-            ]);
-
-            $this->recordExecutionOutbox($executionId, $userId, $finalStatus, $rewardPaid, $rewardAmount, $currency ?? (string)($exec->currency ?? 'irt'), $score, $decision);
-
-            $this->model->commit();
-            
-            return [
-                'success' => true, 
-                'message' => 'ارسال با موفقیت انجام شد', 
-                'status' => $finalStatus,
-                'score' => $score['score'] ?? 0
-            ];
+    
+                $this->model->updateExecutionStatus($executionId, $finalStatus, [
+                    'proof_url' => $proofUrl !== '' ? $proofUrl : null,
+                    'proof_text' => $proofText !== '' ? $proofText : null,
+                    'anti_fraud_score' => (float)($score['score'] ?? 0),
+                    'reward_paid' => $rewardPaid,
+                    'reward_amount' => $rewardAmount
+                ]);
+    
+                $this->outbox?->record('social_task_execution', (string)$executionId, 'social_task.execution.completed', [
+                    'execution_id' => $executionId,
+                    'user_id' => $userId,
+                    'status' => $finalStatus,
+                    'reward_paid' => $rewardPaid,
+                    'reward_amount' => $rewardAmount,
+                    'currency' => $currency ?? (string)($exec->currency ?? 'irt'),
+                    'score' => $score,
+                    'decision' => $decision
+                ]);
+                
+                return [
+                    'success' => true, 
+                    'message' => 'ارسال با موفقیت انجام شد', 
+                    'status' => $finalStatus,
+                    'score' => $score['score'] ?? 0
+                ];
+            });
         } catch (\Throwable $e) {
-            $this->model->rollBack();
             $this->logger->error('social.submit_execution_failed', [
                 'user_id' => $userId,
                 'execution_id' => $executionId,
@@ -601,63 +593,7 @@ class SocialTaskService extends \App\Services\BaseService
         return ['success' => true, 'message' => 'اجرا رد شد'];
     }
 
-    /**
-     * Executor به Advertiser امتیاز می‌دهد
-     */
-    public function rateExecution(int $executorId, array $data): array
-    {
-        $executionId = (int)($data['execution_id'] ?? 0);
-        $stars = max(1, min(5, (int)($data['rating'] ?? 0)));
-        $comment = $data['review_text'] ?? '';
-
-        $exec = $this->model->getExecutionWithAd($executionId, $executorId);
-
-        if (!$exec) {
-            return ['success' => false, 'message' => 'اجرا یافت نشد یا تأیید نشده'];
-        }
-
-        if ($this->analyticsModel && $this->analyticsModel->hasUserRated($executionId, $executorId, 'executor')) {
-            return ['success' => false, 'message' => 'قبلاً امتیاز داده‌اید'];
-        }
-
-        if (!$this->isWithinRatingWindow($exec->completed_at ?? $exec->created_at)) {
-            return ['success' => false, 'message' => 'مهلت امتیازدهی گذشته است (۷۲ ساعت)'];
-        }
-
-        // Use Core Interaction Service
-        $success = $this->interactionRatingService->rate(
-            $executorId,
-            'user',
-            (int)$exec->user_id,
-            ModuleContext::SOCIAL_TASKS,
-            $stars
-        );
-
-        if (!$success) {
-            return ['success' => false, 'message' => 'خطا در ثبت امتیاز'];
-        }
-
-        if ($this->analyticsModel) {
-            $this->analyticsModel->recalculateUserStats((int)$exec->user_id, 'advertiser');
-        }
-
-        return ['success' => true, 'message' => 'امتیاز با موفقیت ثبت شد'];
-    }
-
-    private function isWithinRatingWindow(?string $completedAt): bool
-    {
-        if (!$completedAt) return false;
-        try {
-            $completed = new \DateTime($completedAt, new \DateTimeZone('UTC'));
-            $now = new \DateTime('now', new \DateTimeZone('UTC'));
-            $elapsed = $now->getTimestamp() - $completed->getTimestamp();
-            return $elapsed <= (72 * 3600);
-        } catch (\Exception $e) {
-            return false;
-        }
-    }
-
-    public function getAdById(int $adId): ?object
+        public function getAdById(int $adId): ?object
     {
         return $this->model->getAdById($adId);
     }
@@ -671,27 +607,24 @@ class SocialTaskService extends \App\Services\BaseService
     public function addAccount(int $userId, string $platform, string $username, string $accessToken = ''): array
     {
         try {
-            $this->model->beginTransaction();
-
-            $existsSql = "SELECT COUNT(*) FROM user_social_accounts WHERE platform = ? AND username = ? AND deleted_at IS NULL";
-            $count = (int)$this->model->getDb()->fetchColumn($existsSql, [$platform, $username]);
-            if ($count > 0) {
-                $this->model->rollBack();
-                return ['success' => false, 'message' => 'این حساب کاربری قبلاً ثبت شده است'];
-            }
-
-            $sql = "INSERT INTO user_social_accounts (user_id, platform, username, profile_url, follower_count, following_count, post_count, engagement_rate, account_age_months, status, created_at, updated_at) 
-                    VALUES (?, ?, ?, ?, 0, 0, 0, 0.0, 0, 'pending', NOW(), NOW())";
-            
-            $profileUrl = "https://{$platform}.com/{$username}";
-            $this->model->getDb()->query($sql, [$userId, $platform, $username, $profileUrl]);
-
-            $accountId = (int)$this->model->getDb()->lastInsertId();
-            $this->model->commit();
-
-            return ['success' => true, 'id' => $accountId, 'message' => 'حساب با موفقیت ثبت شد'];
+            return $this->transaction(function() use ($userId, $platform, $username, $accessToken) {
+                $existsSql = "SELECT COUNT(*) FROM user_social_accounts WHERE platform = ? AND username = ? AND deleted_at IS NULL";
+                $count = (int)$this->model->getDb()->fetchColumn($existsSql, [$platform, $username]);
+                if ($count > 0) {
+                    return ['success' => false, 'message' => 'این حساب کاربری قبلاً ثبت شده است'];
+                }
+    
+                $sql = "INSERT INTO user_social_accounts (user_id, platform, username, profile_url, follower_count, following_count, post_count, engagement_rate, account_age_months, status, created_at, updated_at) 
+                        VALUES (?, ?, ?, ?, 0, 0, 0, 0.0, 0, 'pending', NOW(), NOW())";
+                
+                $profileUrl = "https://{$platform}.com/{$username}";
+                $this->model->getDb()->query($sql, [$userId, $platform, $username, $profileUrl]);
+    
+                $accountId = (int)$this->model->getDb()->lastInsertId();
+    
+                return ['success' => true, 'id' => $accountId, 'message' => 'حساب با موفقیت ثبت شد'];
+            });
         } catch (\Throwable $e) {
-            $this->model->rollBack();
             return ['success' => false, 'message' => 'خطا در ثبت حساب: ' . $e->getMessage()];
         }
     }
@@ -713,49 +646,7 @@ class SocialTaskService extends \App\Services\BaseService
 
 
 
-    private function recordExecutionOutbox(
-        int $executionId,
-        int $userId,
-        string $status,
-        int $rewardPaid,
-        float $rewardAmount,
-        string $currency,
-        array $score,
-        array $decision
-    ): void {
-        if (!$this->outbox) {
-            return;
-        }
-
-        $this->outbox->record('social_task_execution', (string)$executionId, 'social_task.execution.completed', [
-            'execution_id' => $executionId,
-            'user_id' => $userId,
-            'status' => $status,
-            'reward_paid' => $rewardPaid,
-            'reward_amount' => $rewardAmount,
-            'currency' => $currency,
-            'score' => $score,
-            'decision' => $decision,
-        ]);
-
-        if ($status === 'approved' && $rewardPaid === 1) {
-            $this->outbox->record('social_task_execution', (string)$executionId, 'score.task_completed', [
-                'job' => \App\Jobs\UpdateFraudScoreJob::class,
-                'data' => [
-                    'user_id' => $userId,
-                    'delta' => 1.0,
-                    'domain' => 'task',
-                    'source' => 'social_task_execution',
-                    'meta' => [
-                        'execution_id' => $executionId,
-                        'task_score' => $score['task_score'] ?? ($score['score'] ?? null),
-                        'reward_amount' => $rewardAmount,
-                        'currency' => $currency,
-                    ],
-                ],
-            ]);
-        }
-    }
+    
 
     private function sanitizeSearch(string $str): string
     {

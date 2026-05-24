@@ -6,7 +6,7 @@ namespace App\Services\Analytics;
 
 use App\Models\User;
 use App\Models\KYCVerification;
-use App\Models\Transaction;
+use App\Models\TransactionQuery;
 use App\Models\KpiStatistics;
 use App\Models\CustomTaskAnalyticsModel;
 use Core\Cache;
@@ -31,7 +31,7 @@ class AnalyticsQueryService extends \App\Services\BaseService
         private CustomTaskAnalyticsModel $customTaskAnalyticsModel,
         private User $userModel,
         private KYCVerification $kycModel,
-        private Transaction $transactionModel,
+        private TransactionQuery $transactionQuery,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -82,7 +82,7 @@ class AnalyticsQueryService extends \App\Services\BaseService
     public function getFinancialStats(?string $currency = null): array
     {
         $curr = strtolower($currency ?: 'irt');
-        return $this->cache->remember("financial_stats_{$curr}", self::CACHE_TTL_HOT, fn() => $this->transactionModel->getFinancialStats($curr));
+        return $this->cache->remember("financial_stats_{$curr}", self::CACHE_TTL_HOT, fn() => $this->transactionQuery->getFinancialStats($curr));
     }
 
     // ==========================================

@@ -13,7 +13,8 @@ class ModuleSearchProvider extends BaseSearchProvider
         \App\Models\AdvancedSearch $searchModel,
         \Core\Cache $cache,
         \App\Contracts\LoggerInterface $logger,
-        private ModuleSearchGateway $gateway
+        private ModuleSearchGateway $gateway,
+        private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($searchModel, $cache, $logger);
     }
@@ -34,9 +35,11 @@ class ModuleSearchProvider extends BaseSearchProvider
         $modules = is_array($modules) ? $modules : [$modules];
 
         $results = [];
+        $gateway = app(\App\Services\Search\AdminSearchGateway::class);
+        $registeredModules = $gateway->registeredModules();
 
         foreach ($modules as $module) {
-            if (!in_array($module, self::MODULES, true)) {
+            if (!in_array($module, $registeredModules, true)) {
                 continue;
             }
 
@@ -49,23 +52,12 @@ class ModuleSearchProvider extends BaseSearchProvider
                 continue;
             }
 
-            $searchResult = match ($module) {
-                'social_task'    => $this->searchSocialTasks($filters, $limit, $offset),
-                'influencer'     => $this->searchInfluencersModule($filters, $limit, $offset),
-                'vitrine'        => $this->searchVitrine($filters, $limit, $offset),
-                'custom_task'    => $this->searchCustomTasks($filters, $limit, $offset),
-                'investment'     => $this->searchInvestments($filters, $limit, $offset),
-                'prediction'     => $this->searchPredictions($filters, $limit, $offset),
-                'lottery'        => $this->searchLotteries($filters, $limit, $offset),
-                'content'        => $this->searchContents($filters, $limit, $offset),
-                'coupon'         => $this->searchCoupons($filters, $limit, $offset),
-                'ticket'         => $this->searchTickets($filters, $limit, $offset),
-                'seo_ad'         => $this->searchSeoAds($filters, $limit, $offset),
-                'direct_message' => $this->searchDirectMessages($filters, $limit, $offset),
-                default          => []
-            };
+            // Proxy directly to dynamic AdminSearchGateway to unify pagination, index-usage, and full text search
+            $searchResult = $gateway->searchRegistered($module, '', $filters, $limit, $offset);
 
-            $this->cacheSetSeconds($cacheKey, $searchResult, $this->getCacheTTL($module), $tags);
+            // Use unified cache TTL from config, fallback to 15 mins
+            $ttl = (int) config('search.cache_ttl', 900);
+            $this->cacheSetSeconds($cacheKey, $searchResult, $ttl, $tags);
             $results[$module] = $searchResult;
         }
 
@@ -77,12 +69,18 @@ class ModuleSearchProvider extends BaseSearchProvider
      */
     public function invalidateModuleCache(string $module): void
     {
-        if (!in_array($module, self::MODULES, true)) {
+        $gateway = app(\App\Services\Search\AdminSearchGateway::class);
+        if (!in_array($module, $gateway->registeredModules(), true)) {
             return;
         }
 
         try {
-            $this->cache->tags([$module])->flush();
+            if ($this->cacheInvalidation) {
+                $this->cacheInvalidation->invalidateModuleSearch($module);
+            } else {
+                $this->cache->tags([$module])->flush();
+                $this->cache->tags(["search:module:{$module}"])->flush();
+            }
             $this->logger->info("search.cache_invalidated", [
                 'module' => $module,
                 'driver' => $this->cache->driver()
@@ -93,67 +91,5 @@ class ModuleSearchProvider extends BaseSearchProvider
                 'error' => $e->getMessage()
             ]);
         }
-    }
-
-    // Internal delegators
-
-    private function searchSocialTasks(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchSocialTasks($f, $limit, $offset);
-    }
-
-    private function searchInfluencersModule(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchInfluencers($f, $limit, $offset);
-    }
-
-    private function searchVitrine(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchVitrine($f, $limit, $offset);
-    }
-
-    private function searchCustomTasks(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchCustomTasks($f, $limit, $offset);
-    }
-
-    private function searchInvestments(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchInvestments($f, $limit, $offset);
-    }
-
-    private function searchPredictions(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchPredictions($f, $limit, $offset);
-    }
-
-    private function searchLotteries(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchLotteries($f, $limit, $offset);
-    }
-
-    private function searchContents(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchContents($f, $limit, $offset);
-    }
-
-    private function searchCoupons(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchCoupons($f, $limit, $offset);
-    }
-
-    private function searchTickets(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchTickets($f, $limit, $offset);
-    }
-
-    private function searchSeoAds(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchSeoAds($f, $limit, $offset);
-    }
-
-    private function searchDirectMessages(array $f, int $limit, int $offset): array
-    {
-        return $this->gateway->searchDirectMessages($f, $limit, $offset);
     }
 }
