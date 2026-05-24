@@ -18,6 +18,7 @@ enum ScoreDomain: string
     case Referral = 'referral';
     case Activity = 'activity';
     case Loyalty = 'loyalty';
+    case Reputation = 'reputation';
 
     public static function normalize(string $domain): string
     {

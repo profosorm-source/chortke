@@ -36,6 +36,8 @@ class CacheWarmupJob
         $warmed += $this->warmFeatureFlags();
         $warmed += $this->warmSystemConfigs();
         $warmed += $this->warmDashboardSummary();
+        $warmed += $this->warmUserSessions();
+        $warmed += $this->warmSearchCache();
 
         $this->logger->info('cache.warmup.completed', ['warmed_keys' => $warmed]);
     }
@@ -115,6 +117,56 @@ class CacheWarmupJob
             return 1;
         } catch (\Throwable $e) {
             $this->logger->warning('cache.warmup.dashboard_summary_failed', ['error' => $e->getMessage()]);
+            return 0;
+        }
+    }
+
+    /**
+     * گرم کردن کش نشست کاربری (User Session Cache) برای کاربران فعال اخیر
+     */
+    private function warmUserSessions(): int
+    {
+        try {
+            // دریافت کاربران فعال در 24 ساعت گذشته
+            $activeUsers = $this->db->fetchAll(
+                "SELECT id FROM users WHERE last_login_at >= DATE_SUB(NOW(), INTERVAL 1 DAY) AND deleted_at IS NULL LIMIT 1000"
+            );
+
+            $warmed = 0;
+            // اگر از dependency injection در اینجا استفاده نمی‌شود، برای سادگی فقط کلید کش لاگین یا پروفایل را لمس می‌کنیم
+            foreach ($activeUsers as $user) {
+                // Preload user settings or preferences if needed by touching the repository
+                // Actually, caching the active state is good enough here
+                $this->cache->putSeconds('user_active_state:' . $user->id, true, 3600);
+                $warmed++;
+            }
+
+            return $warmed;
+        } catch (\Throwable $e) {
+            $this->logger->warning('cache.warmup.user_sessions_failed', ['error' => $e->getMessage()]);
+            return 0;
+        }
+    }
+
+    /**
+     * گرم کردن کش جستجوهای پرکاربرد سیستم
+     */
+    private function warmSearchCache(): int
+    {
+        try {
+            $warmed = 0;
+            // پیش‌بارگذاری تگ‌های جستجوی ماژول‌های پرکاربرد (بدون دیتای سنگین تا زمانی که کوئری واقعی بخورد، فقط ساختار تگ‌ها)
+            $modules = ['social_task', 'seo_ad', 'vitrine'];
+            
+            foreach ($modules as $module) {
+                // Pre-create the tag index in file mode if it doesn't exist by touching a dummy key
+                $this->cache->tags(["search:module:{$module}"])->put('warmup_dummy', 1, 60);
+                $warmed++;
+            }
+            
+            return $warmed;
+        } catch (\Throwable $e) {
+            $this->logger->warning('cache.warmup.search_cache_failed', ['error' => $e->getMessage()]);
             return 0;
         }
     }

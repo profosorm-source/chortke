@@ -42,9 +42,24 @@ class QueueFailedCommand extends Command
         }
 
         $this->info("Retrying job #{$id}...");
-        // Logic for retry
-        $this->db->execute("DELETE FROM failed_jobs WHERE id = ?", [$id]);
-        $this->info("Job retried successfully");
+        
+        $queue = app(\Core\Queue::class);
+        $payload = json_decode((string)$job->payload, true);
+        if (is_array($payload) && !empty($payload['job'])) {
+            $ok = $queue->push(
+                (string)$payload['job'],
+                (array)($payload['data'] ?? []),
+                (string)($job->queue ?? 'default')
+            );
+            if ($ok) {
+                $this->db->execute("DELETE FROM failed_jobs WHERE id = ?", [$id]);
+                $this->info("Job retried successfully and pushed back to queue.");
+            } else {
+                $this->error("Failed to push job back to queue.");
+            }
+        } else {
+            $this->error("Invalid job payload.");
+        }
     }
 
     public function forget(int $id): void
@@ -55,9 +70,15 @@ class QueueFailedCommand extends Command
 
     public function replayAll(): void
     {
+        $queue = app(\Core\Queue::class);
         $count = $this->db->fetchColumn("SELECT COUNT(*) FROM failed_jobs");
+        if ($count == 0) {
+            $this->info("No failed jobs to replay.");
+            return;
+        }
+
         $this->info("Replaying {$count} failed jobs...");
-        // Logic for replay
-        $this->info("All failed jobs replayed");
+        $stats = $queue->retryFailedJobs((int)$count);
+        $this->info("Replay complete: {$stats['requeued']} requeued, {$stats['errors']} errors, {$stats['skipped']} skipped.");
     }
 }

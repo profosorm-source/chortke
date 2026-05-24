@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
-use App\Services\AntiFraud\FraudScoreService;
+use App\Services\ScoreService;
 use Core\Cache;
 
 /**
@@ -12,10 +12,10 @@ use Core\Cache;
  */
 class UpdateFraudScoreJob
 {
-    private FraudScoreService $scoreService;
+    private ScoreService $scoreService;
     private Cache $cache;
 
-    public function __construct(FraudScoreService $scoreService, Cache $cache)
+    public function __construct(ScoreService $scoreService, Cache $cache)
     {
         $this->scoreService = $scoreService;
         $this->cache = $cache;
@@ -33,7 +33,7 @@ class UpdateFraudScoreJob
             return;
         }
 
-        // Physical writes executed inside background context
-        $this->scoreService->commitDeltaToDatabase($userId, $domain, $delta, $source, $meta);
+        // Physical writes executed inside background context using Unified ScoreService
+        $this->scoreService->applyDelta('user', $userId, $domain, $delta, $source, $meta);
     }
 }

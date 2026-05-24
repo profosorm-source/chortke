@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
-use App\Services\AntiFraud\FraudScoreService;
+use App\Services\ScoreService;
 use App\Contracts\LoggerInterface;
 use Core\Database;
 
@@ -24,7 +24,7 @@ class ScoreRecalculationJob
     private const DIFF_TOLERANCE = 0.001;
 
     public function __construct(
-        private FraudScoreService $scoreService,
+        private ScoreService $scoreService,
         private Database $db,
         private LoggerInterface $logger
     ) {}
@@ -64,7 +64,8 @@ class ScoreRecalculationJob
                     $diff      = $real - $projected;
 
                     // تصحیح projection با delta اختلاف
-                    $this->scoreService->commitDeltaToDatabase(
+                    $this->scoreService->applyDelta(
+                        'user',
                         (int) $row->user_id,
                         $domain,
                         $diff,
