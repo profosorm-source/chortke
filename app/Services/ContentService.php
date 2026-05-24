@@ -41,19 +41,14 @@ class ContentService extends \App\Services\BaseService
     private const ACTIVE_MAX_PERCENT = 75;
 
     private WalletServiceInterface $walletService;
-    private NotificationServiceInterface $notificationService;
-    private UserService $userService;
-    private ReferralService $referralService;
-    private Cache $cache;
-    private ContentSubmission $submissionModel;
+    private \App\Services\Shared\RatingService $ratingService;
+                    private ContentSubmission $submissionModel;
     private ContentRevenue $revenueModel;
     private ContentAgreement $agreementModel;
     private TransactionWrapper $transactionWrapper;
     private EventDispatcher $eventDispatcher;
     private SettingService $settingService;
-    private XpService $xpService;
-    private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
-    // متن تعهدنامه
+            // متن تعهدنامه
     private const AGREEMENT_TEXT = <<<EOT
 تعهدنامه همکاری محتوایی با مجموعه چرتکه
 
@@ -72,35 +67,25 @@ EOT;
 
     public function __construct(
         WalletServiceInterface $walletService,
-        NotificationServiceInterface $notificationService,
-        UserService $userService,
-        ReferralService $referralService,
+        \App\Services\Shared\RatingService $ratingService,
         ContentSubmission $submissionModel,
         ContentRevenue $revenueModel,
         ContentAgreement $agreementModel,
         TransactionWrapper $transactionWrapper,
         EventDispatcher $eventDispatcher,
         LoggerInterface $logger,
-        Cache $cache,
         SettingService $settingService,
-        XpService $xpService,
-        ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
-    ) {
+        ) {
         parent::__construct($logger);
         $this->submissionModel = $submissionModel;
         $this->revenueModel = $revenueModel;
         $this->agreementModel = $agreementModel;
         $this->walletService = $walletService;
-        $this->notificationService = $notificationService;
-        $this->userService = $userService;
-        $this->referralService = $referralService;
+        $this->ratingService = $ratingService;
         $this->transactionWrapper = $transactionWrapper;
         $this->eventDispatcher = $eventDispatcher;
-        $this->cache = $cache;
         $this->settingService = $settingService;
-        $this->xpService = $xpService;
-        $this->cacheInvalidation = $cacheInvalidation;
-    }
+        }
 
     /**
      * ارسال محتوای جدید
@@ -174,8 +159,6 @@ EOT;
             $this->logInfo('content_submission', ['message' => "User {$userId} submitted content #{$submissionId}"]);
 
             // Clear cache
-            $this->clearUserCache($userId);
-
             return $this->successResponse(
                 'محتوای شما با موفقیت ثبت شد و در صف بررسی قرار گرفت.',
                 ['submission_id' => $submissionId]
@@ -230,73 +213,6 @@ EOT;
                 'approved_by' => $adminId,
             ]);
 
-            // 🏆 Award XP to content creator
-            try {
-                $this->xpService->award(
-                    (int)$submission->user_id,
-                    ModuleContext::YOUTUBE_TASKS,
-                    2.0,
-                    "content_approved_{$submissionId}"
-                );
-            } catch (\Throwable $e) {
-                $this->logger->warning('content.approval.xp_failed', [
-                    'user_id' => $submission->user_id,
-                    'submission_id' => $submissionId,
-                    'error' => $e->getMessage()
-                ]);
-            }
-
-            // 📊 Record approval score event
-            try {
-                $this->userScoreService->applyEventDelta(
-                    (int)$submission->user_id,
-                    'activity',
-                    10.0,  // Base points for content approval
-                    'content_approved',
-                    [
-                        'submission_id' => $submissionId,
-                        'title' => $submission->title,
-                        'approved_by' => $adminId
-                    ]
-                );
-            } catch (\Throwable $e) {
-                $this->logger->warning('content.approval.score_event_failed', [
-                    'user_id' => $submission->user_id,
-                    'submission_id' => $submissionId,
-                    'error' => $e->getMessage()
-                ]);
-            }
-
-            // 📝 Create initial rating record (for content quality tracking)
-            try {
-                $this->ratingService->rate(
-                    raterId: $adminId,
-                    ratedId: (int)$submission->user_id,
-                    refType: 'content_submission',
-                    refId: $submissionId,
-                    rating: 5,  // Default high rating for approved content
-                    review: 'محتوای تأیید‌شده از طرف ادمین',
-                    ratedType: 'user'
-                );
-            } catch (\Throwable $e) {
-                $this->logger->warning('content.approval.rating_failed', [
-                    'user_id' => $submission->user_id,
-                    'submission_id' => $submissionId,
-                    'error' => $e->getMessage()
-                ]);
-            }
-
-            // Send notification
-            $this->sendNotification(
-                $submission->user_id,
-                'محتوای شما تأیید شد',
-                sprintf(
-                    'محتوای «%s» تأیید شد. پس از انتشار در کانال‌های مجموعه، درآمد شما محاسبه خواهد شد.',
-                    $this->escapeText($submission->title)
-                ),
-                'content_approved'
-            );
-
             $this->eventDispatcher->dispatchAsync('content.approved', [
                 'submission_id' => $submissionId,
                 'user_id' => $submission->user_id,
@@ -304,8 +220,6 @@ EOT;
             ]);
 
             $this->logInfo('content_approval', ['message' => "Admin {$adminId} approved content #{$submissionId}"]);
-            $this->clearUserCache($submission->user_id);
-
             return $this->successResponse('محتوا با موفقیت تأیید شد.');
             
         } catch (\Throwable $e) {
@@ -368,39 +282,7 @@ EOT;
                 return $this->errorResponse('امتیاز ثبت نشد. شاید قبلاً نظر دادید.');
             }
 
-            // Award XP to rater for engagement
-            try {
-                $this->xpService->award(
-                    $userId,
-                    ModuleContext::YOUTUBE_TASKS,
-                    1.0,
-                    "content_rated_{$submissionId}"
-                );
-            } catch (\Throwable $e) {
-                $this->logger->warning('content.rating.xp_failed', [
-                    'user_id' => $userId,
-                    'submission_id' => $submissionId
-                ]);
-            }
-
-            $this->logInfo('content.rated', [
-                'rater_id' => $userId,
-                'creator_id' => $submission->user_id,
-                'submission_id' => $submissionId,
-                'rating' => $rating
-            ]);
-
-            return $this->successResponse('نظر شما با موفقیت ثبت شد.');
-
-        } catch (\Throwable $e) {
-            $this->logError('content.rating.failed', [
-                'user_id' => $userId,
-                'submission_id' => $submissionId,
-                'error' => $e->getMessage()
-            ]);
-            return $this->errorResponse('خطا در ثبت نظر.');
-        }
-    }
+            
 
     /**
      * رد محتوا (ادمین)
@@ -433,21 +315,14 @@ EOT;
                 'rejected_at' => date('Y-m-d H:i:s'),
             ]);
 
-            // Send notification
-            $this->sendNotification(
-                $submission->user_id,
-                'محتوای شما رد شد',
-                sprintf(
-                    "محتوای «%s» رد شد.\nدلیل: %s",
-                    $this->escapeText($submission->title),
-                    $this->escapeText($reason)
-                ),
-                'content_rejected'
-            );
+                        $this->eventDispatcher->dispatchAsync('content.rejected', [
+                'submission_id' => $submissionId,
+                'user_id' => $submission->user_id,
+                'rejected_by' => $adminId,
+                'reason' => $reason
+            ]);
 
-            $this->logInfo('content_rejection', ['message' => "Admin {$adminId} rejected content #{$submissionId}: {$reason}"]);
-            $this->clearUserCache($submission->user_id);
-
+$this->logInfo('content_rejection', ['message' => "Admin {$adminId} rejected content #{$submissionId}: {$reason}"]);
             return $this->successResponse('محتوا رد شد.');
             
         } catch (\Throwable $e) {
@@ -499,20 +374,14 @@ EOT;
                 'published_by' => $adminId,
             ]);
 
-            // Send notification
-            $this->sendNotification(
-                $submission->user_id,
-                'محتوای شما منتشر شد',
-                sprintf(
-                    'محتوای «%s» در کانال مجموعه منتشر شد. از ماه سوم درآمد شما محاسبه خواهد شد.',
-                    $this->escapeText($submission->title)
-                ),
-                'content_published'
-            );
+                        $this->eventDispatcher->dispatchAsync('content.rejected', [
+                'submission_id' => $submissionId,
+                'user_id' => $submission->user_id,
+                'rejected_by' => $adminId,
+                'reason' => $reason
+            ]);
 
-            $this->logInfo('content_publish', ['message' => "Admin {$adminId} published content #{$submissionId}"]);
-            $this->clearUserCache($submission->user_id);
-
+$this->logInfo('content_publish', ['message' => "Admin {$adminId} published content #{$submissionId}"]);
             return $this->successResponse('محتوا با موفقیت منتشر شد.');
             
         } catch (\Throwable $e) {
@@ -586,12 +455,14 @@ EOT;
                 throw new BusinessException('خطا در ثبت درآمد.');
             }
 
-            // Send notification
-            $this->sendRevenueNotification($submission, $revenueData, $period);
+                        $this->eventDispatcher->dispatchAsync('content.revenue_recorded', [
+                'submission_id' => $submissionId,
+                'user_id' => $submission->user_id,
+                'revenue_id' => $revenueId,
+                'period' => $period
+            ]);
 
-            $this->logInfo('content_revenue', ['message' => "Admin {$adminId} added revenue #{$revenueId} for content #{$submissionId}"]);
-            $this->clearUserCache($submission->user_id);
-
+$this->logInfo('content_revenue', ['message' => "Admin {$adminId} added revenue #{$revenueId} for content #{$submissionId}"]);
             return $this->successResponse('درآمد با موفقیت ثبت شد.', ['revenue_id' => $revenueId]);
             
         } catch (BusinessException $e) {
@@ -729,34 +600,14 @@ EOT;
                 'paid_by_admin'  => $adminId,
             ]);
             
-            // پورسانت ریفرال تولید محتوا
-            $userRecord = $this->userService->findById($revenue->user_id);
-            if ($userRecord && !empty($userRecord->referred_by)) {
-                $this->referralService->processCommission((int)$userRecord->referred_by, (float)$revenue->net_user_amount, $currency, [
-                    'action' => 'content_revenue_reward',
-                    'creator_id' => $revenue->user_id,
-                    'revenue_id' => $revenueId
-                ]);
-            }
-            
-            $this->db->commit();
-
-            $this->clearUserCache((int)$revenue->user_id);
-
-            $this->notificationService->send(
-                (int)$revenue->user_id,
-                \App\Models\Notification::TYPE_SUCCESS,
-                'پرداخت درآمد محتوا',
-                sprintf(
-                    'درآمد شما به مبلغ %s %s بابت دوره %s به کیف پول واریز شد.',
-                    number_format((float)$revenue->net_user_amount, $currency === 'usdt' ? 2 : 0),
-                    $currency === 'usdt' ? 'USDT' : 'تومان',
-                    $revenue->period
-                ),
-                ['action_url' => url("/user/content/revenues")]
-            );
-
-            return $this->successResponse('درآمد با موفقیت پرداخت شد.');
+                        $this->eventDispatcher->dispatchAsync('content.revenue_paid', [
+                'revenue_id' => $revenueId,
+                'user_id' => $revenue->user_id,
+                'submission_id' => $revenue->submission_id,
+                'amount' => $revenue->net_user_amount,
+                'currency' => $currency
+            ]);
+return $this->successResponse('درآمد با موفقیت پرداخت شد.');
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logError('content.revenue.pay_failed', [
@@ -784,20 +635,14 @@ EOT;
                 'suspended_at' => date('Y-m-d H:i:s'),
             ]);
 
-            $this->sendNotification(
-                $submission->user_id,
-                'محتوای شما تعلیق شد',
-                sprintf(
-                    "محتوای «%s» تعلیق شد.\nدلیل: %s",
-                    $this->escapeText($submission->title),
-                    $this->escapeText($reason)
-                ),
-                'content_suspended'
-            );
+                        $this->eventDispatcher->dispatchAsync('content.suspended', [
+                'submission_id' => $submissionId,
+                'user_id' => $submission->user_id,
+                'suspended_by' => $adminId,
+                'reason' => $reason
+            ]);
 
-            $this->logInfo('content_suspended', ['message' => "Admin {$adminId} suspended content #{$submissionId}: {$reason}"]);
-            $this->clearUserCache($submission->user_id);
-
+$this->logInfo('content_suspended', ['message' => "Admin {$adminId} suspended content #{$submissionId}: {$reason}"]);
             return $this->successResponse('محتوا تعلیق شد.');
             
         } catch (\Throwable $e) {
@@ -1125,75 +970,7 @@ EOT;
      * @param string $period
      * @return void
      */
-    private function sendRevenueNotification($submission, array $revenueData, string $period): void
-    {
-        $amount = number_format($revenueData['net_user_amount']);
-        $currencyLabel = $revenueData['currency'] === 'usdt' ? 'تتر' : 'تومان';
-        
-        $this->sendNotification(
-            $submission->user_id,
-            'درآمد جدید ثبت شد',
-            sprintf(
-                'درآمد دوره %s برای محتوای «%s»: %s %s',
-                $period,
-                $this->escapeText($submission->title),
-                $amount,
-                $currencyLabel
-            ),
-            'content_revenue'
-        );
-    }
-
-    /**
-     * ارسال نوتیفیکیشن
-     * 
-     * @param int $userId
-     * @param string $title
-     * @param string $message
-     * @param string $type
-     * @return void
-     */
-    private function sendNotification(int $userId, string $title, string $message, string $type): void
-    {
-        try {
-            $this->notificationService->send($userId, $type, $title, $message);
-        } catch (\Throwable $e) {
-            $this->logError('content.notification.failed', [
-                'user_id'   => $userId,
-                'title'     => $title,
-                'error'     => $e->getMessage(),
-                'exception' => \get_class($e),
-                'file'      => $e->getFile(),
-                'line'      => $e->getLine(),
-            ]);
-        }
-    }
-
-    /**
-     * پاک کردن کش کاربر
-     * 
-     * @param int $userId
-     * @return void
-     */
-    private function clearUserCache(int $userId): void
-    {
-        try {
-            if ($this->cacheInvalidation) {
-                $this->cacheInvalidation->invalidateUser($userId);
-            } else {
-                $this->cache->forget("user_content_stats_{$userId}");
-                $this->cache->forget("user_revenue_{$userId}");
-            }
-        } catch (\Throwable $e) {
-            $this->logError('content.cache_clear.failed', [
-                'user_id'   => $userId,
-                'error'     => $e->getMessage(),
-                'exception' => \get_class($e),
-                'file'      => $e->getFile(),
-                'line'      => $e->getLine(),
-            ]);
-        }
-    }
+    
 
     public function searchContent(string $q, array $filters, int $limit, int $offset): array
     {

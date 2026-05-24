@@ -70,6 +70,16 @@ class SettingService extends \App\Services\BaseService
             $this->cache->put(self::CACHE_KEY, $parsedSettings, self::CACHE_TTL);
             $this->runtimeCache = $parsedSettings;
 
+            // 🚀 DYNAMIC CONFIG FIX: تزریق مقادیر دیتابیس به کش تنظیمات حافظه
+            // با این کار تغییرات پنل ادمین فوراً در تابع config() در تمام طول عمر اپلیکیشن منعکس می‌شود
+            if (function_exists('config_set')) {
+                foreach ($parsedSettings as $k => $v) {
+                    if (str_contains((string)$k, '.')) {
+                        config_set($k, $v);
+                    }
+                }
+            }
+
             return $parsedSettings;
 
         } catch (\Throwable $e) {
@@ -102,27 +112,22 @@ class SettingService extends \App\Services\BaseService
         }
 
         try {
-            $this->db->beginTransaction();
-
             // 🚀 BUG FIX [H-06]: Pessimistic Locking (SELECT FOR UPDATE)
             // جلوگیری از Race Condition هنگام تغییر تنظیمات حساس توسط چند ادمین
-            $this->db->query("SELECT id FROM system_settings WHERE `key` = ? FOR UPDATE", [$key]);
-
-            $ok = $this->model->set($key, $value);
-            
-            if ($ok) {
-                $this->db->commit();
-                $this->clearCache();
-                return true;
-            }
-
-            $this->db->rollBack();
-            return false;
+            return $this->transaction(function($db) use ($key, $value) {
+                $db->query("SELECT id FROM system_settings WHERE `key` = ? FOR UPDATE", [$key]);
+                
+                $ok = $this->model->set($key, $value);
+                
+                if ($ok) {
+                    $this->clearCache();
+                    return true;
+                }
+                
+                return false;
+            });
 
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
             $this->logger->error('settings.set_failed', ['key' => $key, 'error' => $e->getMessage()]);
             return false;
         }
@@ -146,28 +151,23 @@ class SettingService extends \App\Services\BaseService
         }
 
         try {
-            $this->db->beginTransaction();
-
             // 🚀 BUG FIX [H-06]: Locking multiple keys
-            $keys = array_keys($settings);
-            $placeholders = implode(',', array_fill(0, count($keys), '?'));
-            $this->db->query("SELECT id FROM system_settings WHERE `key` IN ($placeholders) FOR UPDATE", $keys);
+            return $this->transaction(function($db) use ($settings) {
+                $keys = array_keys($settings);
+                $placeholders = implode(',', array_fill(0, count($keys), '?'));
+                $db->query("SELECT id FROM system_settings WHERE `key` IN ($placeholders) FOR UPDATE", $keys);
 
-            $ok = $this->model->setMany($settings);
-            
-            if ($ok) {
-                $this->db->commit();
-                $this->clearCache();
-                return true;
-            }
+                $ok = $this->model->setMany($settings);
+                
+                if ($ok) {
+                    $this->clearCache();
+                    return true;
+                }
 
-            $this->db->rollBack();
-            return false;
+                return false;
+            });
 
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
             $this->logger->error('settings.set_many_failed', ['keys' => array_keys($settings), 'error' => $e->getMessage()]);
             return false;
         }
@@ -243,6 +243,11 @@ class SettingService extends \App\Services\BaseService
     {
         $this->runtimeCache = null;
         $this->cache->forget(self::CACHE_KEY);
+        
+        // پاک کردن کش در سطح توابع هلوپر برای ریلود شدن داینامیک تنظیمات
+        if (function_exists('config_reload')) {
+            config_reload();
+        }
     }
 
     // =========================================================================

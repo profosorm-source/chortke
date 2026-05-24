@@ -65,65 +65,62 @@ class ProfileService extends \App\Services\BaseService
 
         if (empty($updateData)) return false;
 
-        $this->model->beginTransaction();
         try {
-            // Lock user row (CRIT-01)
-            $current = $this->model->getDb()->fetch(
-                "SELECT id, mobile, national_id FROM users WHERE id = ? FOR UPDATE",
-                [$userId]
-            );
-
-            if (!$current) {
-                $this->model->rollback();
+            return $this->transaction(function() use ($userId, $updateData) {
+                // Lock user row (CRIT-01)
+                $current = $this->model->getDb()->fetch(
+                    "SELECT id, mobile, national_id FROM users WHERE id = ? FOR UPDATE",
+                    [$userId]
+                );
+    
+                if (!$current) {
+                    return false;
+                }
+    
+                // Check uniqueness under FOR UPDATE lock
+                if (isset($updateData['mobile'])) {
+                    $exists = $this->model->getDb()->fetch(
+                        "SELECT id FROM users WHERE mobile = ? AND id != ? FOR UPDATE",
+                        [$updateData['mobile'], $userId]
+                    );
+                    if ($exists) {
+                        throw new \RuntimeException('شماره موبایل قبلاً ثبت شده است');
+                    }
+                }
+                if (isset($updateData['national_id'])) {
+                    $exists = $this->model->getDb()->fetch(
+                        "SELECT id FROM users WHERE national_id = ? AND id != ? FOR UPDATE",
+                        [$updateData['national_id'], $userId]
+                    );
+                    if ($exists) {
+                        throw new \RuntimeException('کد ملی قبلاً ثبت شده است');
+                    }
+                }
+    
+                $updateData['updated_at'] = date('Y-m-d H:i:s');
+                $success = $this->model->update($userId, $updateData);
+                
+                if ($success) {
+                    if ($this->cacheInvalidation) {
+                        $this->cacheInvalidation->invalidateUser($userId);
+                    }
+    
+                    $maskedData = [];
+                    foreach ($updateData as $k => $v) {
+                        $maskedData[$k] = $this->maskPII($k, $v);
+                    }
+    
+                    $this->logger->info('user.profile.updated', [
+                        'user_id' => $userId,
+                        'fields' => array_keys($updateData),
+                        'values_masked' => $maskedData
+                    ]);
+                    return true;
+                }
+    
                 return false;
-            }
-
-            // Check uniqueness under FOR UPDATE lock
-            if (isset($updateData['mobile'])) {
-                $exists = $this->model->getDb()->fetch(
-                    "SELECT id FROM users WHERE mobile = ? AND id != ? FOR UPDATE",
-                    [$updateData['mobile'], $userId]
-                );
-                if ($exists) {
-                    throw new \RuntimeException('شماره موبایل قبلاً ثبت شده است');
-                }
-            }
-            if (isset($updateData['national_id'])) {
-                $exists = $this->model->getDb()->fetch(
-                    "SELECT id FROM users WHERE national_id = ? AND id != ? FOR UPDATE",
-                    [$updateData['national_id'], $userId]
-                );
-                if ($exists) {
-                    throw new \RuntimeException('کد ملی قبلاً ثبت شده است');
-                }
-            }
-
-            $updateData['updated_at'] = date('Y-m-d H:i:s');
-            $success = $this->model->update($userId, $updateData);
-            if ($success) {
-                $this->model->commit();
-
-                if ($this->cacheInvalidation) {
-                    $this->cacheInvalidation->invalidateUser($userId);
-                }
-
-                $maskedData = [];
-                foreach ($updateData as $k => $v) {
-                    $maskedData[$k] = $this->maskPII($k, $v);
-                }
-
-                $this->logger->info('user.profile.updated', [
-                    'user_id' => $userId,
-                    'fields' => array_keys($updateData),
-                    'values_masked' => $maskedData
-                ]);
-                return true;
-            }
-
-            $this->model->rollback();
-            return false;
+            });
         } catch (\Throwable $e) {
-            $this->model->rollback();
             $this->logger->error('user.profile.update_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
             return false;
         }
@@ -167,15 +164,14 @@ class ProfileService extends \App\Services\BaseService
 
     public function updateMultipleSettings(int $userId, array $settings): bool
     {
-        $this->model->beginTransaction();
         try {
-            foreach ($settings as $key => $value) {
-                $this->updateSetting($userId, $key, $value);
-            }
-            $this->model->commit();
-            return true;
+            return $this->transaction(function() use ($userId, $settings) {
+                foreach ($settings as $key => $value) {
+                    $this->updateSetting($userId, $key, $value);
+                }
+                return true;
+            });
         } catch (\Throwable $e) {
-            $this->model->rollback();
             $this->logger->error('user.settings.batch_update_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
             return false;
         }

@@ -16,26 +16,23 @@ class TicketService extends \App\Services\BaseService
     private Database $db;
     private Ticket $ticketModel;
     private TicketMessage $messageModel;
-    private NotificationServiceInterface $notificationService;
-    private \Core\RateLimiter $rateLimiter; // 🛡️ مقابله با سوءاستفاده
-    private \Core\Redis $redis;
+    private \Core\EventDispatcher $events;
+    private \Core\RateLimiter $rateLimiter;
     
     public function __construct(
         Ticket $ticketModel,
         TicketMessage $messageModel,
         Database $db,
         LoggerInterface $logger,
-        NotificationServiceInterface $notificationService,
-        \Core\RateLimiter $rateLimiter, // 🛡️
-        \Core\Redis $redis
+        \Core\EventDispatcher $events,
+        \Core\RateLimiter $rateLimiter
     ) {
         parent::__construct($logger);
         $this->ticketModel = $ticketModel;
         $this->messageModel = $messageModel;
         $this->db = $db;
-        $this->notificationService = $notificationService;
+        $this->events = $events;
         $this->rateLimiter = $rateLimiter;
-        $this->redis = $redis;
     }
     
     /**
@@ -85,20 +82,8 @@ class TicketService extends \App\Services\BaseService
             ];
         }
         
-        // 🛡️ مقابله با سوءاستفاده: ریت لیمیت اتمیک ثبت تیکت جدید (حداکثر ۳ تیکت در ساعت جهت مقابله با اسپم و Race Condition)
-        $rateKey = "ticket_creation_limit:{$userId}";
-        try {
-            $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
-        } catch (\Throwable $e) {
-            $this->logger->critical('redis_down_fallback_to_db', ['user_id' => $userId, 'action' => 'ticket_create']);
-            $count = (int)$this->db->query(
-                "SELECT COUNT(*) FROM tickets WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)",
-                [$userId]
-            )->fetchColumn();
-            $count++; // شبیه‌سازی increment
-        }
-        
-        if ($count > 3) {
+                // 🛡️ مقابله با سوءاستفاده: ریت لیمیت با استفاده از سرویس استاندارد
+        if (!$this->rateLimiter->attempt("ticket_creation:{$userId}", 3, 3600)) {
             $this->logger->warning('ticket.rate_limit_exceeded', ['user_id' => $userId]);
             return [
                 'success' => false,
@@ -129,61 +114,52 @@ class TicketService extends \App\Services\BaseService
         // Dynamic Metadata serialization
         $metadata = isset($data['metadata']) ? json_encode($data['metadata'], JSON_UNESCAPED_UNICODE) : null;
 
-        $this->db->beginTransaction();
-        
         try {
-            // ایجاد تیکت
-            $ticketId = $this->ticketModel->create([
-                'user_id' => $userId,
-                'category_id' => $categoryId,
-                'subject' => $subject,
-                'priority' => $priority,
-                'metadata' => $metadata
-            ]);
-            
-            if (!$ticketId) {
-                throw new \Exception('خطا در ایجاد تیکت');
-            }
-            
-            // ایجاد پیام اول
-            $this->messageModel->create([
-                'ticket_id' => $ticketId,
-                'user_id' => $userId,
-                'message' => htmlspecialchars((string)$data['message'], ENT_QUOTES, 'UTF-8', false),
-                'attachments' => $data['attachments'] ?? [],
-                'is_admin' => false
-            ]);
-            
-            // لاگ نویسی دقیق بدون آرایه تکراری بی‌اثر
-            $this->logger->activity('ticket_created', "تیکت جدید ایجاد شد: {$subject}", $userId, [
-                'ticket_id' => $ticketId
-            ]);
-            
-            // نوتیفیکیشن به ادمین (🛡️ HIGH-13: درپوش try-catch جهت ممانعت از بازگشت تراکنش دیتابیس در صورت بروز مشکل شبکه)
-            $escapedSubject = htmlspecialchars($subject, ENT_QUOTES, 'UTF-8', false);
-            try {
-                $this->notificationService->sendToAdmins('info', 'تیکت جدید ثبت شد', "تیکت جدید ثبت شد: {$escapedSubject}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
-            } catch (\Throwable $nte) {
-                $this->logger->error('ticket.create.notification.failed', [
-                    'ticket_id' => $ticketId,
-                    'error' => $nte->getMessage()
+            return $this->transaction(function() use ($userId, $categoryId, $subject, $priority, $metadata, $data) {
+                // ایجاد تیکت
+                $ticketId = $this->ticketModel->create([
+                    'user_id' => $userId,
+                    'category_id' => $categoryId,
+                    'subject' => $subject,
+                    'priority' => $priority,
+                    'metadata' => $metadata
                 ]);
-            }
-            
-            $this->db->commit();
-            
-            return [
-                'success' => true,
-                'ticket_id' => $ticketId,
-                'message' => 'تیکت شما با موفقیت ثبت شد.'
-            ];
+                
+                if (!$ticketId) {
+                    throw new \Exception('خطا در ایجاد تیکت');
+                }
+                
+                // ایجاد پیام اول
+                $this->messageModel->create([
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                    'message' => htmlspecialchars((string)$data['message'], ENT_QUOTES, 'UTF-8', false),
+                    'attachments' => $data['attachments'] ?? [],
+                    'is_admin' => false
+                ]);
+                
+                // لاگ نویسی دقیق بدون آرایه تکراری بی‌اثر
+                $this->logger->activity('ticket_created', "تیکت جدید ایجاد شد: {$subject}", $userId, [
+                    'ticket_id' => $ticketId
+                ]);
+                
+                // صدور رویداد ایجاد تیکت
+                $this->events->dispatchAsync('ticket.created', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                    'subject' => $subject,
+                    'category_id' => $categoryId,
+                    'priority' => $priority
+                ]);
+        
+                return [
+                    'success' => true,
+                    'ticket_id' => $ticketId,
+                    'message' => 'تیکت شما با موفقیت ثبت شد.'
+                ];
+            });
             
         } catch (\Exception $e) {
-            $this->db->rollBack();
-            
-            // 🛡️ CRITICAL-12: Restore rate limit counter if the ticket creation fails
-            $this->redis->decr("ticket_creation_limit:{$userId}");
-            
             $this->logger->error('ticket.create.failed', [
                 'user_id' => $userId,
                 'error' => $e->getMessage(),
@@ -202,26 +178,9 @@ class TicketService extends \App\Services\BaseService
      */
     public function reply(int $ticketId, int $userId, string $message, bool $isAdmin = false, array $attachments = []): array
     {
-        // 🛡️ HIGH-14: ریت لیمیت پیش از شروع تراکنش دیتابیس جهت مقابله با فرسایش استخر اتصالات
+                // 🛡️ ریت لیمیت استاندارد برای جلوگیری از اسپم پاسخ
         if (!$isAdmin) {
-            $rateKey = "ticket_reply_limit:{$userId}";
-            try {
-                $count = $this->incrementRedisCounterWithExpire($rateKey, 3600);
-            } catch (\Throwable $e) {
-                $this->logger->critical('redis_down_fallback_to_db', ['user_id' => $userId, 'action' => 'ticket_reply']);
-                $count = (int)$this->db->query(
-                    "SELECT COUNT(*) FROM ticket_messages WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)",
-                    [$userId]
-                )->fetchColumn();
-                $count++;
-            }
-            
-            if ($count > 5) {
-                try {
-                    $this->redis->decr($rateKey);
-                } catch (\Throwable $e) {
-                    // Ignore if redis is down
-                }
+            if (!$this->rateLimiter->attempt("ticket_reply:{$userId}", 5, 3600)) {
                 $this->logger->warning('ticket.reply.rate_limit_exceeded', ['user_id' => $userId, 'ticket_id' => $ticketId]);
                 return [
                     'success' => false,
@@ -231,111 +190,58 @@ class TicketService extends \App\Services\BaseService
         }
 
         // 🛡️ Item 6: Pessimistic Locking inside Transaction
-        $this->db->beginTransaction();
-        
+        // 🛡️ Item 6: Pessimistic Locking inside Transaction
         try {
-            $ticket = $this->db->fetch("SELECT * FROM tickets WHERE id = ? FOR UPDATE", [$ticketId]);
-            
-            if (!$ticket) {
-                $this->db->rollBack();
-                if (!$isAdmin) {
-                    $this->redis->decr("ticket_reply_limit:{$userId}");
+            return $this->transaction(function() use ($ticketId, $userId, $message, $isAdmin, $attachments) {
+                $ticket = $this->db->fetch("SELECT * FROM tickets WHERE id = ? FOR UPDATE", [$ticketId]);
+                
+                if (!$ticket) {
+                    return ['success' => false, 'message' => 'تیکت یافت نشد.'];
                 }
-                return ['success' => false, 'message' => 'تیکت یافت نشد.'];
-            }
-            
-            // بررسی دسترسی
-            if (!$isAdmin && (int)$ticket->user_id !== $userId) {
-                $this->db->rollBack();
-                if (!$isAdmin) {
-                    $this->redis->decr("ticket_reply_limit:{$userId}");
+                
+                // بررسی دسترسی
+                if (!$isAdmin && (int)$ticket->user_id !== $userId) {
+                    return ['success' => false, 'message' => 'دسترسی غیرمجاز.'];
                 }
-                return ['success' => false, 'message' => 'دسترسی غیرمجاز.'];
-            }
-            
-            // بررسی وضعیت
-            if ($ticket->status === 'closed' && !$isAdmin) {
-                $this->db->rollBack();
-                if (!$isAdmin) {
-                    $this->redis->decr("ticket_reply_limit:{$userId}");
+                
+                // بررسی وضعیت
+                if ($ticket->status === 'closed' && !$isAdmin) {
+                    return ['success' => false, 'message' => 'تیکت بسته شده است.'];
                 }
-                return ['success' => false, 'message' => 'تیکت بسته شده است.'];
-            }
 
-            // 🛡️ مقابله با سوءاستفاده: ارزیابی طول پیام
-            $msgLen = mb_strlen($message, 'UTF-8');
-            if ($msgLen > 5000) {
-                $this->db->rollBack();
-                if (!$isAdmin) {
-                    $this->redis->decr("ticket_reply_limit:{$userId}");
+                // 🛡️ مقابله با سوءاستفاده: ارزیابی طول پیام
+                $msgLen = mb_strlen($message, 'UTF-8');
+                if ($msgLen > 5000) {
+                    return ['success' => false, 'message' => 'متن پاسخ نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
                 }
-                return ['success' => false, 'message' => 'متن پاسخ نباید بیشتر از ۵۰۰۰ کاراکتر باشد.'];
-            }
 
-            // ایجاد پیام
-            $this->messageModel->create([
-                'ticket_id' => $ticketId,
-                'user_id' => $userId,
-                'message' => htmlspecialchars($message, ENT_QUOTES, 'UTF-8', false),
-                'attachments' => $attachments,
-                'is_admin' => $isAdmin
-            ]);
-            
-            // بروزرسانی تیکت
-            $this->ticketModel->updateLastReply($ticketId, $isAdmin ? 'admin' : 'user');
-            
-            // 🛡️ RC-03: دیبانس نوتیفیکیشن‌ها با استفاده از قفل ردیس ۶۰ ثانیه‌ای به ازای هر تیکت جهت جلوگیری از اسپم
-            $notifLockKey = "ticket_notification_lock:{$ticketId}:" . ($isAdmin ? 'to_user' : 'to_admins');
-            $canSendNotification = true;
-            try {
-                if ($this->redis->get($notifLockKey)) {
-                    $canSendNotification = false;
-                } else {
-                    $this->redis->setex($notifLockKey, 60, '1');
-                }
-            } catch (\Exception $redisEx) {
-                $this->logger->warning('ticket.reply.redis_failed_lock', ['error' => $redisEx->getMessage()]);
-                // ✅ در صورت قطعی ردیس، دیفالت را به false تغییر دهید تا ایمیل/نوتیفیکیشن اسپم نشود (Item 10)
-                $canSendNotification = false;
-            }
-
-            if ($canSendNotification) {
-                // نوتیفیکیشن صریح از طریق وابستگی تزریق شده سازنده (Constructor DI)
-                // 🛡️ HIGH-13: درپوش try-catch جهت ممانعت از بازگشت تراکنش دیتابیس در صورت بروز مشکل شبکه
-                try {
-                    if ($isAdmin) {
-                        $this->notificationService->send($ticket->user_id, 'info', "پاسخ جدید برای تیکت: {$ticket->subject}", "/tickets/show/{$ticketId}");
-                    } else {
-                        $this->notificationService->sendToAdmins('info', 'پاسخ جدید تیکت', "پاسخ جدید از کاربر در تیکت #{$ticketId}", ['action_url' => "/admin/tickets/show/{$ticketId}"]);
-                    }
-                } catch (\Throwable $nte) {
-                    $this->logger->error('ticket.reply.notification.failed', [
-                        'ticket_id' => $ticketId,
-                        'error' => $nte->getMessage()
-                    ]);
-                }
-            } else {
-                $this->logger->info('ticket.reply.notification_debounced', [
+                // ایجاد پیام
+                $this->messageModel->create([
                     'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                    'message' => htmlspecialchars($message, ENT_QUOTES, 'UTF-8', false),
+                    'attachments' => $attachments,
                     'is_admin' => $isAdmin
                 ]);
-            }
-            
-            $this->db->commit();
-            
-            return [
-                'success' => true,
-                'message' => 'پاسخ شما ارسال شد.'
-            ];
+                
+                // بروزرسانی تیکت
+                $this->ticketModel->updateLastReply($ticketId, $isAdmin ? 'admin' : 'user');
+                
+                // صدور رویداد ارسال پاسخ - دیبانس در لیسنر انجام خواهد شد
+                $this->events->dispatchAsync('ticket.replied', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                    'is_admin' => $isAdmin,
+                    'subject' => $ticket->subject
+                ]);
+                
+                return [
+                    'success' => true,
+                    'message' => 'پاسخ با موفقیت ثبت شد.'
+                ];
+            });
             
         } catch (\Exception $e) {
-            $this->db->rollBack();
-            
-            // 🛡️ CRITICAL-13: Restore rate limit counter if ticket reply fails
-            if (!$isAdmin) {
-                $this->redis->decr("ticket_reply_limit:{$userId}");
-            }
-            
             $this->logger->error('ticket.reply.failed', [
                 'ticket_id' => $ticketId,
                 'user_id' => $userId,
@@ -358,22 +264,7 @@ class TicketService extends \App\Services\BaseService
         return $this->ticketModel->getUserTickets($userId, $status, $page, $perPage);
     }
 
-    /**
-     * Increment a Redis counter and set TTL only on the first increment.
-     * This avoids the incr+expire race condition and keeps a fixed-window counter.
-     */
-    private function incrementRedisCounterWithExpire(string $rateKey, int $ttl): int
-    {
-        $script = <<<'LUA'
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
-    redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return count
-LUA;
-        $result = $this->redis->eval($script, [$rateKey, $ttl], 1);
-        return is_int($result) ? $result : (int)$result;
-    }
+    
 
     /**
      * ثبت تخصصی گزارش باگ به عنوان یک تیکت با متادیتا
@@ -557,46 +448,44 @@ LUA;
         $this->db->beginTransaction();
 
         try {
-            // ✅ قفل بدبینانه برای جلوگیری از Race Condition
-            $ticket = $this->db->query(
-                "SELECT id, status FROM tickets WHERE id = ? FOR UPDATE",
-                [$ticketId]
-            )->fetch(\PDO::FETCH_OBJ);
-
-            if (!$ticket) {
-                $this->db->rollBack();
-                return false;
-            }
-
-            // 🛡️ RC-05: بررسی کنید که آیا وضعیت واقعاً تغییر کرده است تا از ثبت تاریخچه تکراری جلوگیری شود
-            if ($ticket->status === $status) {
-                $this->db->commit();
-                return true;
-            }
-
-            $oldStatus = $ticket->status;
-
-            $ok = $this->ticketModel->updateStatus($ticketId, $status);
-            if ($ok) {
-                // ثبت در تاریخچه تغییرات وضعیت تیکت
-                $this->db->table('ticket_status_history')->insert([
-                    'ticket_id' => $ticketId,
-                    'old_status' => $oldStatus,
-                    'new_status' => $status,
-                    'changed_by' => $adminId,
-                    'changed_at' => date('Y-m-d H:i:s')
-                ]);
-
-                $this->logger->activity('ticket_status_updated', "وضعیت تیکت #{$ticketId} از {$oldStatus} به {$status} تغییر یافت", $adminId, [
-                    'old_status' => $oldStatus,
-                    'new_status' => $status
-                ]);
-            }
-
-            $this->db->commit();
-            return $ok;
+            return $this->transaction(function() use ($ticketId, $status, $adminId) {
+                // ✅ قفل بدبینانه برای جلوگیری از Race Condition
+                $ticket = $this->db->query(
+                    "SELECT id, status FROM tickets WHERE id = ? FOR UPDATE",
+                    [$ticketId]
+                )->fetch(\PDO::FETCH_OBJ);
+    
+                if (!$ticket) {
+                    return false;
+                }
+    
+                // 🛡️ RC-05: بررسی کنید که آیا وضعیت واقعاً تغییر کرده است تا از ثبت تاریخچه تکراری جلوگیری شود
+                if ($ticket->status === $status) {
+                    return true;
+                }
+    
+                $oldStatus = $ticket->status;
+    
+                $ok = $this->ticketModel->updateStatus($ticketId, $status);
+                if ($ok) {
+                    // ثبت در تاریخچه تغییرات وضعیت تیکت
+                    $this->db->table('ticket_status_history')->insert([
+                        'ticket_id' => $ticketId,
+                        'old_status' => $oldStatus,
+                        'new_status' => $status,
+                        'changed_by' => $adminId,
+                        'changed_at' => date('Y-m-d H:i:s')
+                    ]);
+    
+                    $this->logger->activity('ticket_status_updated', "وضعیت تیکت #{$ticketId} از {$oldStatus} به {$status} تغییر یافت", $adminId, [
+                        'old_status' => $oldStatus,
+                        'new_status' => $status
+                    ]);
+                }
+    
+                return $ok;
+            });
         } catch (\Exception $e) {
-            $this->db->rollBack();
             $this->logger->error('ticket.status.update.failed', [
                 'ticket_id' => $ticketId,
                 'error' => $e->getMessage()
@@ -610,39 +499,35 @@ LUA;
      */
     public function updatePriority(int $ticketId, string $priority, int $adminId): bool
     {
-        $this->db->beginTransaction();
-
         try {
-            // ✅ قفل بدبینانه برای جلوگیری از Race Condition (TOCTOU)
-            $ticket = $this->db->query(
-                "SELECT id, priority FROM tickets WHERE id = ? FOR UPDATE",
-                [$ticketId]
-            )->fetch(\PDO::FETCH_OBJ);
-
-            if (!$ticket) {
-                $this->db->rollBack();
-                return false;
-            }
-
-            if ($ticket->priority === $priority) {
-                $this->db->commit();
-                return true;
-            }
-
-            $oldPriority = $ticket->priority;
-
-            $ok = $this->ticketModel->update($ticketId, ['priority' => $priority]);
-            if ($ok) {
-                $this->logger->activity('ticket_priority_updated', "اولویت تیکت #{$ticketId} از {$oldPriority} به {$priority} تغییر یافت", $adminId, [
-                    'old_priority' => $oldPriority,
-                    'new_priority' => $priority
-                ]);
-            }
-
-            $this->db->commit();
-            return $ok;
+            return $this->transaction(function() use ($ticketId, $priority, $adminId) {
+                // ✅ قفل بدبینانه برای جلوگیری از Race Condition (TOCTOU)
+                $ticket = $this->db->query(
+                    "SELECT id, priority FROM tickets WHERE id = ? FOR UPDATE",
+                    [$ticketId]
+                )->fetch(\PDO::FETCH_OBJ);
+    
+                if (!$ticket) {
+                    return false;
+                }
+    
+                if ($ticket->priority === $priority) {
+                    return true;
+                }
+    
+                $oldPriority = $ticket->priority;
+    
+                $ok = $this->ticketModel->update($ticketId, ['priority' => $priority]);
+                if ($ok) {
+                    $this->logger->activity('ticket_priority_updated', "اولویت تیکت #{$ticketId} از {$oldPriority} به {$priority} تغییر یافت", $adminId, [
+                        'old_priority' => $oldPriority,
+                        'new_priority' => $priority
+                    ]);
+                }
+    
+                return $ok;
+            });
         } catch (\Exception $e) {
-            $this->db->rollBack();
             $this->logger->error('ticket.priority.update.failed', [
                 'ticket_id' => $ticketId,
                 'error' => $e->getMessage()
@@ -656,69 +541,50 @@ LUA;
      */
     public function assignTo(int $ticketId, int $newAdminId): bool
     {
-        $this->db->beginTransaction();
-        
         try {
-            // دریافت تیکت جهت بررسی تخصیص قبلی
-            $ticket = $this->ticketModel->findById($ticketId);
-            if (!$ticket) {
-                $this->db->rollBack();
-                return false;
-            }
-            
-            $oldAdminId = $ticket->assigned_to ? (int)$ticket->assigned_to : null;
-            
-            // تخصیص تیکت به ادمین جدید
-            $ok = $this->ticketModel->assign($ticketId, $newAdminId);
-            if (!$ok) {
-                $this->db->rollBack();
-                return false;
-            }
-            
-            // ثبت در جدول تاریخچه تغییر تخصیص
-            $this->db->table('ticket_assignment_history')->insert([
-                'ticket_id' => $ticketId,
-                'old_admin_id' => $oldAdminId,
-                'new_admin_id' => $newAdminId > 0 ? $newAdminId : null,
-                'changed_by' => user_id() > 0 ? user_id() : 1,
-                'changed_at' => date('Y-m-d H:i:s')
-            ]);
-            
-            // اطلاع‌رسانی به ادمین قبلی در صورت انتقال تیکت
-            if ($oldAdminId && $oldAdminId !== $newAdminId) {
-                $this->notificationService->send(
-                    $oldAdminId,
-                    \App\Models\Notification::TYPE_SECURITY ?? 'system',
-                    'تغییر تخصیص تیکت',
-                    "تیکت #{$ticketId} از کارتابل شما برداشته و به مدیر دیگری واگذار شد.",
-                    ['ticket_id' => $ticketId]
-                );
-            }
-            
-            // اطلاع‌رسانی به ادمین جدید
-            if ($newAdminId > 0 && $newAdminId !== $oldAdminId) {
-                $this->notificationService->send(
-                    $newAdminId,
-                    \App\Models\Notification::TYPE_INFO ?? 'info',
-                    'تیکت جدید اختصاص داده شد',
-                    "تیکت #{$ticketId} با عنوان \"" . $ticket->subject . "\" به شما محول گردید.",
-                    ['action_url' => "/admin/tickets/show/{$ticketId}", 'ticket_id' => $ticketId]
-                );
-            }
-            
-            $this->db->commit();
-            
-            // ثبت در لاگ فعالیت سیستم
-            $this->logger->activity('ticket_assigned', "تیکت #{$ticketId} به مدیر #{$newAdminId} تخصیص یافت", user_id() ?: 1, [
-                'ticket_id' => $ticketId,
-                'old_admin_id' => $oldAdminId,
-                'new_admin_id' => $newAdminId
-            ]);
+            $this->transaction(function() use ($ticketId, $newAdminId) {
+                // دریافت تیکت جهت بررسی تخصیص قبلی
+                $ticket = $this->ticketModel->findById($ticketId);
+                if (!$ticket) {
+                    throw new \Exception('Ticket not found');
+                }
+                
+                $oldAdminId = $ticket->assigned_to ? (int)$ticket->assigned_to : null;
+                
+                // تخصیص تیکت به ادمین جدید
+                $ok = $this->ticketModel->assign($ticketId, $newAdminId);
+                if (!$ok) {
+                    throw new \Exception('Failed to assign ticket');
+                }
+                
+                // ثبت در جدول تاریخچه تغییر تخصیص
+                $this->db->table('ticket_assignment_history')->insert([
+                    'ticket_id' => $ticketId,
+                    'old_admin_id' => $oldAdminId,
+                    'new_admin_id' => $newAdminId > 0 ? $newAdminId : null,
+                    'changed_by' => user_id() > 0 ? user_id() : 1,
+                    'changed_at' => date('Y-m-d H:i:s')
+                ]);
+                
+                // صدور رویداد تخصیص تیکت
+                $this->events->dispatchAsync('ticket.assigned', [
+                    'ticket_id' => $ticketId,
+                    'old_admin_id' => $oldAdminId,
+                    'new_admin_id' => $newAdminId,
+                    'subject' => $ticket->subject
+                ]);
+                
+                // ثبت در لاگ فعالیت سیستم
+                $this->logger->activity('ticket_assigned', "تیکت #{$ticketId} به مدیر #{$newAdminId} تخصیص یافت", user_id() ?: 1, [
+                    'ticket_id' => $ticketId,
+                    'old_admin_id' => $oldAdminId,
+                    'new_admin_id' => $newAdminId
+                ]);
+            });
             
             return true;
             
         } catch (\Exception $e) {
-            $this->db->rollBack();
             $this->logger->error('ticket.assign.failed', ['error' => $e->getMessage()]);
             return false;
         }
@@ -896,5 +762,18 @@ LUA;
             'items' => (clone $query)->orderBy('tickets.created_at', 'DESC')
                                      ->limit($limit)->offset($offset)->get() ?? []
         ];
+    }
+
+    /**
+     * پیدا کردن پیام مرتبط با فایل پیوست
+     */
+    public function getAttachmentMessage(string $filename): ?object
+    {
+        return $this->db->query(
+            "SELECT tm.ticket_id, tm.user_id, tm.is_admin
+             FROM ticket_messages tm
+             WHERE JSON_CONTAINS(tm.attachments, JSON_QUOTE(?), '$[*].path')",
+            [$filename]
+        )->fetch(\PDO::FETCH_OBJ) ?: null;
     }
 }

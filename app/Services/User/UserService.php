@@ -185,106 +185,83 @@ class UserService extends \App\Services\BaseService
 
     public function updateUser(int $id, array $data): array
     {
-        $startedTransaction = !$this->db->inTransaction();
-        if ($startedTransaction) {
-            $this->db->beginTransaction();
-        }
         try {
-            if (isset($data['email'])) {
-                $existing = $this->findByEmail($data['email']);
-                if ($existing && (int)$existing->id !== $id) {
-                    if ($startedTransaction && $this->db->inTransaction()) {
-                        $this->db->rollBack();
+            return $this->transaction(function() use ($id, $data) {
+                if (isset($data['email'])) {
+                    $existing = $this->findByEmail($data['email']);
+                    if ($existing && (int)$existing->id !== $id) {
+                        return [
+                            'success' => false, 
+                            'errors' => ['email' => ['این ایمیل قبلاً توسط کاربر دیگری ثبت شده است']]
+                        ];
                     }
-                    return [
-                        'success' => false, 
-                        'errors' => ['email' => ['این ایمیل قبلاً توسط کاربر دیگری ثبت شده است']]
-                    ];
                 }
-            }
-
-            // ✅ Enforce Role Hierarchy inside service layer (Defense-in-Depth against privilege escalation)
-            if (isset($data['role']) || isset($data['status'])) {
-                $actorId = function_exists('user_id') ? user_id() : null;
-                if ($actorId) {
-                    $actor = $this->model->findById($actorId);
-                    $target = $this->model->findById($id);
-                    if ($actor && $target) {
-                        $hierarchy = ['user' => 0, 'admin' => 1, 'super_admin' => 2];
-                        $actorLevel = $hierarchy[$actor->role ?? 'user'] ?? 0;
-                        $targetLevel = $hierarchy[$target->role ?? 'user'] ?? 0;
-                        
-                        // Non-super_admins cannot edit other admins
-                        if ($actorLevel < 2 && $targetLevel >= 1 && $id !== $actorId) {
-                            if ($startedTransaction && $this->db->inTransaction()) {
-                                $this->db->rollBack();
-                            }
-                            return [
-                                'success' => false,
-                                'message' => 'شما مجاز به ویرایش سایر مدیران نیستید.'
-                            ];
-                        }
-                        
-                        // Cannot assign a role higher than the actor's current role
-                        if (isset($data['role'])) {
-                            $newRoleLevel = $hierarchy[$data['role']] ?? 0;
-                            if ($newRoleLevel > $actorLevel) {
-                                if ($startedTransaction && $this->db->inTransaction()) {
-                                    $this->db->rollBack();
-                                }
+    
+                // ✅ Enforce Role Hierarchy inside service layer (Defense-in-Depth against privilege escalation)
+                if (isset($data['role']) || isset($data['status'])) {
+                    $actorId = function_exists('user_id') ? user_id() : null;
+                    if ($actorId) {
+                        $actor = $this->model->findById($actorId);
+                        $target = $this->model->findById($id);
+                        if ($actor && $target) {
+                            $hierarchy = ['user' => 0, 'admin' => 1, 'super_admin' => 2];
+                            $actorLevel = $hierarchy[$actor->role ?? 'user'] ?? 0;
+                            $targetLevel = $hierarchy[$target->role ?? 'user'] ?? 0;
+                            
+                            // Non-super_admins cannot edit other admins
+                            if ($actorLevel < 2 && $targetLevel >= 1 && $id !== $actorId) {
                                 return [
                                     'success' => false,
-                                    'message' => 'شما نمی‌توانید سطحی بالاتر از سطح خود تخصیص دهید.'
+                                    'message' => 'شما مجاز به ویرایش سایر مدیران نیستید.'
                                 ];
+                            }
+                            
+                            // Cannot assign a role higher than the actor's current role
+                            if (isset($data['role'])) {
+                                $newRoleLevel = $hierarchy[$data['role']] ?? 0;
+                                if ($newRoleLevel > $actorLevel) {
+                                    return [
+                                        'success' => false,
+                                        'message' => 'شما نمی‌توانید سطحی بالاتر از سطح خود تخصیص دهید.'
+                                    ];
+                                }
                             }
                         }
                     }
                 }
-            }
-
-            $updateData = [];
-            $updatableFields = ['full_name', 'email', 'role', 'status'];
-            
-            foreach ($updatableFields as $field) {
-                if (isset($data[$field])) {
-                    $updateData[$field] = $data[$field];
-                }
-            }
-
-            if (!empty($data['password'])) {
-                // ✅ Validate password strength
-                $complexityPattern = '/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/';
-                if (!preg_match($complexityPattern, (string)$data['password'])) {
-                    if ($startedTransaction && $this->db->inTransaction()) {
-                        $this->db->rollBack();
+    
+                $updateData = [];
+                $updatableFields = ['full_name', 'email', 'role', 'status'];
+                
+                foreach ($updatableFields as $field) {
+                    if (isset($data[$field])) {
+                        $updateData[$field] = $data[$field];
                     }
-                    return [
-                        'success' => false,
-                        'errors' => ['password' => ['رمز عبور باید حداقل ۸ کاراکتر و شامل حروف بزرگ، کوچک، عدد و نماد باشد']]
-                    ];
                 }
-                $updateData['password'] = hash_password((string)$data['password']);
-            }
-
-            $updateData['updated_at'] = date('Y-m-d H:i:s');
-
-            $ok = $this->model->update($id, $updateData);
-            
-            if ($ok) {
-                if ($startedTransaction) {
-                    $this->db->commit();
+    
+                if (!empty($data['password'])) {
+                    // ✅ Validate password strength
+                    $complexityPattern = '/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/';
+                    if (!preg_match($complexityPattern, (string)$data['password'])) {
+                        return [
+                            'success' => false,
+                            'errors' => ['password' => ['رمز عبور باید حداقل ۸ کاراکتر و شامل حروف بزرگ، کوچک، عدد و نماد باشد']]
+                        ];
+                    }
+                    $updateData['password'] = hash_password((string)$data['password']);
                 }
-                return ['success' => true, 'message' => 'کاربر با موفقیت بروزرسانی شد'];
-            }
-
-            if ($startedTransaction && $this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            return ['success' => false, 'message' => 'خطا در ذخیره مشخصات کاربر'];
+    
+                $updateData['updated_at'] = date('Y-m-d H:i:s');
+    
+                $ok = $this->model->update($id, $updateData);
+                
+                if ($ok) {
+                    return ['success' => true, 'message' => 'کاربر با موفقیت بروزرسانی شد'];
+                }
+    
+                throw new \Exception('خطا در ذخیره مشخصات کاربر');
+            });
         } catch (\Exception $e) {
-            if ($startedTransaction && $this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
             $this->logger->error('user.update_failed', ['user_id' => $id, 'error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'بروز خطا در عملیات بروزرسانی کاربر'];
         }

@@ -81,6 +81,20 @@ abstract class BaseService
         }, $errors));
     }
 
+    /**
+     * یکپارچه‌سازی فرآیند ساخت، اجرا و پردازش خروجی اعتبارسنجی
+     */
+    protected function validate(array $data, array $rules, array $messages = [], bool $throw = true): ?array
+    {
+        $validator = app(\App\Contracts\ValidatorFactoryInterface::class)->make($data, $rules, $messages, app(\Core\Database::class));
+        $valid = $validator->validate();
+        
+        return $this->guardValidation([
+            'valid' => $valid,
+            'errors' => $validator->getErrors()
+        ], $throw);
+    }
+
     protected function successResponse(string $message = '', array $data = []): array
     {
         return [
@@ -133,6 +147,7 @@ abstract class BaseService
      */
     protected function withRetry(callable $fn, int $times = 3, int $sleepMs = 100, array $retryOn = []): mixed
     {
+        \Core\RetryPolicy::recordAttempt();
         $attempts = 0;
         while ($attempts < $times) {
             try {
@@ -160,10 +175,58 @@ abstract class BaseService
                     ]);
                     throw $e;
                 }
-                usleep($sleepMs * 1000);
+                
+                // Enforce System-wide Retry Budget to avoid retry storms
+                if (!\Core\RetryPolicy::acquireRetryBudget()) {
+                    $this->logger->critical('operation_retry_aborted_budget', [
+                        'attempts' => $attempts,
+                        'error' => $e->getMessage()
+                    ]);
+                    throw new \RuntimeException("System-wide retry budget exhausted. " . $e->getMessage(), 503, $e);
+                }
+
+                // Random jitter (0.8x to 1.2x)
+                $jitterFactor = mt_rand(800, 1200) / 1000.0;
+                $sleepWithJitter = max(1, (int)($sleepMs * $jitterFactor));
+                usleep($sleepWithJitter * 1000);
             }
         }
         return null;
+    }
+
+    /**
+     * اجرای امن عملیات در قالب یک Database Transaction با مدیریت خودکار
+     * یکپارچه شده با TransactionWrapper هسته جهت پشتیبانی از Retry و Deadlock Recovery
+     */
+    protected function transaction(callable $callback, int $maxRetries = 3): mixed
+    {
+        $db = app(\Core\Database::class);
+        // استفاده از کلاس کمکی هسته از طریق کانتینر
+        // اگر کانتینر کانفیگ نشده باشد از نمونه‌سازی مستقیم استفاده می‌کنیم
+        $wrapper = app(\Core\TransactionWrapper::class);
+        if (!$wrapper instanceof \Core\TransactionWrapper) {
+            $wrapper = new \Core\TransactionWrapper($db);
+        }
+
+        return $wrapper->runWithRetry($callback, $maxRetries);
+    }
+
+    /**
+     * پاک‌سازی امن کش با قابلیت Retry خودکار برای جلوگیری از Inconsistency
+     */
+    protected function invalidateCache(string|array $keys, ?callable $fallback = null, int $maxAttempts = 3): void
+    {
+        $keys = (array)$keys;
+        $this->withRetry(function () use ($keys, $fallback) {
+            $cache = app(\Core\Cache::class);
+            if ($fallback) {
+                $fallback($cache);
+            } else {
+                foreach ($keys as $key) {
+                    $cache->forget($key);
+                }
+            }
+        }, $maxAttempts, 100);
     }
 
     // =========================================================================

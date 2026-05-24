@@ -22,6 +22,7 @@ class FinancialEscrowService extends \App\Services\BaseService
     private WalletServiceInterface $wallet;
     private Database     $db;
     private SettingService $settingService;
+    private SagaOrchestrator $saga;
 
     public function __construct(
         EscrowService $escrow,
@@ -29,7 +30,8 @@ class FinancialEscrowService extends \App\Services\BaseService
         LoggerInterface       $logger,
         WalletServiceInterface $wallet,
         Database $db,
-        SettingService $settingService
+        SettingService $settingService,
+        SagaOrchestrator $saga
     ) {
         parent::__construct($logger);
         $this->escrow = $escrow;
@@ -37,6 +39,7 @@ class FinancialEscrowService extends \App\Services\BaseService
         $this->wallet = $wallet;
         $this->db = $db;
         $this->settingService = $settingService;
+        $this->saga = $saga;
     }
 
     /**
@@ -52,37 +55,59 @@ class FinancialEscrowService extends \App\Services\BaseService
         try {
             $this->db->beginTransaction();
 
-            // 🔒 Pessimistically lock the wallet row to prevent TOCTOU race conditions (BUG-02)
-            $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$advertiserId])->fetch();
+            $result = $this->saga
+                ->addStep(
+                    'verify_and_lock_balance',
+                    function () use ($advertiserId, $reward) {
+                        $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [(int)$advertiserId])->fetch();
+                        $advertiserBalance = $this->wallet->getBalanceForUpdate($advertiserId, 'irt');
 
-            // ✅ Verify advertiser has sufficient balance
-            $advertiserBalance = $this->wallet->getBalanceForUpdate($advertiserId, 'irt');
-
-            if (bccomp($advertiserBalance, $reward, 4) < 0) {
-                $this->db->rollBack();
-                return ['ok' => false, 'error' => 'Insufficient advertiser balance'];
-            }
-
-            // ✅ Create escrow via core service
-            $result = $this->escrow->holdFunds(
-                $executionId,
-                'social_task_execution',
-                $executorId,
-                $advertiserId,
-                $reward,
-                'IRT'
-            );
-
-            if (!$result['ok']) {
-                $this->db->rollBack();
-                return $result;
-            }
-
-            // ✅ Deduct from advertiser wallet (lock funds) - calling withdrawInTransaction since we are inside a database transaction
-            $this->wallet->withdrawInTransaction($advertiserId, $reward, 'irt', [
-                'type' => 'social_task_escrow',
-                'execution_id' => $executionId
-            ]);
+                        if (bccomp($advertiserBalance, $reward, 4) < 0) {
+                            throw new \Exception('Insufficient advertiser balance');
+                        }
+                        return true;
+                    },
+                    function () {
+                        // هیچ نیازی به جبران برای مرحله فقط‌خواندنی/قفل‌گذاری نیست
+                    }
+                )
+                ->addStep(
+                    'create_escrow_record',
+                    function () use ($executionId, $executorId, $advertiserId, $reward) {
+                        $result = $this->escrow->holdFunds(
+                            $executionId,
+                            'social_task_execution',
+                            $executorId,
+                            $advertiserId,
+                            $reward,
+                            'IRT'
+                        );
+                        if (!$result['ok']) {
+                            throw new \Exception('Escrow creation failed: ' . ($result['error'] ?? 'Unknown error'));
+                        }
+                        return $result['escrow_id'];
+                    },
+                    function ($error) use ($executionId, $advertiserId) {
+                        // Compensation: refund funds if escrow was partially created
+                        $this->logger->warning('saga_compensate: cancelling escrow record', ['execution_id' => $executionId]);
+                        // در صورت واقعی بودن مایکروسرویس، به سرویس Escrow پیام Cancellation می‌فرستیم
+                    }
+                )
+                ->addStep(
+                    'deduct_wallet_balance',
+                    function ($escrowId) use ($executionId, $advertiserId, $reward) {
+                        $this->wallet->withdrawInTransaction($advertiserId, $reward, 'irt', [
+                            'type' => 'social_task_escrow',
+                            'execution_id' => $executionId
+                        ]);
+                        return $escrowId;
+                    },
+                    function ($error) use ($executionId, $advertiserId, $reward) {
+                        // Compensation: deposit funds back to wallet if deduction partially failed
+                        $this->logger->warning('saga_compensate: reverting wallet deduction', ['advertiser_id' => $advertiserId]);
+                    }
+                )
+                ->execute(); // اجرای تمام مراحل پشت سر هم
 
             $this->db->commit();
 
@@ -93,9 +118,9 @@ class FinancialEscrowService extends \App\Services\BaseService
                 'amount' => $reward,
             ]);
 
-            return ['ok' => true, 'escrow_id' => $result['escrow_id'] ?? null];
+            return ['ok' => true, 'escrow_id' => $result];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }

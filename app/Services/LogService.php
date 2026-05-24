@@ -41,6 +41,10 @@ class LogService extends BaseService
     ];
 
     private string $logDir;
+    private string $rotationMarkerFile;
+    private bool $rotationChecked = false;
+    private array $localThrottleCache = [];
+    private int $rotationIntervalSeconds = 3600;
     private int $maxContextSize = 5000;
     private int $retentionDays  = 90;
 
@@ -76,13 +80,14 @@ class LogService extends BaseService
         $this->redis = $redis;
         $this->auditTrail = $auditTrail;
         
-        $this->logDir = dirname(__DIR__, 2) . '/storage/logs/';
+        $this->logDir = trim((string)config('logging.log_dir', dirname(__DIR__, 2) . '/storage/logs/'), '/\\') . '/';
+        $this->rotationMarkerFile = $this->logDir . '.rotation_check';
         $this->requestId = $_SERVER['REQUEST_ID'] ?? bin2hex(random_bytes(16));
 
         if (!is_dir($this->logDir)) {
             @mkdir($this->logDir, 0755, true);
         }
-        
+
         register_shutdown_function([$this, 'flush']);
     }
 
@@ -120,20 +125,119 @@ class LogService extends BaseService
     {
         return [
             'trace_id' => $_SERVER['HTTP_X_TRACE_ID'] ?? $this->requestId,
-            'span_id' => bin2hex(random_bytes(8)),
+            'span_id' => $_SERVER['HTTP_X_SPAN_ID'] ?? bin2hex(random_bytes(8)),
             'parent_span_id' => $_SERVER['HTTP_X_PARENT_SPAN_ID'] ?? null,
         ];
     }
 
+    private function prepareContext(array $context = []): string
+    {
+        return json_encode(
+            array_merge($this->sanitizeContext($context), $this->getTraceContext()),
+            JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR
+        );
+    }
+
+    private function shouldLog(string $level, string $message, array $context = []): bool
+    {
+        $env = config('app.env', 'production');
+        if (!config("logging.enabled.{$env}", true)) {
+            return false;
+        }
+
+        $level = strtolower($level);
+        $minLevel = strtolower(config('logging.min_level', 'info'));
+        $levels = ['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency'];
+
+        $currentIndex = array_search($level, $levels, true);
+        $minIndex = array_search($minLevel, $levels, true);
+        if ($currentIndex === false || $minIndex === false || $currentIndex < $minIndex) {
+            return false;
+        }
+
+        if ($env !== 'production') {
+            return true;
+        }
+
+        if (in_array($level, ['debug', 'info'], true)) {
+            $sampleRate = (int)config("logging.database_sample_rate", $level === 'debug' ? 5 : 25);
+            if ($sampleRate > 0 && $sampleRate < 100) {
+                $hash = crc32($this->requestId . '|' . $message . '|' . json_encode($context));
+                if (($hash % 100) >= $sampleRate) {
+                    return false;
+                }
+            }
+        }
+
+        return $this->throttleLog($level, $message, $context);
+    }
+
+    private function throttleLog(string $level, string $message, array $context = []): bool
+    {
+        $limit = (int)config("logging.throttle.{$level}_per_minute", in_array($level, ['debug', 'info'], true) ? 30 : 300);
+        if ($limit <= 0) {
+            return true;
+        }
+
+        $key = 'log:throttle:' . $level . ':' . substr(md5($level . '|' . $message . '|' . json_encode($context)), 0, 16);
+
+        try {
+            if ($this->redis && $this->redis->isAvailable()) {
+                $count = $this->redis->incr($key);
+                if ($count === 1) {
+                    $this->redis->expire($key, 60);
+                }
+                return $count <= $limit;
+            }
+        } catch (\Throwable) {
+            // fallback to in-memory sampling
+        }
+
+        $now = time();
+        if (!isset($this->localThrottleCache[$key]) || $this->localThrottleCache[$key]['expires_at'] <= $now) {
+            $this->localThrottleCache[$key] = [
+                'count' => 1,
+                'expires_at' => $now + 60,
+            ];
+            return true;
+        }
+
+        if ($this->localThrottleCache[$key]['count'] < $limit) {
+            $this->localThrottleCache[$key]['count']++;
+            return true;
+        }
+
+        return false;
+    }
+
+    private function maybeRotateLogFiles(): void
+    {
+        if ($this->rotationChecked) {
+            return;
+        }
+
+        $this->rotationChecked = true;
+        if (file_exists($this->rotationMarkerFile) && filemtime($this->rotationMarkerFile) > (time() - $this->rotationIntervalSeconds)) {
+            return;
+        }
+
+        $this->rotateLogFiles();
+        @touch($this->rotationMarkerFile);
+    }
+
     public function logActivity(string $action, string $description, ?int $userId = null, array $context = [], string $channel = 'default'): void
     {
+        if (!$this->shouldLog('info', "Activity: {$action}", $context)) {
+            return;
+        }
+
         $data = [
             'request_id' => $this->requestId,
             'user_id' => $userId ?? $this->session->get('user_id'),
             'channel' => $channel,
             'action' => $action,
             'description' => $description,
-            'context' => !empty($context) ? json_encode(array_merge($this->sanitizeContext($context), $this->getTraceContext()), JSON_UNESCAPED_UNICODE) : null,
+            'metadata' => $this->prepareContext($context),
             'ip_address' => $this->getRealIp(),
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
             'created_at' => date('Y-m-d H:i:s')
@@ -153,12 +257,16 @@ class LogService extends BaseService
 
     public function logSystem(string $level, string $message, array $context = []): void
     {
+        if (!$this->shouldLog($level, $message, $context)) {
+            return;
+        }
+
         $data = [
             'request_id' => $this->requestId,
             'level' => self::LEVEL_MAP[strtolower($level)] ?? 'INFO',
             'type' => $context['type'] ?? 'system',
             'message' => $message,
-            'context' => !empty($context) ? json_encode(array_merge($this->sanitizeContext($context), $this->getTraceContext()), JSON_UNESCAPED_UNICODE) : null,
+            'context' => $this->prepareContext($context),
             'user_id' => $this->session->get('user_id'),
             'ip_address' => $this->getRealIp(),
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
@@ -170,12 +278,16 @@ class LogService extends BaseService
 
     public function logSecurity(string $event, string $message, string $level = 'WARNING', array $context = []): void
     {
+        if (!$this->shouldLog($level, $message, $context)) {
+            return;
+        }
+
         $data = [
             'request_id' => $this->requestId,
             'level' => $level,
             'type' => $event,
             'message' => $message,
-            'context' => !empty($context) ? json_encode(array_merge($this->sanitizeContext($context), $this->getTraceContext()), JSON_UNESCAPED_UNICODE) : null,
+            'context' => $this->prepareContext($context),
             'user_id' => $this->session->get('user_id'),
             'ip_address' => $this->getRealIp(),
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
@@ -187,11 +299,15 @@ class LogService extends BaseService
 
     public function logPerformance(string $metric, $value, array $context = []): void
     {
+        if (!$this->shouldLog('debug', "Performance: {$metric}", $context)) {
+            return;
+        }
+
         $data = [
             'request_id' => $this->requestId,
             'metric' => $metric,
             'value' => (float)$value,
-            'context' => !empty($context) ? json_encode(array_merge($this->sanitizeContext($context), $this->getTraceContext()), JSON_UNESCAPED_UNICODE) : null,
+            'context' => $this->prepareContext($context),
             'created_at' => date('Y-m-d H:i:s')
         ];
 
@@ -243,6 +359,11 @@ class LogService extends BaseService
     {
         if (empty($rows)) return;
 
+        if (!$this->isDatabaseLoggingEnabled()) {
+            $this->writeLogFile($table, $rows);
+            return;
+        }
+
         $columns = array_keys($rows[0]);
         $escapedColumns = array_map(fn($col) => "`" . str_replace("`", "", $col) . "`", $columns);
         $colList = implode(', ', $escapedColumns);
@@ -268,6 +389,31 @@ class LogService extends BaseService
             // HIGH-09 Fix: Fallback to Redis or local file system if DB insert fails to prevent audit log evasion
             $this->robustFallbackLog($table, $rows, $e->getMessage());
         }
+    }
+
+    private function isDatabaseLoggingEnabled(): bool
+    {
+        return (bool) config('logging.log_to_database', false);
+    }
+
+    private function writeLogFile(string $table, array $rows): void
+    {
+        if (!config('logging.log_to_file', true)) {
+            return;
+        }
+
+        $file = $this->logDir . $table . '.log';
+        $entries = [];
+
+        foreach ($rows as $row) {
+            $entries[] = json_encode([
+                'table' => $table,
+                'entry' => $row,
+                'created_at' => $row['created_at'] ?? date('Y-m-d H:i:s'),
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        }
+
+        @file_put_contents($file, implode("\n", $entries) . "\n", FILE_APPEND | LOCK_EX);
     }
 
     private function robustFallbackLog(string $table, array $rows, string $errorMessage): void

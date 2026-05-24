@@ -55,6 +55,42 @@ class AuditTrail extends \App\Services\BaseService
         }
     }
 
+    /**
+     * ثبت لاگ تغییرات ادمین در جدول اختصاصی admin_audit_log
+     */
+    public function logAdminAction(
+        int $adminId,
+        string $action,
+        string $entityType,
+        int $entityId,
+        ?array $oldValues,
+        ?array $newValues,
+        string $ipAddress,
+        string $userAgent,
+        string $sessionId
+    ): bool {
+        try {
+            return (bool)db()->query(
+                "INSERT INTO admin_audit_log (admin_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, session_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    $adminId,
+                    $action,
+                    $entityType,
+                    $entityId,
+                    $oldValues !== null ? json_encode($oldValues, JSON_UNESCAPED_UNICODE) : null,
+                    $newValues !== null ? json_encode($newValues, JSON_UNESCAPED_UNICODE) : null,
+                    $ipAddress,
+                    $userAgent,
+                    $sessionId
+                ]
+            );
+        } catch (\Throwable $e) {
+            $this->logger->error('audit_trail.admin_action.failed', ['error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
     public function diff(
         string $event,
         ?int $userId,

@@ -363,6 +363,10 @@ class FeatureFlagService extends \App\Services\BaseService implements FeatureFla
         } else {
             $this->cache->tags(['feature_flag'])->flush();
         }
+
+        if (function_exists('config_reload')) {
+            config_reload('feature_flags');
+        }
     }
 
     /**
@@ -697,6 +701,11 @@ class FeatureFlagService extends \App\Services\BaseService implements FeatureFla
         try {
             $listener = new LogFeatureFlagChange($this->db, $this->logger, $this->eventDispatcher);
             $listener->handle($event);
+
+            // Reload feature flag config in long-running processes after updates
+            if (function_exists('config_reload')) {
+                config_reload('feature_flags');
+            }
         } catch (\Throwable $e) {
             $this->logger->error('feature_flag.service.dispatch_failed', [
                 'channel' => 'feature_flag',

@@ -12,7 +12,7 @@ use App\Services\SettingService;
 use App\Contracts\WalletServiceInterface;
 use App\Services\Shared\ReferralService as ReferralCommissionService;
 use Core\EventDispatcher;
-use App\Services\Gamification\ScoreService;
+use App\Services\ScoreService;
 use App\Enums\ModuleContext;
 use App\Services\User\UserService;
 
@@ -59,34 +59,25 @@ class UserLevelService extends \App\Services\BaseService
         $today = \date('Y-m-d');
         $currentMonth = \date('Y-m');
 
-        $this->db->beginTransaction();
         try {
-            $stmt = $this->db->prepare("SELECT last_active_date FROM users WHERE id = ? FOR UPDATE");
-            $stmt->execute([$userId]);
-            $userRow = $stmt->fetch(\PDO::FETCH_OBJ);
+            $this->transaction(function() use ($userId, $today) {
+                $stmt = $this->db->prepare("SELECT last_active_date FROM users WHERE id = ? FOR UPDATE");
+                $stmt->execute([$userId]);
+                $userRow = $stmt->fetch(\PDO::FETCH_OBJ);
 
-            if (!$userRow) {
-                $this->db->commit();
-                return;
-            }
+                if (!$userRow || $userRow->last_active_date === $today) {
+                    return;
+                }
 
-            // If already registered today, rollback or commit and skip
-            if ($userRow->last_active_date === $today) {
-                $this->db->commit();
-                return;
-            }
-
-            $stmt = $this->db->prepare("UPDATE users SET last_active_date = ? WHERE id = ?");
-            $stmt->execute([$today, $userId]);
-            
-            $this->db->commit();
+                $stmt = $this->db->prepare("UPDATE users SET last_active_date = ? WHERE id = ?");
+                $stmt->execute([$today, $userId]);
+            });
 
             // Verify user potential upgrade levels
             if ($this->settingService->get('level_activity_upgrade_enabled', 1)) {
                 $this->checkUpgrade($userId);
             }
         } catch (\Throwable $e) {
-            $this->db->rollBack();
             $this->logger->error('level.record_daily_activity.failed', [
                 'user_id' => $userId,
                 'error' => $e->getMessage()
@@ -111,74 +102,65 @@ class UserLevelService extends \App\Services\BaseService
      */
     public function checkUpgrade(int $userId): ?string
     {
-        $this->db->beginTransaction();
-
         try {
-            // قفل کردن سطر کاربر برای جلوگیری از Race Condition در ارتقای همزمان (Issue #24)
-            $stmt = $this->db->prepare("
-                SELECT level_slug, level_type, level_expires_at
-                FROM users 
-                WHERE id = ? AND deleted_at IS NULL
-                FOR UPDATE
-            ");
-            $stmt->execute([$userId]);
-            $userRow = $stmt->fetch(\PDO::FETCH_OBJ);
+            return $this->transaction(function() use ($userId) {
+                // قفل کردن سطر کاربر برای جلوگیری از Race Condition در ارتقای همزمان (Issue #24)
+                $stmt = $this->db->prepare("
+                    SELECT level_slug, level_type, level_expires_at
+                    FROM users 
+                    WHERE id = ? AND deleted_at IS NULL
+                    FOR UPDATE
+                ");
+                $stmt->execute([$userId]);
+                $userRow = $stmt->fetch(\PDO::FETCH_OBJ);
 
-            // Lock latest history record to prevent double history insertion concurrently (MED-08)
-            $stmtHist = $this->db->prepare("SELECT id FROM user_level_histories WHERE user_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE");
-            $stmtHist->execute([$userId]);
-            $stmtHist->fetch();
+                // Lock latest history record to prevent double history insertion concurrently (MED-08)
+                $stmtHist = $this->db->prepare("SELECT id FROM user_level_histories WHERE user_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE");
+                $stmtHist->execute([$userId]);
+                $stmtHist->fetch();
 
-            if (!$userRow) {
-                $this->db->rollBack();
-                return null;
-            }
-
-            // اگر سطح خریداری شده و هنوز معتبر است، ارتقا با فعالیت اعمال نمی‌شود
-            if ($userRow->level_type === 'purchased') {
-                if ($userRow->level_expires_at && \strtotime($userRow->level_expires_at) > \time()) {
-                    $this->db->rollBack();
-                    return null; // سطح خریداری‌شده هنوز معتبر
+                if (!$userRow) {
+                    return null;
                 }
-            }
-            
-            // Fetch Total Gamification Score
-            $totalScore = $this->scoreService->getTotalScore($userId, ModuleContext::GLOBAL);
 
-            $eligible = $this->levelModel->getEligibleLevel($totalScore);
+                // اگر سطح خریداری شده و هنوز معتبر است، ارتقا با فعالیت اعمال نمی‌شود
+                if ($userRow->level_type === 'purchased') {
+                    if ($userRow->level_expires_at && \strtotime($userRow->level_expires_at) > \time()) {
+                        return null; // سطح خریداری‌شده هنوز معتبر
+                    }
+                }
+                
+                // Fetch Total Gamification Score
+                $totalScore = $this->scoreService->getScore('user', $userId, 'score_' . ModuleContext::GLOBAL->value);
 
-            if (!$eligible) {
-                $this->db->rollBack();
-                return null;
-            }
+                $eligible = $this->levelModel->getEligibleLevel($totalScore);
 
-            $currentLevel = $this->levelModel->findBySlug($userRow->level_slug);
-            if (!$currentLevel) {
-                $this->db->rollBack();
-                return null;
-            }
+                if (!$eligible) {
+                    return null;
+                }
 
-            // فقط ارتقا (نه سقوط)
-            if ($eligible->sort_order <= $currentLevel->sort_order) {
-                $this->db->rollBack();
-                return null;
-            }
+                $currentLevel = $this->levelModel->findBySlug($userRow->level_slug);
+                if (!$currentLevel) {
+                    return null;
+                }
 
-            // ارتقا
-            $this->changeLevel($userId, $userRow->level_slug, $eligible->slug, 'upgrade', 'ارتقا بر اساس امتیاز سیستم (Gamification)');
+                // فقط ارتقا (نه سقوط)
+                if ($eligible->sort_order <= $currentLevel->sort_order) {
+                    return null;
+                }
 
-            $this->db->commit();
+                // ارتقا
+                $this->changeLevel($userId, $userRow->level_slug, $eligible->slug, 'upgrade', 'ارتقا بر اساس امتیاز سیستم (Gamification)');
 
-            $this->logger->info('User level upgraded by score', [
-                'user_id' => $userId,
-                'from' => $userRow->level_slug,
-                'to' => $eligible->slug,
-            ]);
+                $this->logger->info('User level upgraded by score', [
+                    'user_id' => $userId,
+                    'from' => $userRow->level_slug,
+                    'to' => $eligible->slug,
+                ]);
 
-            return $eligible->slug;
-
+                return $eligible->slug;
+            });
         } catch (\Exception $e) {
-            $this->db->rollBack();
             $this->logger->error('level.upgrade_check.failed', [
                 'user_id' => $userId,
                 'error' => $e->getMessage()
@@ -211,141 +193,133 @@ class UserLevelService extends \App\Services\BaseService
         $idempotencyKey = "level_purch_{$userId}_{$levelSlug}_" . \date('YmdH');
 
         try {
-            $this->db->beginTransaction();
+            return $this->transaction(function() use ($userId, $levelSlug, $level, $price, $currency, $idempotencyKey) {
+                // 🛡️ Pessimistic Lock on Users and Wallet together to prevent race conditions (CRIT-04)
+                $stmt = $this->db->prepare("SELECT level_slug, level_expires_at, level_type FROM users WHERE id = ? FOR UPDATE");
+                $stmt->execute([$userId]);
+                $u = $stmt->fetch(\PDO::FETCH_OBJ);
 
-            // 🛡️ Pessimistic Lock on Users and Wallet together to prevent race conditions (CRIT-04)
-            $stmt = $this->db->prepare("SELECT level_slug, level_expires_at, level_type FROM users WHERE id = ? FOR UPDATE");
-            $stmt->execute([$userId]);
-            $u = $stmt->fetch(\PDO::FETCH_OBJ);
-
-            if ($u && $u->level_slug === $levelSlug && $u->level_type === 'purchased') {
-                if ($u->level_expires_at && \strtotime($u->level_expires_at) > \time()) {
-                    $this->db->rollBack();
-                    return ['success' => false, 'message' => 'شما در حال حاضر اشتراک فعال برای این سطح را دارا هستید.'];
+                if ($u && $u->level_slug === $levelSlug && $u->level_type === 'purchased') {
+                    if ($u->level_expires_at && \strtotime($u->level_expires_at) > \time()) {
+                        return ['success' => false, 'message' => 'شما در حال حاضر اشتراک فعال برای این سطح را دارا هستید.'];
+                    }
                 }
-            }
 
-            // Lock latest history record to prevent double history insertion concurrently (MED-08)
-            $stmtHist = $this->db->prepare("SELECT id FROM user_level_histories WHERE user_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE");
-            $stmtHist->execute([$userId]);
-            $stmtHist->fetch();
+                // Lock latest history record to prevent double history insertion concurrently (MED-08)
+                $stmtHist = $this->db->prepare("SELECT id FROM user_level_histories WHERE user_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE");
+                $stmtHist->execute([$userId]);
+                $stmtHist->fetch();
 
-            // Check idempotency INSIDE transaction with lock
-            $stmt = $this->db->prepare("SELECT id FROM user_level_purchases WHERE idempotency_key = ? FOR UPDATE");
-            $stmt->execute([$idempotencyKey]);
-            if ($stmt->fetch()) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'شما امروز درخواست مشابهی برای ارتقای این سطح ثبت کرده‌اید.'];
-            }
+                // Check idempotency INSIDE transaction with lock
+                $stmt = $this->db->prepare("SELECT id FROM user_level_purchases WHERE idempotency_key = ? FOR UPDATE");
+                $stmt->execute([$idempotencyKey]);
+                if ($stmt->fetch()) {
+                    return ['success' => false, 'message' => 'شما امروز درخواست مشابهی برای ارتقای این سطح ثبت کرده‌اید.'];
+                }
 
-            // 🛡️ MED-12 Fix (CRITICAL): Implement atomic transaction-level locking
-            // Lock user wallet with FOR UPDATE to prevent race conditions during purchase
-            $stmt = $this->db->prepare("SELECT balance_irt, balance_usdt FROM wallets WHERE user_id = ? FOR UPDATE");
-            $stmt->execute([$userId]);
-            $wallet = $stmt->fetch(\PDO::FETCH_OBJ);
-            
-            if (!$wallet) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'کیف پول کاربر یافت نشد.'];
-            }
+                // 🛡️ MED-12 Fix (CRITICAL): Implement atomic transaction-level locking
+                // Lock user wallet with FOR UPDATE to prevent race conditions during purchase
+                $stmt = $this->db->prepare("SELECT balance_irt, balance_usdt FROM wallets WHERE user_id = ? FOR UPDATE");
+                $stmt->execute([$userId]);
+                $wallet = $stmt->fetch(\PDO::FETCH_OBJ);
+                
+                if (!$wallet) {
+                    return ['success' => false, 'message' => 'کیف پول کاربر یافت نشد.'];
+                }
 
-            // Check balance before withdrawal to prevent TOCTOU
-            $balanceField = ($currency === 'usdt') ? 'balance_usdt' : 'balance_irt';
-            $currentBalance = (float)$wallet->$balanceField;
-            
-            if (bccomp((string)$currentBalance, (string)$price, 2) < 0) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'موجودی کافی نیست.'];
-            }
+                // Check balance before withdrawal to prevent TOCTOU
+                $balanceField = ($currency === 'usdt') ? 'balance_usdt' : 'balance_irt';
+                $currentBalance = (float)$wallet->$balanceField;
+                
+                if (bccomp((string)$currentBalance, (string)$price, 2) < 0) {
+                    return ['success' => false, 'message' => 'موجودی کافی نیست.'];
+                }
 
-            // Use withdrawInTransaction() for atomic transaction-based withdrawal
-            $withdrawResult = $this->walletService->withdrawInTransaction(
-                $userId,
-                $price,
-                $currency,
-                [
-                    'type' => 'vip_purchase',
-                    'description' => "خرید سطح {$level->name}",
-                    'ref_type' => 'user_level_purchase',
-                    'ref_id' => null,
-                ]
-            );
+                // Use withdrawInTransaction() for atomic transaction-based withdrawal
+                $withdrawResult = $this->walletService->withdrawInTransaction(
+                    $userId,
+                    $price,
+                    $currency,
+                    [
+                        'type' => 'vip_purchase',
+                        'description' => "خرید سطح {$level->name}",
+                        'ref_type' => 'user_level_purchase',
+                        'ref_id' => null,
+                    ]
+                );
 
-            if (empty($withdrawResult['success'])) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => $withdrawResult['message'] ?? 'موجودی کافی نیست.'];
-            }
+                if (empty($withdrawResult['success'])) {
+                    return ['success' => false, 'message' => $withdrawResult['message'] ?? 'موجودی کافی نیست.'];
+                }
 
-            $txId = $withdrawResult['transaction_id'] ?? null;
+                $txId = $withdrawResult['transaction_id'] ?? null;
 
-            // تاریخ انقضا
-            $duration = (int) $level->purchase_duration_days;
-            $expiresAt = \date('Y-m-d H:i:s', \strtotime("+{$duration} days"));
+                // تاریخ انقضا
+                $duration = (int) $level->purchase_duration_days;
+                $expiresAt = \date('Y-m-d H:i:s', \strtotime("+{$duration} days"));
 
-            // ثبت خرید
-            $stmt = $this->db->prepare("
-                INSERT INTO user_level_purchases 
-                (user_id, level_slug, amount, currency, duration_days, starts_at, expires_at, status, transaction_id, idempotency_key)
-                VALUES (?, ?, ?, ?, ?, NOW(), ?, 'active', ?, ?)
-            ");
-            $stmt->execute([$userId, $levelSlug, $price, $currency, $duration, $expiresAt, $txId, $idempotencyKey]);
+                // ثبت خرید
+                $stmt = $this->db->prepare("
+                    INSERT INTO user_level_purchases 
+                    (user_id, level_slug, amount, currency, duration_days, starts_at, expires_at, status, transaction_id, idempotency_key)
+                    VALUES (?, ?, ?, ?, ?, NOW(), ?, 'active', ?, ?)
+                ");
+                $stmt->execute([$userId, $levelSlug, $price, $currency, $duration, $expiresAt, $txId, $idempotencyKey]);
 
-            // بروزرسانی سطح کاربر
-            $stmt = $this->db->prepare("SELECT level_slug FROM users WHERE id = ?");
-            $stmt->execute([$userId]);
-            $currentUser = $stmt->fetch(\PDO::FETCH_OBJ);
-            $fromLevel = $currentUser->level_slug ?? 'bronze';
+                // بروزرسانی سطح کاربر
+                $stmt = $this->db->prepare("SELECT level_slug FROM users WHERE id = ?");
+                $stmt->execute([$userId]);
+                $currentUser = $stmt->fetch(\PDO::FETCH_OBJ);
+                $fromLevel = $currentUser->level_slug ?? 'bronze';
 
-            $stmt = $this->db->prepare("
-                UPDATE users SET 
-                    level_slug = ?, 
-                    level_type = 'purchased', 
-                    level_expires_at = ?
-                WHERE id = ?
-            ");
-            $stmt->execute([$levelSlug, $expiresAt, $userId]);
+                $stmt = $this->db->prepare("
+                    UPDATE users SET 
+                        level_slug = ?, 
+                        level_type = 'purchased', 
+                        level_expires_at = ?
+                    WHERE id = ?
+                ");
+                $stmt->execute([$levelSlug, $expiresAt, $userId]);
 
-            // ثبت تاریخچه
-            $this->historyModel->create([
-                'user_id' => $userId,
-                'from_level' => $fromLevel,
-                'to_level' => $levelSlug,
-                'change_type' => 'purchase',
-                'reason' => "خرید سطح {$level->name} به مدت {$duration} روز",
-                'metadata' => ['price' => $price, 'currency' => $currency, 'duration' => $duration],
-            ]);
+                // ثبت تاریخچه
+                $this->historyModel->create([
+                    'user_id' => $userId,
+                    'from_level' => $fromLevel,
+                    'to_level' => $levelSlug,
+                    'change_type' => 'purchase',
+                    'reason' => "خرید سطح {$level->name} به مدت {$duration} روز",
+                    'metadata' => ['price' => $price, 'currency' => $currency, 'duration' => $duration],
+                ]);
 
-            // کمیسیون معرفی
-            $this->commissionService->processCommission($userId, 'vip_purchase', null, $price, $currency);
+                // کمیسیون معرفی
+                $this->commissionService->processCommission($userId, 'vip_purchase', null, $price, $currency);
 
-            $this->db->commit();
+                $this->logger->info('User level purchased', [
+                    'user_id' => $userId,
+                    'level' => $levelSlug,
+                    'price' => $price,
+                    'currency' => $currency,
+                ]);
 
-            $this->logger->info('User level purchased', [
-                'user_id' => $userId,
-                'level' => $levelSlug,
-                'price' => $price,
-                'currency' => $currency,
-            ]);
-
-            return [
-                'success' => true,
-                'message' => "سطح «{$level->name}» با موفقیت خریداری شد.",
-                'level' => $level,
-                'expires_at' => $expiresAt,
-            ];
+                return [
+                    'success' => true,
+                    'message' => "سطح «{$level->name}» با موفقیت خریداری شد.",
+                    'level' => $level,
+                    'expires_at' => $expiresAt,
+                ];
+            });
 
         } catch (\Exception $e) {
-    $this->db->rollBack();
-    $this->logger->error('level.purchase.failed', [
-        'channel' => 'level',
-        'user_id' => $userId,
-        'error' => $e->getMessage(),
-        'exception' => get_class($e),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-    ]);
-    return ['success' => false, 'message' => 'خطا در خرید سطح. لطفاً دوباره تلاش کنید.'];
-}
+            $this->logger->error('level.purchase.failed', [
+                'channel' => 'level',
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            return ['success' => false, 'message' => 'خطا در خرید سطح. لطفاً دوباره تلاش کنید.'];
+        }
     }
 
     /**
