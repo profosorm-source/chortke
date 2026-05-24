@@ -84,9 +84,7 @@ class EventDispatcher
      */
     public function restoreBootstrapState(): void
     {
-        if (!empty($this->bootstrapListeners)) {
-            $this->listeners = $this->bootstrapListeners;
-        }
+        $this->listeners = $this->bootstrapListeners;
     }
 
     /**
@@ -106,14 +104,37 @@ class EventDispatcher
         foreach ($this->listeners[$eventName] as $item) {
             $listener = $item['listener'];
             
-            // اجرای Listener
-            if (is_callable($listener)) {
-                $listener($event);
-            } elseif (is_string($listener) && class_exists($listener)) {
-                $listenerInstance = new $listener();
-                if (method_exists($listenerInstance, 'handle')) {
-                    $listenerInstance->handle($event);
+            $startTime = microtime(true);
+            try {
+                // اجرای Listener
+                if (is_callable($listener)) {
+                    $listener($event);
+                } elseif (is_string($listener) && class_exists($listener)) {
+                    $listenerInstance = new $listener();
+                    if (method_exists($listenerInstance, 'handle')) {
+                        $listenerInstance->handle($event);
+                    }
                 }
+            } catch (\Throwable $e) {
+                if (function_exists('logger')) {
+                    logger()->error('event.listener_failed', [
+                        'event' => $eventName,
+                        'listener' => is_string($listener) ? $listener : 'closure',
+                        'error' => $e->getMessage()
+                    ]);
+                }
+                // Stop propagation on failure to prevent partial state corruption
+                $event->stopPropagation();
+            }
+
+            $duration = microtime(true) - $startTime;
+            if ($duration > 5.0 && function_exists('logger')) {
+                logger()->warning('event.listener_timeout', [
+                    'event' => $eventName,
+                    'listener' => is_string($listener) ? $listener : 'closure',
+                    'duration' => round($duration, 2) . 's',
+                    'threshold' => '5.0s'
+                ]);
             }
             
             // بررسی توقف انتشار

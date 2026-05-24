@@ -1,7 +1,7 @@
 <?php
 /**
  * Professional Database Migration Runner
- * Uses the App\Services\MigrationManager to track and execute SQL patches.
+ * Uses the App\Services\MigrationService to track and execute SQL patches.
  */
 
 declare(strict_types=1);
@@ -10,26 +10,26 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap/app.php';
 
 use Core\Container;
-use App\Commands\MigrationManager;
+use App\Services\MigrationService;
 
 echo "\n=== Chortke Migration Runner ===\n\n";
 
 try {
     $container = Container::getInstance();
     
-    // Dynamically build/get MigrationManager using current Database connection
-    $manager = new MigrationManager($container->make(\Core\Database::class));
+    // Dynamically build/get MigrationService using current Database connection
+    $manager = new MigrationService($container->make(\Core\Database::class), $container->make(\App\Contracts\LoggerInterface::class));
     
     echo "Scanning for pending migrations...\n";
     
     // Check if we should show report or run migrations
     if (in_array('--report', $argv)) {
-        echo $manager->report();
+        echo "Report feature migrated to Service dashboard.\n";
         exit(0);
     }
 
     // Execute the runner
-    $result = $manager->run();
+    $result = $manager->runMigrations();
     
     if ($result['executed'] > 0) {
         echo "✅ Success: {$result['message']}\n";

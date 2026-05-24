@@ -385,6 +385,7 @@ $r->get('/admin/account-deletion/stats',        [AccountDeletionManagementContro
 $r->get('/admin/backups',                       [BackupManagementController::class, 'index'],           $admin);
 $r->post('/admin/backups/create',               [BackupManagementController::class, 'createBackup'],   $admin);
 $r->post('/admin/backups/{id}/restore',         [BackupManagementController::class, 'restoreBackup'],  $admin);
+$r->post('/admin/backups/{id}/verify',          [BackupManagementController::class, 'verifyBackup'],   $admin);
 $r->get('/admin/backups/stats',                 [BackupManagementController::class, 'stats'],          $admin);
 $r->post('/admin/backups/cleanup',              [BackupManagementController::class, 'cleanup'],        $admin);
 // ── جستجو ─────────────────────────────────────────────────────────────────────

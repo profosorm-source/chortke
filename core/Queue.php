@@ -100,11 +100,47 @@ class Queue
     }
 
     /**
+     * سیستم کنترل ترافیک (Backpressure)
+     * در زمان پیک ترافیک اگر سایز صف از حد مجاز بگذرد، درج جاب مسدود می‌شود.
+     */
+    private function checkBackpressure(string $queue): void
+    {
+        // سقف مجاز برای صف‌ها را می‌توانیم از تنظیمات بگیریم یا سخت‌افزاری تعیین کنیم
+        $limits = [
+            'high_priority' => 50000,
+            'default' => 100000,
+            'analytics' => 5000,
+            'notifications' => 20000,
+            'maintenance' => 1000,
+        ];
+        
+        $limit = $limits[$queue] ?? 10000;
+        
+        // کش کردن سایز به مدت ۵ ثانیه برای جلوگیری از سربار I/O هنگام چک کردن سایز
+        $cache = \Core\Cache::getInstance();
+        $cacheKey = "queue_size_cache:{$queue}";
+        
+        $size = (int) $cache->remember($cacheKey, 5, fn() => $this->size($queue));
+        
+        if ($size >= $limit) {
+            if (function_exists('logger')) {
+                logger()->critical('queue.backpressure.activated', [
+                    'queue' => $queue,
+                    'size' => $size,
+                    'limit' => $limit
+                ]);
+            }
+            throw new \RuntimeException("Backpressure Active: Queue {$queue} is full (size: {$size}). Please try again later.");
+        }
+    }
+
+    /**
      * اضافه کردن job به صف
      */
     public function push(string $job, array $data = [], ?string $queue = null, int $delay = 0): bool
     {
         $queue = $this->resolveQueueName($job, $queue);
+        $this->checkBackpressure($queue);
         $availableAt = $delay > 0 ? time() + $delay : time();
 
         // 🚀 Real-time delta-buffering to eliminate propagation delay/race conditions during async updates!
@@ -143,6 +179,7 @@ class Queue
                     'data' => $data,
                     'meta' => [
                         'correlation_id' => $_SERVER['REQUEST_ID'] ?? ($_SERVER['HTTP_X_REQUEST_ID'] ?? null),
+                        'trace_id' => $_SERVER['HTTP_X_TRACE_ID'] ?? ($_SERVER['REQUEST_ID'] ?? null),
                     ],
                 ];
 
@@ -183,6 +220,7 @@ class Queue
                 'data' => $data,
                 'meta' => [
                     'correlation_id' => $_SERVER['REQUEST_ID'] ?? ($_SERVER['HTTP_X_REQUEST_ID'] ?? null),
+                    'trace_id' => $_SERVER['HTTP_X_TRACE_ID'] ?? ($_SERVER['REQUEST_ID'] ?? null),
                 ],
             ], JSON_UNESCAPED_UNICODE),
             'attempts' => 0,

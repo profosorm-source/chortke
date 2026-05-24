@@ -683,6 +683,24 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
         }
     }
 
+    /**
+     * پاکسازی تمام قفل‌های ثبت‌شده در مموری (کاربرد در فرآیندهای طولانی مثل Queue Workers)
+     */
+    public function flushAllLocks(): void
+    {
+        // 1. Close file handles
+        foreach ($this->fileLocks as $key => $fh) {
+            if (is_resource($fh)) {
+                flock($fh, LOCK_UN);
+                fclose($fh);
+            }
+        }
+        $this->fileLocks = [];
+
+        // 2. Clear redis locks array
+        $this->redisLocks = [];
+    }
+
     // ─────────────────────────────────────────────────
     //  Cleanup — فقط در حالت فایل
     // ─────────────────────────────────────────────────
@@ -973,9 +991,24 @@ class TaggedCache
             if (!file_exists($indexFile)) {
                 continue;
             }
-            $existing = json_decode(file_get_contents($indexFile), true) ?? [];
-            $existing = array_values(array_filter($existing, fn($k) => $k !== $taggedKey));
-            file_put_contents($indexFile, json_encode($existing));
+            
+            $fh = fopen($indexFile, 'c+');
+            if (!$fh) {
+                continue;
+            }
+            if (flock($fh, LOCK_EX)) {
+                $content  = stream_get_contents($fh);
+                $existing = $content ? (json_decode($content, true) ?? []) : [];
+                $filtered = array_values(array_filter($existing, fn($k) => $k !== $taggedKey));
+                
+                if (count($filtered) !== count($existing)) {
+                    ftruncate($fh, 0);
+                    rewind($fh);
+                    fwrite($fh, json_encode($filtered));
+                }
+                flock($fh, LOCK_UN);
+            }
+            fclose($fh);
         }
     }
 

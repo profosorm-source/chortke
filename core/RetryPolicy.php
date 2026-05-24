@@ -36,7 +36,7 @@ class RetryPolicy
         $attempt = 0;
         $delayMs = $this->initialDelayMs;
 
-        $this->recordAttempt(); // Record the primary call in the budget
+        self::recordAttempt(); // Record the primary call in the budget
 
         while (true) {
             try {
@@ -49,7 +49,7 @@ class RetryPolicy
                 }
 
                 // Enforce the cascading failure system-wide Retry Budget
-                if (!$this->acquireRetryBudget()) {
+                if (!self::acquireRetryBudget()) {
                     // Refuse to execute retry and fail-fast to prevent retry storm
                     throw new \RuntimeException(
                         "Cascading failure protection: system-wide retry budget exhausted. " . $exception->getMessage(),
@@ -74,7 +74,7 @@ class RetryPolicy
      * Allows retries only if retries are < 10% of total calls,
      * with a minimum allowance of 5 retries for cold start.
      */
-    private function acquireRetryBudget(): bool
+    public static function acquireRetryBudget(): bool
     {
         $cache = Cache::getInstance();
         
@@ -114,7 +114,7 @@ class RetryPolicy
     /**
      * Record a non-retry attempt in the system-wide budget
      */
-    private function recordAttempt(): void
+    public static function recordAttempt(): void
     {
         try {
             $currentBucket = time() % 10;

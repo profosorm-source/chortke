@@ -90,6 +90,34 @@ if (!function_exists('secure_hash')) {
     }
 }
 
+if (!function_exists('get_trace_context')) {
+    function get_trace_context(): array
+    {
+        $traceId = $_SERVER['TRACE_ID'] ?? $_SERVER['HTTP_X_B3_TRACEID'] ?? $_SERVER['HTTP_X_CORRELATION_ID'] ?? bin2hex(random_bytes(16));
+        $spanId = $_SERVER['SPAN_ID'] ?? $_SERVER['HTTP_X_B3_SPANID'] ?? bin2hex(random_bytes(8));
+        $parentId = $_SERVER['PARENT_SPAN_ID'] ?? $_SERVER['HTTP_X_B3_PARENTSPANID'] ?? null;
+
+        return [
+            'trace_id' => $traceId,
+            'span_id' => $spanId,
+            'parent_span_id' => $parentId,
+        ];
+    }
+}
+
+if (!function_exists('trace_headers')) {
+    function trace_headers(): array
+    {
+        $traceContext = get_trace_context();
+        return [
+            'X-B3-TraceId: ' . $traceContext['trace_id'],
+            'X-B3-SpanId: ' . $traceContext['span_id'],
+            'X-B3-ParentSpanId: ' . ($traceContext['parent_span_id'] ?? ''),
+            'X-B3-Sampled: 1',
+            'X-Request-Id: ' . ($_SERVER['REQUEST_ID'] ?? $traceContext['trace_id']),
+        ];
+    }
+}
 
 if (!function_exists('is_strong_password')) {
     function is_strong_password(string $password): bool
@@ -309,6 +337,38 @@ if (!function_exists('get_request_id')) {
             $_SERVER['REQUEST_ID'] = $requestId;
         }
         return $requestId;
+    }
+}
+
+if (!function_exists('get_trace_context')) {
+    function get_trace_context(): array
+    {
+        $traceId = $_SERVER['HTTP_X_TRACE_ID'] ?? ($_SERVER['REQUEST_ID'] ?? get_request_id());
+        $spanId = $_SERVER['HTTP_X_SPAN_ID'] ?? bin2hex(random_bytes(8));
+        $parentSpanId = $_SERVER['HTTP_X_PARENT_SPAN_ID'] ?? null;
+
+        return [
+            'trace_id' => $traceId,
+            'span_id' => $spanId,
+            'parent_span_id' => $parentSpanId,
+        ];
+    }
+}
+
+if (!function_exists('trace_headers')) {
+    function trace_headers(array $headers = []): array
+    {
+        $context = get_trace_context();
+        $default = [
+            'X-Request-Id: ' . ($_SERVER['REQUEST_ID'] ?? get_request_id()),
+            'X-Trace-Id: ' . $context['trace_id'],
+            'X-Span-Id: ' . $context['span_id'],
+        ];
+        if (!empty($context['parent_span_id'])) {
+            $default[] = 'X-Parent-Span-Id: ' . $context['parent_span_id'];
+        }
+
+        return array_merge($default, $headers);
     }
 }
 

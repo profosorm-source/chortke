@@ -38,7 +38,15 @@ $auth      = [AuthMiddleware::class];
 $authCSRF  = [AuthMiddleware::class, CSRFMiddleware::class];
 $admin     = [AuthMiddleware::class, AdminMiddleware::class];
 $adminCSRF = [AuthMiddleware::class, AdminMiddleware::class, CSRFMiddleware::class];
+
+$vitrineAuth     = array_merge($auth, [\App\Middleware\RequireFeature::class . ':vitrine_enabled']);
+$vitrineAuthCSRF = array_merge($authCSRF, [\App\Middleware\RequireFeature::class . ':vitrine_enabled']);
+
 $r         = app()->router;
+
+// ── Metrics & Health ──────────────────────────────────────────────────────
+$r->get('/health', [\App\Controllers\MetricsController::class, 'health']);
+$r->get('/metrics', [\App\Controllers\MetricsController::class, 'metrics']);
 
 // ════════════════════════════════════════════════════════════════════════════
 // USER ROUTES
@@ -89,26 +97,26 @@ $r->post('/influencer/ads/orders/{id}/confirm', [InfluencerController::class, 'b
 $r->post('/influencer/ads/orders/{id}/dispute', [InfluencerController::class, 'buyerDispute'],    $authCSRF);
 
 // ── ویترین (جایگزین Online Store) ────────────────────────────────────────────
-$r->get('/vitrine',                        [VitrineController::class, 'index'],          $auth);
-$r->get('/vitrine/wanted',                 [VitrineController::class, 'wantedIndex'],    $auth);
-$r->get('/vitrine/wanted/create',          [VitrineController::class, 'createWanted'],   $auth);
-$r->get('/vitrine/sell/create',            [VitrineController::class, 'create'],         $auth);
-$r->get('/vitrine/my-listings',            [VitrineController::class, 'myListings'],     $auth);
-$r->get('/vitrine/my-purchases',           [VitrineController::class, 'myPurchases'],    $auth);
-$r->get('/vitrine/my-requests',            [VitrineController::class, 'myRequests'],     $auth);
-$r->post('/vitrine/store',                 [VitrineController::class, 'store'],          $authCSRF);
-$r->post('/vitrine/request/{rid}/accept',  [VitrineController::class, 'acceptRequest'],  $authCSRF);
-$r->post('/vitrine/request/{rid}/reject',  [VitrineController::class, 'rejectRequest'],  $authCSRF);
-$r->get('/vitrine/{id}',                   [VitrineController::class, 'show'],           $auth);
-$r->post('/vitrine/{id}/buy',              [VitrineController::class, 'buy'],            $authCSRF);
-$r->post('/vitrine/{id}/request',          [VitrineController::class, 'sendRequest'],    $authCSRF);
-$r->post('/vitrine/{id}/confirm',          [VitrineController::class, 'confirmDelivery'],$authCSRF);
-$r->post('/vitrine/{id}/dispute',          [VitrineController::class, 'dispute'],        $authCSRF);
-$r->post('/vitrine/{id}/watch',            [VitrineController::class, 'watch'],          $authCSRF);
+$r->get('/vitrine',                        [VitrineController::class, 'index'],          $vitrineAuth);
+$r->get('/vitrine/wanted',                 [VitrineController::class, 'wantedIndex'],    $vitrineAuth);
+$r->get('/vitrine/wanted/create',          [VitrineController::class, 'createWanted'],   $vitrineAuth);
+$r->get('/vitrine/sell/create',            [VitrineController::class, 'create'],         $vitrineAuth);
+$r->get('/vitrine/my-listings',            [VitrineController::class, 'myListings'],     $vitrineAuth);
+$r->get('/vitrine/my-purchases',           [VitrineController::class, 'myPurchases'],    $vitrineAuth);
+$r->get('/vitrine/my-requests',            [VitrineController::class, 'myRequests'],     $vitrineAuth);
+$r->post('/vitrine/store',                 [VitrineController::class, 'store'],          $vitrineAuthCSRF);
+$r->post('/vitrine/request/{rid}/accept',  [VitrineController::class, 'acceptRequest'],  $vitrineAuthCSRF);
+$r->post('/vitrine/request/{rid}/reject',  [VitrineController::class, 'rejectRequest'],  $vitrineAuthCSRF);
+$r->get('/vitrine/{id}',                   [VitrineController::class, 'show'],           $vitrineAuth);
+$r->post('/vitrine/{id}/buy',              [VitrineController::class, 'buy'],            $vitrineAuthCSRF);
+$r->post('/vitrine/{id}/request',          [VitrineController::class, 'sendRequest'],    $vitrineAuthCSRF);
+$r->post('/vitrine/{id}/confirm',          [VitrineController::class, 'confirmDelivery'],$vitrineAuthCSRF);
+$r->post('/vitrine/{id}/dispute',          [VitrineController::class, 'dispute'],        $vitrineAuthCSRF);
+$r->post('/vitrine/{id}/watch',            [VitrineController::class, 'watch'],          $vitrineAuthCSRF);
 // redirect قدیمی → vitrine (backward compat)
-$r->get('/online-store',              [VitrineController::class, 'index'],       $auth);
-$r->get('/online-store/sell',         [VitrineController::class, 'myListings'],  $auth);
-$r->get('/online-store/my-purchases', [VitrineController::class, 'myPurchases'], $auth);
+$r->get('/online-store',              [VitrineController::class, 'index'],       $vitrineAuth);
+$r->get('/online-store/sell',         [VitrineController::class, 'myListings'],  $vitrineAuth);
+$r->get('/online-store/my-purchases', [VitrineController::class, 'myPurchases'], $vitrineAuth);
 
 // ── تبلیغ سئو (کاربر) ────────────────────────────────────────────────────────
 $r->get('/seo-ad',               [SeoAdController::class, 'index'],  $auth);

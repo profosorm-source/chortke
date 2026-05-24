@@ -47,9 +47,18 @@ class Logger implements LoggerInterface
 
     private function enrich(array $context): array
     {
+        $traceContext = function_exists('get_trace_context') ? get_trace_context() : [
+            'trace_id' => $_SERVER['HTTP_X_TRACE_ID'] ?? ($_SERVER['REQUEST_ID'] ?? null),
+            'span_id' => $_SERVER['HTTP_X_SPAN_ID'] ?? null,
+            'parent_span_id' => $_SERVER['HTTP_X_PARENT_SPAN_ID'] ?? null,
+        ];
+
         return array_merge(
             [
                 'request_id' => $_SERVER['REQUEST_ID'] ?? ($_SERVER['HTTP_X_REQUEST_ID'] ?? null),
+                'trace_id' => $traceContext['trace_id'] ?? null,
+                'span_id' => $traceContext['span_id'] ?? null,
+                'parent_span_id' => $traceContext['parent_span_id'] ?? null,
             ],
             $this->defaultContext,
             $context

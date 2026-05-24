@@ -44,6 +44,13 @@ return [
     // فرمت لاگ
     'format' => '[{timestamp}] [{level}] {message} {context}',
 
+    // نرخ throttle برای لاگ‌های غیر بحرانی در production
+    'throttle' => [
+        'debug_per_minute' => (int)env('LOG_THROTTLE_DEBUG_PER_MINUTE', 30),
+        'info_per_minute' => (int)env('LOG_THROTTLE_INFO_PER_MINUTE', 60),
+        'warning_per_minute' => (int)env('LOG_THROTTLE_WARNING_PER_MINUTE', 300),
+    ],
+
     // فعال/غیرفعال کردن لاگ در محیط‌های مختلف
     'enabled' => [
         'production' => true,

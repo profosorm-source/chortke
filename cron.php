@@ -504,6 +504,17 @@ $scheduler->hourly(function () {
     return ['deleted_tokens' => $count];
 }, 'cleanup_password_resets');
 
+// چرخش لاگ‌های اپلیکیشن (جلوگیری از حجیم شدن فایل‌ها)
+$scheduler->hourly(function () {
+    $logService = \Core\Container::getInstance()->make(\App\Services\LogService::class);
+    
+    // استفاده از متد بازتابی یا فراخوانی مستقیم در صورتی که عمومی شود
+    // اما در اینجا می‌توانیم cleanup را با 0 روز صدا بزنیم که هم لاگ‌های دیتابیس را پاک نکند، هم فایل‌ها را بچرخاند.
+    // یا اینکه از یک Job یا تابع عمومی برای Rotate استفاده کنیم.
+    $logService->cleanup(90); // این هم rotate می‌کند و هم قدیمی‌ها را پاک می‌کند
+    return ['status' => 'rotated'];
+}, 'rotate_logs');
+
 // پاک‌سازی پیام‌های realtime منقضی‌شده
 $scheduler->hourly(function () {
     $service = Container::getInstance()->make(\App\Services\WebSocketService::class);
@@ -778,11 +789,10 @@ $scheduler->weekly('Sunday', '05:00', function () {
     return ['new_users' => $newUsers, 'tx_volume' => $txVolume];
 }, 'weekly_kpi_report');
 
-// توزیع سود/ضرر سرمایه‌گذاری هفتگی با استفاده از آخرین ترید بسته‌شده و تنظیمات پیش‌فرض
+// توزیع سود/ضرر سرمایه‌گذاری هفتگی به صورت Asynchronous (جلوگیری از قفل شدن Cron)
 $scheduler->weekly('Sunday', '05:10', function () use ($container) {
-    $job = $container->make(\App\Jobs\InvestmentProfitDistributionJob::class);
-    $job->handle();
-    return ['status' => 'ok'];
+    $container->make(\Core\Queue::class)->push(\App\Jobs\InvestmentProfitDistributionJob::class);
+    return ['status' => 'queued'];
 }, 'investment_profit_distribution');
 
 // ==========================================
@@ -803,6 +813,12 @@ $scheduler->daily('01:30', function () {
     $result = $svc->processWeeklyRecovery();
     return $result;
 }, 'social_task_trust_recovery');
+
+// ── هر روز صبح — ارسال یادآوری برای بررسی تسک‌های انجام‌شده (Task Management)
+$scheduler->daily('09:00', function () use ($container) {
+    $container->make(\Core\Queue::class)->push(\App\Jobs\SocialTaskApprovalReminderJob::class);
+    return ['status' => 'queued'];
+}, 'social_task_approval_reminder');
 
 // ── هر ساعت — انقضای execution های زمان‌گذشته (بیش از ۲۴ ساعت pending)
 // مشکل #13: از execute() برای DML استفاده می‌کنیم که مستقیماً تعداد affected rows برمی‌گرداند
@@ -921,27 +937,24 @@ $scheduler->daily('04:00', function () use ($container) {
  * هر ساعت: آزادسازی خودکار escrow های منقضی شده
  */
 $scheduler->hourly(function () use ($container) {
-    $job = $container->make(\App\Jobs\EscrowTimeoutJob::class);
-    $job->handle();
-    return ['status' => 'ok'];
+    $container->make(\Core\Queue::class)->push(\App\Jobs\EscrowTimeoutJob::class);
+    return ['status' => 'queued'];
 }, 'escrow_timeout_release');
 
 /**
  * روزانه: پاکسازی اعلان‌های قدیمی
  */
 $scheduler->daily('04:10', function () use ($container) {
-    $job = $container->make(\App\Jobs\NotificationCleanupJob::class);
-    $job->handle();
-    return ['status' => 'ok'];
+    $container->make(\Core\Queue::class)->push(\App\Jobs\NotificationCleanupJob::class);
+    return ['status' => 'queued'];
 }, 'notification_cleanup');
 
 /**
  * هر ساعت: انقضای لیست ویترین و آزادسازی Holdهای منقضی شده
  */
 $scheduler->hourly(function () use ($container) {
-    $job = $container->make(\App\Jobs\VitrineListingExpiryJob::class);
-    $job->handle();
-    return ['status' => 'ok'];
+    $container->make(\Core\Queue::class)->push(\App\Jobs\VitrineListingExpiryJob::class);
+    return ['status' => 'queued'];
 }, 'vitrine_listing_expiry');
 
 /**
@@ -951,6 +964,14 @@ $scheduler->daily('02:20', function () use ($container) {
     $cronService = $container->make(\App\Services\CronService::class);
     return $cronService->applyInactivityScoreDecay();
 }, 'inactivity_score_decay');
+
+/**
+ * هر ۱۵ دقیقه: تسویه خودکار بازی‌های پیش‌بینی
+ */
+$scheduler->everyMinutes(15, function () use ($container) {
+    $container->make(\Core\Queue::class)->push(\App\Jobs\PredictionGameSettlementJob::class);
+    return ['status' => 'queued'];
+}, 'prediction_game_settlement');
 
 /**
  * روزانه: به‌روزرسانی لیست Tor Exit Nodes
@@ -1017,6 +1038,20 @@ $scheduler->hourly(function () use ($container) {
  * هر ساعت: batch aggregation آمار نوتیفیکیشن
  */
 $scheduler->hourly(function () use ($container) {
+    echo "Running DLQ Auto-Retry...\n";
+    try {
+        $queue = $container->make(\Core\Queue::class);
+        $stats = $queue->retryFailedJobs(50);
+        if ($stats['requeued'] > 0 || $stats['errors'] > 0) {
+            echo "DLQ Auto-Retry: {$stats['requeued']} requeued, {$stats['errors']} errors.\n";
+            logger()->info('queue_dlq_auto_retry_results', $stats);
+        }
+    } catch (\Throwable $e) {
+        logger()->error('queue_dlq_auto_retry_exception', ['error' => $e->getMessage()]);
+    }
+}, 'queue_dlq_auto_retry');
+
+$scheduler->hourly(function () use ($container) {
     $notificationService = $container->make(\App\Services\Notification\NotificationService::class);
     $stats = $notificationService->runBatchAggregation();
 
@@ -1039,6 +1074,77 @@ $scheduler->everySeconds((int)setting('outbox_publish_interval', 60), function (
     }
     return ['output' => $output, 'exit_code' => $exitCode];
 }, 'outbox_publisher');
+
+$scheduler->daily('04:30', function () use ($container) {
+    echo "Running Database Daily Maintenance (Retention, Archival, Backup)... \n";
+    try {
+        $dbService = $container->make(\App\Services\DatabaseService::class);
+        $results = $dbService->runDailyMaintenance();
+        
+        echo "Maintenance Completed. Results: " . json_encode($results) . "\n";
+    } catch (\Throwable $e) {
+        logger()->error('cron.database_maintenance.failed', ['error' => $e->getMessage()]);
+        echo "Maintenance Failed: " . $e->getMessage() . "\n";
+    }
+}, 'database_maintenance');
+
+// هر ۵ دقیقه: تازه‌سازی داده‌های داشبورد (Materialized View)
+$scheduler->everyMinutes(5, function () use ($container) {
+    echo "Refreshing Dashboard Materialized Views...\n";
+    try {
+        $transactionQuery = $container->make(\App\Models\TransactionQuery::class);
+        $transactionQuery->refreshMaterializedView();
+        echo "Dashboard Materialized Views refreshed successfully.\n";
+    } catch (\Throwable $e) {
+        logger()->error('cron.mv_refresh.failed', ['error' => $e->getMessage()]);
+        echo "MV Refresh Failed: " . $e->getMessage() . "\n";
+    }
+}, 'dashboard_mv_refresh');
+
+// هر یک دقیقه: مانیتورینگ بلادرنگ عمق صف‌ها (Queue Depth Monitoring)
+$scheduler->everyMinutes(1, function () use ($container) {
+    try {
+        $queue = $container->make(\Core\Queue::class);
+        $queues = ['high_priority', 'default', 'analytics', 'notifications', 'maintenance'];
+        
+        $stats = [];
+        $hasBacklog = false;
+        
+        foreach ($queues as $qName) {
+            $size = $queue->size($qName);
+            $stats[$qName] = $size;
+            
+            // آستانه هشدار برای هر صف
+            $threshold = match($qName) {
+                'high_priority' => 1000,
+                'default' => 5000,
+                default => 10000,
+            };
+            
+            if ($size >= $threshold) {
+                $hasBacklog = true;
+                logger()->critical('queue_monitoring.backlog_alert', [
+                    'queue' => $qName,
+                    'current_depth' => $size,
+                    'threshold' => $threshold,
+                    'action_required' => 'Auto-scale consumers or investigate blockages'
+                ]);
+            }
+        }
+        
+        // ارسال متریک‌ها به سرویس مانیتورینگ/گرافانا
+        logger()->info('queue_monitoring.depth_metrics', $stats);
+        
+        if ($hasBacklog) {
+            echo "⚠️ [ALERT] Queue backlog detected! Check logs.\n";
+        }
+        
+        return ['status' => 'ok', 'depth' => $stats];
+    } catch (\Throwable $e) {
+        logger()->error('queue_monitoring.failed', ['error' => $e->getMessage()]);
+        return ['status' => 'error', 'message' => $e->getMessage()];
+    }
+}, 'queue_depth_monitor');
 
 if ($dryRun) {
     echo "وظایف ثبت‌شده - اجرا نشدند (dry-run mode)\n";

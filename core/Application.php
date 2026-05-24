@@ -182,6 +182,24 @@ class Application
 
     public function run(): void
     {
+        $startTime = microtime(true);
+        
         $this->router->dispatch();
+
+        // ✅ SLA Monitor
+        $durationMs = (microtime(true) - $startTime) * 1000;
+        $slaThresholdMs = (float) config('app.sla_threshold_ms', 1000);
+
+        if ($durationMs > $slaThresholdMs) {
+            try {
+                $logger = $this->container->make(\App\Contracts\LoggerInterface::class);
+                $logger->warning('sla_breach_detected', [
+                    'duration_ms' => round($durationMs, 2),
+                    'threshold_ms' => $slaThresholdMs,
+                    'uri' => $_SERVER['REQUEST_URI'] ?? 'unknown',
+                    'method' => $_SERVER['REQUEST_METHOD'] ?? 'unknown',
+                ]);
+            } catch (\Throwable $ignore) {}
+        }
     }
 }

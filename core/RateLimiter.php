@@ -83,6 +83,48 @@ class RateLimiter
     }
 
     /**
+     * شکل‌دهی ترافیک (Traffic Shaping)
+     * به جای بلاک کردن فوری (429)، اگر سرعت کاربر از حد مشخصی گذشت، ریکوئست او را کمی با تاخیر مواجه می‌کند.
+     * این تکنیک برای مقابله با بات‌ها و اسپم‌ها بدون آزار دادن کاربر واقعی عالی است.
+     */
+    public function throttle(string $key, int $maxAttempts = 60, int $decaySeconds = 60): bool
+    {
+        $allowed = $this->attempt($key, $maxAttempts, $decaySeconds);
+        
+        if (!$allowed) {
+            return false;
+        }
+        
+        // محاسبه میزان فشار
+        $attempts = $this->getAttempts($key);
+        $threshold = $maxAttempts * 0.5; // از 50% ظرفیت به بعد شروع به کند کردن می‌کنیم
+        
+        if ($attempts > $threshold) {
+            // هر چه به سقف نزدیک‌تر شود، زمان انتظار بیشتر می‌شود
+            // مثال: حد 60، تلاش 55 -> تاخیر 500 میلی ثانیه
+            // فرمول: (تلاش فعلی - آستانه) / (سقف - آستانه) * حداکثر تاخیر
+            $penaltyFactor = ($attempts - $threshold) / ($maxAttempts - $threshold);
+            $sleepMs = (int) ($penaltyFactor * 1000); // Max 1000ms delay
+            
+            if ($sleepMs > 0) {
+                // تاخیر عمدی برای خنثی کردن بات‌ها
+                usleep($sleepMs * 1000); // تبدیل به میکروثانیه
+                
+                // لاگینگ فقط برای مواردی که تاخیر زیاد است تا فایل لاگ پر نشود
+                if ($sleepMs >= 500) {
+                    $this->logger->info('traffic_shaping.applied', [
+                        'key' => $key,
+                        'delay_ms' => $sleepMs,
+                        'attempts' => $attempts
+                    ]);
+                }
+            }
+        }
+        
+        return true;
+    }
+
+    /**
      * Rate Limit مخصوص عملیات مالی (حساس)
      */
     public function financial(string $action, int $userId): bool

@@ -92,107 +92,160 @@ if (!function_exists('env')) {
 if (!function_exists('config')) {
     function config(?string $key = null, mixed $default = null): mixed
     {
-        static $config = [];
-        static $loaded = [];
+        global $configData, $configLoaded, $configOverrides;
 
-        $loadConfig = function(string $name) use (&$config, &$loaded) {
-            if (isset($loaded[$name])) {
+        if (!is_array($configData)) {
+            $configData = [];
+        }
+
+        if (!is_array($configLoaded)) {
+            $configLoaded = [];
+        }
+
+        if (!is_array($configOverrides)) {
+            $configOverrides = [];
+        }
+
+        $loadConfig = function(string $name) use (&$configData, &$configLoaded) {
+            if (isset($configLoaded[$name])) {
                 return;
             }
-            $loaded[$name] = true;
+            $configLoaded[$name] = true;
 
             $file = __DIR__ . "/../config/{$name}.php";
             if (file_exists($file)) {
                 $content = require $file;
                 if (is_array($content)) {
-                    $config[$name] = $content;
+                    $configData[$name] = $content;
                 }
             }
         };
 
+        $traverse = function(array $source, array $keys, bool &$found) {
+            $value = $source;
+            foreach ($keys as $segment) {
+                if (is_array($value) && array_key_exists($segment, $value)) {
+                    $value = $value[$segment];
+                    continue;
+                }
+                $found = false;
+                return null;
+            }
+            $found = true;
+            return $value;
+        };
+
         if ($key === null) {
-            // Load everything
             $configDir = __DIR__ . '/../config/';
             if (is_dir($configDir)) {
                 foreach (glob($configDir . '*.php') as $file) {
-                    $name = basename($file, '.php');
-                    $loadConfig($name);
+                    $loadConfig(basename($file, '.php'));
                 }
             }
-            
-            // Re-map main config file to top-level keys for backward-compatibility
+
             $merged = [];
-            foreach ($config as $name => $content) {
+            foreach ($configData as $name => $content) {
                 if ($name === 'config') {
                     $merged = array_merge($merged, $content);
                 } else {
                     $merged[$name] = $content;
                 }
             }
-            return $merged;
+
+            return array_replace_recursive($merged, $configOverrides);
         }
 
         $keys = explode('.', $key);
         $file = $keys[0];
 
-        // Lazy load the requested file
         $loadConfig($file);
-        
-        // Also lazy load the main config file as it houses general nested configurations
         $loadConfig('config');
 
-        // Look for the value
-        $value = $config;
-        $found = true;
-
-        // Try to traverse via separate file space first: $config[$file][$key1][$key2]
-        if (isset($config[$file])) {
-            $value = $config[$file];
-            $slicedKeys = array_slice($keys, 1);
-            foreach ($slicedKeys as $k) {
-                if (is_array($value) && isset($value[$k])) {
-                    $value = $value[$k];
-                } else {
-                    $found = false;
-                    break;
-                }
-            }
-        } else {
+        if (!empty($configOverrides)) {
             $found = false;
-        }
-
-        // If not found, try to traverse main flat configuration space: $config['config'][$file][$key1][$key2]
-        if (!$found && isset($config['config'])) {
-            $value = $config['config'];
-            $found = true;
-            foreach ($keys as $k) {
-                if (is_array($value) && isset($value[$k])) {
-                    $value = $value[$k];
-                } else {
-                    $found = false;
-                    break;
-                }
+            $override = $traverse($configOverrides, $keys, $found);
+            if ($found) {
+                return $override;
             }
         }
 
-        return $found ? $value : $default;
+        if (isset($configData[$file])) {
+            $found = false;
+            $value = $traverse($configData[$file], array_slice($keys, 1), $found);
+            if ($found) {
+                return $value;
+            }
+        }
+
+        if (isset($configData['config'])) {
+            $found = false;
+            $value = $traverse($configData['config'], $keys, $found);
+            if ($found) {
+                return $value;
+            }
+        }
+
+        return $default;
+    }
+}
+
+if (!function_exists('config_set')) {
+    function config_set(string $key, mixed $value): void
+    {
+        global $configOverrides;
+
+        if (!is_array($configOverrides)) {
+            $configOverrides = [];
+        }
+
+        $segments = explode('.', $key);
+        $target = &$configOverrides;
+        foreach ($segments as $segment) {
+            if (!isset($target[$segment]) || !is_array($target[$segment])) {
+                $target[$segment] = [];
+            }
+            $target = &$target[$segment];
+        }
+
+        $target = $value;
+    }
+}
+
+if (!function_exists('config_reload')) {
+    function config_reload(?string $key = null): void
+    {
+        global $configData, $configLoaded, $configOverrides;
+
+        if (!is_array($configData)) {
+            $configData = [];
+        }
+        if (!is_array($configLoaded)) {
+            $configLoaded = [];
+        }
+        if (!is_array($configOverrides)) {
+            $configOverrides = [];
+        }
+
+        if ($key === null) {
+            $configData = [];
+            $configLoaded = [];
+            $configOverrides = [];
+            return;
+        }
+
+        $segments = explode('.', $key);
+        unset($configData[$segments[0]], $configLoaded[$segments[0]]);
     }
 }
 
 if (!function_exists('settings')) {
     function settings(bool $forceReload = false): array
     {
-        static $settings = null;
-
+        $service = app(\App\Services\SettingService::class);
         if ($forceReload) {
-            $settings = null;
+            $service->clearCache();
         }
-
-        if ($settings !== null) {
-            return $settings;
-        }
-
-        $settings = app(\App\Services\SettingService::class)->load();
+        $settings = $service->load();
         return is_array($settings) ? $settings : [];
     }
 }

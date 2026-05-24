@@ -50,16 +50,17 @@ class Database
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_OBJ, // ✅ Object به جای Array
             \PDO::ATTR_EMULATE_PREPARES => false,
             \PDO::ATTR_TIMEOUT => 2, // ✅ Strict timeout to protect against Time-Based SQLi DoS
+            \PDO::ATTR_PERSISTENT => true, // ✅ Connection Pool Manager (Persistent Connections)
         ];
 
         if (defined('\PDO::MYSQL_ATTR_INIT_COMMAND')) {
             $options[\PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES {$this->config['charset']} COLLATE utf8mb4_unicode_ci";
         }
         if (defined('\PDO::MYSQL_ATTR_READ_TIMEOUT')) {
-            $options[\PDO::MYSQL_ATTR_READ_TIMEOUT] = 2;
+            $options[\PDO::MYSQL_ATTR_READ_TIMEOUT] = 3; // ✅ Query Timeout Manager (Read)
         }
         if (defined('\PDO::MYSQL_ATTR_WRITE_TIMEOUT')) {
-            $options[\PDO::MYSQL_ATTR_WRITE_TIMEOUT] = 2;
+            $options[\PDO::MYSQL_ATTR_WRITE_TIMEOUT] = 3; // ✅ Query Timeout Manager (Write)
         }
         
         $this->pdo = new \PDO($dsn, $this->config['user'], $this->config['pass'], $options);

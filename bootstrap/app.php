@@ -1683,9 +1683,18 @@ $container->singleton(\App\Services\MessageModerationService::class, function($c
     );
 });
 
-$container->singleton(\App\Commands\MigrationManager::class, function($c) {
-    return new \App\Commands\MigrationManager(
-        $c->make(\Core\Database::class)
+$container->singleton(\App\Services\MigrationService::class, function($c) {
+    return new \App\Services\MigrationService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
+    );
+});
+
+$container->singleton(\App\Services\DatabaseService::class, function($c) {
+    return new \App\Services\DatabaseService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Models\BackupLog::class),
+        $c->make(\App\Contracts\LoggerInterface::class)
     );
 });
 
@@ -1854,7 +1863,7 @@ $container->singleton(\App\Services\Analytics\AnalyticsQueryService::class, func
         $c->make(\App\Models\CustomTaskAnalyticsModel::class),
         $c->make(\App\Models\User::class),
         $c->make(\App\Models\KYCVerification::class),
-        $c->make(\App\Models\Transaction::class),
+        $c->make(\App\Models\TransactionQuery::class),
         $c->make(\Core\Logger::class) // M35 Fix: اصلاح کامل نگاشت‌های اشتباه به private::class و رفع خطای تزریق وابستگی
     );
 });
