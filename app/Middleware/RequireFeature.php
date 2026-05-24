@@ -43,7 +43,7 @@ class RequireFeature
         
         // بررسی فیچر
         if (!$this->featureService->isEnabled($feature, $userId)) {
-            return $this->handleDisabledFeature($request, $feature, $mode);
+            return $this->handleDisabledFeature($request, $feature, $userId, $mode);
         }
         
         // فیچر فعال است، ادامه بده
@@ -53,7 +53,7 @@ class RequireFeature
     /**
      * مدیریت فیچر غیرفعال
      */
-    private function handleDisabledFeature(Request $request, string $feature, ?string $mode)
+    private function handleDisabledFeature(Request $request, string $feature, ?int $userId, ?string $mode)
     {
         // تشخیص نوع درخواست
         $isAjax = $request->isAjax();

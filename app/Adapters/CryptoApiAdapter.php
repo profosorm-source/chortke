@@ -115,10 +115,10 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                     \curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
                     \curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, min(8, max(2, (int)floor($timeout / 2))));
                     \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-                    \curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                    \curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge([
                         'User-Agent: ChortkeSecureApp/1.0 (+https://chortke.com)',
                         'Accept: application/json',
-                    ]);
+                    ], trace_headers()));
                     $response = \curl_exec($ch);
                     $httpCode = (int) \curl_getinfo($ch, CURLINFO_HTTP_CODE);
                     $errno    = (int) \curl_errno($ch);

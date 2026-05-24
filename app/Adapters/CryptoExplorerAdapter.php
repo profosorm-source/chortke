@@ -81,14 +81,14 @@ class CryptoExplorerAdapter implements CryptoVerificationAdapter
         \curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         \curl_setopt($ch, CURLOPT_TIMEOUT, 5);
         \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        \curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        \curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge([
             'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
             'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language: en-US,en;q=0.5',
             'Accept-Encoding: gzip, deflate',
             'Connection: keep-alive',
             'Upgrade-Insecure-Requests: 1',
-        ]);
+        ], trace_headers()));
 
         $response = \curl_exec($ch);
         $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
