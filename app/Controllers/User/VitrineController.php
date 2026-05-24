@@ -26,12 +26,6 @@ class VitrineController extends BaseUserController
         parent::__construct();
         $this->service      = $service;
         $this->flags        = $flags;
-
-        if (!$this->service->isEnabled()) {
-            $this->session->setFlash('error', 'سرویس ویترین در حال حاضر غیرفعال است.');
-            redirect(url('/dashboard'));
-            exit;
-        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

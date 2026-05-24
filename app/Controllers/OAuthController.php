@@ -303,30 +303,13 @@ class OAuthController extends BaseController
         }
 
         // Link the social account
-        $db = app(\Core\Database::class);
-        $db->beginTransaction();
-        try {
-            $linkResult = $this->oauthService->linkSocialAccount((int)$user->id, $pending['provider'], $pending['data']);
-            if (!$linkResult['success']) {
-                $db->rollBack();
-                if ($this->request->isAjax()) {
-                    $this->jsonError($linkResult['message']);
-                    return;
-                }
-                $this->session->setFlash('error', $linkResult['message']);
-                $this->response->redirect(url('auth/oauth-confirm'));
-                return;
-            }
-            $db->commit();
-        } catch (\Throwable $e) {
-            $db->rollBack();
-            $logger = app(\App\Contracts\LoggerInterface::class);
-            $logger->error('oauth.confirm_link_failed', ['error' => $e->getMessage()]);
+        $linkResult = $this->oauthService->linkSocialAccountSafe((int)$user->id, $pending['provider'], $pending['data']);
+        if (!$linkResult['success']) {
             if ($this->request->isAjax()) {
-                $this->jsonError('خطا در اتصال حساب کاربری');
+                $this->jsonError($linkResult['message']);
                 return;
             }
-            $this->session->setFlash('error', 'خطا در اتصال حساب کاربری');
+            $this->session->setFlash('error', $linkResult['message']);
             $this->response->redirect(url('auth/oauth-confirm'));
             return;
         }

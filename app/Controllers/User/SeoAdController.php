@@ -20,6 +20,7 @@ class SeoAdController extends BaseUserController
     private DashboardStatsService $analytics;
     private SeoPayoutService $payoutService;
     private AdSystemManager $adManager;
+    private \App\Services\SeoService $seoService;
 
     public function __construct(
         Ads $m,
@@ -27,7 +28,8 @@ class SeoAdController extends BaseUserController
         WalletServiceInterface $w,
         DashboardStatsService $a,
         SeoPayoutService $p,
-        AdSystemManager $adManager
+        AdSystemManager $adManager,
+        \App\Services\SeoService $seoService
     ) {
         parent::__construct();
         $this->model = $m;
@@ -36,6 +38,7 @@ class SeoAdController extends BaseUserController
         $this->analytics = $a;
         $this->payoutService = $p;
         $this->adManager = $adManager;
+        $this->seoService = $seoService;
     }
 
     /** لیست آگهی‌های من */
@@ -124,52 +127,14 @@ class SeoAdController extends BaseUserController
             $this->session->setFlash('warning', 'توجه: بودجه شما ممکن است برای تعداد کاربران مورد نظر کافی نباشد.');
         }
 
-        // کسر از کیف پول از طریق API رسمی WalletService
-        $debit = $this->wallet->pay(
-            $uid,
-            (string)$budget,
-            'irt',
-            [
-                'type' => 'seo_ad',
-                'description' => 'SEO Ad: ' . $data['keyword'],
-                'ref_type' => 'seo_ad',
-            ]
-        );
+        // کسر از کیف پول از طریق API رسمی و ثبت آگهی در تراکنش واحد
+        $createResult = $this->seoService->createAd($uid, $data, $budget, $minPayout, $maxPayout);
         
-        if (!$debit['success']) {
-            $this->session->setFlash('error', $debit['message'] ?? 'موجودی کافی نیست.');
-            redirect(url('/seo-ad/create')); return;
-        }
-
-        $ad = $this->model->create([
-            'user_id' => $uid,
-            'type' => 'seo', // مشخص کردن نوع تبلیغ به صورت متمرکز
-            'site_url' => $data['site_url'],
-            'title' => $data['title'] ?? $data['keyword'],
-            'keyword' => $data['keyword'],
-            'description' => $data['description'] ?? null,
-            'budget' => $budget,
-            'remaining_budget' => $budget, // فیلد الزامی
-            'min_payout' => $minPayout,
-            'max_payout' => $maxPayout,
-            'target_duration' => (int)($data['target_duration'] ?? feature_config('seo_ad_limits', 'target_duration_default', 60)),
-            'min_score' => (int)($data['min_score'] ?? feature_config('seo_ad_limits', 'min_score_default', 40)),
-            'max_per_day' => (int)($data['max_per_day'] ?? feature_config('seo_ad_limits', 'max_per_day', 10)),
-            'deadline' => !empty($data['deadline']) ? $data['deadline'] : null,
-            'status' => 'pending',
-        ]);
-
-        if ($ad) {
+        if (!empty($createResult['success'])) {
             $this->session->setFlash('success', 'آگهی SEO ثبت شد و پس از تایید مدیر فعال می‌شود.');
             redirect(url('/seo-ad'));
         } else {
-            // برگشت وجه از طریق API رسمی WalletService
-            $this->wallet->deposit($uid, (string)$budget, 'irt', [
-                'type' => 'seo_ad_refund',
-                'description' => 'برگشت بودجه SEO Ad',
-                'ref_type' => 'seo_ad',
-            ]);
-            $this->session->setFlash('error', 'خطا در ثبت آگهی.');
+            $this->session->setFlash('error', $createResult['message'] ?? 'خطا در ثبت آگهی.');
             redirect(url('/seo-ad/create'));
         }
     }
@@ -180,10 +145,7 @@ class SeoAdController extends BaseUserController
         $adId = (int)$this->request->param('id');
         $userId = (int)user_id();
         
-        $ad = $this->model->db->table('ads')
-            ->where('id', '=', $adId)
-            ->where('user_id', '=', $userId)
-            ->first();
+        $ad = $this->model->findByIdAndUser($adId, $userId);
             
         if (!$ad) { redirect(url('/seo-ad')); return; }
 
@@ -233,10 +195,7 @@ class SeoAdController extends BaseUserController
     /** توقف موقت */
     public function pause(): void
     {
-        $this->model->db->table('ads')
-            ->where('id', '=', (int)$this->request->param('id'))
-            ->where('user_id', '=', (int)user_id())
-            ->update(['status' => 'paused', 'updated_at' => date('Y-m-d H:i:s')]);
+        $this->model->updateStatusByUser((int)$this->request->param('id'), (int)user_id(), 'paused');
         
         if (is_ajax()) {
             $this->response->json(['success' => true]);
@@ -249,10 +208,7 @@ class SeoAdController extends BaseUserController
     /** ادامه */
     public function resume(): void
     {
-        $this->model->db->table('ads')
-            ->where('id', '=', (int)$this->request->param('id'))
-            ->where('user_id', '=', (int)user_id())
-            ->update(['status' => 'active', 'updated_at' => date('Y-m-d H:i:s')]);
+        $this->model->updateStatusByUser((int)$this->request->param('id'), (int)user_id(), 'active');
         
         if (is_ajax()) {
             $this->response->json(['success' => true]);

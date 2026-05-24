@@ -380,12 +380,7 @@ class TicketController extends BaseUserController
         $filename = basename($filename);
         
         // ۲. پیدا کردن پیام مرتبط با فایل پیوست در دیتابیس
-        $attachment = db()->query(
-            "SELECT tm.ticket_id, tm.user_id, tm.is_admin
-             FROM ticket_messages tm
-             WHERE JSON_CONTAINS(tm.attachments, JSON_QUOTE(?), '$[*].path')",
-            [$filename]
-        )->fetch(\PDO::FETCH_OBJ);
+        $attachment = $this->ticketService->getAttachmentMessage($filename);
         
         if (!$attachment) {
             $this->response->json(['success' => false, 'message' => 'فایل یافت نشد.'], 404);
