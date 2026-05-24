@@ -73,13 +73,14 @@ class SystemSettingController extends BaseAdminController
             $this->jsonError('تنظیمات یافت نشد یا کلید معتبر نیست');
         }
 
-        // Log the change
-        $this->logger->activity('setting.updated', 'تغییر تنظیمات سیستم', $this->userId(), [
-            'setting_id' => $id,
-            'key' => $key,
-            'old_value' => $oldValue,
-            'new_value' => $value,
-        ]);
+        // Log the change using robust Audit Trail
+        $this->auditLog(
+            'setting.updated',
+            'setting',
+            $id,
+            ['key' => $key, 'value' => $oldValue],
+            ['key' => $key, 'value' => $value]
+        );
 
         $this->settingService->clearCache();
 
@@ -134,13 +135,14 @@ class SystemSettingController extends BaseAdminController
                 throw new \Exception('خطا در ذخیره اطلاعات در دیتابیس');
             }
 
-            // Log the change
-            $this->logger->activity('setting.image_uploaded', 'آپلود تصویر تنظیمات سیستم', $this->userId(), [
-                'setting_id' => $settingId,
-                'key' => $setting->key ?? null,
-                'old_value' => $setting->value ?? null,
-                'new_value' => $imagePath,
-            ]);
+            // Log the change using robust Audit Trail
+            $this->auditLog(
+                'setting.image_uploaded',
+                'setting',
+                $settingId,
+                ['key' => $setting->key ?? null, 'value' => $setting->value ?? null],
+                ['key' => $setting->key ?? null, 'value' => $imagePath]
+            );
             
             $this->settingService->clearCache();
             
@@ -178,13 +180,14 @@ class SystemSettingController extends BaseAdminController
             
             $this->settingService->updateValueById($settingId, '');
 
-            // Log the change
-            $this->logger->activity('setting.image_removed', 'حذف تصویر تنظیمات سیستم', $this->userId(), [
-                'setting_id' => $settingId,
-                'key' => $setting->key ?? null,
-                'old_value' => $setting->value ?? null,
-                'new_value' => '',
-            ]);
+            // Log the change using robust Audit Trail
+            $this->auditLog(
+                'setting.image_removed',
+                'setting',
+                $settingId,
+                ['key' => $setting->key ?? null, 'value' => $setting->value ?? null],
+                ['key' => $setting->key ?? null, 'value' => '']
+            );
 
             $this->settingService->clearCache();
             

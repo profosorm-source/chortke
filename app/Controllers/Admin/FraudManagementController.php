@@ -46,7 +46,13 @@ class FraudManagementController extends BaseAdminController
             $duration !== null ? (int) $duration : null
         );
 
-        $this->logger->activity('ip_blocked', "IP {$ip} مسدود شد", $adminId, []);
+        $this->auditLog(
+            'ip_blocked',
+            'ip_block',
+            0,
+            null,
+            ['ip' => $ip, 'reason' => $reason]
+        );
         $this->session->setFlash('success', 'IP با موفقیت مسدود شد');
         return $response->redirect(url('/admin/fraud/ip-blacklist'));
     }
@@ -58,7 +64,13 @@ class FraudManagementController extends BaseAdminController
         $this->fraudManagementService->deleteIpBlacklistEntry($id);
 
         $adminId = (int) $this->session->get('user_id');
-        $this->logger->activity('ip_unblocked', 'IP آنبلاک شد', $adminId, []);
+        $this->auditLog(
+            'ip_unblocked',
+            'ip_block',
+            0,
+            ['ip' => $ip],
+            ['ip' => null]
+        );
         $this->session->setFlash('success', 'مسدودیت IP برداشته شد');
         return $response->redirect(url('/admin/fraud/ip-blacklist'));
     }
@@ -77,7 +89,13 @@ class FraudManagementController extends BaseAdminController
 
         $this->fraudManagementService->blockDevice($fingerprint, $reason, null);
 
-        $this->logger->activity('device_blocked', 'دستگاه مسدود شد', $adminId, []);
+        $this->auditLog(
+            'device_blocked',
+            'device_block',
+            0,
+            null,
+            ['device_id' => $deviceId, 'reason' => $reason]
+        );
         $this->session->setFlash('success', 'دستگاه با موفقیت مسدود شد');
         return $response->redirect(url('/admin/fraud/device-blacklist'));
     }
@@ -89,7 +107,13 @@ class FraudManagementController extends BaseAdminController
         $this->fraudManagementService->deleteDeviceBlacklistEntry($id);
 
         $adminId = (int) $this->session->get('user_id');
-        $this->logger->activity('device_unblocked', 'دستگاه آنبلاک شد', $adminId, []);
+        $this->auditLog(
+            'device_unblocked',
+            'device_block',
+            0,
+            ['device_id' => $deviceId],
+            ['device_id' => null]
+        );
         $this->session->setFlash('success', 'مسدودیت دستگاه برداشته شد');
         return $response->redirect(url('/admin/fraud/device-blacklist'));
     }
@@ -129,7 +153,13 @@ class FraudManagementController extends BaseAdminController
             );
 
             if ($ok) {
-                $this->logger->activity('fraud_score_reset', "Fraud score کاربر #{$userId} reset by adjustment", $adminId, []);
+                $this->auditLog(
+                    'fraud_score_reset',
+                    'user_fraud_score',
+                    $userId,
+                    ['old_score' => 'unknown'],
+                    ['new_score' => 0, 'reason' => $reason]
+                );
                 $this->session->setFlash('success', 'Fraud score با adjustment ریست شد.');
             } else {
                 $this->session->setFlash('error', 'ریست Fraud score ناموفق بود.');

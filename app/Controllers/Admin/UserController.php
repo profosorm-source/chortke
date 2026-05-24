@@ -342,11 +342,12 @@ public function update(int $id): void
 
         if ($ok) {
             // لاگ امنیتی (اختیاری)
-            $this->logger->activity(
+            $this->auditLog(
                 'user.ban.toggle',
-                'تغییر وضعیت بن کاربر',
-                $currentAdminId,
-                ['target_user_id' => $id, 'new_status' => $newStatus]
+                'user',
+                $id,
+                ['status' => $user->status ?? 'active'],
+                ['status' => $newStatus]
             );
 
             $this->response->json([
@@ -408,6 +409,14 @@ public function update(int $id): void
         ]);
 
         if ($ok) {
+            $this->auditLog(
+                'user.suspend.toggle',
+                'user',
+                $id,
+                ['status' => $user->status ?? 'active'],
+                ['status' => $newStatus]
+            );
+
             $this->response->json([
                 'success' => true,
                 'message' => $newStatus === 'suspended' ? 'کاربر تعلیق شد' : 'تعلیق برداشته شد',

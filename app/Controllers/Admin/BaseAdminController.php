@@ -68,20 +68,17 @@ abstract class BaseAdminController extends BaseController
             $oldValues = $this->redactPII($oldValues);
             $newValues = $this->redactPII($newValues);
 
-            db()->query(
-                "INSERT INTO admin_audit_log (admin_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, session_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    user_id(),
-                    $action,
-                    $entityType,
-                    $entityId,
-                    $oldValues !== null ? json_encode($oldValues, JSON_UNESCAPED_UNICODE) : null,
-                    $newValues !== null ? json_encode($newValues, JSON_UNESCAPED_UNICODE) : null,
-                    $this->request->ip(),
-                    $this->request->userAgent() ?: 'unknown',
-                    session_id() ?: ''
-                ]
+            $auditTrailService = app(\App\Services\AuditTrail::class);
+            $auditTrailService->logAdminAction(
+                (int)user_id(),
+                $action,
+                $entityType,
+                $entityId,
+                $oldValues,
+                $newValues,
+                $this->request->ip(),
+                $this->request->userAgent() ?: 'unknown',
+                session_id() ?: ''
             );
         } catch (\Exception $e) {
             if (isset($this->logger)) {

@@ -2,7 +2,7 @@
 
 namespace App\Controllers\Admin;
 
-use App\Services\BackupService;
+use App\Services\DatabaseService;
 use Core\Logger;
 
 /**
@@ -11,13 +11,13 @@ use Core\Logger;
  */
 class BackupManagementController extends BaseAdminController
 {
-    private BackupService $backupService;
+    private DatabaseService $databaseService;
     private Logger $logger;
 
-    public function __construct(BackupService $backupService, Logger $logger)
+    public function __construct(DatabaseService $databaseService, Logger $logger)
     {
         parent::__construct();
-        $this->backupService = $backupService;
+        $this->databaseService = $databaseService;
         $this->logger = $logger;
     }
 
@@ -27,8 +27,8 @@ class BackupManagementController extends BaseAdminController
     public function index()
     {
         try {
-            $backups = $this->backupService->getBackups(50, 0);
-            $stats = $this->backupService->getBackupStats();
+            $backups = $this->databaseService->getBackups(50, 0); 
+            $stats = $this->databaseService->getBackupStats();
 
             view('admin/backups/index', [
                 'backups' => $backups['backups'] ?? [],
@@ -51,7 +51,7 @@ class BackupManagementController extends BaseAdminController
         try {
             $description = $_POST['description'] ?? null;
 
-            $result = $this->backupService->createBackup($description);
+            $result = $this->databaseService->createBackup($description);
 
             if ($result['success']) {
                 $this->logger->info('admin.backup.created', [
@@ -87,14 +87,14 @@ class BackupManagementController extends BaseAdminController
                 return;
             }
 
-            $backup = $this->backupService->getBackupById((int)$backupId);
+            $backup = $this->databaseService->getBackupById((int)$backupId);
             if (!$backup || empty($backup['filename'])) {
                 flash('پشتیبان یافت نشد', 'error');
                 redirect('/admin/backups');
                 return;
             }
 
-            $result = $this->backupService->restoreBackup($backup['filename']);
+            $result = $this->databaseService->restoreBackup($backup['filename']);
 
             if ($result['success']) {
                 $this->logger->info('admin.backup.restore.success', ['backup_id' => $backupId]);
@@ -117,12 +117,55 @@ class BackupManagementController extends BaseAdminController
     }
 
     /**
+     * بررسی صحت (Verify) فایل پشتیبان
+     */
+    public function verifyBackup()
+    {
+        try {
+            $backupId = $_POST['backup_id'] ?? null;
+
+            if (!$backupId) {
+                flash('شناسه پشتیبان الزامی است', 'error');
+                redirect('/admin/backups');
+                return;
+            }
+
+            $backup = $this->databaseService->getBackupById((int)$backupId);
+            if (!$backup || empty($backup['filename'])) {
+                flash('پشتیبان یافت نشد', 'error');
+                redirect('/admin/backups');
+                return;
+            }
+
+            $result = $this->databaseService->verifyBackupIntegrity($backup['filename']);
+
+            if ($result['success']) {
+                $this->logger->info('admin.backup.verify.success', ['backup_id' => $backupId]);
+                flash($result['message'], 'success');
+            } else {
+                $this->logger->warning('admin.backup.verify.failed', [
+                    'backup_id' => $backupId,
+                    'error' => $result['error']
+                ]);
+                flash('خطا: ' . $result['error'], 'error');
+            }
+
+            redirect('/admin/backups');
+
+        } catch (\Exception $e) {
+            $this->logger->error('admin.backup.verify.failed', ['error' => $e->getMessage()]);
+            flash('خطا در بررسی صحت پشتیبان', 'error');
+            redirect('/admin/backups');
+        }
+    }
+
+    /**
      * نمایش آمار پشتیبان‌ها
      */
     public function stats()
     {
         try {
-            $stats = $this->backupService->getBackupStats();
+            $stats = $this->databaseService->getBackupStats();
 
             view('admin/backups/stats', ['stats' => $stats]);
 
@@ -141,7 +184,7 @@ class BackupManagementController extends BaseAdminController
         try {
             $daysToKeep = (int)($_POST['days_to_keep'] ?? 30);
 
-            $result = $this->backupService->cleanupOldBackups($daysToKeep);
+            $result = $this->databaseService->cleanupOldBackups($daysToKeep);
 
             if ($result['success']) {
                 $this->logger->info('admin.backup.cleanup', [

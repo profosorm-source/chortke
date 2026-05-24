@@ -82,7 +82,13 @@ class FeatureFlagController extends BaseAdminController
             if ($this->featureService->toggle($name)) {
                 $newStatus = !$feature->enabled ? 'فعال' : 'غیرفعال';
                 
-                $this->logger->activity('feature_toggled', "فیچر {$name} {$newStatus} شد", user_id(), []);
+                $this->auditLog(
+                    'feature_toggled',
+                    'feature_flag',
+                    $feature->id ?? 0,
+                    ['name' => $name, 'enabled' => $feature->enabled],
+                    ['name' => $name, 'enabled' => !$feature->enabled]
+                );
                 
                 return $this->response->json([
                     'success' => true,
@@ -195,7 +201,13 @@ class FeatureFlagController extends BaseAdminController
             }
             
             if ($this->featureService->update($name, $updateData)) {
-                $this->logger->activity('feature_updated', "تنظیمات پیشرفته فیچر {$name} به‌روزرسانی شد", user_id(), ['updated_fields' => array_keys($updateData)] ?? []);
+                $this->auditLog(
+                    'feature_updated',
+                    'feature_flag',
+                    $feature->id ?? 0,
+                    null,
+                    $updateData
+                );
                 
                 return $this->response->json([
                     'success' => true,
@@ -261,7 +273,13 @@ class FeatureFlagController extends BaseAdminController
             }
             
             if ($this->featureService->create($data)) {
-                $this->logger->activity('feature_created', "فیچر جدید {$data['name']} ایجاد شد", user_id(), []);
+                $this->auditLog(
+                    'feature_created',
+                    'feature_flag',
+                    0,
+                    null,
+                    $data
+                );
                 
                 return $this->response->json([
                     'success' => true,
@@ -321,7 +339,13 @@ class FeatureFlagController extends BaseAdminController
             }
             
             if ($this->featureService->delete($name)) {
-                $this->logger->activity('feature_deleted', "فیچر {$name} حذف شد", user_id(), []);
+                $this->auditLog(
+                    'feature_deleted',
+                    'feature_flag',
+                    $feature->id ?? 0,
+                    ['name' => $name],
+                    null
+                );
                 
                 return $this->response->json([
                     'success' => true,
@@ -588,7 +612,13 @@ class FeatureFlagController extends BaseAdminController
             }
             
             if ($this->featureService->update($name, $updateData)) {
-                $this->logger->activity('feature_advanced_updated', "تنظیمات پیشرفته فیچر {$name} به‌روزرسانی شد", user_id(), ['updated_fields' => array_keys($updateData)]);
+                $this->auditLog(
+                    'feature_advanced_updated',
+                    'feature_flag',
+                    $feature->id ?? 0,
+                    null,
+                    $updateData
+                );
                 
                 return $this->response->json([
                     'success' => true,
