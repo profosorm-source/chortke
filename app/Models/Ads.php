@@ -36,9 +36,6 @@ class Ads extends Model implements AdsRepositoryInterface
         return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
     }
 
-    /**
-     * دریافت بر اساس شناسه مالک تبلیغ (یکدست‌سازی به user_id)
-     */
     public function getByAdvertiser(int $userId, int $limit = 20, int $offset = 0, string $type = null, ?string $status = null): array
     {
         $q = $this->db->table(static::$table)
@@ -57,6 +54,31 @@ class Ads extends Model implements AdsRepositoryInterface
             ->limit($limit)
             ->offset($offset)
             ->get();
+    }
+
+    /**
+     * دریافت آگهی بر اساس شناسه و کاربر
+     */
+    public function findByIdAndUser(int $id, int $userId): ?object
+    {
+        return $this->db->table(static::$table)
+            ->where('id', '=', $id)
+            ->where('user_id', '=', $userId)
+            ->first() ?: null;
+    }
+
+    /**
+     * بروزرسانی وضعیت آگهی توسط مالک
+     */
+    public function updateStatusByUser(int $id, int $userId, string $status): bool
+    {
+        return $this->db->table(static::$table)
+            ->where('id', '=', $id)
+            ->where('user_id', '=', $userId)
+            ->update([
+                'status' => $status,
+                'updated_at' => date('Y-m-d H:i:s')
+            ]);
     }
 
     /**

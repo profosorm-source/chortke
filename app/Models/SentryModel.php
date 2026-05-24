@@ -422,14 +422,23 @@ class SentryModel extends Model
 
         $this->db->beginTransaction();
         try {
-            $this->db->table('queues')->insert([
-                'queue' => $job->queue,
-                'payload' => $job->payload,
-                'attempts' => 0,
-                'reserved_at' => null,
-                'available_at' => date('Y-m-d H:i:s'),
-                'created_at' => date('Y-m-d H:i:s')
-            ]);
+            $payload = json_decode((string)$job->payload, true);
+            if (!is_array($payload) || empty($payload['job'])) {
+                $this->db->rollback();
+                return false;
+            }
+
+            $queue = app(\Core\Queue::class);
+            $ok = $queue->push(
+                (string)$payload['job'],
+                (array)($payload['data'] ?? []),
+                (string)($job->queue ?? 'default')
+            );
+
+            if (!$ok) {
+                $this->db->rollback();
+                return false;
+            }
 
             $this->db->execute("DELETE FROM failed_jobs WHERE id = ?", [$id]);
             $this->db->commit();

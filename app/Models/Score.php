@@ -73,24 +73,18 @@ class Score extends Model
             $stmt = $this->db->prepare("
                 SELECT id, domain, source, delta, meta_json, created_at FROM score_events
                 WHERE entity_type = 'user' AND entity_id = ?
-                UNION ALL
-                SELECT id, domain, source, delta, meta_json, created_at FROM user_score_events
-                WHERE user_id = ?
                 ORDER BY created_at DESC 
                 LIMIT ?
             ");
-            $stmt->execute([$userId, $userId, $limit]);
+            $stmt->execute([$userId, $limit]);
         } else {
             $stmt = $this->db->prepare("
                 SELECT id, domain, source, delta, meta_json, created_at FROM score_events
                 WHERE entity_type = 'user' AND entity_id = ? AND domain = ?
-                UNION ALL
-                SELECT id, domain, source, delta, meta_json, created_at FROM user_score_events
-                WHERE user_id = ? AND domain = ?
                 ORDER BY created_at DESC 
                 LIMIT ?
             ");
-            $stmt->execute([$userId, $domain, $userId, $domain, $limit]);
+            $stmt->execute([$userId, $domain, $limit]);
         }
 
         return $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
@@ -198,96 +192,21 @@ class Score extends Model
     public function getDomainScore(int $userId, string $domain): float
     {
         $domain = self::normalizeDomain($domain);
-        // 🔒 جلوگیری از Race Condition با قفل بدبینانه در صورت فعال بودن تراکنش
+        // 🔒 جلوگیری از Race Condition با قفل کردن آخرین رکورد رویداد امتیاز (به جای جدول کاربران)
         if ($this->db->inTransaction()) {
-            $this->db->query("SELECT id FROM users WHERE id = ? FOR UPDATE", [$userId]);
+            $this->db->query("SELECT id FROM score_events WHERE entity_id = ? AND entity_type = 'user' AND domain = ? ORDER BY id DESC LIMIT 1 FOR UPDATE", [$userId, $domain]);
         }
 
-        // به شکل همزمان و ریاضی هردو جدول سنتی و جدید را تجمیع می‌کند
+        // جدول یکپارچه score_events (داده‌های legacy حذف شده‌اند)
         $stmt = $this->db->prepare("
-            SELECT COALESCE(SUM(total_delta), 0.0) FROM (
-                SELECT SUM(delta) as total_delta FROM score_events
-                WHERE entity_id = ? AND entity_type = 'user' AND domain = ?
-                UNION ALL
-                SELECT SUM(delta) as total_delta FROM user_score_events
-                WHERE user_id = ? AND domain = ?
-            ) as combined_scores
+            SELECT COALESCE(SUM(delta), 0.0) FROM score_events
+            WHERE entity_id = ? AND entity_type = 'user' AND domain = ?
         ");
-        $stmt->execute([$userId, $domain, $userId, $domain]);
+        $stmt->execute([$userId, $domain]);
         return (float)$stmt->fetchColumn();
     }
 
-    // ==========================================
-    // Trust Score Management (from TrustScoreService)
-    // ==========================================
 
-    /**
-     * دریافت trust score کاربر
-     */
-    public function getTrustScore(int $userId): float
-    {
-        $stmt = $this->db->prepare("
-            SELECT trust_score FROM user_trust_scores 
-            WHERE user_id = ? 
-            LIMIT 1
-        ");
-        $stmt->execute([$userId]);
-        $score = $stmt->fetchColumn();
-
-        return $score !== false ? (float)$score : 50.0; // Default 50
-    }
-
-    /**
-     * بروزرسانی trust score کاربر
-     */
-    public function updateTrustScore(int $userId, float $score): bool
-    {
-        $stmt = $this->db->prepare("
-            INSERT INTO user_trust_scores (user_id, trust_score, updated_at)
-            VALUES (?, ?, NOW())
-            ON DUPLICATE KEY UPDATE trust_score = VALUES(trust_score), updated_at = NOW()
-        ");
-
-        return $stmt->execute([$userId, $score]);
-    }
-
-    /**
-     * اعمال اتمیک delta روی trust score داخل transaction فعال.
-     *
-     * این متد برای جلوگیری از lost update در پردازش‌های همزمان، ابتدا رکورد را
-     * ایجاد می‌کند، سپس با SELECT ... FOR UPDATE مقدار فعلی را قفل و به‌روزرسانی می‌کند.
-     *
-     * @return array{old: float, new: float}
-     */
-    public function applyTrustDeltaAtomic(int $userId, float $delta, float $min = 0.0, float $max = 100.0, float $initial = 50.0): array
-    {
-        $insert = $this->db->prepare("
-            INSERT INTO user_trust_scores (user_id, trust_score, updated_at)
-            VALUES (?, ?, NOW())
-            ON DUPLICATE KEY UPDATE user_id = user_id
-        ");
-        $insert->execute([$userId, $initial]);
-
-        $select = $this->db->prepare("
-            SELECT trust_score
-            FROM user_trust_scores
-            WHERE user_id = ?
-            LIMIT 1
-            FOR UPDATE
-        ");
-        $select->execute([$userId]);
-        $old = (float)$select->fetchColumn();
-        $new = max($min, min($max, $old + $delta));
-
-        $update = $this->db->prepare("
-            UPDATE user_trust_scores
-            SET trust_score = ?, updated_at = NOW()
-            WHERE user_id = ?
-        ");
-        $update->execute([$new, $userId]);
-
-        return ['old' => $old, 'new' => $new];
-    }
 
     /**
      * دریافت آمار هفتگی اجرا برای trust score

@@ -32,6 +32,15 @@ class BackupLog extends Model
             ->first();
     }
 
+    public function findByFilename(string $filename): ?array
+    {
+        $result = $this->db->table(self::$table)
+            ->select('file_path', 'checksum', 'request_id')
+            ->where('file_path', '=', $filename)
+            ->first();
+        return $result ? (array) $result : null;
+    }
+
     public function logBackup(array $data): int
     {
         return (int)$this->db->table(self::$table)

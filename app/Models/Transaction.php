@@ -429,39 +429,11 @@ class Transaction extends Model
     }
 
     /**
-     * آمار تراکنش‌های کاربر
+     * @deprecated CQRS: Use TransactionQuery::getUserStats instead
      */
     public function getUserStats(int $userId): object
     {
-        $sql = "
-            SELECT
-                currency,
-                SUM(CASE WHEN type = 'deposit' AND status = 'completed' THEN amount ELSE 0 END) as total_deposits,
-                SUM(CASE WHEN type = 'withdraw' AND status = 'completed' THEN amount ELSE 0 END) as total_withdrawals,
-                COUNT(CASE WHEN type = 'deposit' THEN 1 END) as deposit_count,
-                COUNT(CASE WHEN type = 'withdraw' THEN 1 END) as withdrawal_count
-            FROM " . static::$table . "
-            WHERE user_id = :user_id
-            GROUP BY currency
-        ";
-
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute(['user_id' => $userId]);
-        $results = $stmt->fetchAll(\PDO::FETCH_OBJ);
-
-        $stats = (object)[
-            'irt'  => (object)['total_deposits' => 0, 'total_withdrawals' => 0, 'deposit_count' => 0, 'withdrawal_count' => 0],
-            'usdt' => (object)['total_deposits' => 0, 'total_withdrawals' => 0, 'deposit_count' => 0, 'withdrawal_count' => 0],
-        ];
-
-        foreach ($results as $result) {
-            $cur = (string)($result->currency ?? '');
-            if ($cur !== '') {
-                $stats->{$cur} = $result;
-            }
-        }
-
-        return $stats;
+        throw new \RuntimeException("CQRS Violation: Do not use Transaction model for heavy reporting. Use TransactionQuery.");
     }
 
     /**
@@ -645,53 +617,11 @@ class Transaction extends Model
     // ==================== ANALYTICS METHODS ====================
 
     /**
-     * آمار مالی کلی
+     * @deprecated CQRS: Use TransactionQuery::getFinancialStats instead
      */
     public function getFinancialStats(string $currency = 'irt'): array
     {
-        $row = $this->db->fetch("
-            SELECT
-                SUM(CASE WHEN type = 'deposit' AND status = 'completed' THEN amount ELSE 0 END) as total_deposits,
-                SUM(CASE WHEN type = 'withdraw' AND status = 'completed' THEN amount ELSE 0 END) as total_withdrawals,
-                SUM(CASE WHEN type = 'deposit' AND status = 'completed' AND DATE(created_at) = CURDATE() THEN amount ELSE 0 END) as today_deposits,
-                SUM(CASE WHEN type = 'withdraw' AND status = 'completed' AND DATE(created_at) = CURDATE() THEN amount ELSE 0 END) as today_withdrawals,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_transactions,
-                SUM(CASE WHEN type IN ('commission_site','tax','fee') AND status = 'completed' THEN amount ELSE 0 END) as site_revenue,
-                SUM(CASE WHEN type IN ('commission_site','tax','fee') AND status = 'completed' AND DATE(created_at) = CURDATE() THEN amount ELSE 0 END) as today_revenue,
-                SUM(CASE WHEN type IN ('commission_site','tax','fee') AND status = 'completed' AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN amount ELSE 0 END) as weekly_revenue,
-                SUM(CASE WHEN type IN ('commission_site','tax','fee') AND status = 'completed' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN amount ELSE 0 END) as monthly_revenue,
-                COUNT(*) as total_transactions
-            FROM " . static::$table . "
-            WHERE currency = ?
-        ", [$currency]);
-
-        $totalDeposits = (string)($row->total_deposits ?? '0');
-        $totalWithdrawals = (string)($row->total_withdrawals ?? '0');
-        $monthlyRevenue = (string)($row->monthly_revenue ?? '0');
-
-        // Calculate ARPU
-        $activeUsers = (int)$this->db->fetchColumn("
-            SELECT COUNT(DISTINCT user_id) FROM " . static::$table . "
-            WHERE status = 'completed' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-        ");
-        $scale = strtolower($currency) === 'usdt' ? 8 : 4;
-        $arpu = $activeUsers > 0 ? (float)bcdiv($monthlyRevenue, (string)$activeUsers, $scale) : 0.0;
-
-        return [
-            'currency' => $currency,
-            'total_deposits' => (float)$totalDeposits,
-            'total_withdrawals' => (float)$totalWithdrawals,
-            'today_deposits' => (float)($row->today_deposits ?? 0),
-            'today_withdrawals' => (float)($row->today_withdrawals ?? 0),
-            'pending_transactions' => (int)($row->pending_transactions ?? 0),
-            'site_revenue' => (float)($row->site_revenue ?? 0),
-            'today_revenue' => (float)($row->today_revenue ?? 0),
-            'weekly_revenue' => (float)($row->weekly_revenue ?? 0),
-            'monthly_revenue' => (float)$monthlyRevenue,
-            'total_transactions' => (int)($row->total_transactions ?? 0),
-            'arpu' => $arpu,
-            'net_flow' => (float)bcsub($totalDeposits, $totalWithdrawals, $scale),
-        ];
+        throw new \RuntimeException("CQRS Violation: Do not use Transaction model for heavy reporting. Use TransactionQuery.");
     }
 
     /**
