@@ -29,7 +29,6 @@ use App\Services\CryptoDeposit\CryptoDepositService;
 use App\Services\User\UserLevelService;
 use App\Services\LotteryService;
 use App\Services\BannerService;
-use App\Services\WithdrawalService;
 use App\Services\InfluencerService;
 use App\Services\Shared\DisputeService;
 use App\Services\Notification\NotificationService;

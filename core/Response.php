@@ -37,6 +37,10 @@ class Response
         'permissions-policy',
         'cross-origin-opener-policy',
         'cross-origin-resource-policy',
+        'cross-origin-embedder-policy',
+        'reporting-endpoints',
+        'report-to',
+        'nel',
         'vary',
         'access-control-allow-credentials',
         'access-control-allow-methods',
@@ -45,12 +49,13 @@ class Response
         'server',
     ];
 
-    public function setStatusCode(int $code): void
+    public function setStatusCode(int $code): self
     {
         if ($code < 100 || $code > 599) {
             throw new \InvalidArgumentException("کد وضعیت HTTP نامعتبر است: {$code}");
         }
         $this->statusCode = $code;
+        return $this;
     }
     
     /**
@@ -87,10 +92,11 @@ class Response
     /**
      * تنظیم Header
      */
-    public function setHeader(string $name, string $value): void
+    public function setHeader(string $name, string $value): self
     {
         $this->validateHeader($name, $value);
         $this->headers[$name] = $value;
+        return $this;
     }
 
     /**

@@ -12,6 +12,7 @@ class EventDispatcher
     private $listeners = [];
     private array $bootstrapListeners = [];
     private Queue $queue;
+    private ?\App\Services\AuditTrail $auditTrail = null;
 
     public function __construct(Queue $queue)
     {
@@ -158,6 +159,84 @@ class EventDispatcher
                 'data_size'    => $encoded !== false ? strlen($encoded) : null,
             ]);
         }
+
+        $this->auditDispatchedEvent($eventName, $event);
+    }
+
+    private function auditDispatchedEvent(string $eventName, Event $event): void
+    {
+        try {
+            // Avoid auditing audit-record events themselves to prevent recursion/duplication
+            if ($event instanceof \App\Events\AuditRecordedEvent || $eventName === \App\Events\AuditRecordedEvent::class) {
+                return;
+            }
+
+            $auditTrail = $this->resolveAuditTrail();
+            if ($auditTrail === null) {
+                return;
+            }
+
+            $normalizedEventName = $this->normalizeEventName($eventName);
+            $eventData = $event->getData();
+            $userId = null;
+            $actorId = null;
+
+            if (is_array($eventData)) {
+                $userId = $eventData['user_id'] ?? $eventData['userId'] ?? $eventData['user'] ?? null;
+                $actorId = $eventData['actor_id'] ?? $eventData['actorId'] ?? $eventData['admin_id'] ?? $eventData['adminId'] ?? null;
+            }
+
+            $auditTrail->record(
+                $normalizedEventName,
+                is_int($userId) ? $userId : null,
+                [
+                    'event_class' => get_class($event),
+                    'event_data' => $eventData,
+                    'source' => 'event_dispatcher',
+                    '_dispatched_at' => date('Y-m-d H:i:s')
+                ],
+                is_int($actorId) ? $actorId : null
+            );
+        } catch (\Throwable $e) {
+            if (function_exists('logger')) {
+                logger()->warning('event.audit.record_failed', [
+                    'event_name' => $eventName,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    private function resolveAuditTrail(): ?\App\Services\AuditTrail
+    {
+        if ($this->auditTrail !== null) {
+            return $this->auditTrail;
+        }
+
+        try {
+            $container = Container::getInstance();
+            if ($container->has(\App\Services\AuditTrail::class)) {
+                $this->auditTrail = $container->make(\App\Services\AuditTrail::class);
+                return $this->auditTrail;
+            }
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        return null;
+    }
+
+    private function normalizeEventName(string $eventName): string
+    {
+        if (!class_exists($eventName)) {
+            return $eventName;
+        }
+
+        $parts = explode('\\', $eventName);
+        $className = end($parts);
+        $name = preg_replace('/Event$/', '', $className);
+        $name = preg_replace('/([a-z])([A-Z])/', '$1.$2', $name);
+        return strtolower($name);
     }
 
     /**

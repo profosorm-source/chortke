@@ -9,7 +9,10 @@ class Validator
     protected array $rules = [];
     protected array $errors = [];
     protected array $customValidations = [];
-    protected ?callable $authorizationCheck = null;
+
+    /** @var callable|null */
+    protected $authorizationCheck = null;
+
     protected array $messages = [];
 
     private ?Database $db = null;

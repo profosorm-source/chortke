@@ -544,9 +544,11 @@ class QueryBuilder
         // قبلاً first() صدا زده می‌شد که limit را به 1 تبدیل می‌کرد
         // و بعد از بازیابی select، limit همچنان 1 باقی می‌ماند.
         $originalSelect = $this->select;
+        $originalSelectRaw = $this->selectRaw;
         $originalLimit  = $this->limit;
 
-        $this->select = ['COUNT(*) as count'];
+        $this->select = [];
+        $this->selectRaw = ['COUNT(*) as count'];
         $this->limit  = null;
 
         $bindings = [];
@@ -558,11 +560,13 @@ class QueryBuilder
             $result = $stmt->fetch(\PDO::FETCH_OBJ);
         } catch (\PDOException $e) {
             $this->select = $originalSelect;
+            $this->selectRaw = $originalSelectRaw;
             $this->limit  = $originalLimit;
             throw $e;
         }
 
         $this->select = $originalSelect;
+        $this->selectRaw = $originalSelectRaw;
         $this->limit  = $originalLimit;
 
         return (int)($result->count ?? 0);

@@ -29,9 +29,18 @@ if (!function_exists('url')) {
             
             $baseUrl = $protocol . '://' . $host . $basePath;
         }
-        
+
+        $baseUrl = rtrim($baseUrl, '/');
         $path = '/' . ltrim($path, '/');
-        return rtrim($baseUrl, '/') . $path;
+
+        $parsedBasePath = parse_url($baseUrl, PHP_URL_PATH) ?: '';
+        $parsedBasePath = rtrim($parsedBasePath, '/');
+        if ($parsedBasePath !== '' && ($path === $parsedBasePath || str_starts_with($path, $parsedBasePath . '/'))) {
+            $path = substr($path, strlen($parsedBasePath));
+            $path = '/' . ltrim($path, '/');
+        }
+
+        return $baseUrl . $path;
     }
 }
 

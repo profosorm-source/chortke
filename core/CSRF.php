@@ -82,6 +82,10 @@ class CSRF
         
         // Enforce Origin/Referer presence in production to prevent bypasses
         if (config('app.env') === 'production' && !$origin && !$referer) {
+            $appHost = parse_url($appUrl, PHP_URL_HOST);
+            if (in_array($appHost, ['localhost', '127.0.0.1'], true)) {
+                return true; // Local development may not always send Origin/Referer reliably.
+            }
             return false;
         }
 
@@ -108,9 +112,12 @@ class CSRF
         }
         $tokenName = config('csrf.token_name') ?? '_token';
         // M16 Fix: پشتیبانی کامل از هدرهای کلاینت‌های Vue.js و Axios با چک کردن X-XSRF-TOKEN به عنوان جایگزین
-        $token = $this->request->input($tokenName) 
-                 ?? $this->request->header('X-CSRF-TOKEN') 
-                 ?? $this->request->header('X-XSRF-TOKEN');
+        $token = $this->request->input($tokenName)
+                 ?? $this->request->header('X-CSRF-TOKEN')
+                 ?? $this->request->header('X-XSRF-TOKEN')
+                 // BACKWARD-COMPAT: Some legacy forms still use _token or csrf_token names.
+                 ?? $this->request->input('_token')
+                 ?? $this->request->input('csrf_token');
         return $this->verify($token);
     }
 

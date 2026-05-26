@@ -11,6 +11,7 @@ return [
         'env' => env('APP_ENV', 'local'),
         'debug' => env('APP_DEBUG', false),
         'url' => env('APP_URL', 'http://localhost'),
+        'base_path' => env('APP_BASE_PATH', ''),
         'timezone' => env('APP_TIMEZONE', 'Asia/Tehran'),
         'key' => env('APP_KEY', ''),
         'trusted_proxies' => array_filter(array_map('trim', explode(',', env('TRUSTED_PROXIES', '127.0.0.1')))),

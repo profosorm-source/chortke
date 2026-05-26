@@ -546,16 +546,34 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 ? (int)round((microtime(true) - (float)$_SERVER['REQUEST_TIME_FLOAT']) * 1000)
                 : null;
 
-            $db->table('performance_logs')->insert([
-                'endpoint' => mb_substr($endpoint, 0, 500),
-                'method' => $method,
-                'status_code' => $statusCode,
-                'user_id' => $userId,
-                'duration_ms' => $durationMs,
-                'memory_peak' => memory_get_peak_usage(true),
-                'request_id' => $_SERVER['REQUEST_ID'] ?? null,
-                'created_at' => date('Y-m-d H:i:s'),
-            ]);
+            $supportsDetailedSchema = (bool) $db->query("SHOW COLUMNS FROM performance_logs LIKE 'endpoint'")->fetch();
+
+            if ($supportsDetailedSchema) {
+                $db->table('performance_logs')->insert([
+                    'endpoint' => mb_substr($endpoint, 0, 500),
+                    'method' => $method,
+                    'status_code' => $statusCode,
+                    'user_id' => $userId,
+                    'duration_ms' => $durationMs,
+                    'memory_peak' => memory_get_peak_usage(true),
+                    'request_id' => $_SERVER['REQUEST_ID'] ?? null,
+                    'created_at' => date('Y-m-d H:i:s'),
+                ]);
+            } else {
+                $db->table('performance_logs')->insert([
+                    'metric' => 'request_failure',
+                    'value' => $durationMs ?? 0,
+                    'context' => json_encode([
+                        'endpoint' => $endpoint,
+                        'method' => $method,
+                        'status_code' => $statusCode,
+                        'user_id' => $userId,
+                        'memory_peak' => memory_get_peak_usage(true),
+                        'request_id' => $_SERVER['REQUEST_ID'] ?? null,
+                    ], JSON_UNESCAPED_UNICODE),
+                    'created_at' => date('Y-m-d H:i:s'),
+                ]);
+            }
 
         } catch (\Throwable $e) {
             // Silent

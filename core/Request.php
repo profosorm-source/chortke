@@ -360,11 +360,18 @@ private function parseBody(): array
         if (($pos = strpos($uri, '?')) !== false) {
             $uri = substr($uri, 0, $pos);
         }
-        
-        // حذف Base Path (اگر در subdirectory باشد)
-        $scriptName = dirname($_SERVER['SCRIPT_NAME']);
-        if ($scriptName !== '/' && strpos($uri, $scriptName) === 0) {
-            $uri = substr($uri, strlen($scriptName));
+
+        // استفاده از APP_BASE_PATH اگر مشخص شده باشد، در غیر این صورت از مسیر اسکریپت
+        $basePath = config('app.base_path', '');
+        if ($basePath === null || $basePath === '') {
+            $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+            $scriptDir  = dirname($scriptName);
+            $basePath   = ($scriptDir === '/' || $scriptDir === '\\') ? '' : rtrim($scriptDir, '/');
+            $basePath   = preg_replace('/\/public$/', '', $basePath);
+        }
+
+        if ($basePath !== '' && $basePath !== '/' && str_starts_with($uri, $basePath)) {
+            $uri = substr($uri, strlen($basePath));
         }
         
         return '/' . trim($uri, '/');
