@@ -25,13 +25,15 @@ class OutboxPublisher extends BaseService
     private const MAX_RETRY_DELAY_SECONDS = 3600;
 
     public function __construct(
-        private Database $db,
+        protected ?Database $db,
         private Queue $queue,
         private EventDispatcher $events,
         private \App\Contracts\NotificationServiceInterface $notificationService,
         LoggerInterface $logger
     ) {
-        parent::__construct($logger);
+        // Ensure BaseService receives common dependencies so it doesn't overwrite
+        // promoted properties (Logger first, then idempotencyKey, db, transactionWrapper, validatorFactory, cache, redis, eventDispatcher)
+        parent::__construct($logger, null, $db, null, null, null, null, $events);
     }
 
     public function publishPending(int $limit = 50): array
@@ -59,7 +61,7 @@ class OutboxPublisher extends BaseService
             }
         }
 
-        $this->logger->info('outbox.publish.completed', [
+        $this->logInfo('outbox.publish.completed', [
             'published' => $published,
             'failed' => $failed,
             'moved_to_dlq' => $dlq
@@ -129,7 +131,7 @@ class OutboxPublisher extends BaseService
             [mb_substr($e->getMessage(), 0, 1000), (int)$event->id]
         );
 
-        $this->logger->critical('outbox.moved_to_dlq', [
+        $this->logError('outbox.moved_to_dlq', [
             'outbox_id' => $event->id,
             'event_type' => $event->event_type,
             'error' => $e->getMessage()

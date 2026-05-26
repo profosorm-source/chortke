@@ -20,7 +20,6 @@ use App\Services\Cache\CacheInvalidationService;
 
 class LotteryService extends \App\Services\BaseService
 {
-    private Database $db;
     private WalletServiceInterface $walletService;
     private NotificationServiceInterface $notificationService;
     private LotteryRound $roundModel;
@@ -31,12 +30,11 @@ class LotteryService extends \App\Services\BaseService
     private FeatureFlagService $featureFlagService;
     private \App\Services\AuditTrail $auditTrail;
     private CacheInvalidationService $cacheInvalidation;
+    private ?\App\Services\OutboxService $outboxService = null;
 
     private const MATCH_TYPES = ['value', 'position', 'value_position', 'signal'];
     private const MAX_CODE_GENERATION_ATTEMPTS = 100;
     private const MAX_DAILY_VOTES_PER_USER = 1;
-    
-    private Cache $cache;
     private int $cacheTTL = 300;
 
     public function __construct(
@@ -67,6 +65,11 @@ class LotteryService extends \App\Services\BaseService
         $this->cache = $cache;
         $this->auditTrail = $auditTrail;
         $this->cacheInvalidation = $cacheInvalidation;
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
+        }
     }
 
     public function createRound(int $adminId, array $data): array
@@ -238,6 +241,13 @@ class LotteryService extends \App\Services\BaseService
                 }
 
                 $this->db->commit();
+
+                $this->eventDispatcher->dispatch('lottery.participated', [
+                    'user_id' => $userId,
+                    'round_id' => $roundId,
+                    'code' => $code,
+                    'price' => $round->ticket_price
+                ]);
 
                 $this->cacheInvalidation->invalidateWallet($userId);
 
@@ -703,27 +713,44 @@ class LotteryService extends \App\Services\BaseService
             // Pay prize AFTER commit so a wallet failure cannot roll back the winner record.
             // The idempotency_key guarantees no double-payment on retry.
             if ($round->prize_amount > 0) {
-                $depositResult = $this->walletService->deposit(
-                    $winner->user_id,
-                    (float)$round->prize_amount,
-                    $round->currency,
-                    [
+                $payload = [
+                    'user_id' => $winner->user_id,
+                    'amount' => (float)$round->prize_amount,
+                    'currency' => $round->currency,
+                    'metadata' => [
                         'type' => 'lottery_prize',
                         'round_id' => $roundId,
                         'description' => "جایزه قرعه‌کشی: {$round->title}",
                         'idempotency_key' => "lottery_winner_{$roundId}_{$winner->user_id}"
-                    ]
-                );
+                    ],
+                ];
 
-                if (!$depositResult['success']) {
-                    // Winner record is already committed. Log for manual reconciliation.
-                    $this->logger->error('lottery.prize_payment_failed', [
-                        'round_id'      => $roundId,
-                        'winner_user_id'=> $winner->user_id,
-                        'prize_amount'  => $round->prize_amount,
-                        'currency'      => $round->currency,
-                    ]);
-                    // Do NOT return failure — the winner selection itself succeeded.
+                if ($this->outboxService) {
+                    $ok = $this->outboxService->record('lottery_round', $roundId, 'wallet.deposit.requested', $payload);
+                    if (!$ok) {
+                        $this->logger->error('lottery.prize_outbox_failed', ['round_id' => $roundId, 'winner_user_id' => $winner->user_id]);
+                    }
+                } else {
+                    $depositResult = $this->walletService->deposit(
+                        $winner->user_id,
+                        (float)$round->prize_amount,
+                        $round->currency,
+                        [
+                            'type' => 'lottery_prize',
+                            'round_id' => $roundId,
+                            'description' => "جایزه قرعه‌کشی: {$round->title}",
+                            'idempotency_key' => "lottery_winner_{$roundId}_{$winner->user_id}"
+                        ]
+                    );
+
+                    if (!$depositResult['success']) {
+                        $this->logger->error('lottery.prize_payment_failed', [
+                            'round_id'      => $roundId,
+                            'winner_user_id'=> $winner->user_id,
+                            'prize_amount'  => $round->prize_amount,
+                            'currency'      => $round->currency,
+                        ]);
+                    }
                 }
             }
 
@@ -772,17 +799,31 @@ class LotteryService extends \App\Services\BaseService
         try {
             $participants = $this->participationModel->getAllActiveByRound($roundId);
             
-            foreach ($participants as $p) {
+                foreach ($participants as $p) {
                 // 🛡️ H10 Fix: Use participation->price_paid instead of round->entry_fee
                 // Each participant may have paid a different amount
                 if ($p->transaction_id && $p->price_paid > 0) {
-                    $this->walletService->deposit(
-                        $p->user_id,
-                        $p->price_paid,
-                        $round->currency,
-                        'lottery_refund',
-                        ['round_id' => $roundId, 'description' => "بازگشت هزینه: {$round->title}"]
-                    );
+                        $refundPayload = [
+                            'user_id' => $p->user_id,
+                            'amount' => $p->price_paid,
+                            'currency' => $round->currency,
+                            'metadata' => [
+                                'type' => 'lottery_refund',
+                                'round_id' => $roundId,
+                                'description' => "بازگشت هزینه: {$round->title}",
+                            ],
+                        ];
+
+                        if ($this->outboxService) {
+                            $this->outboxService->record('lottery_participation', $p->id, 'wallet.deposit.requested', $refundPayload);
+                        } else {
+                            $this->walletService->deposit(
+                                $p->user_id,
+                                $p->price_paid,
+                                $round->currency,
+                                ['type' => 'lottery_refund', 'description' => "بازگشت هزینه: {$round->title}", 'round_id' => $roundId]
+                            );
+                        }
                 }
 
                 $this->participationModel->update($p->id, ['status' => 'cancelled']);
@@ -956,10 +997,15 @@ EOT;
     private function notify(int $userId, string $title, string $message, string $type): void
     {
         try {
-            $this->notificationService->send($userId, $type, $title, $message);
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => $userId,
+                'type' => $type,
+                'title' => $title,
+                'message' => $message,
+                'data' => []
+            ]);
         } catch (\Throwable $e) {
             $this->logger->error('notification_error', ['message' => $e->getMessage()]);
         }
     }
 }
-

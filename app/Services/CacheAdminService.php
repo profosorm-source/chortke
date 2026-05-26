@@ -13,7 +13,7 @@ use App\Contracts\LoggerInterface;
  */
 class CacheAdminService extends \App\Services\BaseService
 {
-    private CacheInterface $cache;
+    protected ?CacheInterface $cache;
     public function __construct(CacheInterface $cache, LoggerInterface $logger)
     {
         parent::__construct($logger);

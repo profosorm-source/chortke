@@ -2,52 +2,49 @@
 
 namespace App\Services;
 
-use App\Services\Notification\NotificationService;
 use Core\Database;
 use App\Models\ManualDeposit;
 use App\Models\BankCard;
 use App\Models\User;
-use App\Services\AuditTrail;
 use App\Services\UploadService;
 use App\Services\CurrencyService;
 use App\Validators\Requests\CreateManualDepositRequest;
-
+use Core\EventDispatcher;
+use Core\RateLimiter;
+use Core\IdempotencyKey;
+use App\Services\Search\SearchQuery;
+use App\Services\Search\SearchResult;
 
 use App\Contracts\LoggerInterface;
 class ManualDepositService extends \App\Services\BaseService
 {
     private \App\Models\User        $userModel;
     private \App\Models\BankCard    $bankCardModel;
-    private Database                $db;
     private ManualDeposit           $model;
     private WalletService           $wallet;
-    private NotificationService     $notifier;
-    private AuditTrail              $auditTrail;
     private ReconciliationService   $reconciliationService;
     private UploadService           $uploadService;
     private CurrencyService         $currencyService;
 
     public function __construct(
-        Database                $db,
         WalletService           $walletService,
-        NotificationService     $notificationService,
         \App\Models\ManualDeposit $model,
         \App\Models\BankCard      $bankCardModel,
         \App\Models\User          $userModel,
-        AuditTrail              $auditTrail,
+        Database                $db,
         LoggerInterface         $logger,
+        EventDispatcher         $eventDispatcher,
+        private RateLimiter     $rateLimiter,
+        private IdempotencyKey  $idempotency,
         ReconciliationService   $reconciliationService,
         UploadService           $uploadService,
         CurrencyService         $currencyService
     ) {
-        parent::__construct($logger);
-        $this->db                     = $db;
+        parent::__construct($logger, null, $db, null, null, null, null, $eventDispatcher);
         $this->model                  = $model;
         $this->wallet                 = $walletService;
-        $this->notifier               = $notificationService;
         $this->bankCardModel          = $bankCardModel;
         $this->userModel              = $userModel;
-        $this->auditTrail             = $auditTrail;
         $this->reconciliationService  = $reconciliationService;
         $this->uploadService          = $uploadService;
         $this->currencyService        = $currencyService;
@@ -55,6 +52,21 @@ class ManualDepositService extends \App\Services\BaseService
 
     public function create(int $userId, array $data, ?string $receiptPath): array
     {
+        // 🛡️ Idempotency Check: Prevent duplicate form submissions
+        $ikey = $data['idempotency_key'] ?? null;
+        if ($ikey) {
+            $cachedResponse = $this->idempotency->check($ikey, "manual_deposit:{$userId}");
+            if ($cachedResponse) {
+                return $cachedResponse;
+            }
+        }
+
+        // 🛡️ Service-Layer Rate Limiting: Prevent rapid-fire manual deposit requests
+        if (!$this->rateLimiter->attempt("manual_deposit_create:{$userId}", 3, 600)) {
+            $this->logger->warning('manual_deposit.rate_limit_exceeded', ['user_id' => $userId]);
+            return $this->idempotency->save($ikey, ['success' => false, 'message' => 'تعداد درخواست‌های شما بیش از حد مجاز است. لطفاً ۱۰ دقیقه دیگر تلاش کنید.'], 600);
+        }
+
         $request = new CreateManualDepositRequest($data);
         if (!$request->validate()) {
             if (!empty($receiptPath)) {
@@ -209,13 +221,25 @@ class ManualDepositService extends \App\Services\BaseService
             $this->db->commit();
             
             $depositId = (int)($id->id ?? 0);
-            $this->logger->info('manual_deposit.created', ['user_id' => $userId, 'id' => $depositId, 'amount' => $amount]);
 
-            return [
+            $this->eventDispatcher->dispatch('deposit.manual_created', [
+                'user_id' => $userId,
+                'deposit_id' => $depositId,
+                'amount' => $amount
+            ]);
+
+            $this->logger->info('manual_deposit.created', [
+                'channel' => 'deposit',
+                'user_id' => $userId, 
+                'id' => $depositId, 
+                'amount' => $amount
+            ]);
+
+            return $this->idempotency->save($ikey, [
                 'success'    => true,
                 'message'    => 'درخواست واریز ثبت شد و در انتظار بررسی است',
                 'deposit_id' => $depositId,
-            ];
+            ]);
 
         } catch (\PDOException $e) {
             if ($this->db->inTransaction()) {
@@ -231,6 +255,7 @@ class ManualDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => 'این شماره پیگیری قبلاً ثبت شده است'];
             }
             $this->logger->error('manual_deposit.create.failed', [
+                'channel' => 'deposit',
                 'user_id' => $userId,
                 'amount'  => $amount,
                 'error'   => $e->getMessage()
@@ -244,6 +269,7 @@ class ManualDepositService extends \App\Services\BaseService
                 try { $this->uploadService->delete($receiptPath); } catch (\Throwable $t) {}
             }
             $this->logger->error('manual_deposit.create.failed', [
+                'channel' => 'deposit',
                 'user_id' => $userId,
                 'amount'  => $amount,
                 'error'   => $e->getMessage()
@@ -343,6 +369,14 @@ class ManualDepositService extends \App\Services\BaseService
                         'deposit_id' => $depositId,
                         'error' => $reconciliation['message'] ?? 'Unknown'
                     ]);
+                    // 🚀 اعلام شکست در تطبیق برای Alerting در Listener
+                    $this->eventDispatcher->dispatch('reconciliation.failed', [
+                        'type' => 'manual_deposit',
+                        'id' => $depositId,
+                        'user_id' => (int)$d->user_id,
+                        'amount' => $amountStr,
+                        'error' => $reconciliation['message'] ?? 'Mismatch detected'
+                    ]);
                 }
             } catch (\Throwable $reconEx) {
                 $this->logger->error('manual_deposit.reconcile_exception', [
@@ -360,17 +394,14 @@ class ManualDepositService extends \App\Services\BaseService
                 }
             }
 
-            $this->auditTrail->record('deposit.approved', (int)$d->user_id, [
-                'deposit_id'     => $depositId,
-                'amount'         => $amountStr,
-                'tracking_code'  => $d->tracking_code,
-                'admin_id'       => $adminId,
-                'transaction_id' => $ok['transaction_id'],
-                'balance_before' => $ok['balance_before'] ?? null,
-                'balance_after'  => $ok['balance_after'] ?? null,
-            ], $adminId);
-
-            $this->notifier->depositSuccess((int)$d->user_id, $amountStr, 'IRT');
+            $this->eventDispatcher->dispatch('deposit.manual_approved', [
+                'user_id' => (int)$d->user_id,
+                'deposit_id' => $depositId,
+                'amount' => $amountStr,
+                'tracking_code' => $d->tracking_code,
+                'admin_id' => $adminId,
+                'transaction_id' => $ok['transaction_id']
+            ]);
 
             return ['success' => true, 'message' => 'واریز تأیید شد و کیف پول شارژ گردید'];
 
@@ -378,7 +409,11 @@ class ManualDepositService extends \App\Services\BaseService
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
-            $this->logger->error('manual_deposit.approve.failed', ['id' => $depositId, 'err' => $e->getMessage()]);
+            $this->logger->error('manual_deposit.approve.failed', [
+                'channel' => 'deposit',
+                'id' => $depositId, 
+                'err' => $e->getMessage()
+            ]);
             return ['success' => false, 'message' => 'خطا در تأیید واریز'];
         }
     }
@@ -421,25 +456,15 @@ class ManualDepositService extends \App\Services\BaseService
                 ['pending', 'under_review']
             );
 
-            $this->auditTrail->record('deposit.rejected', (int)$d->user_id, [
-                'deposit_id' => $depositId,
-                'amount'     => $amountStr,
-                'reason'     => $reason,
-                'admin_id'   => $adminId,
-            ], $adminId);
-
             $this->db->commit();
 
-            $this->notifier->send(
-                (int)$d->user_id,
-                \App\Models\Notification::TYPE_DEPOSIT,
-                'واریز دستی رد شد',
-                'درخواست واریز دستی شما رد شد. دلیل: ' . $reason,
-                ['deposit_id' => $depositId],
-                url('/wallet/manual-deposit/history'),
-                'مشاهده',
-                'high'
-            );
+            $this->eventDispatcher->dispatch('deposit.manual_rejected', [
+                'user_id' => (int)$d->user_id,
+                'deposit_id' => $depositId,
+                'amount' => $amountStr,
+                'reason' => $reason,
+                'admin_id' => $adminId
+            ]);
 
             return ['success' => true, 'message' => 'رد شد'];
 
@@ -447,33 +472,41 @@ class ManualDepositService extends \App\Services\BaseService
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
-            $this->logger->error('manual_deposit.reject.failed', ['id' => $depositId, 'err' => $e->getMessage()]);
+            $this->logger->error('manual_deposit.reject.failed', [
+                'channel' => 'deposit',
+                'id' => $depositId, 
+                'err' => $e->getMessage()
+            ]);
             return ['success' => false, 'message' => 'خطا در رد درخواست واریز'];
         }
     }
 
     /**
-     * جستجوی سریع واریزهای دستی برای سیستم سرچ مرکزی
+     * جستجوی استاندارد واریزهای دستی
      */
-    public function quickSearchManualDeposits(string $term, int $limit = 5): array
+    public function searchManualDeposits(SearchQuery $query): SearchResult
     {
-        $query = $this->model->query()
-            ->selectRaw("manual_deposits.id, manual_deposits.amount, 'manual' as type, manual_deposits.status, manual_deposits.created_at, u.full_name, u.email")
+        $dbQuery = $this->model->query()
+            ->selectRaw("manual_deposits.*, u.full_name as user_name, u.email as user_email")
             ->leftJoin('users as u', 'u.id', '=', 'manual_deposits.user_id');
 
-        $this->model->applySearch($query, $term);
-
-        if (!empty($term)) {
-            $escaped = addcslashes(trim($term), '%_');
-            $like = "%{$escaped}%";
-            $query->where(function($sub) use ($like) {
-                $sub->orWhere('u.email', 'LIKE', $like);
-            });
+        if ($query->getTerm()) {
+            $this->model->applySearch($dbQuery, $query->getTerm());
         }
 
-        return $query->orderBy('manual_deposits.created_at', 'DESC')
-                     ->limit($limit)
-                     ->get() ?? [];
+        // اعمال فیلترهای استاندارد
+        foreach ($query->getFilters() as $col => $val) {
+            if ($val !== null && $val !== '') {
+                $dbQuery->where("manual_deposits.{$col}", '=', $val);
+            }
+        }
+
+        $total = (int)$dbQuery->count();
+        $items = $dbQuery->orderByRaw($query->getSort())
+                       ->limit($query->getLimit())
+                       ->offset($query->getOffset())
+                       ->get() ?? [];
+
+        return new SearchResult($items, $total);
     }
 }
-

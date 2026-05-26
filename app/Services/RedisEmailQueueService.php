@@ -16,14 +16,14 @@ use App\Contracts\MetricsCollectorInterface;
  */
 class RedisEmailQueueService extends \App\Services\BaseService
 {
-    private Cache $cache;
-    private ?\Redis $redis = null;
+    protected ?Cache $cache;
+    private ?\Redis $redisClient = null;
     private bool $useRedis = false;
     private string $queueKey = 'email:queue';
     private string $processingKey = 'email:processing';
     private string $metaPrefix = 'email:meta:';
 
-    private \Core\Database $db;
+    protected ?\Core\Database $db;
     private MetricsCollectorInterface $metrics;
 
     public function __construct(Cache $cache, LoggerInterface $logger, \Core\Database $db, MetricsCollectorInterface $metrics)
@@ -32,7 +32,7 @@ class RedisEmailQueueService extends \App\Services\BaseService
         $this->cache = $cache;
         $this->db = $db;
         $this->metrics = $metrics;
-        $this->redis = $this->cache->redis();
+        $this->redisClient = $this->cache->redis();
         $this->useRedis = $this->cache->driver() === 'redis';
 
         $prefix = config('redis.prefix', 'chortke');
@@ -71,7 +71,7 @@ class RedisEmailQueueService extends \App\Services\BaseService
         if ($this->useRedis) {
             try {
                 // ذخیره metadata
-                $this->redis->setEx(
+                $this->redisClient->setEx(
                     $this->metaPrefix . $emailId,
                     86400 * 7, // 7 days TTL
                     json_encode($payload)
@@ -79,7 +79,7 @@ class RedisEmailQueueService extends \App\Services\BaseService
 
                 // اضافه به صف با اولویت و زمان‌بندی (زمان‌بندی اولویت بالاتر دارد تا کارهای آینده زودتر برداشته نشوند)
                 $score = ($scheduledAt * 10) + $priority;
-                $this->redis->zAdd($this->queueKey, $score, $emailId);
+                $this->redisClient->zAdd($this->queueKey, $score, $emailId);
 
                 $this->logger->info('email.redis.queued', [
                     'email_id' => $emailId,
@@ -141,7 +141,7 @@ class RedisEmailQueueService extends \App\Services\BaseService
                     return items
 LUA;
 
-                $emailIds = $this->redis->eval($script, [$this->queueKey, $this->processingKey, $maxScore, $limit], 2);
+                $emailIds = $this->redisClient->eval($script, [$this->queueKey, $this->processingKey, $maxScore, $limit], 2);
 
                 if (empty($emailIds)) {
                     return [];
@@ -149,7 +149,7 @@ LUA;
 
                 $emails = [];
                 foreach ($emailIds as $emailId) {
-                    $data = $this->redis->get($this->metaPrefix . $emailId);
+                    $data = $this->redisClient->get($this->metaPrefix . $emailId);
                     if ($data) {
                         $email = json_decode($data, true);
                         
@@ -157,12 +157,12 @@ LUA;
                         if ($email['attempts'] < 5) {
                             $emails[] = $email;
                         } else {
-                            $this->redis->sRem($this->processingKey, $emailId);
+                            $this->redisClient->sRem($this->processingKey, $emailId);
                             $this->markAsFailed($emailId, 'Max attempts reached during pop');
                         }
                     } else {
                         // Metadata گم شده - پاکسازی از processing
-                        $this->redis->sRem($this->processingKey, $emailId);
+                        $this->redisClient->sRem($this->processingKey, $emailId);
                     }
                 }
 
@@ -230,7 +230,7 @@ LUA;
                 end
                 return 0
 LUA;
-            return (bool) $this->redis->eval($script, [$this->queueKey, $this->processingKey, $emailId], 2);
+            return (bool) $this->redisClient->eval($script, [$this->queueKey, $this->processingKey, $emailId], 2);
         } catch (\Throwable $e) {
             $this->logger->error('email.redis.claim.failed', ['email_id' => $emailId, 'error' => $e->getMessage()]);
             return false;
@@ -257,10 +257,10 @@ LUA;
         if ($this->useRedis) {
             try {
                 // حذف از processing
-                $this->redis->sRem($this->processingKey, $emailId);
+                $this->redisClient->sRem($this->processingKey, $emailId);
                 
                 // به‌روزرسانی metadata
-                $data = $this->redis->get($this->metaPrefix . $emailId);
+                $data = $this->redisClient->get($this->metaPrefix . $emailId);
                 if ($data) {
                     $email = json_decode($data, true);
                     $email['status'] = 'sent';
@@ -270,7 +270,7 @@ LUA;
                     $this->archiveToDatabase($email);
                     
                     // حذف از Redis (دیگر نیازی نیست)
-                    $this->redis->del($this->metaPrefix . $emailId);
+                    $this->redisClient->del($this->metaPrefix . $emailId);
                 }
 
                 $this->metrics->increment('email.send.success');
@@ -342,9 +342,9 @@ LUA;
         if ($this->useRedis) {
             try {
                 // حذف از processing
-                $this->redis->sRem($this->processingKey, $emailId);
+                $this->redisClient->sRem($this->processingKey, $emailId);
                 
-                $data = $this->redis->get($this->metaPrefix . $emailId);
+                $data = $this->redisClient->get($this->metaPrefix . $emailId);
                 if ($data) {
                     $email = json_decode($data, true);
                     $email['attempts']++;
@@ -370,13 +370,13 @@ LUA;
 
                         // 3. Push to Redis LIST for fast monitoring
                         try {
-                            $this->redis->rPush('email:dlq', json_encode($email));
-                            $this->redis->lTrim('email:dlq', -10000, -1);
+                            $this->redisClient->rPush('email:dlq', json_encode($email));
+                            $this->redisClient->lTrim('email:dlq', -10000, -1);
                         } catch (\Throwable $redisError) {
                             $this->logger->error('email.dlq.redis_failed', ['error' => $redisError->getMessage()]);
                         }
 
-                        $this->redis->del($this->metaPrefix . $emailId);
+                        $this->redisClient->del($this->metaPrefix . $emailId);
                         
                         $this->logger->warning("Email moved to DLQ after max attempts: {$emailId}", ['error' => $error]);
                     } else {
@@ -385,7 +385,7 @@ LUA;
                         $delay = min($delay, 3600);
                         
                         $email['status'] = 'pending';
-                        $this->redis->setEx(
+                        $this->redisClient->setEx(
                             $this->metaPrefix . $emailId,
                             86400 * 7,
                             json_encode($email)
@@ -394,7 +394,7 @@ LUA;
                         $priority = $this->getPriorityScore($email['priority']);
                         $nextRun = time() + $delay;
                         $score = ($nextRun * 10) + $priority; 
-                        $this->redis->zAdd($this->queueKey, $score, $emailId);
+                        $this->redisClient->zAdd($this->queueKey, $score, $emailId);
                         
                         $this->logger->info('email.redis.retry_scheduled', [
                             'email_id' => $emailId,
@@ -426,8 +426,8 @@ LUA;
         if ($this->useRedis) {
             try {
                 return [
-                    'pending' => (int) $this->redis->zCard($this->queueKey),
-                    'processing' => (int) $this->redis->sCard($this->processingKey),
+                    'pending' => (int) $this->redisClient->zCard($this->queueKey),
+                    'processing' => (int) $this->redisClient->sCard($this->processingKey),
                     'driver' => 'redis'
                 ];
             } catch (\Throwable $e) {
@@ -448,27 +448,27 @@ LUA;
         if (!$this->useRedis) return 0;
 
         try {
-            $emailIds = $this->redis->sMembers($this->processingKey) ?? [];
+            $emailIds = $this->redisClient->sMembers($this->processingKey) ?? [];
             $requeued = 0;
             $now = time();
 
             foreach ($emailIds as $emailId) {
-                $data = $this->redis->get($this->metaPrefix . $emailId);
+                $data = $this->redisClient->get($this->metaPrefix . $emailId);
                 if ($data) {
                     $email = json_decode($data, true);
                     // اگه بیش از 600 ثانیه (10 دقیقه) در حال پردازش بوده
                     // فرض بر این است که worker کرش کرده
                     if (isset($email['updated_at']) && ($now - $email['updated_at'] > 600)) {
-                        $this->redis->sRem($this->processingKey, $emailId);
+                        $this->redisClient->sRem($this->processingKey, $emailId);
                         
                         $priority = $this->getPriorityScore($email['priority'] ?? 'normal');
                         $score = ($now * 10) + $priority;
-                        $this->redis->zAdd($this->queueKey, $score, $emailId);
+                        $this->redisClient->zAdd($this->queueKey, $score, $emailId);
                         $requeued++;
                     }
                 } else {
                     // پیام بدون متا - حذف از پردازش
-                    $this->redis->sRem($this->processingKey, $emailId);
+                    $this->redisClient->sRem($this->processingKey, $emailId);
                 }
             }
 
@@ -499,12 +499,12 @@ LUA;
                 $cursor = null;
 
                 do {
-                    $keys = $this->redis->scan($cursor, $pattern, 100);
+                    $keys = $this->redisClient->scan($cursor, $pattern, 100);
                     if ($keys) {
                         foreach ($keys as $key) {
-                            $ttl = $this->redis->ttl($key);
+                            $ttl = $this->redisClient->ttl($key);
                             if ($ttl < 0) { // منقضی شده
-                                $this->redis->del($key);
+                                $this->redisClient->del($key);
                                 $cleaned++;
                             }
                         }
@@ -1057,7 +1057,7 @@ LUA;
     {
         try {
             if ($this->useRedis) {
-                $depth = $this->redis->zCard($this->queueKey) ?: 0;
+                $depth = $this->redisClient->zCard($this->queueKey) ?: 0;
             } else {
                 $depth = (int)$this->db->fetchColumn("SELECT COUNT(*) FROM email_queue WHERE status = 'pending'") ?: 0;
             }

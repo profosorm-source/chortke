@@ -6,40 +6,28 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\LoggerInterface;
-use App\Contracts\WalletServiceInterface;
-use App\Contracts\NotificationServiceInterface;
-use App\Services\User\UserService;
-use App\Services\Shared\ReferralService;
 use App\Models\Investment;
 use App\Models\TradingRecord;
 use App\Models\InvestmentProfit;
 use App\Models\InvestmentWithdrawal;
-use Core\Database;
-use App\Services\AuditTrail;
+use App\Contracts\WalletServiceInterface;
 use App\Services\SettingService;
-use App\Services\PerformanceOptimizationService;
-use App\Contracts\CurrencyServiceInterface;
-use App\Services\Cache\CacheInvalidationService;
+use Core\Database;
+use App\Contracts\LoggerInterface;
 use App\Services\StateMachineService;
+use Core\EventDispatcher;
+use App\Events\InvestmentCreatedEvent;
 
 class InvestmentService extends \App\Services\BaseService
 {
-    private Database             $db;
-    private WalletServiceInterface        $walletService;
-    private NotificationServiceInterface  $notificationService;
-    private UserService          $userService;
-    private ReferralService      $referralService;
     private Investment           $investmentModel;
     private TradingRecord        $tradingModel;
     private InvestmentProfit     $profitModel;
     private InvestmentWithdrawal $withdrawalModel;
-    private AuditTrail           $auditTrail;
-	private \Core\Queue $queue;
     private SettingService       $settingService;
-    private PerformanceOptimizationService $performance;
-    private CurrencyServiceInterface $currencyService;
-    private CacheInvalidationService $cacheInvalidation;
+    private WalletServiceInterface $walletService;
     private StateMachineService  $stateMachine;
+    private ?\App\Services\OutboxService $outboxService = null;
     private const RISK_WARNING = <<<EOT
 ⚠️ هشدار ریسک سرمایه‌گذاری
 
@@ -55,41 +43,32 @@ class InvestmentService extends \App\Services\BaseService
 EOT;
 
     public function __construct(
-    Database $db,
-    WalletServiceInterface $walletService,
-    NotificationServiceInterface $notificationService,
-    UserService $userService,
-    ReferralService $referralService,
     \App\Models\Investment $investmentModel,
     \App\Models\TradingRecord $tradingModel,
     \App\Models\InvestmentProfit $profitModel,
     \App\Models\InvestmentWithdrawal $withdrawalModel,
-    AuditTrail $auditTrail,
-    LoggerInterface $logger,
-    \Core\Queue $queue,
+    WalletServiceInterface $walletService,
     SettingService $settingService,
-    PerformanceOptimizationService $performance,
-    CurrencyServiceInterface $currencyService,
-    CacheInvalidationService $cacheInvalidation,
+    LoggerInterface $logger,
+    Database $db,
+    EventDispatcher $eventDispatcher,
     ?StateMachineService $stateMachine = null
 ) {
-        parent::__construct($logger);
-        $this->db                  = $db;
+        // انتقال مدیریت زیرساخت به والد (BaseService)
+        parent::__construct($logger, null, $db, null, null, null, null, $eventDispatcher);
+        
         $this->investmentModel     = $investmentModel;
         $this->tradingModel        = $tradingModel;
         $this->profitModel         = $profitModel;
         $this->withdrawalModel     = $withdrawalModel;
-        $this->walletService       = $walletService;
-        $this->notificationService = $notificationService;
-        $this->userService         = $userService;
-        $this->referralService     = $referralService;
-        $this->auditTrail = $auditTrail;
-        $this->queue = $queue;
         $this->settingService = $settingService;
-        $this->performance = $performance;
-        $this->currencyService = $currencyService;
-        $this->cacheInvalidation = $cacheInvalidation;
+        $this->walletService = $walletService;
         $this->stateMachine = $stateMachine ?? new StateMachineService($logger, $db);
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
+        }
     }
 
     /**
@@ -183,32 +162,17 @@ EOT;
                 
                 $this->db->commit();
 
-                $this->cacheInvalidation->invalidateWallet($userId);
+                // 🚀 جایگزینی کدهای بالا با یک Event ساده
+                $this->eventDispatcher->dispatch(
+                    InvestmentCreatedEvent::class,
+                    new InvestmentCreatedEvent(
+                        $userId,
+                        $investmentId,
+                        $amount,
+                        'usdt'
+                    )
+                );
 
-                // ۳. پورسانت شبکه ارجاع (Referral) صندوق سرمایه گذاری (پس از موفقیت در commit اصلی)
-                try {
-                    $userRecord = $this->userService->findById($userId);
-                    if ($userRecord && !empty($userRecord->referred_by)) {
-                        $this->referralService->processCommission((int)$userRecord->referred_by, $amount, 'usdt', [
-                            'action' => 'investment_creation',
-                            'investor_id' => $userId,
-                            'investment_id' => $investmentId
-                        ]);
-                    }
-                } catch (\Throwable $commissionEx) {
-                    $this->logger->error('investment_commission_post_commit_failed', [
-                        'user_id' => $userId,
-                        'investment_id' => $investmentId,
-                        'error' => $commissionEx->getMessage()
-                    ]);
-                }
-
-                $this->auditTrail->record('investment.created', $userId, [
-                    'investment_id' => $investmentId,
-                    'amount' => $amount,
-                ]);
-
-                $this->notify($userId, 'سرمایه‌گذاری جدید', "سرمایه‌گذاری " . $this->currencyService->formatAmount($amount, 'usdt') . " با موفقیت ثبت شد.", 'investment_created');
                 $this->logger->info('investment_created', ['message' => "User {$userId} invested {$amount} USDT", 'id' => $investmentId]);
 
                 return ['success' => true, 'message' => 'سرمایه‌گذاری با موفقیت انجام شد'];
@@ -478,16 +442,17 @@ EOT;
 
                 $typeLabel       = $isProfit ? 'سود' : 'ضرر';
                 $amountFormatted = $this->currencyService->formatAmount(abs($netAmount), 'usdt');
-                $this->notify($inv->user_id,
-                    "گزارش هفتگی سرمایه‌گذاری",
-                    "دوره {$period}: {$typeLabel} {$amountFormatted} | موجودی جدید: " . $this->currencyService->formatAmount($balanceAfter, 'usdt'),
-                    'investment_profit'
-                );
+                
+                $this->eventDispatcher->dispatch('investment.profit_applied', [
+                    'user_id' => $inv->user_id,
+                    'amount_formatted' => $amountFormatted,
+                    'period' => $period
+                ]);
                 $count++;
             }
 
             // H-I7: Audit Trail
-            app(\App\Services\AuditTrail::class)->record('investment.profit_batch_applied', $adminId, [
+            $this->auditTrail->record('investment.profit_batch_applied', $adminId, [
                 'trading_record_id' => $tradingRecordId,
                 'count' => count($investmentIds),
                 'percent' => $percent,
@@ -496,11 +461,6 @@ EOT;
 
             $this->db->commit();
 
-            foreach ($investments as $inv) {
-                if ($inv && isset($inv->user_id)) {
-                    $this->cacheInvalidation->invalidateWallet((int)$inv->user_id);
-                }
-            }
             return ['success' => true, 'processed' => count($investments)];
 
         } catch (\Throwable $e) {
@@ -577,8 +537,6 @@ EOT;
 
         $this->db->commit();
 
-        $this->cacheInvalidation->invalidateWallet($userId);
-
         $this->auditTrail->record('investment.withdrawal_requested', $userId, [
             'withdrawal_id' => $withdrawalId,
             'amount'        => $amount,
@@ -616,22 +574,43 @@ EOT;
 
         try {
             $idempotencyKey = "inv_withdrawal_{$withdrawalId}_" . time();
-            $depositResult = $this->walletService->deposit(
-                (int)$withdrawal->user_id,
-                (string)$withdrawal->amount,
-                'usdt',
-                [
-                    'type'          => 'investment_withdrawal',
+            $payload = [
+                'user_id' => (int)$withdrawal->user_id,
+                'amount' => (string)$withdrawal->amount,
+                'currency' => 'usdt',
+                'metadata' => [
+                    'type' => 'investment_withdrawal',
                     'investment_id' => $investment->id,
                     'withdrawal_id' => $withdrawalId,
-                    'description'   => 'برداشت سود سرمایه‌گذاری',
+                    'description' => 'برداشت سود سرمایه‌گذاری',
                     'idempotency_key' => $idempotencyKey,
-                ]
-            );
+                ],
+            ];
 
-            if (empty($depositResult['success'])) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در واریز: ' . ($depositResult['message'] ?? '')];
+            if ($this->outboxService) {
+                $ok = $this->outboxService->record('investment_withdrawal', $withdrawalId, 'wallet.deposit.requested', $payload);
+                if (!$ok) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در ثبت رکورد خروجی برای واریز برداشت.'];
+                }
+            } else {
+                $depositResult = $this->walletService->deposit(
+                    (int)$withdrawal->user_id,
+                    (string)$withdrawal->amount,
+                    'usdt',
+                    [
+                        'type'          => 'investment_withdrawal',
+                        'investment_id' => $investment->id,
+                        'withdrawal_id' => $withdrawalId,
+                        'description'   => 'برداشت سود سرمایه‌گذاری',
+                        'idempotency_key' => $idempotencyKey,
+                    ]
+                );
+
+                if (empty($depositResult['success'])) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در واریز: ' . ($depositResult['message'] ?? '')];
+                }
             }
 
             $this->withdrawalModel->update($withdrawalId, [
@@ -660,8 +639,6 @@ EOT;
 
             $this->db->commit();
 
-            $this->cacheInvalidation->invalidateWallet((int)$withdrawal->user_id);
-
             $this->auditTrail->record('investment.closed', (int)$withdrawal->user_id, [
                 'withdrawal_id'   => $withdrawalId,
                 'investment_id'   => $investment->id,
@@ -670,10 +647,11 @@ EOT;
                 'admin_id'        => $adminId,
             ], $adminId);
 
-            $this->notify($withdrawal->user_id, 'برداشت سرمایه‌گذاری تأیید شد',
-                "مبلغ " . $this->currencyService->formatAmount((float)$withdrawal->amount, 'usdt') . " به کیف پول شما واریز شد",
-                'investment_withdrawal_approved');
-
+            $this->eventDispatcher->dispatch('investment.withdrawal_approved', [
+                'user_id' => $withdrawal->user_id,
+                'amount' => $withdrawal->amount
+            ]);
+            
             $this->logger->info('investment_withdrawal_approved', ['message' => "Admin {$adminId} approved withdrawal #{$withdrawalId}"]);
 
             return ['success' => true, 'message' => 'برداشت تأیید و واریز شد'];
@@ -718,8 +696,6 @@ EOT;
 
             $this->db->commit();
 
-            $this->cacheInvalidation->invalidateWallet((int)$withdrawal->user_id);
-
             $this->auditTrail->record('investment.closed', (int)$withdrawal->user_id, [
                 'action'        => 'withdrawal_rejected',
                 'withdrawal_id' => $withdrawalId,
@@ -727,9 +703,11 @@ EOT;
                 'admin_id'      => $adminId,
             ], $adminId);
 
-            $this->notify($withdrawal->user_id, 'درخواست برداشت رد شد',
-                "دلیل: {$reason}", 'investment_withdrawal_rejected');
-
+            $this->eventDispatcher->dispatch('investment.withdrawal_rejected', [
+                'user_id' => $withdrawal->user_id,
+                'reason' => $reason
+            ]);
+            
             $this->logger->info('investment_withdrawal_rejected', ['message' => "Admin {$adminId} rejected withdrawal #{$withdrawalId}"]);
 
             return ['success' => true, 'message' => 'درخواست رد شد.'];
@@ -809,19 +787,9 @@ EOT;
         ];
     }
 
-    private function notify(int $userId, string $title, string $message, string $type): void
-    {
-        try {
-            $this->notificationService->send($userId, $type, $title, $message);
-        } catch (\Throwable $e) {
-            $this->logger->error('notification_error', ['message' => $e->getMessage()]);
-        }
-    }
-
     public function searchInvestments(string $q, array $filters, int $limit, int $offset): array
     {
         // Centralized Delegation to Model leveraging the optimized Filterable Trait system
         return $this->investmentModel->searchNative($q, $filters, $limit, $offset);
     }
 }
-

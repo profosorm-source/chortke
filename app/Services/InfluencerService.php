@@ -3,62 +3,45 @@
 namespace App\Services;
 
 use App\Contracts\WalletServiceInterface;
-use App\Contracts\NotificationServiceInterface;
 use App\Models\InfluencerModel;
 use App\Models\StoryOrder;
-use App\Services\ScoreService;
-use Core\Database;
-use App\Services\AuditTrail;
 use App\Contracts\LoggerInterface;
+use Core\Database;
+use Core\EventDispatcher;
 use App\Services\SettingService;
-use App\Services\Gamification\XpService;
 use App\Enums\ModuleContext;
-use App\Models\User;
-use App\Services\Shared\ReferralService;
-use App\Services\Cache\CacheInvalidationService;
 
 class InfluencerService extends \App\Services\BaseService
 {
-	const SYSTEM_ACTOR_ID = -1;
-	
-    private InfluencerModel           $profileModel;
-    private StoryOrder                  $orderModel;
-    private Database                    $db;
-    private WalletServiceInterface      $walletService;
-    private NotificationServiceInterface $notificationService;
-    private ReferralService             $referralService;
-    private AuditTrail                 $auditTrail;
-    private ScoreService               $scoreService;
-    private SettingService             $settingService;
-    private XpService                  $xpService;
-    private CacheInvalidationService   $cacheInvalidation;
+    const SYSTEM_ACTOR_ID = -1;
+
+    private InfluencerModel $profileModel;
+    private StoryOrder      $orderModel;
+    private WalletServiceInterface $walletService;
+    private SettingService  $settingService;
+    private ?\App\Services\OutboxService $outboxService = null;
 
     public function __construct(
-        Database                    $db,
-        WalletServiceInterface        $walletService,
-        NotificationServiceInterface $notificationService,
-        ReferralService             $referralService,
-        AuditTrail                 $auditTrail,
-        InfluencerModel           $profileModel,
-        StoryOrder                  $orderModel,
-        ScoreService                $scoreService,
-        SettingService             $settingService,
-        LoggerInterface             $logger,
-        XpService                  $xpService,
-        CacheInvalidationService   $cacheInvalidation
+        InfluencerModel $profileModel,
+        StoryOrder      $orderModel,
+        WalletServiceInterface $walletService,
+        SettingService  $settingService,
+        LoggerInterface $logger,
+        Database $db,
+        EventDispatcher $eventDispatcher
     ) {
-        parent::__construct($logger);
-        $this->db                  = $db;
-        $this->walletService       = $walletService;
-        $this->notificationService = $notificationService;
-        $this->referralService     = $referralService;
-        $this->auditTrail         = $auditTrail;
-        $this->profileModel        = $profileModel;
-        $this->orderModel          = $orderModel;
-        $this->scoreService        = $scoreService;
-        $this->settingService      = $settingService;
-        $this->xpService           = $xpService;
-        $this->cacheInvalidation   = $cacheInvalidation;
+        // انتقال زیرساخت به والد
+        parent::__construct($logger, null, $db, null, null, null, null, $eventDispatcher);
+        $this->profileModel = $profileModel;
+        $this->orderModel   = $orderModel;
+        $this->walletService = $walletService;
+        $this->settingService = $settingService;
+        // optional OutboxService for async deposits
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
+        }
     }
 
     // ══════════════════════════════════════════════════════
@@ -94,11 +77,11 @@ class InfluencerService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'خطا در ثبت پیج.'];
         }
 
-        $this->auditTrail->record('influencer.profile.registered', $userId, [
-    'channel' => 'influencer',
-    'profile_id' => $profile->id,
-    'username' => $profile->username,
-]);
+        $this->eventDispatcher->dispatch('influencer.profile_registered', [
+            'user_id' => $userId,
+            'profile_id' => $profile->id,
+            'username' => $profile->username,
+        ]);
 
         return [
             'success'           => true,
@@ -126,11 +109,11 @@ class InfluencerService extends \App\Services\BaseService
             'status'                => 'pending_admin_review',
         ]);
 
-        $this->auditTrail->record('influencer.verification.submitted', $userId, [
-    'channel' => 'influencer',
-    'profile_id' => $profile->id,
-    'post_url' => $postUrl,
-]);
+        $this->eventDispatcher->dispatch('influencer.verification_submitted', [
+            'user_id' => $userId,
+            'profile_id' => $profile->id,
+            'post_url' => $postUrl,
+        ]);
 
         return ['success' => true, 'message' => 'لینک پست ثبت شد. منتظر بررسی مدیر باشید.'];
     }
@@ -210,36 +193,19 @@ class InfluencerService extends \App\Services\BaseService
                     throw new \Exception('خطا در ثبت سفارش.');
                 }
 
-                $this->referralService->processModularCommission(
-                    $customerId,
-                    'influencer',
-                    $price,
-                    $profile->currency,
-                    ['order_id' => $order->id]
-                );
+                // 🚀 Side effects moved to central listener
+                $this->eventDispatcher->dispatch('influencer.order_created', [
+                    'order_id'           => $order->id,
+                    'customer_id'        => $customerId,
+                    'influencer_user_id' => (int)$profile->user_id,
+                    'price'              => $price,
+                    'currency'           => $profile->currency,
+                    'order_type'         => $orderType
+                ]);
                 $this->profileModel->update($influencerId, [
                     'total_orders' => (int)$profile->total_orders + 1,
                 ]);
             });
-
-            $this->cacheInvalidation->invalidateWallet($customerId);
-
-            $this->notificationService->send(
-                (int)$profile->user_id,
-                'influencer_new_order',
-                'سفارش جدید دریافت کردید',
-                "یک سفارش {$orderType} جدید منتظر پذیرش شماست.",
-                ['order_id' => $order->id],
-                url('/influencer/orders'),
-                'مشاهده سفارش'
-            );
-
-            $this->auditTrail->record('influencer.order.created', $customerId, [
-    'channel' => 'influencer',
-    'order_id' => $order->id,
-    'influencer_id' => $influencerId,
-    'price' => $price,
-]);
 
             return ['success' => true, 'message' => 'سفارش ثبت و مبلغ در صندوق امانی قفل شد.', 'order' => $order];
 
@@ -265,50 +231,27 @@ class InfluencerService extends \App\Services\BaseService
 
         if ($decision === 'accept') {
             $this->orderModel->update($orderId, ['status' => 'accepted']);
-            $this->notificationService->send(
-                (int)$order->customer_id,
-                'influencer_order_accepted',
-                'سفارش شما پذیرفته شد',
-                "اینفلوئنسر سفارش #{$orderId} را پذیرفت.",
-                ['order_id' => $orderId],
-                url('/influencer/ads/my-orders'),
-                'مشاهده سفارش'
-            );
-            $this->auditTrail->record('influencer.order.accepted', $influencerUserId, [
-    'channel' => 'influencer',
-    'order_id' => $orderId,
-]);
-return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
+            $this->eventDispatcher->dispatch('influencer.order_accepted', [
+                'order_id'           => $orderId,
+                'customer_id'        => (int)$order->customer_id,
+                'influencer_user_id' => $influencerUserId
+            ]);
+            return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
         }
 
         $this->orderModel->update($orderId, [
             'status'           => 'rejected_by_influencer',
             'rejection_reason' => $reason ?? 'رد توسط اینفلوئنسر',
         ]);
+
         $this->refundCustomer($order, 'rejected_by_influencer');
-        $this->notificationService->send(
-            (int)$order->customer_id,
-            'influencer_order_rejected',
-            'سفارش رد شد',
-            "اینفلوئنسر سفارش #{$orderId} را رد کرد. مبلغ به کیف پول برگشت.",
-            ['order_id' => $orderId],
-            url('/influencer/ads/my-orders'),
-            'مشاهده سفارش‌ها'
-        );
-        $this->auditTrail->record('influencer.order.rejected', $influencerUserId, [
-    'channel' => 'influencer',
-    'order_id' => $orderId,
-]);
-        // امتیاز منفی برای رد سفارش
-        $profile = $this->profileModel->findByUserId($influencerUserId);
-        if ($profile) {
-            $pts = (int) $this->settingService->get('influencer_rep_reject_points', -3);
-            $this->scoreService->applyDelta('profile', (int)$profile->id, 'reputation', $pts, 'order_rejected', [
-                'user_id' => $influencerUserId,
-                'order_id' => $orderId,
-                'note' => 'رد سفارش یا عدم پاسخ',
-            ]);
-        }
+        
+        $this->eventDispatcher->dispatch('influencer.order_rejected', [
+            'order_id'           => $orderId,
+            'customer_id'        => (int)$order->customer_id,
+            'influencer_user_id' => $influencerUserId,
+            'points'             => (int)$this->settingService->get('influencer_rep_reject_points', -3)
+        ]);
 
         return ['success' => true, 'message' => 'سفارش رد شد و مبلغ به تبلیغ‌دهنده بازگشت.'];
     }
@@ -343,22 +286,12 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
 
         $this->orderModel->update($orderId, $updateData);
 
-        // نوتیف فوری به buyer
-        $this->notificationService->send(
-            (int)$order->customer_id,
-            'influencer_proof_submitted',
-            'استوری/پست منتشر شد — بررسی کنید',
-            "اینفلوئنسر مدرک انتشار سفارش #{$orderId} را ثبت کرد. تا {$buyerCheckHours} ساعت فرصت دارید پیج را چک کنید و نتیجه را اعلام کنید.",
-            ['order_id' => $orderId, 'deadline' => $buyerCheckDeadline],
-            url('/influencer/ads/my-orders'),
-            'بررسی و تایید سفارش'
-        );
-
-        $this->auditTrail->record('influencer.proof.submitted', $influencerUserId, [
-    'channel' => 'influencer',
-    'order_id' => $orderId,
-    'deadline' => $buyerCheckDeadline,
-]);
+        $this->eventDispatcher->dispatch('influencer.proof_submitted', [
+            'order_id'           => $orderId,
+            'customer_id'        => (int)$order->customer_id,
+            'influencer_user_id' => $influencerUserId,
+            'deadline'           => $buyerCheckDeadline
+        ]);
 
         return ['success' => true, 'message' => 'مدرک ثبت شد و به تبلیغ‌دهنده اطلاع‌رسانی شد.'];
     }
@@ -401,20 +334,12 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
             'peer_resolution_started_at' => \date('Y-m-d H:i:s'),
         ]);
 
-        $this->notificationService->send(
-            (int)$order->influencer_user_id,
-            'influencer_dispute_opened',
-            'اعتراض ثبت شد',
-            "تبلیغ‌دهنده سفارش #{$orderId} اعتراض ثبت کرد. وارد پنل اختلاف شوید.",
-            ['order_id' => $orderId],
-            url('/influencer/orders/' . $orderId . '/dispute'),
-            'پنل اختلاف'
-        );
-        $this->auditTrail->record('influencer.dispute.opened', $customerId, [
-    'channel' => 'influencer',
-    'order_id' => $orderId,
-    'reason' => $reason,
-]);
+        $this->eventDispatcher->dispatch('influencer.dispute_opened', [
+            'order_id'           => $orderId,
+            'customer_id'        => $customerId,
+            'influencer_user_id' => (int)$order->influencer_user_id,
+            'reason'             => $reason
+        ]);
 
         return ['success' => true, 'message' => 'اعتراض ثبت شد. وارد پنل گفت‌وگو شوید.', 'order_id' => $orderId];
     }
@@ -435,91 +360,58 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
     $actorType = $isSystemAction ? 'system' : 'admin';
 
     try {
-        $xpAwarded = false;
-        
-        $this->transaction(function() use ($order, $orderId, $isSystemAction, $actorId, $reason, &$xpAwarded) {
-            $payoutResult = $this->walletService->deposit(
-                (int)$order->influencer_user_id,
-                (float)$order->influencer_earning,
-                $order->currency,
-                ['type' => 'earning', 'description' => "درآمد سفارش #{$orderId}", 'idempotency_key' => "story_payout_{$orderId}"]
-            );
+        $this->transaction(function() use ($order, $orderId, $isSystemAction, $actorId, $reason) {
+            $payload = [
+                'user_id' => (int)$order->influencer_user_id,
+                'amount' => (float)$order->influencer_earning,
+                'currency' => $order->currency,
+                'metadata' => [
+                    'type' => 'earning',
+                    'description' => "درآمد سفارش #{$orderId}",
+                    'idempotency_key' => "story_payout_{$orderId}",
+                    'order_id' => $orderId,
+                ],
+            ];
 
-            if (!($payoutResult['success'] ?? false)) {
-                throw new \Exception('خطا در پرداخت به اینفلوئنسر.');
-            }
-
-            $this->orderModel->update($orderId, [
-                'status'                => 'completed',
-                'buyer_confirmed_at'    => date('Y-m-d H:i:s'),
-                'payout_transaction_id' => $payoutResult['transaction_id'] ?? null,
-                'reviewed_by'           => $isSystemAction ? null : $actorId,
-                'reviewed_at'           => date('Y-m-d H:i:s'),
-                'admin_note'            => $reason,
-            ]);
-
-            $profile = $this->profileModel->find((int)$order->influencer_id);
-            if ($profile) {
-                $this->profileModel->update((int)$profile->id, [
-                    'completed_orders' => (int)$profile->completed_orders + 1,
-                ]);
-            }
-
-            // ✅ TRANSACTION BOUNDARY: Award XP BEFORE commit to ensure atomicity
-            if ($profile) {
-                // Award XP while still in transaction - financial consistency first
-                $user = new User($this->db);
-                $user = $user->find((int)$order->influencer_user_id);
-                if ($user) {
-                    $this->xpService->award($user, ModuleContext::YOUTUBE_TASKS, 2.0, "influencer_order_{$order->id}");
+            if ($this->outboxService) {
+                $ok = $this->outboxService->record('influencer_order', $orderId, 'wallet.deposit.requested', $payload);
+                if (!$ok) {
+                    throw new \Exception('خطا در ثبت رکورد خروجی پرداخت');
                 }
-                $xpAwarded = true;
+                $this->orderModel->update($orderId, [
+                    'status'                => 'completed',
+                    'buyer_confirmed_at'    => date('Y-m-d H:i:s'),
+                    'payout_transaction_id' => null,
+                ]);
+            } else {
+                $payoutResult = $this->walletService->deposit(
+                    (int)$order->influencer_user_id,
+                    (float)$order->influencer_earning,
+                    $order->currency,
+                    ['type' => 'earning', 'description' => "درآمد سفارش #{$orderId}", 'idempotency_key' => "story_payout_{$orderId}"]
+                );
+                if (!($payoutResult['success'] ?? false)) {
+                    throw new \Exception('خطا در پرداخت به اینفلوئنسر.');
+                }
+                $this->orderModel->update($orderId, [
+                    'status'                => 'completed',
+                    'buyer_confirmed_at'    => date('Y-m-d H:i:s'),
+                    'payout_transaction_id' => $payoutResult['transaction_id'] ?? null,
+                ]);
             }
         });
 
-        $this->cacheInvalidation->invalidateWallet((int)$order->influencer_user_id);
-
-        // ✅ POST-TRANSACTION: Send notifications and audit logs AFTER commit
-        // These are informational and don't affect financial state
-        try {
-            $this->notificationService->send(
-                (int)$order->influencer_user_id,
-                'influencer_order_completed',
-                'سفارش تکمیل شد — درآمد واریز شد',
-                "مبلغ " . number_format((float)$order->influencer_earning) . " به کیف پول شما واریز شد.",
-                ['order_id' => $orderId],
-                url('/influencer'),
-                'مشاهده پروفایل'
-            );
-        } catch (\Throwable $e) {
-            $this->logger->error('notification_send_failed', ['order_id' => $orderId, 'error' => $e->getMessage()]);
-        }
-
-        $this->auditTrail->record('influencer.order.completed', $actorId, [
-    'channel' => 'influencer',
-    'order_id' => $orderId,
-    'reason' => $reason,
-    'amount' => $order->influencer_earning,
-    'actor_type' => $actorType,
-    'actor_id' => $isSystemAction ? null : $actorId,
-    'xp_awarded' => $xpAwarded,
-], $actorId);
-
-        if ($profile) {
-            try {
-                $pts = (int) $this->settingService->get('influencer_rep_complete_points', 10);
-                $this->scoreService->applyDelta('profile', (int)$profile->id, 'reputation', $pts, 'order_completed', [
-                    'user_id' => (int)$order->influencer_user_id,
-                    'order_id' => $orderId,
-                    'note' => 'تحویل موفق سفارش',
-                ]);
-            } catch (\Throwable $e) {
-                $this->logger->error('reputation_score_failed', ['order_id' => $orderId, 'error' => $e->getMessage()]);
-            }
-        }
+        $this->eventDispatcher->dispatch('influencer.order_completed', [
+            'order_id'           => $orderId,
+            'influencer_user_id' => (int)$order->influencer_user_id,
+            'influencer_id'      => (int)$order->influencer_id,
+            'amount'             => $order->influencer_earning,
+            'actor_id'           => $actorId,
+            'actor_type'         => $actorType,
+            'points'             => (int)$this->settingService->get('influencer_rep_complete_points', 10)
+        ]);
 
         return ['success' => true, 'message' => 'سفارش تکمیل و درآمد واریز شد.'];
-
     } catch (\Exception $e) {
         $this->logger->error('story.complete_order_failed', ['order_id' => $orderId, 'error' => $e->getMessage()]);
         return ['success' => false, 'message' => $e->getMessage() === 'خطا در پرداخت به اینفلوئنسر.' ? $e->getMessage() : 'خطای سیستمی در تسویه.'];
@@ -541,14 +433,34 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
 
     try {
         $this->transaction(function() use ($order, $orderId, $refundAmount, $refundPercent, $reason, $actorId) {
-            $refundResult = $this->walletService->deposit(
-                (int)$order->customer_id,
-                $refundAmount,
-                $order->currency,
-                ['type' => 'refund', 'description' => "بازگشت سفارش #{$orderId}", 'idempotency_key' => "story_refund_{$orderId}"]
-            );
-            if (!($refundResult['success'] ?? false)) {
-                throw new \Exception('خطا در بازگشت وجه.');
+            // Refund customer
+            $refundPayload = [
+                'user_id' => (int)$order->customer_id,
+                'amount' => $refundAmount,
+                'currency' => $order->currency,
+                'metadata' => [
+                    'type' => 'refund',
+                    'description' => "بازگشت سفارش #{$orderId}",
+                    'idempotency_key' => "story_refund_{$orderId}",
+                    'order_id' => $orderId,
+                ],
+            ];
+
+            if ($this->outboxService) {
+                $ok = $this->outboxService->record('influencer_order', $orderId, 'wallet.deposit.requested', $refundPayload);
+                if (!$ok) {
+                    throw new \Exception('خطا در ثبت رکورد خروجی بازگشت وجه.');
+                }
+            } else {
+                $refundResult = $this->walletService->deposit(
+                    (int)$order->customer_id,
+                    $refundAmount,
+                    $order->currency,
+                    ['type' => 'refund', 'description' => "بازگشت سفارش #{$orderId}", 'idempotency_key' => "story_refund_{$orderId}"]
+                );
+                if (!($refundResult['success'] ?? false)) {
+                    throw new \Exception('خطا در بازگشت وجه.');
+                }
             }
 
             if ($refundPercent < 100) {
@@ -557,14 +469,33 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
                 $influencerShare = round($remainingAmount * (1 - $feePercent / 100), 2);
 
                 if ($influencerShare > 0) {
-                    $partialResult = $this->walletService->deposit(
-                        (int)$order->influencer_user_id,
-                        $influencerShare,
-                        $order->currency,
-                        ['type' => 'partial_earning', 'description' => "درآمد جزئی سفارش #{$orderId}", 'idempotency_key' => "story_partial_{$orderId}"]
-                    );
-                    if (!($partialResult['success'] ?? false)) {
-                        throw new \Exception('خطا در پرداخت جزئی به اینفلوئنسر.');
+                    $partialPayload = [
+                        'user_id' => (int)$order->influencer_user_id,
+                        'amount' => $influencerShare,
+                        'currency' => $order->currency,
+                        'metadata' => [
+                            'type' => 'partial_earning',
+                            'description' => "درآمد جزئی سفارش #{$orderId}",
+                            'idempotency_key' => "story_partial_{$orderId}",
+                            'order_id' => $orderId,
+                        ],
+                    ];
+
+                    if ($this->outboxService) {
+                        $ok2 = $this->outboxService->record('influencer_order', $orderId, 'wallet.deposit.requested', $partialPayload);
+                        if (!$ok2) {
+                            throw new \Exception('خطا در ثبت رکورد خروجی پرداخت جزئی.');
+                        }
+                    } else {
+                        $partialResult = $this->walletService->deposit(
+                            (int)$order->influencer_user_id,
+                            $influencerShare,
+                            $order->currency,
+                            ['type' => 'partial_earning', 'description' => "درآمد جزئی سفارش #{$orderId}", 'idempotency_key' => "story_partial_{$orderId}"]
+                        );
+                        if (!($partialResult['success'] ?? false)) {
+                            throw new \Exception('خطا در پرداخت جزئی به اینفلوئنسر.');
+                        }
                     }
                 }
             }
@@ -582,15 +513,15 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
             $this->cacheInvalidation->invalidateWallet((int)$order->influencer_user_id);
         }
 
-        $this->notificationService->send(
-            (int)$order->customer_id,
-            'influencer_order_refunded',
-            'بازگشت وجه سفارش',
-            number_format($refundAmount) . " به کیف پول شما بازگشت.",
-            ['order_id' => $orderId],
-            url('/influencer/ads/my-orders'),
-            'مشاهده سفارش‌ها'
-        );
+        $this->eventDispatcher->dispatch('notification.requested', [
+            'user_id' => (int)$order->customer_id,
+            'type' => 'influencer_order_refunded',
+            'title' => 'بازگشت وجه سفارش',
+            'message' => number_format($refundAmount) . " به کیف پول شما بازگشت.",
+            'data' => ['order_id' => $orderId],
+            'action_url' => url('/influencer/ads/my-orders'),
+            'action_text' => 'مشاهده سفارش‌ها'
+        ]);
 
         $this->auditTrail->record('influencer.order.refunded', $actorId, [
     'channel' => 'influencer',
@@ -703,23 +634,43 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
 {
     try {
         $this->transaction(function() use ($order, $reason) {
-            $result = $this->walletService->deposit(
-                (int)$order->customer_id,
-                (float)$order->price,
-                $order->currency,
-                [
-                    'type'            => 'refund',
-                    'description'     => "بازگشت سفارش #{$order->id}",
+            $payload = [
+                'user_id' => (int)$order->customer_id,
+                'amount' => (float)$order->price,
+                'currency' => $order->currency,
+                'metadata' => [
+                    'type' => 'refund',
+                    'description' => "بازگشت سفارش #{$order->id}",
                     'idempotency_key' => "story_refund_{$order->id}",
-                ]
-            );
-
-            if (!($result['success'] ?? false)) {
-                $this->logger->error('story.refund_customer_failed', [
                     'order_id' => $order->id,
-                    'reason'   => 'wallet deposit rejected',
-                ]);
-                throw new \Exception('wallet deposit rejected');
+                ],
+            ];
+
+            if ($this->outboxService) {
+                $ok = $this->outboxService->record('influencer_order', $order->id, 'wallet.deposit.requested', $payload);
+                if (!$ok) {
+                    $this->logger->error('story.refund_outbox_failed', ['order_id' => $order->id]);
+                    throw new \Exception('wallet deposit rejected');
+                }
+            } else {
+                $result = $this->walletService->deposit(
+                    (int)$order->customer_id,
+                    (float)$order->price,
+                    $order->currency,
+                    [
+                        'type'            => 'refund',
+                        'description'     => "بازگشت سفارش #{$order->id}",
+                        'idempotency_key' => "story_refund_{$order->id}",
+                    ]
+                );
+
+                if (!($result['success'] ?? false)) {
+                    $this->logger->error('story.refund_customer_failed', [
+                        'order_id' => $order->id,
+                        'reason'   => 'wallet deposit rejected',
+                    ]);
+                    throw new \Exception('wallet deposit rejected');
+                }
             }
 
             $this->orderModel->update((int)$order->id, [
@@ -872,4 +823,3 @@ return ['success' => true, 'message' => 'سفارش پذیرفته شد.'];
         return $this->model->searchNative($q, $filters, $limit, $offset);
     }
 }
-

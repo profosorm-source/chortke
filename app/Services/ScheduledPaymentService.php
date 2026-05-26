@@ -17,7 +17,7 @@ class ScheduledPaymentService extends \App\Services\BaseService
     public function __construct(
         private ScheduledPayment $scheduledPaymentModel,
         private WalletServiceInterface $walletService,
-        private Database $db,
+        protected ?Database $db,
         LoggerInterface $logger,
         private ReconciliationService $reconciliationService
     ) {

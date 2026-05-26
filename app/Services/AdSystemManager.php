@@ -20,7 +20,7 @@ class AdSystemManager extends \App\Services\BaseService
 {
     private array $adapters = [];
     private AdsRepositoryInterface $adsRepository;
-    private Database $db;
+    protected ?Database $db;
 
     public function __construct(array $adapters, LoggerInterface $logger, AdsRepositoryInterface $adsRepository, Database $db)
     {

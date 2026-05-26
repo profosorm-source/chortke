@@ -21,7 +21,7 @@ class ProfileService extends \App\Services\BaseService
     public function __construct(
         private User $model,
         protected LoggerInterface $logger,
-        private ?Cache $cache = null,
+        protected ?Cache $cache = null,
         private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);

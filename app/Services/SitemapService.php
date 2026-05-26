@@ -10,7 +10,7 @@ use App\Services\SettingService;
 class SitemapService extends \App\Services\BaseService
 {
     private Page $pageModel;
-    private Cache $cache;
+    protected ?Cache $cache;
     private SettingService $settingService;
     private const CACHE_KEY = 'sitemap_xml_content';
 

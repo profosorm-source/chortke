@@ -24,7 +24,6 @@ class SeoService extends \App\Services\BaseService
     private SeoFraudDetector $fraudDetector;
     private WalletServiceInterface $walletService;
     private ReferralService $referralService;
-    private Database $db;
     private \App\Services\Interaction\RatingService $ratingService;
     private \App\Services\Interaction\ReportService $reportService;
     private User $userModel;
@@ -43,9 +42,10 @@ class SeoService extends \App\Services\BaseService
         LoggerInterface $logger,
         User $userModel,
         SettingService $settingService,
-        \App\Services\AntiFraud\FraudGuardService $fraudGuard
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        \Core\EventDispatcher $eventDispatcher
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, null, null, null, null, null, $eventDispatcher);
         $this->settingService = $settingService;
         $this->adModel = $adModel;
         $this->executionModel = $executionModel;
@@ -305,16 +305,21 @@ class SeoService extends \App\Services\BaseService
                     throw new \Exception('خطا در واریز پاداش');
                 }
     
-                // 9. پورسانت ریفرال
+                // 9. پورسانت ریفرال (event-driven)
                 $userRecord = $this->userModel->findById($userId);
                 if ($userRecord && !empty($userRecord->referred_by)) {
-                    if ($this->referralService) {
-                        $this->referralService->processCommission((int)$userRecord->referred_by, $payout, $adCurrency, [
+                    // Migrated to event-driven referral commission
+                    $this->eventDispatcher?->dispatch('referral.commission.process', [
+                        'referrer_id' => (int)$userRecord->referred_by,
+                        'amount' => $payout,
+                        'currency' => $adCurrency,
+                        'source_user_id' => $userId,
+                        'context' => [
                             'action' => 'seo_task_reward',
                             'executor_id' => $userId,
                             'execution_id' => $executionId
-                        ]);
-                    }
+                        ]
+                    ]);
                 }
     
                 return [

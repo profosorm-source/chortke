@@ -13,7 +13,7 @@ use App\Contracts\NotificationServiceInterface;
 class TicketService extends \App\Services\BaseService
 {
     use \App\Traits\ValidationTrait;
-    private Database $db;
+    protected ?Database $db;
     private Ticket $ticketModel;
     private TicketMessage $messageModel;
     private \Core\EventDispatcher $events;

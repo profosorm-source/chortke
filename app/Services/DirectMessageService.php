@@ -8,6 +8,7 @@ use App\Models\DirectMessage;
 use Core\Redis;
 use Core\Database;
 use App\Services\SettingService;
+use App\Services\User\UserSettingsService;
 use App\Validators\Requests\SendDirectMessageRequest;
 
 use App\Contracts\LoggerInterface;
@@ -26,9 +27,10 @@ use App\Contracts\LoggerInterface;
 class DirectMessageService extends \App\Services\BaseService
 {
     private DirectMessage $directMessageModel;
-    private Redis $redis;
+    protected ?Redis $redis;
     private SettingService $settingService;
-    private Database $db;
+    protected ?Database $db;
+    private UserSettingsService $userSettingsService;
 
     // محدودیت‌های سرویس
     private const MAX_MESSAGE_LENGTH = 5000;
@@ -42,13 +44,14 @@ class DirectMessageService extends \App\Services\BaseService
     private const TYPING_PREFIX = 'typing:';
     private const UNREAD_PREFIX = 'unread:';
 
-    public function __construct(DirectMessage $directMessageModel, LoggerInterface $logger, Redis $redis, SettingService $settingService, Database $db)
+    public function __construct(DirectMessage $directMessageModel, LoggerInterface $logger, Redis $redis, SettingService $settingService, Database $db, UserSettingsService $userSettingsService)
     {
         parent::__construct($logger);
         $this->directMessageModel = $directMessageModel;
         $this->redis = $redis;
         $this->settingService = $settingService;
         $this->db = $db;
+        $this->userSettingsService = $userSettingsService;
     }
 
     /**
@@ -84,8 +87,7 @@ class DirectMessageService extends \App\Services\BaseService
             }
 
             // 🛡️ CRIT-12: بررسی تنظیمات حریم خصوصی
-            $userSettingsService = app(\App\Services\User\UserSettingsService::class);
-            $allowMessages = $userSettingsService->get($recipientId, 'allow_messages', true);
+            $allowMessages = $this->userSettingsService->get($recipientId, 'allow_messages', true);
 
             // 🛡️ BLF-01: بررسی وجود کاربر مقصد و مسدودی دوطرفه با جلوگیری از User Enumeration و برابر شدن زمان پاسخ
             $recipient = $this->directMessageModel->getUserInfo($recipientId);

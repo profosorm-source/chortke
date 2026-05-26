@@ -5,9 +5,15 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\LoggerInterface;
+use App\Contracts\ValidatorFactoryInterface;
 use App\Traits\ClientInfoTrait;
+use Core\Cache;
+use Core\Database;
 use Core\Exceptions\ValidationException;
 use Core\IdempotencyKey;
+use Core\Redis;
+use Core\TransactionWrapper;
+use Core\EventDispatcher;
 
 abstract class BaseService
 {
@@ -15,11 +21,31 @@ abstract class BaseService
 
     protected LoggerInterface $logger;
     protected ?IdempotencyKey $idempotencyKey;
+    protected ?Database $db;
+    protected ?TransactionWrapper $transactionWrapper;
+    protected ?ValidatorFactoryInterface $validatorFactory;
+    protected ?Cache $cache;
+    protected ?Redis $redis;
+    protected ?EventDispatcher $eventDispatcher;
 
-    public function __construct(LoggerInterface $logger, ?IdempotencyKey $idempotencyKey = null)
-    {
+    public function __construct(
+        LoggerInterface $logger,
+        ?IdempotencyKey $idempotencyKey = null,
+        ?Database $db = null,
+        ?TransactionWrapper $transactionWrapper = null,
+        ?ValidatorFactoryInterface $validatorFactory = null,
+        ?Cache $cache = null,
+        ?Redis $redis = null,
+        ?EventDispatcher $eventDispatcher = null
+    ) {
         $this->logger = $logger;
         $this->idempotencyKey = $idempotencyKey;
+        $this->db = $db;
+        $this->transactionWrapper = $transactionWrapper;
+        $this->validatorFactory = $validatorFactory;
+        $this->cache = $cache;
+        $this->redis = $redis;
+        $this->eventDispatcher = $eventDispatcher;
     }
 
     protected function logInfo(string $event, array $context = []): void
@@ -81,12 +107,52 @@ abstract class BaseService
         }, $errors));
     }
 
+    protected function getDatabase(): Database
+    {
+        if ($this->db === null) {
+            throw new \RuntimeException('Database dependency not injected into BaseService.');
+        }
+        return $this->db;
+    }
+
+    protected function getTransactionWrapper(): TransactionWrapper
+    {
+        if ($this->transactionWrapper === null) {
+            throw new \RuntimeException('TransactionWrapper dependency not injected into BaseService.');
+        }
+        return $this->transactionWrapper;
+    }
+
+    protected function getValidatorFactory(): ValidatorFactoryInterface
+    {
+        if ($this->validatorFactory === null) {
+            throw new \RuntimeException('ValidatorFactoryInterface dependency not injected into BaseService.');
+        }
+        return $this->validatorFactory;
+    }
+
+    protected function getCache(): Cache
+    {
+        if ($this->cache === null) {
+            throw new \RuntimeException('Cache dependency not injected into BaseService.');
+        }
+        return $this->cache;
+    }
+
+    protected function getRedis(): Redis
+    {
+        if ($this->redis === null) {
+            throw new \RuntimeException('Redis dependency not injected into BaseService.');
+        }
+        return $this->redis;
+    }
+
     /**
      * یکپارچه‌سازی فرآیند ساخت، اجرا و پردازش خروجی اعتبارسنجی
      */
     protected function validate(array $data, array $rules, array $messages = [], bool $throw = true): ?array
     {
-        $validator = app(\App\Contracts\ValidatorFactoryInterface::class)->make($data, $rules, $messages, app(\Core\Database::class));
+        $validator = $this->getValidatorFactory()->make($data, $rules, $messages, $this->getDatabase());
         $valid = $validator->validate();
         
         return $this->guardValidation([
@@ -200,13 +266,8 @@ abstract class BaseService
      */
     protected function transaction(callable $callback, int $maxRetries = 3): mixed
     {
-        $db = app(\Core\Database::class);
-        // استفاده از کلاس کمکی هسته از طریق کانتینر
-        // اگر کانتینر کانفیگ نشده باشد از نمونه‌سازی مستقیم استفاده می‌کنیم
-        $wrapper = app(\Core\TransactionWrapper::class);
-        if (!$wrapper instanceof \Core\TransactionWrapper) {
-            $wrapper = new \Core\TransactionWrapper($db);
-        }
+        $db = $this->getDatabase();
+        $wrapper = $this->getTransactionWrapper();
 
         return $wrapper->runWithRetry($callback, $maxRetries);
     }
@@ -218,7 +279,7 @@ abstract class BaseService
     {
         $keys = (array)$keys;
         $this->withRetry(function () use ($keys, $fallback) {
-            $cache = app(\Core\Cache::class);
+            $cache = $this->getCache();
             if ($fallback) {
                 $fallback($cache);
             } else {

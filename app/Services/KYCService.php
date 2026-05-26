@@ -5,48 +5,45 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\LoggerInterface;
-use App\Services\Notification\NotificationService;
+use App\Contracts\NotificationServiceInterface;
 use App\Models\KYCVerification;
 use App\Models\User;
-use App\Services\AuditTrail;
 use App\Services\UploadService;
 use Core\Database;
+use Core\EventDispatcher;
+use Core\RateLimiter;
+use Core\IdempotencyKey;
+use App\Events\KYCApprovedEvent;
+use App\Services\Search\SearchQuery;
+use App\Services\Search\SearchResult;
 
 class KYCService extends \App\Services\BaseService
 {
-    private Database         $db;
     private KYCVerification  $kycModel;
     private User             $userModel;
     private UploadService    $uploadService;
-    private AuditTrail       $auditTrail;
-    private NotificationService $notificationService;
     private \App\Adapters\KycFaceVerificationAdapter $aiAdapter;
     private \Core\Encryption $encryption;
-
-    private \Core\EventDispatcher $eventDispatcher;
 
     public function __construct(
         KYCVerification      $kycModel,
         User                 $userModel,
         Database             $db,
         UploadService        $uploadService,
-        AuditTrail           $auditTrail,
         \App\Adapters\KycFaceVerificationAdapter $aiAdapter,
         LoggerInterface      $logger,
         \Core\Encryption     $encryption,
-        ?NotificationService $notificationService = null,
-        ?\Core\EventDispatcher $eventDispatcher = null
+        EventDispatcher      $eventDispatcher,
+        private RateLimiter  $rateLimiter,
+        private IdempotencyKey $idempotency
     ) {
-        parent::__construct($logger);
+        // انتقال زیرساخت به BaseService
+        parent::__construct($logger, null, $db, null, null, null, null, $eventDispatcher);
         $this->kycModel            = $kycModel;
         $this->userModel           = $userModel;
-        $this->db                  = $db;
         $this->uploadService       = $uploadService;
-        $this->auditTrail          = $auditTrail;
         $this->aiAdapter           = $aiAdapter;
         $this->encryption          = $encryption;
-        $this->notificationService = $notificationService;
-        $this->eventDispatcher     = $eventDispatcher ?? \Core\EventDispatcher::getInstance();
     }
 
     /**
@@ -105,6 +102,7 @@ class KYCService extends \App\Services\BaseService
 
         if ($suspicious) {
             $this->logger->warning('kyc.image.suspicious', [
+                'channel' => 'kyc',
                 'image_path' => basename($imagePath),
                 'reasons' => $reasons,
                 'software' => $exif['Software'] ?? null
@@ -120,6 +118,21 @@ class KYCService extends \App\Services\BaseService
     public function submitKYC(int $userId, array $data, array $files): array
 {
     $uploadResult = null;
+
+    // 🛡️ Idempotency Check: Prevent duplicate KYC submissions
+    $ikey = $data['idempotency_key'] ?? null;
+    if ($ikey) {
+        $cached = $this->idempotency->check($ikey, "kyc_submit:{$userId}");
+        if ($cached) return $cached;
+    }
+
+    // 🛡️ Service-Layer Rate Limiting: Prevent automated/spam KYC submissions
+    if (!$this->rateLimiter->attempt("kyc_submit:{$userId}", 2, 3600)) {
+        $this->logger->warning('kyc.submit.rate_limited', ['user_id' => $userId]);
+        return $this->idempotency->save($ikey, [
+            'success' => false, 'message' => 'تعداد تلاش‌های شما برای احراز هویت بیش از حد مجاز است. لطفاً یک ساعت دیگر تلاش کنید.'
+        ], 3600);
+    }
 
     try {
         // 1) ورودی پایه
@@ -144,11 +157,6 @@ class KYCService extends \App\Services\BaseService
                     try {
                         $decrypted = $this->encryption->decrypt((string)$row->national_code);
                         if ($decrypted === $nationalCode && (int)$row->user_id !== $userId) {
-                            $this->auditTrail->record('kyc.duplicate_national_code_attempt', $userId, [
-                                'attempted_national_code_hash' => hash('sha256', $nationalCode),
-                                'original_user' => (int)$row->user_id
-                            ], $userId);
-
                             return [
                                 'success' => false,
                                 'message' => 'این کد ملی قبلاً در سیستم ثبت شده است'
@@ -209,20 +217,6 @@ class KYCService extends \App\Services\BaseService
         if (!$kycId) {
             $this->db->rollBack();
             $this->uploadService->delete('kyc/' . $filename);
-            $this->logger->error('kyc.create.failed', [
-                'channel' => 'kyc',
-                'user_id' => $userId,
-            ]);
-            return ['success' => false, 'message' => 'خطا در ثبت درخواست احراز هویت'];
-        }
-
-        $okUser = $this->userModel->update($userId, [
-            'kyc_status' => 'pending',
-        ]);
-
-        if (!$okUser) {
-            $this->db->rollBack();
-            $this->uploadService->delete('kyc/' . $filename);
             $this->logger->error('kyc.user_status_update.failed', [
                 'channel' => 'kyc',
                 'user_id' => $userId,
@@ -231,20 +225,17 @@ class KYCService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'خطا در بروزرسانی وضعیت کاربر'];
         }
 
-        $this->auditTrail->record('kyc.submitted', $userId, [
-            'kyc_id' => (int)$kycId,
-            'photoshop_suspicious' => !empty($photoshopCheck['suspicious']) ? 1 : 0,
-            'ai_verified' => (int)($aiCheck['is_valid'] ?? 1),
-            'ai_confidence' => (float)($aiCheck['confidence'] ?? 1.0)
-        ], $userId);
-
         $this->db->commit();
 
         $this->eventDispatcher->dispatch('kyc.status_changed', [
             'kyc_id' => (int)$kycId,
             'user_id' => $userId,
             'old_status' => null,
-            'new_status' => !empty($photoshopCheck['suspicious']) ? 'under_review' : 'pending'
+            'new_status' => !empty($photoshopCheck['suspicious']) ? 'under_review' : 'pending',
+            'metadata' => [
+                'photoshop_suspicious' => !empty($photoshopCheck['suspicious']),
+                'ai_verified' => $aiCheck['is_valid'] ?? true
+            ]
         ]);
 
         return [
@@ -310,19 +301,6 @@ class KYCService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'خطا در بروزرسانی KYC'];
         }
 
-        $okUser = $this->userModel->update((int)$kyc->user_id, [
-            'kyc_status' => 'verified',
-        ]);
-
-        if (!$okUser) {
-            $this->db->rollBack();
-            return ['success' => false, 'message' => 'خطا در بروزرسانی کاربر'];
-        }
-
-        $this->auditTrail->record('kyc.verified', (int)$kyc->user_id, [
-            'kyc_id' => $kycId,
-        ], $adminId);
-
         $this->db->commit();
 
         $this->eventDispatcher->dispatch('kyc.status_changed', [
@@ -333,20 +311,11 @@ class KYCService extends \App\Services\BaseService
             'admin_id' => $adminId
         ]);
 
-        try {
-            if ($this->notificationService && method_exists($this->notificationService, 'sendKYCApproved')) {
-    $this->notificationService->sendKYCApproved((int)$kyc->user_id, $kycId);
-}
-        } catch (\Throwable $e) {
-            $this->logger->error('kyc.verify.notification.failed', [
-                'channel' => 'kyc',
-                'kyc_id' => $kycId,
-                'user_id' => (int)$kyc->user_id,
-                'error' => $e->getMessage(),
-                'exception' => get_class($e),
-                'file' => basename($e->getFile()) . ':' . $e->getLine(),
-            ]);
-        }
+        // Dispatch class-based approved event for new listeners
+        $this->eventDispatcher->dispatch(
+            KYCApprovedEvent::class,
+            new KYCApprovedEvent((int)$kyc->user_id, $kycId)
+        );
 
         return ['success' => true, 'message' => 'KYC با موفقیت تایید شد'];
     } catch (\Throwable $e) {
@@ -417,16 +386,6 @@ class KYCService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'خطا در بروزرسانی کاربر'];
         }
 
-        // H-7: Context and audit trail logging upon rejection
-        $this->auditTrail->record('kyc.rejected', (int)$kyc->user_id, [
-            'kyc_id' => $kycId,
-            'previous_status' => $kyc->status,
-            'reason' => $reason,
-            'ip_address' => get_client_ip(),
-            'user_agent' => get_user_agent(),
-            'admin_session_id' => session_id(),
-        ], $adminId);
-
         $this->db->commit();
 
         $this->eventDispatcher->dispatch('kyc.status_changed', [
@@ -437,22 +396,6 @@ class KYCService extends \App\Services\BaseService
             'reason' => $reason,
             'admin_id' => $adminId
         ]);
-
-        // نوتیف خارج از transaction
-        try {
-           if ($this->notificationService && method_exists($this->notificationService, 'sendKYCRejected')) {
-    $this->notificationService->sendKYCRejected((int)$kyc->user_id, $kycId, $reason);
-}
-        } catch (\Throwable $e) {
-            $this->logger->error('kyc.reject.notification.failed', [
-                'channel' => 'kyc',
-                'kyc_id' => $kycId,
-                'user_id' => (int)$kyc->user_id,
-                'error' => $e->getMessage(),
-                'exception' => get_class($e),
-                'file' => basename($e->getFile()) . ':' . $e->getLine(),
-            ]);
-        }
 
         return ['success' => true, 'message' => 'KYC با موفقیت رد شد'];
     } catch (\Throwable $e) {
@@ -474,9 +417,17 @@ class KYCService extends \App\Services\BaseService
     /**
      * دریافت تمامی رکوردهای احراز هویت (برای ادمین)
      */
-    public function getAll(array $filters = [], int $limit = 50, int $offset = 0, bool $maskPII = false): array
+    public function getAll(SearchQuery $query, bool $maskPII = false): SearchResult
     {
-        $results = $this->kycModel->getAll($filters, $limit, $offset);
+        $filters = $query->getFilters();
+        if ($query->getTerm()) {
+            $filters['q'] = $query->getTerm();
+        }
+        $filters['sort'] = $query->getSort();
+
+        $results = $this->kycModel->getAll($filters, $query->getLimit(), $query->getOffset());
+        $total = $this->count($filters);
+
         foreach ($results as $kyc) {
             if (!empty($kyc->national_code)) {
                 $decrypted = $this->encryption->decrypt((string)$kyc->national_code);
@@ -491,7 +442,7 @@ class KYCService extends \App\Services\BaseService
                     : $decrypted;
             }
         }
-        return $results;
+        return new SearchResult($results, $total);
     }
 
     /**
@@ -583,6 +534,3 @@ class KYCService extends \App\Services\BaseService
         return $this->kycModel->updateImageStatusToDeleted($id);
     }
 }
-
-
-

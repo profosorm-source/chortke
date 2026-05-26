@@ -11,8 +11,8 @@ use Core\Cache;
 
 class UserDashboardService extends \App\Services\BaseService
 {
-    private Database $db;
-    private ?Cache $cache;
+    protected ?Database $db;
+    protected ?Cache $cache;
 
     public function __construct(Database $db, LoggerInterface $logger, ?Cache $cache = null)
     {

@@ -12,10 +12,8 @@ use App\Contracts\NotificationServiceInterface;
 class MessageModerationService
 extends \App\Services\BaseService
 {
-    private Database $db;
     private InteractionModel $interactionModel;
     private MessageModerationModel $moderationModel;
-    private \Core\Cache $cache;
     private ?\App\Services\SettingService $settingService;
     private NotificationServiceInterface $notificationService;
 
@@ -289,13 +287,14 @@ extends \App\Services\BaseService
         }
 
         // 🛡️ CRITICAL-16: Alert the user via an in-app notification when a warning is issued
-        $this->notificationService->send(
-            userId: $userId,
-            type: \App\Models\Notification::TYPE_SECURITY,
-            title: 'اخطار مدیریت پیام‌ها',
-            message: 'کاربر گرامی، شما یک اخطار به دلیل گزارش‌های دریافتی از پیام‌هایتان دریافت کرده‌اید (' . $count . '/3). لطفاً قوانین سایت را رعایت کنید.',
-            priority: \App\Models\Notification::PRIORITY_HIGH
-        );
+        $this->eventDispatcher->dispatch('notification.requested', [
+            'user_id' => $userId,
+            'type' => \App\Models\Notification::TYPE_SECURITY,
+            'title' => 'اخطار مدیریت پیام‌ها',
+            'message' => 'کاربر گرامی، شما یک اخطار به دلیل گزارش‌های دریافتی از پیام‌هایتان دریافت کرده‌اید (' . $count . '/3). لطفاً قوانین سایت را رعایت کنید.',
+            'data' => [],
+            'priority' => \App\Models\Notification::PRIORITY_HIGH
+        ]);
 
         if ($count >= 3) {
             $this->banUser($userId, $adminId, $reportId);
@@ -342,13 +341,14 @@ extends \App\Services\BaseService
         }
 
         // 🛡️ CRITICAL-16: Alert the user via an in-app notification when they are banned
-        $this->notificationService->send(
-            userId: $userId,
-            type: \App\Models\Notification::TYPE_SECURITY,
-            title: 'مسدودسازی حساب کاربری',
-            message: 'حساب کاربری شما به دلیل نقض مکرر قوانین در سیستم پیام‌رسانی مسدود شد.',
-            priority: \App\Models\Notification::PRIORITY_URGENT
-        );
+        $this->eventDispatcher->dispatch('notification.requested', [
+            'user_id' => $userId,
+            'type' => \App\Models\Notification::TYPE_SECURITY,
+            'title' => 'مسدودسازی حساب کاربری',
+            'message' => 'حساب کاربری شما به دلیل نقض مکرر قوانین در سیستم پیام‌رسانی مسدود شد.',
+            'data' => [],
+            'priority' => \App\Models\Notification::PRIORITY_URGENT
+        ]);
 
         $this->cache->forget('message_moderation_stats_v2');
     }

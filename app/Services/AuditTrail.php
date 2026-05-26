@@ -25,6 +25,36 @@ class AuditTrail extends \App\Services\BaseService
         ?int $actorId = null
     ): bool {
         try {
+            // Publish an audit-record event instead of writing directly.
+            // A dedicated listener will persist the record to DB. This keeps audit as an event-driven source of truth.
+            $eventObj = new \App\Events\AuditRecordedEvent($event, $userId, $context, $actorId);
+            \Core\EventDispatcher::getInstance()->dispatch(\App\Events\AuditRecordedEvent::class, $eventObj);
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger->error('audit_trail.record.publish_failed', [
+                'channel' => 'audit_trail',
+                'event' => $event,
+                'user_id' => $userId,
+                'actor_id' => $actorId,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Persist an audit record directly to storage. Intended for use by the audit event listener.
+     */
+    public function persistRecord(
+        string $event,
+        ?int $userId = null,
+        array $context = [],
+        ?int $actorId = null
+    ): bool {
+        try {
             $safeEvent = $this->sanitizeEvent($event);
             $safeContext = $this->sanitizeContext($context);
 
@@ -41,7 +71,7 @@ class AuditTrail extends \App\Services\BaseService
 
             return (bool)$result;
         } catch (\Throwable $e) {
-            $this->logger->error('audit_trail.record.failed', [
+            $this->logger->error('audit_trail.persist.failed', [
                 'channel' => 'audit_trail',
                 'event' => $event,
                 'user_id' => $userId,

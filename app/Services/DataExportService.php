@@ -24,7 +24,7 @@ class DataExportService extends \App\Services\BaseService
     private Wallet $walletModel;
     private KYCVerification $kycVerificationModel;
     private UserSetting $userSettingModel;
-    private Cache $cache;
+    protected ?Cache $cache;
 
     public function __construct(
         DataExport $exportModel,

@@ -26,7 +26,7 @@ class ReconciliationService extends \App\Services\BaseService
         private Transaction $transactionModel,
         private LedgerEntry $ledgerModel,
         private Wallet $walletModel,
-        private Database $db,
+        protected ?Database $db,
         protected LoggerInterface $logger,
         private WalletService $walletService,
         private LedgerService $ledgerService,
@@ -476,7 +476,7 @@ class ReconciliationService extends \App\Services\BaseService
     // اصول طراحی:
     //   - هرگز یک برداشت را خودسرانه completed نمی‌کنیم.
     //   - Detect → Flag → Notify-admin-via-Outbox.
-    //   - Auto-fix (refund) متعلق به WithdrawalService::autoResolveStuck() است
+    //   - Auto-fix (refund) متعلق به WithdrawalAdminService::autoResolveStuck() است
     //     چون قفل wallet + قفل withdrawal و state-machine آنجا متمرکز است.
     //
     // این متدها فقط روی جدول withdrawal_reviews کار می‌کنند و یک admin
@@ -704,7 +704,7 @@ class ReconciliationService extends \App\Services\BaseService
      *   processing withdrawal whose linked transaction has been
      *   failed/cancelled for at least $stableMinutes minutes.
      *
-     * Used by WithdrawalService::autoResolveStuck() — kept here because the
+     * Used by WithdrawalAdminService::autoResolveStuck() — kept here because the
      * query touches the reconciliation domain (withdrawals + transactions + reviews).
      */
     public function findAutoFixCandidates(int $stableMinutes, int $limit): array
@@ -803,7 +803,7 @@ class ReconciliationService extends \App\Services\BaseService
     }
 
     /**
-     * Used internally by WithdrawalService::autoResolveStuck() to mark the
+     * Used internally by WithdrawalAdminService::autoResolveStuck() to mark the
      * review row as in_progress / auto_resolved without breaking the
      * single-source-of-truth principle. Returns affected row count.
      */

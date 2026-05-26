@@ -13,8 +13,9 @@ use App\Models\KYCVerification;
 use App\Models\SecurityModel;
 use App\Models\Transaction;
 use App\Models\User;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use Core\Database;
+use Core\EventDispatcher;
 use App\Contracts\LoggerInterface;
 use App\Services\SettingService;
 
@@ -23,8 +24,10 @@ use App\Services\SettingService;
  */
 class CronService extends \App\Services\BaseService
 {
+    private ?\App\Services\OutboxService $outboxService = null;
+
     public function __construct(
-        private Database             $db,
+        ?Database $db,
         private ActivityLog          $logModel,
         private Ads                  $adModel,
         private CryptoDeposit        $cryptoDepositModel,
@@ -35,11 +38,17 @@ class CronService extends \App\Services\BaseService
         private User                 $userModel,
         private CustomTaskSubmissionModel $taskSubmissionModel,
         private WalletService        $walletService,
-        protected LoggerInterface    $logger,
+        LoggerInterface    $logger,
         private SettingService       $settingService,
-        private \App\Services\Gamification\XpService $xpService
+        private \App\Services\Gamification\XpService $xpService,
+        EventDispatcher             $eventDispatcher
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, $db, null, null, null, null, $eventDispatcher);
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
+        }
     }
 
     public function deleteOldSessions(int $days = 7): int
@@ -187,16 +196,37 @@ class CronService extends \App\Services\BaseService
                 $this->taskSubmissionModel->submission_markApproved($submission->id);
 
                 $idempotencyKey = "ctask_auto_reward_{$submission->id}";
-                $this->walletService->deposit(
-                    $submission->worker_id,
-                    $submission->reward_amount,
-                    $submission->reward_currency,
-                    [
+                $payload = [
+                    'user_id' => $submission->worker_id,
+                    'amount' => $submission->reward_amount,
+                    'currency' => $submission->reward_currency,
+                    'metadata' => [
                         'type' => 'task_reward',
                         'description' => "پاداش وظیفه #{$submission->task_id} (تایید خودکار)",
                         'idempotency_key' => $idempotencyKey,
-                    ]
-                );
+                        'submission_id' => $submission->id,
+                    ],
+                ];
+
+                if (isset($this->outboxService) && $this->outboxService) {
+                    $ok = $this->outboxService->record('custom_task_submission', (int)$submission->id, 'wallet.deposit.requested', $payload);
+                    if (!$ok) {
+                        $this->db->rollBack();
+                        $this->logger->error('submission.auto_approve.outbox_failed', ['submission_id' => $submission->id]);
+                        continue;
+                    }
+                } else {
+                    $this->walletService->deposit(
+                        $submission->worker_id,
+                        $submission->reward_amount,
+                        $submission->reward_currency,
+                        [
+                            'type' => 'task_reward',
+                            'description' => "پاداش وظیفه #{$submission->task_id} (تایید خودکار)",
+                            'idempotency_key' => $idempotencyKey,
+                        ]
+                    );
+                }
 
                 $this->taskSubmissionModel->submission_markRewardPaid($submission->id);
                 $this->adModel->incrementCustomTaskCompletion($submission->task_id, (float)$submission->reward_amount);
@@ -229,11 +259,16 @@ class CronService extends \App\Services\BaseService
                 
                 $remaining = (float)($task->remaining_budget ?? 0);
                 if ($remaining > 0) {
-                    $idempotencyKey = "ctask_refund_complete_{$task->id}";
-                    $this->walletService->deposit($task->creator_id, $remaining, $task->currency, [
-                        'type' => 'task_budget_refund',
-                        'description' => "بازگشت بودجه باقیمانده تسک #{$task->id}",
-                        'idempotency_key' => $idempotencyKey,
+                    $this->eventDispatcher->dispatchAsync('wallet.deposit.requested', [
+                        'user_id' => $task->creator_id,
+                        'amount' => $remaining,
+                        'currency' => $task->currency,
+                        'metadata' => [
+                            'type' => 'task_budget_refund',
+                            'description' => "بازگشت بودجه باقیمانده تسک #{$task->id}",
+                            'task_id' => $task->id,
+                            'idempotency_key' => "ctask_refund_complete_{$task->id}"
+                        ]
                     ]);
                 }
                 $this->db->commit();

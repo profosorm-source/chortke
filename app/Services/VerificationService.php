@@ -25,7 +25,7 @@ class VerificationService extends \App\Services\BaseService
 {
     private InfluencerModel $profileModel;
     private InfluencerVerification $verificationModel;
-    private Database $db;
+    protected ?Database $db;
     private SettingService $settingService;
 
     public function __construct(

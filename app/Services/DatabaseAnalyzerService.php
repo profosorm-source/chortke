@@ -15,7 +15,7 @@ use App\Contracts\LoggerInterface;
  */
 class DatabaseAnalyzerService extends \App\Services\BaseService
 {
-    private Database $db;
+    protected ?Database $db;
     private float $slowQueryThreshold = 1.0;
     private bool $logSlowQueries = true;
 

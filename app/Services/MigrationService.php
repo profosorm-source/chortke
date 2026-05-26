@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use Core\Database;
+use Core\Redis;
 use App\Contracts\LoggerInterface;
 
 /**
@@ -13,13 +14,15 @@ use App\Contracts\LoggerInterface;
  */
 class MigrationService extends BaseService
 {
-    private Database $db;
+    protected ?Database $db;
     private string $migrationsDir;
+    protected ?Redis $redis;
 
-    public function __construct(Database $db, LoggerInterface $logger)
+    public function __construct(Database $db, ?Redis $redis, LoggerInterface $logger)
     {
         parent::__construct($logger);
         $this->db = $db;
+        $this->redis = $redis;
         $this->migrationsDir = realpath(__DIR__ . '/../../database/migrations') ?: (__DIR__ . '/../../database/migrations');
     }
 
@@ -28,17 +31,16 @@ class MigrationService extends BaseService
         $this->initializeSchemaTable();
         
         // Distributed Lock for safe multi-node deploy
-        $redis = null;
-        if (class_exists(\Core\Redis::class)) {
+        $redis = $this->redis;
+        if ($redis !== null && $redis->isAvailable()) {
             try {
-                $redis = app(\Core\Redis::class);
-                if ($redis->isAvailable()) {
-                    $lock = $redis->getClient()->set('schema_migration_lock', 'locked', ['nx', 'ex' => 300]);
-                    if (!$lock) {
-                        return ['success' => false, 'message' => 'Migration is already running on another node.'];
-                    }
+                $lock = $redis->getClient()->set('schema_migration_lock', 'locked', ['nx', 'ex' => 300]);
+                if (!$lock) {
+                    return ['success' => false, 'message' => 'Migration is already running on another node.'];
                 }
-            } catch (\Throwable $e) {}
+            } catch (\Throwable $e) {
+                $redis = null;
+            }
         }
 
         try {
@@ -107,7 +109,7 @@ class MigrationService extends BaseService
         } finally {
             if ($redis !== null) {
                 try {
-                    app(\Core\Redis::class)->getClient()->del('schema_migration_lock');
+                    $redis->getClient()->del('schema_migration_lock');
                 } catch (\Throwable $e) {}
             }
         }

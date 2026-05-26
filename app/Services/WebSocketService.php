@@ -25,8 +25,8 @@ use App\Contracts\LoggerInterface;
 class WebSocketService
 extends \App\Services\BaseService
 {
-    private Redis $redis;
-    private Database $db;
+    protected ?Redis $redis;
+    protected ?Database $db;
     private const PRESENCE_TTL = 60;              // 60 seconds
     private const MESSAGE_RETENTION = 3600;       // 1 hour
     private const POLL_TIMEOUT = 60;              // 60 seconds (increased from 25)

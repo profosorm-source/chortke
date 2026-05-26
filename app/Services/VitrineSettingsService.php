@@ -15,7 +15,7 @@ use App\Services\SettingService;
  */
 class VitrineSettingsService extends \App\Services\BaseService
 {
-    private Database $db;
+    protected ?Database $db;
     private FeatureFlag $featureFlag;
     private SettingService $settingService;
 

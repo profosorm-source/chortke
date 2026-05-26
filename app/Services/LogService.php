@@ -17,13 +17,13 @@ use App\Contracts\LoggerInterface;
  */
 class LogService extends BaseService
 {
-    private Database $db;
+    protected ?Database $db;
     private ActivityLog $activityLog;
     private SystemLog $systemLog;
     private SecurityLog $securityLog;
     private PerformanceLog $performanceLog;
     private \Core\Session $session;
-    private \Core\Redis $redis;
+    protected ?\Core\Redis $redis;
     private ?AuditTrail $auditTrail;
     private string $requestId;
     private array $logBuffer = [];
@@ -54,8 +54,8 @@ class LogService extends BaseService
         SystemLog $systemLog,
         SecurityLog $securityLog,
         PerformanceLog $performanceLog,
-        \Core\Session $session,
-        \Core\Redis $redis,
+        ?\Core\Session $session = null,
+        ?\Core\Redis $redis = null,
         ?AuditTrail $auditTrail = null
     ) {
         // LogService dummy logger to prevent recursion
@@ -76,7 +76,7 @@ class LogService extends BaseService
         $this->systemLog = $systemLog;
         $this->securityLog = $securityLog;
         $this->performanceLog = $performanceLog;
-        $this->session = $session;
+        $this->session = $session ?? \Core\Session::getInstance();
         $this->redis = $redis;
         $this->auditTrail = $auditTrail;
         

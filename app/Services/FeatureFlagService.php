@@ -22,12 +22,12 @@ use App\Listeners\LogFeatureFlagChange;
  */
 class FeatureFlagService extends \App\Services\BaseService implements FeatureFlagRepositoryInterface
 {
-    private \Core\Database $db;
+    protected ?\Core\Database $db;
     private FeatureFlag $featureModel;
     private User $userModel;
     private KYCVerification $kycModel;
-    private Cache $cache;
-    private EventDispatcher $eventDispatcher;
+    protected ?Cache $cache;
+    protected ?EventDispatcher $eventDispatcher;
 
     private const ALLOWED_UPDATE_FIELDS = [
         'enabled', 'description', 'enabled_percentage',

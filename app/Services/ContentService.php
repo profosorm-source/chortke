@@ -7,13 +7,6 @@ namespace App\Services;
 use App\Models\ContentSubmission;
 use App\Models\ContentRevenue;
 use App\Models\ContentAgreement;
-use App\Contracts\WalletServiceInterface;
-use App\Contracts\NotificationServiceInterface;
-use App\Services\User\UserService;
-use App\Services\Shared\ReferralService;
-use App\Services\Gamification\XpService;
-use App\Enums\ModuleContext;
-use App\Models\User;
 use Core\Cache;
 use Core\TransactionWrapper;
 use Core\EventDispatcher;
@@ -40,14 +33,11 @@ class ContentService extends \App\Services\BaseService
     private const ACTIVE_BONUS_PERCENT = 5;
     private const ACTIVE_MAX_PERCENT = 75;
 
-    private WalletServiceInterface $walletService;
-    private \App\Services\Shared\RatingService $ratingService;
-                    private ContentSubmission $submissionModel;
+    private ContentSubmission $submissionModel;
     private ContentRevenue $revenueModel;
     private ContentAgreement $agreementModel;
-    private TransactionWrapper $transactionWrapper;
-    private EventDispatcher $eventDispatcher;
     private SettingService $settingService;
+    private ?\App\Services\OutboxService $outboxService = null;
             // متن تعهدنامه
     private const AGREEMENT_TEXT = <<<EOT
 تعهدنامه همکاری محتوایی با مجموعه چرتکه
@@ -66,8 +56,6 @@ class ContentService extends \App\Services\BaseService
 EOT;
 
     public function __construct(
-        WalletServiceInterface $walletService,
-        \App\Services\Shared\RatingService $ratingService,
         ContentSubmission $submissionModel,
         ContentRevenue $revenueModel,
         ContentAgreement $agreementModel,
@@ -75,17 +63,20 @@ EOT;
         EventDispatcher $eventDispatcher,
         LoggerInterface $logger,
         SettingService $settingService,
-        ) {
+    ) {
         parent::__construct($logger);
         $this->submissionModel = $submissionModel;
         $this->revenueModel = $revenueModel;
         $this->agreementModel = $agreementModel;
-        $this->walletService = $walletService;
-        $this->ratingService = $ratingService;
         $this->transactionWrapper = $transactionWrapper;
         $this->eventDispatcher = $eventDispatcher;
         $this->settingService = $settingService;
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
         }
+    }
 
     /**
      * ارسال محتوای جدید
@@ -568,11 +559,11 @@ $this->logInfo('content_revenue', ['message' => "Admin {$adminId} added revenue 
 
             $currency = $revenue->currency === 'usdt' ? 'usdt' : 'irt';
 
-            $depositResult = $this->walletService->deposit(
-                $revenue->user_id,
-                $revenue->net_user_amount,
-                $currency,
-                [
+            $payload = [
+                'user_id' => $revenue->user_id,
+                'amount' => $revenue->net_user_amount,
+                'currency' => $currency,
+                'metadata' => [
                     'type' => 'content_revenue',
                     'revenue_id' => $revenueId,
                     'submission_id' => $revenue->submission_id,
@@ -583,22 +574,55 @@ $this->logInfo('content_revenue', ['message' => "Admin {$adminId} added revenue 
                         $this->escapeText($revenue->video_title ?? '')
                     ),
                     'idempotency_key' => "content_revenue_payment_{$revenueId}",
-                ]
-            );
+                ],
+            ];
 
-            if (empty($depositResult['success'])) {
-                $this->db->rollBack();
-                return $this->errorResponse(
-                    'خطا در واریز به کیف پول: ' . ($depositResult['message'] ?? '')
+            if ($this->outboxService) {
+                $ok = $this->outboxService->record('content_revenue', (int)$revenueId, 'wallet.deposit.requested', $payload);
+                if (!$ok) {
+                    $this->db->rollBack();
+                    return $this->errorResponse('خطا در ثبت رکورد خروجی برای پرداخت درآمد.');
+                }
+
+                $this->revenueModel->update($revenueId, [
+                    'status'         => \App\Models\ContentRevenue::STATUS_PAID,
+                    'paid_at'        => date('Y-m-d H:i:s'),
+                    'transaction_id' => null,
+                    'paid_by_admin'  => $adminId,
+                ]);
+            } else {
+                $depositResult = $this->walletService->deposit(
+                    $revenue->user_id,
+                    $revenue->net_user_amount,
+                    $currency,
+                    [
+                        'type' => 'content_revenue',
+                        'revenue_id' => $revenueId,
+                        'submission_id' => $revenue->submission_id,
+                        'period' => $revenue->period,
+                        'description' => sprintf(
+                            'درآمد محتوا - دوره %s - %s',
+                            $revenue->period,
+                            $this->escapeText($revenue->video_title ?? '')
+                        ),
+                        'idempotency_key' => "content_revenue_payment_{$revenueId}",
+                    ]
                 );
-            }
 
-            $this->revenueModel->update($revenueId, [
-                'status'         => \App\Models\ContentRevenue::STATUS_PAID,
-                'paid_at'        => date('Y-m-d H:i:s'),
-                'transaction_id' => $depositResult['transaction_id'] ?? null,
-                'paid_by_admin'  => $adminId,
-            ]);
+                if (empty($depositResult['success'])) {
+                    $this->db->rollBack();
+                    return $this->errorResponse(
+                        'خطا در واریز به کیف پول: ' . ($depositResult['message'] ?? '')
+                    );
+                }
+
+                $this->revenueModel->update($revenueId, [
+                    'status'         => \App\Models\ContentRevenue::STATUS_PAID,
+                    'paid_at'        => date('Y-m-d H:i:s'),
+                    'transaction_id' => $depositResult['transaction_id'] ?? null,
+                    'paid_by_admin'  => $adminId,
+                ]);
+            }
             
                         $this->eventDispatcher->dispatchAsync('content.revenue_paid', [
                 'revenue_id' => $revenueId,

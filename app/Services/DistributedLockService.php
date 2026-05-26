@@ -13,7 +13,7 @@ use App\Contracts\LoggerInterface;
  */
 class DistributedLockService extends \App\Services\BaseService
 {
-    private Cache $cache;
+    protected ?Cache $cache;
     private ?bool $useRedis = null;
     private int $defaultTTL = 30; // ثانیه
     

@@ -13,7 +13,7 @@ use App\Contracts\CacheInterface;
 class AdNotificationDispatcher extends \App\Services\BaseService
 {
     public function __construct(
-        private Database $db,
+        protected ?Database $db,
         private NotificationService $notificationService,
         private CacheInterface $cache,
         private PerformanceOptimizationService $performanceService,

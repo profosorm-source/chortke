@@ -21,7 +21,7 @@ use App\Contracts\LoggerInterface;
  */
 class PerformanceOptimizationService extends \App\Services\BaseService
 {
-    private Database $db;
+    protected ?Database $db;
     private array $queryTimes = [];
     private int $queryCount = 0;
     private float $slowQueryThreshold = 1.0; // seconds

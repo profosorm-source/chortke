@@ -10,9 +10,7 @@ use App\Contracts\LoggerInterface;
 
 class SettingService extends \App\Services\BaseService
 {
-    private \Core\Database $db;
     private Setting $model;
-    private Cache $cache;
 
     // 🛡️ H17 Fix (CRITICAL): Replace static runtimeCache with instance property
     // to prevent cross-request contamination in long-running processes (Swoole/Octane)

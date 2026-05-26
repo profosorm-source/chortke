@@ -15,8 +15,8 @@ use App\Contracts\LoggerInterface;
  */
 class UserSettingsService extends \App\Services\BaseService
 {
-    private Database $db;
-    private Cache $cache;
+    protected ?Database $db;
+    protected ?Cache $cache;
     private User $userModel;
 
     // ─── Cache ───────────────────────────────────────────────────────────────

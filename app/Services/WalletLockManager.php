@@ -29,7 +29,7 @@ class WalletLockManager extends BaseService
     private const LOCK_HOLD_TIME = 10;
 
     public function __construct(
-        private Database $db,
+        protected ?Database $db,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);

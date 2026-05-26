@@ -11,7 +11,7 @@ use App\Contracts\LoggerInterface;
 class LedgerService extends \App\Services\BaseService
 {
     private LedgerEntry $ledgerEntry;
-    private Database $db;
+    protected ?Database $db;
 
     public function __construct(LedgerEntry $ledgerEntry, Database $db, LoggerInterface $logger)
     {

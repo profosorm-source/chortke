@@ -15,7 +15,7 @@ use Exception;
  */
 class DatabaseService extends BaseService
 {
-    private Database $db;
+    protected ?Database $db;
     private BackupLog $backupLogModel;
     private string $backupDir;
 

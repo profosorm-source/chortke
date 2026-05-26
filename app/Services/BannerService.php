@@ -10,6 +10,7 @@ use App\Contracts\WalletServiceInterface;
 use App\Contracts\LoggerInterface;
 use App\Services\UploadService;
 use Core\Database;
+use Core\EventDispatcher;
 
 class BannerService extends \App\Services\BaseService
 {
@@ -17,8 +18,6 @@ class BannerService extends \App\Services\BaseService
     private BannerPlacement $placementModel;
     private WalletServiceInterface $walletService;
     private UploadService $uploadService;
-    private Database $db;
-    private \Core\Cache $cache;
 
     public function __construct(
         Ads $bannerModel,
@@ -27,9 +26,10 @@ class BannerService extends \App\Services\BaseService
         UploadService $uploadService,
         Database $db,
         \Core\Cache $cache,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        EventDispatcher $eventDispatcher
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, null, null, null, null, null, $eventDispatcher);
         $this->bannerModel = $bannerModel;
         $this->placementModel = $placementModel;
         $this->walletService = $walletService;
@@ -236,13 +236,17 @@ class BannerService extends \App\Services\BaseService
             // ۲. برگشت وجه
             $refundAmount = (float)($banner->total_budget ?? 0);
             if ($refundAmount > 0) {
-                $credit = $this->walletService->deposit($userId, $refundAmount, 'irt', [
-                    'type' => 'banner_refund',
-                    'description' => "برگشت هزینه لغو بنر #{$bannerId}"
+                $this->eventDispatcher->dispatchAsync('wallet.deposit.requested', [
+                    'user_id' => $userId,
+                    'amount' => $refundAmount,
+                    'currency' => 'irt',
+                    'metadata' => [
+                        'type' => 'banner_refund',
+                        'description' => "برگشت هزینه لغو بنر #{$bannerId}",
+                        'banner_id' => $bannerId,
+                        'idempotency_key' => "banner_refund_{$bannerId}_{$userId}"
+                    ]
                 ]);
-                if (!$credit['success']) {
-                    throw new \Exception("خطا در واریز استرداد وجه: " . ($credit['message'] ?? 'Unknown'));
-                }
             }
 
             $this->db->commit();

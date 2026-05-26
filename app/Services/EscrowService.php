@@ -10,6 +10,8 @@ use Core\IdempotencyKey;
 use App\Contracts\LoggerInterface;
 use App\Services\LedgerService;
 use App\Services\StateMachineService;
+use App\Events\EscrowReleasedEvent;
+use App\Events\DisputeOpenedEvent;
 
 /**
  * EscrowService - تسویه‌ مرکزی برای تمام ماژول‌های مالی
@@ -24,10 +26,8 @@ use App\Services\StateMachineService;
 class EscrowService extends \App\Services\BaseService
 {
     private Escrow   $escrowModel;
-    private Database $db;
     private LedgerService $ledgerService;
     private StateMachineService $stateMachine;
-    private \Core\EventDispatcher $eventDispatcher;
 
     public function __construct(
         Escrow $escrowModel,
@@ -249,16 +249,16 @@ class EscrowService extends \App\Services\BaseService
             'seller_id' => $sellerId,
         ]);
 
-        $this->eventDispatcher->dispatch('escrow.state_changed', [
-            'escrow_id' => $escrowId,
-            'order_id' => (int)$escrow->order_id,
-            'order_type' => $escrow->order_type,
-            'old_status' => $escrow->status,
-            'new_status' => 'released',
-            'amount' => $escrow->amount,
-            'currency' => $escrow->currency,
-            'released_by' => $releasedBy
-        ]);
+        // Dispatch a typed event for released state to decouple downstream side-effects
+        $this->eventDispatcher->dispatch(
+            EscrowReleasedEvent::class,
+            new EscrowReleasedEvent(
+                $escrowId,
+                $sellerId,
+                (float)$escrow->amount,
+                $escrow->currency
+            )
+        );
 
         return ['ok' => true, 'amount' => $escrow->amount];
     }
@@ -459,6 +459,18 @@ class EscrowService extends \App\Services\BaseService
             'reason' => $reason,
             'created_at' => date('Y-m-d H:i:s')
         ]);
+
+        // Dispatch class-based event for new listeners
+        $this->eventDispatcher->dispatch(
+            DisputeOpenedEvent::class,
+            new DisputeOpenedEvent(
+                (int)$escrow->buyer_id,
+                $escrowId,
+                (int)$escrow->order_id,
+                $escrow->order_type,
+                $reason
+            )
+        );
 
         $this->logger->info('escrow.disputed', ['escrow_id' => $escrowId, 'reason' => $reason]);
         return ['ok' => true];

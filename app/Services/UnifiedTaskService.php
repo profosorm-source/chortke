@@ -12,7 +12,7 @@ use App\Contracts\LoggerInterface;
  */
 class UnifiedTaskService extends BaseService
 {
-    private Database $db;
+    protected ?Database $db;
 
     public function __construct(Database $db, LoggerInterface $logger)
     {

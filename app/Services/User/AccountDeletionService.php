@@ -20,9 +20,9 @@ class AccountDeletionService extends \App\Services\BaseService
 {
     private User $userModel;
     private AccountDeletionLog $deletionLogModel;
-    private Database $db;
+    protected ?Database $db;
     private AdminCustomTaskService $customTaskService;
-    private EventDispatcher $eventDispatcher;
+    protected ?EventDispatcher $eventDispatcher;
     private Wallet $walletModel;
     private DistributedLockService $lockService;
     private \App\Services\EmailService $emailService;

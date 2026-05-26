@@ -20,7 +20,7 @@ class FinancialEscrowService extends \App\Services\BaseService
     private EscrowService $escrow;
     private User         $userModel;
     private WalletServiceInterface $wallet;
-    private Database     $db;
+    protected ?Database $db;
     private SettingService $settingService;
     private SagaOrchestrator $saga;
 

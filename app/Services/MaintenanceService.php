@@ -15,7 +15,7 @@ use App\Contracts\LoggerInterface;
  */
 class MaintenanceService extends BaseService
 {
-    private Database $db;
+    protected ?Database $db;
     private MigrationService $migrationService;
 
     public function __construct(Database $db, MigrationService $migrationService, LoggerInterface $logger)

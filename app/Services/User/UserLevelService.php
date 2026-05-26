@@ -22,9 +22,7 @@ class UserLevelService extends \App\Services\BaseService
     private ReferralCommissionService $commissionService;
     private UserLevel $levelModel;
     private UserLevelHistory $historyModel;
-    private Database $db;
     private SettingService $settingService;
-    private EventDispatcher $eventDispatcher;
     private ScoreService $scoreService;
     private UserService $userService;
 
@@ -40,7 +38,7 @@ class UserLevelService extends \App\Services\BaseService
         UserService $userService,
         LoggerInterface $logger
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, null, null, null, null, null, $eventDispatcher);
         $this->levelModel = $levelModel;
         $this->historyModel = $historyModel;
         $this->db = $db;
@@ -291,8 +289,20 @@ class UserLevelService extends \App\Services\BaseService
                     'metadata' => ['price' => $price, 'currency' => $currency, 'duration' => $duration],
                 ]);
 
-                // کمیسیون معرفی
-                $this->commissionService->processCommission($userId, 'vip_purchase', null, $price, $currency);
+                // Migrated to event-driven referral commission
+                if ($this->eventDispatcher) {
+                    $this->eventDispatcher->dispatch('referral.commission.process', [
+                        'referrer_id' => $userId,
+                        'amount' => $price,
+                        'currency' => $currency,
+                        'source_user_id' => $userId,
+                        'context' => [
+                            'action' => 'vip_purchase',
+                            'level' => $levelSlug,
+                            'duration' => $duration
+                        ]
+                    ]);
+                }
 
                 $this->logger->info('User level purchased', [
                     'user_id' => $userId,

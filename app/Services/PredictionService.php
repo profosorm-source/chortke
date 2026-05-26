@@ -24,12 +24,12 @@ use App\Services\StateMachineService;
  */
 class PredictionService extends \App\Services\BaseService
 {
-    private Database $db;
     private PredictionGame $gameModel;
     private PredictionBet $betModel;
     private WalletServiceInterface $walletService;
     private \App\Services\AuditTrail $auditTrail;
     private StateMachineService $stateMachine;
+    private ?\App\Services\OutboxService $outboxService = null;
 
     public function __construct(
         Database      $db,
@@ -47,6 +47,11 @@ class PredictionService extends \App\Services\BaseService
         $this->walletService = $walletService;
         $this->auditTrail = $auditTrail;
         $this->stateMachine = $stateMachine ?? new StateMachineService($logger, $db);
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -384,18 +389,35 @@ class PredictionService extends \App\Services\BaseService
 
     private function _payWinner(object $bet, float $payout, int $gameId): void
     {
-        // واریز به کیف پول
-        $this->walletService->deposit(
-            (int)$bet->user_id,
-            $payout,
-            'usdt',
-            [
-                'type'        => 'prediction_win',
+        $payload = [
+            'user_id' => (int)$bet->user_id,
+            'amount' => $payout,
+            'currency' => 'usdt',
+            'metadata' => [
+                'type' => 'prediction_win',
                 'description' => "پاداش پیش‌بینی بازی #{$gameId}",
-                'game_id'     => $gameId,
-                'bet_id'      => $bet->id,
-            ]
-        );
+                'game_id' => $gameId,
+                'bet_id' => $bet->id,
+                'idempotency_key' => "prediction_win_{$gameId}_{$bet->id}",
+            ],
+        ];
+
+        if ($this->outboxService) {
+            $this->outboxService->record('prediction_bet', (int)$bet->id, 'wallet.deposit.requested', $payload);
+        } else {
+            $this->walletService->deposit(
+                (int)$bet->user_id,
+                $payout,
+                'usdt',
+                [
+                    'type' => 'prediction_win',
+                    'description' => "پاداش پیش‌بینی بازی #{$gameId}",
+                    'game_id' => $gameId,
+                    'bet_id' => $bet->id,
+                    'idempotency_key' => "prediction_win_{$gameId}_{$bet->id}",
+                ]
+            );
+        }
 
         // علامت‌گذاری شرط
         $this->betModel->markWon((int)$bet->id, $payout);
@@ -403,17 +425,35 @@ class PredictionService extends \App\Services\BaseService
 
     private function _refundBet(object $bet, int $gameId, string $reason): void
     {
-        $this->walletService->deposit(
-            (int)$bet->user_id,
-            (float)$bet->amount_usdt,
-            'usdt',
-            [
-                'type'        => 'prediction_refund',
+        $payload = [
+            'user_id' => (int)$bet->user_id,
+            'amount' => (float)$bet->amount_usdt,
+            'currency' => 'usdt',
+            'metadata' => [
+                'type' => 'prediction_refund',
                 'description' => "برگشت شرط بازی #{$gameId} ({$reason})",
-                'game_id'     => $gameId,
-                'bet_id'      => $bet->id,
-            ]
-        );
+                'game_id' => $gameId,
+                'bet_id' => $bet->id,
+                'idempotency_key' => "prediction_refund_{$gameId}_{$bet->id}",
+            ],
+        ];
+
+        if ($this->outboxService) {
+            $this->outboxService->record('prediction_bet', (int)$bet->id, 'wallet.deposit.requested', $payload);
+        } else {
+            $this->walletService->deposit(
+                (int)$bet->user_id,
+                (float)$bet->amount_usdt,
+                'usdt',
+                [
+                    'type' => 'prediction_refund',
+                    'description' => "برگشت شرط بازی #{$gameId} ({$reason})",
+                    'game_id' => $gameId,
+                    'bet_id' => $bet->id,
+                    'idempotency_key' => "prediction_refund_{$gameId}_{$bet->id}",
+                ]
+            );
+        }
 
         $this->betModel->markRefunded((int)$bet->id);
     }

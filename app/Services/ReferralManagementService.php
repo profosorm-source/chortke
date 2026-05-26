@@ -14,7 +14,7 @@ class ReferralManagementService extends \App\Services\BaseService
         private ReferralService $referralService,
         private ReferralCommission $commissionModel,
         private UserService $userService,
-        private Database $db,
+        protected ?Database $db,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);

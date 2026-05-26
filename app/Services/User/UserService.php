@@ -16,13 +16,19 @@ use Core\Database;
  */
 class UserService extends \App\Services\BaseService
 {
+    private User $model;
+    private ?GeoIPService $geoService;
+
     public function __construct(
-        private User $model,
-        private Database $db,
-        protected LoggerInterface $logger,
-        private ?GeoIPService $geoService = null
+        User $model,
+        ?Database $db,
+        LoggerInterface $logger,
+        ?GeoIPService $geoService = null
     ) {
-        parent::__construct($logger);
+        $this->model = $model;
+        $this->geoService = $geoService;
+
+        parent::__construct($logger, null, $db, null, null, null, null, null);
     }
 
     public function register(array $data): array|false

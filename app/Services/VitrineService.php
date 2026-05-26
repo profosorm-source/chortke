@@ -27,6 +27,7 @@ use App\Contracts\LoggerInterface;
  */
 class VitrineService extends \App\Services\BaseService
 {
+    private ?\App\Services\OutboxService $outboxService = null;
     public function __construct(
         private readonly VitrineListing     $listing,
         private readonly VitrineRequest     $request,
@@ -42,8 +43,14 @@ class VitrineService extends \App\Services\BaseService
         private readonly SettingService     $settings,
         private readonly UserService        $userService,
         private readonly ReferralService     $referralService,
+        private readonly \Core\EventDispatcher $eventDispatcher,
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, null, null, null, null, null, $eventDispatcher);
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -532,27 +539,52 @@ public function adminRefundListing(int $listingId, int $adminId): array
 
         $this->db->beginTransaction();
         try {
-            $credit = $this->wallet->deposit(
-                (int) $listing->seller_id,
-                $net,
-                'usdt',
-                [
+            $payload = [
+                'user_id' => (int) $listing->seller_id,
+                'amount' => $net,
+                'currency' => 'usdt',
+                'metadata' => [
                     'type' => 'vitrine_sale',
-                    'description' => "درآمد ویترین #{$listing->id}"
-                ]
-            );
-            if (empty($credit['success'])) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در پرداخت به فروشنده.'];
+                    'description' => "درآمد ویترین #{$listing->id}",
+                ],
+            ];
+
+            if ($this->outboxService) {
+                $ok = $this->outboxService->record('vitrine_listing', (int)$listing->id, 'wallet.deposit.requested', $payload);
+                if (!$ok) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در ثبت رکورد خروجی برای پرداخت فروشنده.'];
+                }
+            } else {
+                $credit = $this->wallet->deposit(
+                    (int) $listing->seller_id,
+                    $net,
+                    'usdt',
+                    [
+                        'type' => 'vitrine_sale',
+                        'description' => "درآمد ویترین #{$listing->id}"
+                    ]
+                );
+                if (empty($credit['success'])) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در پرداخت به فروشنده.'];
+                }
             }
             
             // پورسانت ریفرال (معرف فروشنده محصول)
             $userRecord = $this->userService->findById((int)$listing->seller_id);
             if ($userRecord && !empty($userRecord->referred_by)) {
-                $this->referralService->processCommission((int)$userRecord->referred_by, $net, 'usdt', [
-                    'action' => 'vitrine_sale_reward',
-                    'seller_id' => $listing->seller_id,
-                    'listing_id' => $listing->id
+                // Migrated to event-driven referral commission
+                $this->eventDispatcher->dispatch('referral.commission.process', [
+                    'referrer_id' => (int)$userRecord->referred_by,
+                    'amount' => $net,
+                    'currency' => 'usdt',
+                    'source_user_id' => (int)$listing->seller_id,
+                    'context' => [
+                        'action' => 'vitrine_sale_reward',
+                        'seller_id' => $listing->seller_id,
+                        'listing_id' => $listing->id
+                    ]
                 ]);
             }
 
@@ -638,16 +670,33 @@ public function adminRefundListing(int $listingId, int $adminId): array
             $amount = $listing->offer_price_usdt ?? $listing->price_usdt;
             $this->db->beginTransaction();
             try {
-                $credit = $this->wallet->deposit(
-                    (int) $listing->buyer_id,
-                    $amount,
-                    'usdt',
-                    'vitrine_refund',
-                    "استرداد ویترین #{$listingId}"
-                );
-                if (!$credit['success']) {
-                    $this->db->rollBack();
-                    return ['success' => false, 'message' => 'خطا در استرداد وجه.'];
+                $refundPayload = [
+                    'user_id' => (int)$listing->buyer_id,
+                    'amount' => $amount,
+                    'currency' => 'usdt',
+                    'metadata' => [
+                        'type' => 'vitrine_refund',
+                        'description' => "استرداد ویترین #{$listingId}",
+                    ],
+                ];
+
+                if ($this->outboxService) {
+                    $ok = $this->outboxService->record('vitrine_listing', $listingId, 'wallet.deposit.requested', $refundPayload);
+                    if (!$ok) {
+                        $this->db->rollBack();
+                        return ['success' => false, 'message' => 'خطا در ثبت رکورد خروجی برای استرداد وجه.'];
+                    }
+                } else {
+                    $credit = $this->wallet->deposit(
+                        (int) $listing->buyer_id,
+                        $amount,
+                        'usdt',
+                        ['type' => 'vitrine_refund', 'description' => "استرداد ویترین #{$listingId}"]
+                    );
+                    if (!$credit['success']) {
+                        $this->db->rollBack();
+                        return ['success' => false, 'message' => 'خطا در استرداد وجه.'];
+                    }
                 }
                 $this->listing->updateStatus($listingId, VitrineListing::STATUS_CANCELLED);
                 $this->db->commit();

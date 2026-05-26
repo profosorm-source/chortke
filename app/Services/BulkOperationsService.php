@@ -23,8 +23,6 @@ use App\Contracts\LoggerInterface;
  */
 class BulkOperationsService extends \App\Services\BaseService
 {
-    private Database $db;
-    private CacheInterface $cache;
     private BulkOperation $bulkOperationModel;
     private ?NotificationServiceInterface $notificationService;
 
@@ -449,7 +447,13 @@ class BulkOperationsService extends \App\Services\BaseService
         foreach ($batches as $batch) {
             foreach ($batch as $userId) {
                 try {
-                    $this->notificationService->send($userId, $type, $title, $message);
+                    $this->eventDispatcher->dispatch('notification.requested', [
+                        'user_id' => $userId,
+                        'type' => $type,
+                        'title' => $title,
+                        'message' => $message,
+                        'data' => []
+                    ]);
                     $results['success']++;
                 } catch (\Exception $e) {
                     $results['failed']++;

@@ -158,7 +158,7 @@ class StateMachineService extends \App\Services\BaseService
         'rejected'      => [],
     ];
 
-    private \Core\Database $db;
+    protected ?\Core\Database $db;
 
     public function __construct(LoggerInterface $logger, \Core\Database $db)
     {

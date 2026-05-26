@@ -101,7 +101,7 @@ class UploadService extends \App\Services\BaseService implements UploadServiceIn
     private string $publicRoot;
     private string $captchaRoot;
     private SettingService $settingService;
-    private Database $db;
+    protected ?Database $db;
 
     public function __construct(LoggerInterface $logger, SettingService $settingService, Database $db)
     {
