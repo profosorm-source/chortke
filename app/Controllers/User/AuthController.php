@@ -8,6 +8,7 @@ use App\Services\User\UserService;
 use App\Services\Auth\AuthService;
 use App\Controllers\BaseController;
 use App\Services\Auth\LoginRiskService;
+use App\Validators\UserValidator;
 
 /**
  * AuthController
@@ -87,20 +88,15 @@ class AuthController extends BaseController
             }
         }
 
-        $minLength = (int)config('auth.password.min_length', 8);
-        $validator = $this->validatorFactory()->make($data, [
-            'email'    => 'required|email',
-            'password' => "required|min:{$minLength}",
-        ]);
-
-        if ($validator->fails()) {
+        $errors = UserValidator::validateLogin($data);
+        if (!empty($errors)) {
             $this->session->setFlash('error', 'لطفاً اطلاعات را به درستی وارد کنید.');
             $this->response->redirect(url('login'));
             return;
         }
 
         // 🛡️ گیت ضدتقلب و امنیت هوشمند
-        $user = $this->userService->findByEmail($email);
+        $user = $this->userService->findByCredentials($email);
         $userId = $user ? (int)$user->id : 0;
 
         $risk = $this->fraudGuard->checkAction($userId, 'auth.login', [

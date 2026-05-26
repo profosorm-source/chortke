@@ -2,8 +2,9 @@
 
 namespace App\Controllers\User;
 
-use App\Services\WalletService;
-use App\Services\WithdrawalService;
+use App\Services\Wallet\WalletService;
+use App\Services\Withdrawal\WithdrawalUserService;
+use App\Services\Withdrawal\WithdrawalQueryService;
 use App\Services\BankCardService;
 use App\Services\User\UserService;
 use App\Services\AntiFraud\RiskDecisionService;
@@ -16,7 +17,8 @@ class WithdrawalController extends BaseUserController
     private BankCardService $bankCardService;
     private WalletService $walletService;
     private RiskDecisionService $riskDecisionService;
-    private WithdrawalService $withdrawalService;
+    private WithdrawalUserService $withdrawalUserService;
+    private WithdrawalQueryService $withdrawalQueryService;
     private UserService $userService;
     private Logger $logger;
 
@@ -24,7 +26,8 @@ class WithdrawalController extends BaseUserController
         BankCardService $bankCardService,
         WalletService $walletService,
         RiskDecisionService $riskDecisionService,
-        WithdrawalService $withdrawalService,
+        WithdrawalUserService $withdrawalUserService,
+        WithdrawalQueryService $withdrawalQueryService,
         UserService $userService,
         Logger $logger
     ) {
@@ -32,7 +35,8 @@ class WithdrawalController extends BaseUserController
         $this->bankCardService = $bankCardService;
         $this->walletService = $walletService;
         $this->riskDecisionService = $riskDecisionService;
-        $this->withdrawalService = $withdrawalService;
+        $this->withdrawalUserService = $withdrawalUserService;
+        $this->withdrawalQueryService = $withdrawalQueryService;
         $this->userService = $userService;
         $this->logger = $logger;
     }
@@ -53,7 +57,7 @@ class WithdrawalController extends BaseUserController
                 return;
             }
 
-            if ($this->withdrawalService->hasPendingWithdrawal($userId)) {
+            if ($this->withdrawalQueryService->hasPendingWithdrawal($userId)) {
                 $this->session->setFlash('error', 'شما یک درخواست برداشت در انتظار دارید');
                 $this->response->redirect(url('wallet'));
                 return;
@@ -128,7 +132,7 @@ class WithdrawalController extends BaseUserController
                 'fingerprint'  => generate_device_fingerprint(),
             ]);
 
-            $result = $this->withdrawalService->requestFromUser($userId, $payload);
+            $result = $this->withdrawalUserService->requestFromUser($userId, $payload);
 
             $this->response->json([
                 'success' => (bool)($result['success'] ?? false),
@@ -156,7 +160,7 @@ class WithdrawalController extends BaseUserController
         $userId = $this->userId();
 
         try {
-            $withdrawals = $this->withdrawalService->getUserWithdrawals($userId);
+            $withdrawals = $this->withdrawalQueryService->getUserWithdrawals($userId);
 
             view('user.withdrawal.index', [
                 'withdrawals' => $withdrawals,
@@ -184,7 +188,7 @@ class WithdrawalController extends BaseUserController
             $currency = 'IRT';
         }
 
-        $info = $this->withdrawalService->getLimitsForUser($userId, $currency);
+        $info = $this->withdrawalQueryService->getLimitsForUser($userId, $currency);
 
         $this->response->json([
             'success' => true,

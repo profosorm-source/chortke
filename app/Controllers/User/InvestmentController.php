@@ -14,7 +14,7 @@ use App\Controllers\User\BaseUserController;
 class InvestmentController extends BaseUserController
 {
     private \App\Services\Notification\NotificationService $notificationService;
-    private \App\Services\WalletService $walletService;
+    private \App\Services\Wallet\WalletService $walletService;
     private \App\Models\TradingRecord $tradingRecordModel;
     private \App\Models\InvestmentWithdrawal $investmentWithdrawalModel;
     private \App\Models\InvestmentProfit $investmentProfitModel;
@@ -26,7 +26,7 @@ class InvestmentController extends BaseUserController
         \App\Models\InvestmentProfit $investmentProfitModel,
         \App\Models\InvestmentWithdrawal $investmentWithdrawalModel,
         \App\Models\TradingRecord $tradingRecordModel,
-        \App\Services\WalletService $walletService,
+        \App\Services\Wallet\WalletService $walletService,
         \App\Services\Notification\NotificationService $notificationService,
         \App\Services\InvestmentService $investmentService)
     {

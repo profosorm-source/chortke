@@ -3,7 +3,7 @@
 namespace App\Controllers;
 
 use App\Services\Payment\PaymentService;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\ReconciliationService;
 use App\Controllers\BaseController;
 use Core\Exceptions\ValidationException;

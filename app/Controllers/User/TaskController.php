@@ -7,7 +7,7 @@ use App\Services\TaskDisputeService;
 use App\Services\AdTaskService;
 use App\Services\SocialAccountService;
 use App\Services\UploadService;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 
 class TaskController extends BaseUserController
 {

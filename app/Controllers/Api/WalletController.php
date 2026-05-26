@@ -2,7 +2,7 @@
 
 namespace App\Controllers\Api;
 
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\ApiRateLimiter;
 
 /**
