@@ -9,7 +9,7 @@ use App\Enums\ModuleContext;
 use App\Services\User\UserService;
 use App\Services\SocialTask\RatingService;
 use App\Services\SocialTask\SilentAntiFraudService;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\AuditTrail;
 use Core\Database;
 

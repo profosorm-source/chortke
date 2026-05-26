@@ -9,7 +9,7 @@ use App\Services\Search\SearchOrchestrator;
 use App\Services\CustomTaskService;
 use App\Services\Analytics\AnalyticsService;
 use App\Services\Shared\DisputeService;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Controllers\Admin\BaseAdminController;
 
 class CustomTaskController extends BaseAdminController

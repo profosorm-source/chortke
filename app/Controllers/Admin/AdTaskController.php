@@ -5,7 +5,7 @@ namespace App\Controllers\Admin;
 use App\Models\Ads;
 use App\Services\CustomTask\AdminCustomTaskService;
 use App\Services\Analytics\AnalyticsService;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\Search\SearchOrchestrator;
 use App\Controllers\Admin\BaseAdminController;
 

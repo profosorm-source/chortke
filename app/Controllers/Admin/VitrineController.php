@@ -8,7 +8,7 @@ use App\Models\VitrineListing;
 use App\Models\VitrineRequest;
 use App\Services\VitrineService;
 use App\Services\VitrineSettingsService;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\AuditTrail;
 
 /**

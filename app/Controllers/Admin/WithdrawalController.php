@@ -2,37 +2,42 @@
 
 namespace App\Controllers\Admin;
 
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\User\UserService;
 use App\Services\BankCardService;
+use App\Services\Withdrawal\WithdrawalAdminService;
+use App\Services\Withdrawal\WithdrawalQueryService;
 use App\Services\ReconciliationService;
 use App\Controllers\Admin\BaseAdminController;
 
 class WithdrawalController extends BaseAdminController
 {
-    private WalletService  $walletService;
-    private UserService    $userService;
+    private WalletService $walletService;
+    private UserService $userService;
     private BankCardService $cardService;
-	private \App\Services\WithdrawalService $withdrawalService;
-	protected \App\Contracts\LoggerInterface $logger;
-	private ReconciliationService $reconciliationService;
+    private WithdrawalAdminService $withdrawalAdminService;
+    private WithdrawalQueryService $withdrawalQueryService;
+    protected \App\Contracts\LoggerInterface $logger;
+    private ReconciliationService $reconciliationService;
 
-public function __construct(
-    \App\Services\BankCardService $bankCardService,
-    \App\Services\WalletService $walletService,
-    \App\Services\User\UserService $userService,
-    \App\Services\WithdrawalService $withdrawalService,
-	\Core\Logger $logger,
-	ReconciliationService $reconciliationService
-) {
-    parent::__construct();
-    $this->walletService = $walletService;
-    $this->userService = $userService;
-    $this->cardService = $bankCardService;
-    $this->withdrawalService = $withdrawalService;
-	$this->logger = $logger;
-	$this->reconciliationService = $reconciliationService;
-}
+    public function __construct(
+        BankCardService $bankCardService,
+        WalletService $walletService,
+        UserService $userService,
+        WithdrawalAdminService $withdrawalAdminService,
+        WithdrawalQueryService $withdrawalQueryService,
+        \Core\Logger $logger,
+        ReconciliationService $reconciliationService
+    ) {
+        parent::__construct();
+        $this->walletService = $walletService;
+        $this->userService = $userService;
+        $this->cardService = $bankCardService;
+        $this->withdrawalAdminService = $withdrawalAdminService;
+        $this->withdrawalQueryService = $withdrawalQueryService;
+        $this->logger = $logger;
+        $this->reconciliationService = $reconciliationService;
+    }
 
 
     /**
@@ -49,17 +54,17 @@ public function __construct(
 
         try {
             if ($status || $currency) {
-                $withdrawals = $this->withdrawalService->getAll($status, $currency, $limit, $offset);
-                $total = $this->withdrawalService->countAll($status, $currency);
+                $withdrawals = $this->withdrawalQueryService->getAll($status, $currency, $limit, $offset);
+                $total = $this->withdrawalQueryService->countAll($status, $currency);
             } else {
-                $withdrawals = $this->withdrawalService->getPendingWithdrawals($limit, $offset);
-                $total = $this->withdrawalService->countPendingWithdrawals();
+                $withdrawals = $this->withdrawalQueryService->getPendingWithdrawals($limit, $offset);
+                $total = $this->withdrawalQueryService->countPendingWithdrawals();
             }
 
             $totalPages = (int)\ceil($total / $limit);
 
             // آمار خلاصه
-            $summary = $this->withdrawalService->getSummaryStats();
+            $summary = $this->withdrawalQueryService->getSummaryStats();
 
             view('admin.withdrawals.index', [
                 'withdrawals' => $withdrawals,
@@ -94,7 +99,7 @@ public function __construct(
                 $withdrawalId = (int)$this->request->get('id');
 
         try {
-            $withdrawal = $this->withdrawalService->findById($withdrawalId);
+            $withdrawal = $this->withdrawalQueryService->findById($withdrawalId);
 
             if (!$withdrawal) {
                 $this->session->setFlash('error', 'درخواست یافت نشد');
@@ -172,7 +177,7 @@ public function __construct(
             $withdrawalId = (int)$data['withdrawal_id'];
             $paymentRef = (string)$data['payment_reference'];
 
-            $result = $this->withdrawalService->approveWithdrawal($withdrawalId, $paymentRef, $adminId);
+            $result = $this->withdrawalAdminService->adminApprove($withdrawalId, $adminId, $paymentRef);
 
             if (!empty($result['success'])) {
                 // ✅ ثبت لاگ فعالیت در سطح کنترلر (لاگ مانیتورینگ)
@@ -250,7 +255,7 @@ public function __construct(
 
         try {
             $withdrawalId = (int)$data['withdrawal_id'];
-            $result = $this->withdrawalService->adminReject($adminId, $withdrawalId, $data['rejection_reason']);
+            $result = $this->withdrawalAdminService->adminReject($withdrawalId, $adminId, $data['rejection_reason']);
 
             if (!empty($result['success'])) {
                 // ✅ ثبت لاگ

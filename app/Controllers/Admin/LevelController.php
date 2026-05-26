@@ -10,7 +10,7 @@ use App\Controllers\Admin\BaseAdminController;
 class LevelController extends BaseAdminController
 {
     private \App\Services\Shared\ReferralService $referralService;
-    private \App\Services\WalletService $walletService;
+    private \App\Services\Wallet\WalletService $walletService;
     private \App\Services\User\UserLevelService $userLevelService;
     private \App\Models\UserLevelHistory $userLevelHistoryModel;
     private \App\Models\UserLevel $userLevelModel;
@@ -19,7 +19,7 @@ class LevelController extends BaseAdminController
         \App\Models\UserLevel $userLevelModel,
         \App\Models\UserLevelHistory $userLevelHistoryModel,
         \App\Services\User\UserLevelService $userLevelService,
-        \App\Services\WalletService $walletService,
+        \App\Services\Wallet\WalletService $walletService,
         \App\Services\Shared\ReferralService $referralService,
         \App\Services\User\UserService $userService)
     {

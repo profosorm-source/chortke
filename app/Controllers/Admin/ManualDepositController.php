@@ -5,7 +5,7 @@ use App\Models\BankCard;
 use App\Services\User\UserService;
 
 use App\Models\ManualDeposit;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Controllers\Admin\BaseAdminController;
 use App\Services\ManualDepositService;
 use Core\Logger;
@@ -23,7 +23,7 @@ class ManualDepositController extends BaseAdminController
     BankCard $BankCardModel,
     UserService $userService,
     \App\Models\ManualDeposit $depositModel,
-    \App\Services\WalletService $walletService,
+    \App\Services\Wallet\WalletService $walletService,
     ManualDepositService $manualDepositService,
 	Logger $logger,
 ) {

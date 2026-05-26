@@ -3,7 +3,7 @@
 namespace App\Controllers\Admin;
 use App\Services\User\UserService;
 
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Controllers\Admin\BaseAdminController;
 
 class TransactionController extends BaseAdminController

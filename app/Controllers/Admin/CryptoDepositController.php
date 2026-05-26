@@ -3,7 +3,7 @@
 namespace App\Controllers\Admin;
 use App\Services\User\UserService;
 use App\Models\CryptoDeposit;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Controllers\Admin\BaseAdminController;
 use App\Services\CryptoDeposit\CryptoDepositService;
 use Core\Logger;
@@ -19,7 +19,7 @@ class CryptoDepositController extends BaseAdminController
     public function __construct(
     UserService $userService,
     \App\Models\CryptoDeposit $depositModel,
-    \App\Services\WalletService $walletService,
+    \App\Services\Wallet\WalletService $walletService,
     \App\Services\CryptoDeposit\CryptoDepositService $cryptoDepositService,
 	 Logger $logger,
 ) {
