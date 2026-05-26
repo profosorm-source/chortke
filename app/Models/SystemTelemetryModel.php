@@ -44,8 +44,17 @@ class SystemTelemetryModel extends Model
 
     public function getSlowRequestCount(int $minutes): int
     {
+        $hasIsSlowColumn = (bool) $this->db->query("SHOW COLUMNS FROM performance_logs LIKE 'is_slow'")->fetch();
+
+        if ($hasIsSlowColumn) {
+            return (int) $this->db->table('performance_logs')
+                ->where('is_slow', '=', 1)
+                ->where('created_at', '>=', date('Y-m-d H:i:s', strtotime("-{$minutes} minutes")))
+                ->count();
+        }
+
         return (int) $this->db->table('performance_logs')
-            ->where('is_slow', '=', 1)
+            ->where('metric', '=', 'request_duration_ms')
             ->where('created_at', '>=', date('Y-m-d H:i:s', strtotime("-{$minutes} minutes")))
             ->count();
     }

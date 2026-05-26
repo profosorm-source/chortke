@@ -152,7 +152,7 @@ class Withdrawal extends Model
                 return false;
             }
             
-            // M43: Service layer (WithdrawalService) handles:
+            // M43: Service layer (WithdrawalAdminService / WithdrawalUserService) handles:
             // - Locked balance deduction on 'completed'
             // - Balance unlock on 'rejected'
             // - Transaction log creation

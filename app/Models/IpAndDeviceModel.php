@@ -151,6 +151,38 @@ class IpAndDeviceModel extends Model
         return $this->db->fetch($sql, [$ipLong, $ipLong]);
     }
 
+    public function getFromCache(string $ip): ?object
+    {
+        $cache = \Core\Cache::getInstance();
+        $payload = $cache->get('geoip:' . $ip);
+        if ($payload === null) {
+            return null;
+        }
+
+        if (is_string($payload)) {
+            $payload = json_decode($payload, true);
+        }
+
+        if (!is_array($payload)) {
+            return null;
+        }
+
+        return (object) [
+            'country_code' => $payload['country_code'] ?? null,
+            'country_name' => $payload['country_name'] ?? null,
+            'city' => $payload['city'] ?? null,
+            'latitude' => $payload['latitude'] ?? null,
+            'longitude' => $payload['longitude'] ?? null,
+            'timezone' => $payload['timezone'] ?? null,
+        ];
+    }
+
+    public function saveToCache(string $ip, array $location): bool
+    {
+        $cache = \Core\Cache::getInstance();
+        return $cache->put('geoip:' . $ip, $location, 60 * 24 * 7);
+    }
+
     public function getSessionsForVelocity(int $userId, string $since): array
     {
         $sql = "SELECT ip_address, country, city, latitude, longitude, created_at
