@@ -8,5 +8,5 @@ use Core\Database;
 
 interface ValidatorFactoryInterface
 {
-    public function make(array $data, array $rules = [], ?Database $db = null): \Core\Validator;
+    public function make(array $data, array $rules = [], array $messages = [], ?Database $db = null): \Core\Validator;
 }

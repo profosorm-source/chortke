@@ -6,14 +6,14 @@ namespace App\Commands;
 
 use App\Contracts\LoggerInterface;
 use App\Services\ReconciliationService;
-use App\Services\WithdrawalService;
+use App\Services\Withdrawal\WithdrawalAdminService;
 
 /**
  * CLI for the safe stuck-withdrawal review workflow (Section 8.5 / 8.7).
  *
  * This command is a thin orchestrator on top of:
  *   - ReconciliationService (detect/flag/list/admin-ops)
- *   - WithdrawalService::autoResolveStuck() (safe auto-fix)
+ *   - WithdrawalAdminService::autoResolveStuck() (safe auto-fix)
  *
  * Usage:
  *   php cli.php withdrawals:review:scan      [--minutes=120] [--limit=200]
@@ -26,7 +26,7 @@ class StuckWithdrawalReviewCommand
 {
     public function __construct(
         private ReconciliationService $reconciliation,
-        private WithdrawalService $withdrawals,
+        private WithdrawalAdminService $withdrawalAdminService,
         private LoggerInterface $logger
     ) {}
 
@@ -74,7 +74,7 @@ class StuckWithdrawalReviewCommand
         $limit   = (int)($opts['limit']    ?? 50);
         $adminId = isset($opts['admin-id']) ? (int)$opts['admin-id'] : null;
 
-        $r = $this->withdrawals->autoResolveStuck($adminId, $stable, $limit);
+        $r = $this->withdrawalAdminService->autoResolveStuck($adminId, $stable, $limit);
         echo sprintf(
             "[auto-fix] scanned=%d fixed=%d escalated=%d errors=%d (stable=%dmin)\n",
             $r['scanned'], $r['fixed'], $r['escalated'], $r['errors'], $stable
