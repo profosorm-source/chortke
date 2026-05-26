@@ -10,8 +10,10 @@ use App\Services\User\UserService;
 use App\Services\EmailService;
 use App\Services\BaseService;
 use App\Services\AuditTrail;
+use App\Services\Notification\NotificationService;
 use App\Validators\Requests\RegisterRequest;
 use Core\Logger;
+use Core\Redis;
 use Core\Session;
 use Core\RateLimiter;
 use Core\EventDispatcher;
@@ -44,7 +46,8 @@ class AuthService extends \App\Services\BaseService
         private AuditTrail $auditTrail,
         private TwoFactorService $twoFactorService,
         private \App\Services\SettingService $settingService,
-        private EventDispatcher $eventDispatcher,
+        protected ?EventDispatcher $eventDispatcher,
+        protected ?Redis $redis,
         private ?EmailService $emailService = null
     ) {
         parent::__construct($logger);
@@ -437,9 +440,8 @@ class AuthService extends \App\Services\BaseService
 
         // HIGH-01 Fix: Explicitly delete Redis activity key on logout
         try {
-            $redis = app(\Core\Redis::class);
-            if ($redis->isAvailable()) {
-                $redis->delete("session:activity:{$sessionId}");
+            if ($this->redis->isAvailable()) {
+                $this->redis->delete("session:activity:{$sessionId}");
             }
         } catch (\Throwable $e) {
             $this->logger->error('auth.logout.redis_clear_failed', ['error' => $e->getMessage()]);
@@ -461,9 +463,8 @@ class AuthService extends \App\Services\BaseService
         
         foreach ($sessions as $session) {
             try {
-                $redis = app(\Core\Redis::class);
-                if ($redis->isAvailable()) {
-                    $redis->delete("session:activity:" . ($session->session_id ?? ''));
+                if ($this->redis->isAvailable()) {
+                    $this->redis->delete("session:activity:" . ($session->session_id ?? ''));
                 }
             } catch (\Throwable $e) {
                 $this->logger->error('auth.logout_all.redis_clear_failed', [

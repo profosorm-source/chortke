@@ -4,199 +4,72 @@ declare(strict_types=1);
 
 namespace App\Services\Cache;
 
-use App\Contracts\CacheInterface;
 use Core\Cache;
+use App\Contracts\CacheInterface;
 use App\Contracts\LoggerInterface;
 
 /**
- * Cache Manager (Contracts Implementation)
- * 
- * Wrapper برای Core\Cache
- * Implementation از CacheInterface برای DI و تست‌پذیری
- * 
- * این سرویس Core\Cache را wrap می‌کند و بهتر abstraction فراهم می‌کند
+ * CacheManager - Wrapper استاندارد برای دسترسی به سیستم کش
+ * رفع باگ TTL: تمامی مقادیر به ثانیه منتقل می‌شوند.
  */
-class CacheManager extends \App\Services\BaseService implements CacheInterface
+class CacheManager implements CacheInterface
 {
-    private Cache $cache;
+    public function __construct(
+        private Cache $cache,
+        private LoggerInterface $logger
+    ) {}
 
-
-    public function __construct(Cache $cache, LoggerInterface $logger)
+    public function get(string $key, mixed $default = null): mixed
     {
-        parent::__construct($logger);
-        $this->cache = $cache;
+        return $this->cache->get($key, $default);
     }
 
     /**
-     * دریافت از cache
+     * ذخیره در کش
+     * @param int|null $ttl زمان به ثانیه (FIX: قبلاً به دقیقه تبدیل می‌شد که اشتباه بود)
      */
-    public function get(string $key, $default = null)
+    public function set(string $key, mixed $value, ?int $ttl = null): bool
     {
-        try {
-            return $this->cache->get($key, $default);
-        } catch (\Throwable $e) {
-            $this->logger->warning('cache.get.failed', [
-                'key' => $key,
-                'error' => $e->getMessage(),
-            ]);
-            return $default;
+        if ($ttl === null) {
+            return $this->cache->forever($key, $value);
         }
+
+        // استفاده مستقیم از ثانیه برای سازگاری با استاندارد PSR-16
+        return $this->cache->putSeconds($key, $value, $ttl);
     }
 
-    /**
-     * ذخیره در cache
-     */
-    public function set(string $key, $value, ?int $ttl = null): bool
-    {
-        try {
-            // convert seconds to minutes (Core\Cache expects minutes)
-            if ($ttl !== null && $ttl <= 0) {
-                return $this->delete($key);
-            }
-            $minutes = $ttl !== null ? (int)\max(1, \ceil($ttl / 60)) : 60;
-            return $this->cache->put($key, $value, $minutes);
-        } catch (\Throwable $e) {
-            $this->logger->warning('cache.set.failed', [
-                'key' => $key,
-                'error' => $e->getMessage(),
-            ]);
-            return false;
-        }
-    }
-
-    /**
-     * حذف از cache
-     */
     public function delete(string $key): bool
     {
-        try {
-            return $this->cache->forget($key);
-        } catch (\Throwable $e) {
-            $this->logger->warning('cache.delete.failed', [
-                'key' => $key,
-                'error' => $e->getMessage(),
-            ]);
-            return false;
-        }
+        return $this->cache->forget($key);
     }
 
-    /**
-     * افزایش (increment)
-     */
-    public function increment(string $key, int $step = 1): int
-    {
-        try {
-            $result = $this->cache->increment($key, $step);
-            return (int)($result ?? 0);
-        } catch (\Throwable $e) {
-            $this->logger->warning('cache.increment.failed', [
-                'key' => $key,
-                'error' => $e->getMessage(),
-            ]);
-            return 0;
-        }
-    }
-
-    /**
-     * دریافت یا set (remember)
-     */
-    public function getOrSet(string $key, callable $callback, ?int $ttl = null)
-    {
-        try {
-            if ($ttl !== null && $ttl <= 0) {
-                $this->delete($key);
-                return $callback();
-            }
-            $minutes = $ttl !== null ? (int)\max(1, \ceil($ttl / 60)) : 60;
-            return $this->cache->remember($key, $minutes, $callback);
-        } catch (\Throwable $e) {
-            $this->logger->warning('cache.remember.failed', [
-                'key' => $key,
-                'error' => $e->getMessage(),
-            ]);
-            return $callback();
-        }
-    }
-
-    /**
-     * دریافت TTL باقی‌مانده
-     */
-    public function ttl(string $key): int
-    {
-        try {
-            return $this->cache->ttl($key);
-        } catch (\Throwable $e) {
-            return -1;
-        }
-    }
-
-    /**
-     * بررسی وجود
-     */
-    public function has(string $key): bool
-    {
-        try {
-            return $this->cache->has($key);
-        } catch (\Throwable $e) {
-            return false;
-        }
-    }
-
-    /**
-     * فلاش کامل cache
-     */
     public function flush(): bool
     {
-        try {
-            return $this->cache->flush();
-        } catch (\Throwable $e) {
-            $this->logger->warning('cache.flush.failed', [
-                'error' => $e->getMessage(),
-            ]);
-            return false;
+        return $this->cache->flush();
+    }
+
+    /**
+     * پشتیبانی از تگ‌ها (حتی در درایور فایل با مکانیزم شبیه‌سازی)
+     */
+    public function tags(array $tags): self
+    {
+        $this->cache->tags($tags);
+        return $this;
+    }
+
+    public function remember(string $key, ?int $ttl, \Closure $callback): mixed
+    {
+        $value = $this->get($key);
+        if ($value !== null) {
+            return $value;
         }
-    }
 
-    /**
-     * دسترسی به cache اصلی برای عملیات پیشرفته
-     */
-    public function getCache(): Cache
-    {
-        return $this->cache;
+        $value = $callback();
+        $this->set($key, $value, $ttl);
+        return $value;
     }
-
-    /**
-     * دسترسی به Redis مستقیم (برای عملیات خاص)
-     */
-    public function redis(): ?\Redis
-    {
-        return $this->cache->redis();
-    }
-
-    /**
-     * Driver فعلی: redis یا file
-     */
-    public function driver(): string
-    {
-        return $this->cache->driver();
-    }
-
-    /**
-     * Tagged cache برای invalidation گروهی
-     */
-    public function tags(array $tags): \Core\TaggedCache
-    {
-        try {
-            if (empty($tags)) {
-                throw new \InvalidArgumentException('Tags array cannot be empty.');
-            }
-            return $this->cache->tags($tags);
-        } catch (\Throwable $e) {
-            $this->logger->error('cache.tags.failed', [
-                'tags' => $tags,
-                'error' => $e->getMessage(),
-            ]);
-            throw $e;
-        }
-    }
+    
+    public function driver(): string { return $this->cache->getDriver(); }
+    public function redis(): ?\Redis { return $this->cache->redis(); }
+    public function redisKey(string $key): string { return $this->cache->redisKey($key); }
 }

@@ -12,9 +12,13 @@ use Core\IdempotencyKey;
  */
 abstract class PaymentBaseService extends \App\Services\BaseService
 {
-    public function __construct(LoggerInterface $logger, ?IdempotencyKey $idempotencyKey = null)
-    {
-        parent::__construct($logger, $idempotencyKey);
+    public function __construct(
+        LoggerInterface $logger,
+        ?IdempotencyKey $idempotencyKey = null,
+        ?\Core\Database $db = null,
+        ?\Core\EventDispatcher $eventDispatcher = null
+    ) {
+        parent::__construct($logger, $idempotencyKey, $db, null, null, null, null, $eventDispatcher);
     }
 
     /**

@@ -13,6 +13,7 @@ use App\Services\SettingService;
 use App\Contracts\LoggerInterface;
 use App\Contracts\WalletServiceInterface;
 use App\Contracts\NotificationServiceInterface;
+use Core\EventDispatcher;
 /**
  * ReferralService — سرویس اشتراکی سیستم رفرال
  *
@@ -20,17 +21,25 @@ use App\Contracts\NotificationServiceInterface;
  */
 class ReferralService extends \App\Services\BaseService
 {
+    private ?\App\Services\OutboxService $outboxService = null;
+
     public function __construct(
-        private Database $db,
-        protected LoggerInterface $logger,
+        ?Database $db,
+        LoggerInterface $logger,
         private WalletServiceInterface $walletService,
         private NotificationServiceInterface $notificationService,
         private AuditTrail $auditTrail,
         private ReferralCommission $commissionModel,
         private User $userModel,
-        private SettingService $settingService
+        private SettingService $settingService,
+        EventDispatcher $eventDispatcher
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, $db, null, null, null, null, $eventDispatcher);
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -283,7 +292,15 @@ class ReferralService extends \App\Services\BaseService
             $bonus = $top->total * $bonusPercent;
             $sysCurrency = strtolower((string)$this->settingService->get('currency_mode', 'irt'));
             $targetCurrency = in_array($sysCurrency, ['irt', 'usdt'], true) ? $sysCurrency : 'irt';
-            $this->walletService->deposit((int)$top->id, $bonus, $targetCurrency, ['type' => 'referral_bonus']);
+            $this->eventDispatcher->dispatchAsync('wallet.deposit.requested', [
+                'user_id' => (int)$top->id,
+                'amount' => $bonus,
+                'currency' => $targetCurrency,
+                'metadata' => [
+                    'type' => 'referral_bonus',
+                    'description' => 'Referral leaderboard bonus'
+                ]
+            ]);
             return ['bonus_percent' => $bonusPercent];
         }
 
@@ -320,7 +337,16 @@ class ReferralService extends \App\Services\BaseService
                     ]);
                     $sysCurrency = strtolower((string)$this->settingService->get('currency_mode', 'irt'));
                     $targetCurrency = in_array($sysCurrency, ['irt', 'usdt'], true) ? $sysCurrency : 'irt';
-                    $this->walletService->deposit($userId, $milestone['reward'], $targetCurrency, ['type' => 'milestone_bonus']);
+                    $this->eventDispatcher->dispatchAsync('wallet.deposit.requested', [
+                        'user_id' => $userId,
+                        'amount' => $milestone['reward'],
+                        'currency' => $targetCurrency,
+                        'metadata' => [
+                            'type' => 'milestone_bonus',
+                            'milestone' => $milestone['name'],
+                            'description' => 'Referral milestone reward'
+                        ]
+                    ]);
                     $awarded[] = $milestone['name'];
                 }
             }
@@ -542,14 +568,33 @@ class ReferralService extends \App\Services\BaseService
                     }
 
                     $this->transaction(function() use ($commission, $currency) {
-                        $deposit = $this->walletService->deposit((int)$commission->referrer_id, (float)$commission->commission_amount, $currency, [
-                            'type' => 'referral_commission',
-                            'idempotency_key' => "referral_{$commission->id}_{$commission->referrer_id}",
-                        ]);
+                        $payload = [
+                            'user_id' => (int)$commission->referrer_id,
+                            'amount' => (float)$commission->commission_amount,
+                            'currency' => $currency,
+                            'metadata' => [
+                                'type' => 'referral_commission',
+                                'idempotency_key' => "referral_{$commission->id}_{$commission->referrer_id}",
+                                'commission_id' => $commission->id,
+                            ],
+                        ];
 
-                        if (empty($deposit['success'])) throw new \RuntimeException('Wallet deposit failed');
+                        if (isset($this->outboxService) && $this->outboxService) {
+                            $ok = $this->outboxService->record('referral_commission', (int)$commission->id, 'wallet.deposit.requested', $payload);
+                            if (!$ok) throw new \RuntimeException('Wallet outbox record failed');
 
-                        $this->commissionModel->updateStatus((int)$commission->id, 'paid', $deposit['transaction_id'] ?? null);
+                            // mark paid; transaction id will be filled by the Wallet deposit consumer later
+                            $this->commissionModel->updateStatus((int)$commission->id, 'paid', null);
+                        } else {
+                            $deposit = $this->walletService->deposit((int)$commission->referrer_id, (float)$commission->commission_amount, $currency, [
+                                'type' => 'referral_commission',
+                                'idempotency_key' => "referral_{$commission->id}_{$commission->referrer_id}",
+                            ]);
+
+                            if (empty($deposit['success'])) throw new \RuntimeException('Wallet deposit failed');
+
+                            $this->commissionModel->updateStatus((int)$commission->id, 'paid', $deposit['transaction_id'] ?? null);
+                        }
                     });
                     $results['success']++;
                 } catch (\Throwable $e) {

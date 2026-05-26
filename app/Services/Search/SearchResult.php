@@ -5,33 +5,18 @@ declare(strict_types=1);
 namespace App\Services\Search;
 
 /**
- * Lightweight DTO for unified search output.
+ * SearchResult - ساختار یکپارچه خروجی تمامی جستجوها
  */
-class SearchResult
+final class SearchResult
 {
     public function __construct(
-        public array $items = [],
-        public int $total = 0,
-        public array $facets = [],
-        public array $raw = []
+        private array $items,
+        private int $total,
+        private array $metadata = []
     ) {}
 
-    public static function fromArray(array $result): self
-    {
-        if (array_key_exists('items', $result)) {
-            return new self(
-                $result['items'] ?? [],
-                (int)($result['total'] ?? count($result['items'] ?? [])),
-                $result['facets'] ?? [],
-                $result
-            );
-        }
-
-        return new self($result, (int)($result['total'] ?? count($result)), [], $result);
-    }
-
-    public function toArray(): array
-    {
-        return ['items' => $this->items, 'total' => $this->total, 'facets' => $this->facets, 'raw' => $this->raw];
-    }
+    public function getItems(): array { return $this->items; }
+    public function getTotal(): int { return $this->total; }
+    public function getMetadata(): array { return $this->metadata; }
+    public function toArray(): array { return ['items' => $this->items, 'total' => $this->total, 'metadata' => $this->metadata]; }
 }

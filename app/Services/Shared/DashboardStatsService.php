@@ -6,9 +6,10 @@ namespace App\Services\Shared;
 
 use Core\Database;
 use Core\Cache;
-use App\Services\Notification\NotificationService;
+use App\Contracts\NotificationServiceInterface;
 use App\Models\AdvancedAnalytics;
 use App\Contracts\LoggerInterface;
+
 
 /**
  * DashboardStatsService - سرویس اشتراکی تحلیل داده‌ها و آمارها
@@ -24,15 +25,22 @@ use App\Contracts\LoggerInterface;
 class DashboardStatsService extends \App\Services\BaseService
 {
     public function __construct(
-        private Database $db,
-        protected LoggerInterface $logger,
-        private Cache $cache,
-        private NotificationService $notificationService,
+        Database $db,
+        LoggerInterface $logger,
+        Cache $cache,
+        private NotificationServiceInterface $notificationService,
         private AdvancedAnalytics $advancedAnalytics,
         private \App\Services\Analytics\AnalyticsService $customTaskAnalytics
     ) {
-        parent::__construct($logger);
+        // انتقال زیرساخت‌های مشترک به کلاس والد
+        parent::__construct($logger, null, $db, null, null, $cache);
+        $this->notificationService = $notificationService;
+        $this->advancedAnalytics = $advancedAnalytics;
+        $this->customTaskAnalytics = $customTaskAnalytics;
     }
+
+    /**
+
 
     /**
      * دریافت آمارهای کلی سیستم

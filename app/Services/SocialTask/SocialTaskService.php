@@ -59,7 +59,7 @@ class SocialTaskService extends \App\Services\BaseService
         private SettingService $settingService,
         private ?CameraVerificationService $cameraVerification = null,
         private ?\App\Services\AntiFraud\FraudGuardService $fraudGuard = null,
-        private ?\App\Services\OutboxService $outbox = null,
+        private ?\App\Services\OutboxService $outboxService = null,
         private ?SocialTaskAnalyticsModel $analyticsModel = null
     ) {
         // 🛡️ H11 Fix: Pass logger to parent constructor instead of using uninitialized $this->logger
@@ -176,18 +176,41 @@ class SocialTaskService extends \App\Services\BaseService
     
                 if ($refund > 0) {
                     $idempotencyKey = "social_ad_cancel_refund_{$adId}";
-                    $walletResult = $this->wallet->deposit((int)$ad->user_id, (string)$refund, $currency, [
-                        'type' => 'social_ad_refund',
-                        'description' => "Refund for cancelled social ad #{$adId}",
-                        'idempotency_key' => $idempotencyKey,
-                        'gateway' => 'social_ad_refund',
-                        'gateway_transaction_id' => 'refund_' . $adId,
-                        'ref_id' => $adId,
-                        'ref_type' => 'social_ad',
-                    ]);
-    
-                    if (empty($walletResult['success'])) {
-                        return ['success' => false, 'message' => $walletResult['message'] ?? 'خطا در بازگشت وجه'];
+                    $payload = [
+                        'user_id' => (int)$ad->user_id,
+                        'amount' => (string)$refund,
+                        'currency' => $currency,
+                        'metadata' => [
+                            'type' => 'social_ad_refund',
+                            'description' => "Refund for cancelled social ad #{$adId}",
+                            'idempotency_key' => $idempotencyKey,
+                            'gateway' => 'social_ad_refund',
+                            'gateway_transaction_id' => 'refund_' . $adId,
+                            'ref_id' => $adId,
+                            'ref_type' => 'social_ad',
+                        ],
+                    ];
+
+                    if ($this->outboxService) {
+                        $ok = $this->outboxService->record('social_ad', $adId, 'wallet.deposit.requested', $payload);
+                        if (!$ok) {
+                            return ['success' => false, 'message' => 'خطا در ثبت رکورد خروجی برای بازگشت وجه'];
+                        }
+                    } else {
+                        // Fallback to synchronous deposit if outbox isn't available
+                        $walletResult = $this->wallet->deposit((int)$ad->user_id, (string)$refund, $currency, [
+                            'type' => 'social_ad_refund',
+                            'description' => "Refund for cancelled social ad #{$adId}",
+                            'idempotency_key' => $idempotencyKey,
+                            'gateway' => 'social_ad_refund',
+                            'gateway_transaction_id' => 'refund_' . $adId,
+                            'ref_id' => $adId,
+                            'ref_type' => 'social_ad',
+                        ]);
+
+                        if (empty($walletResult['success'])) {
+                            return ['success' => false, 'message' => $walletResult['message'] ?? 'خطا در بازگشت وجه'];
+                        }
                     }
                 }
     

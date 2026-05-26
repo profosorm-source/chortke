@@ -6,6 +6,9 @@ namespace App\Services\Auth;
 
 use App\Models\User;
 use App\Models\SecurityModel;
+use App\Services\AuditTrail;
+use App\Services\Notification\NotificationService;
+use Core\Database;
 use Core\Session;
 use Core\RateLimiter;
 use App\Contracts\LoggerInterface;
@@ -36,6 +39,9 @@ class TwoFactorService extends \App\Services\BaseService
     private User $userModel;
     private SecurityModel $securityModel;
     private Session $session;
+    protected ?Database $db;
+    private NotificationService $notificationService;
+    private AuditTrail $auditTrail;
     private ?RateLimiter $rateLimiter;
 
     // MEDIUM-M-14 Fix: Rate limit for recovery code attempts (stricter than TOTP)
@@ -47,6 +53,9 @@ class TwoFactorService extends \App\Services\BaseService
         User $userModel,
         SecurityModel $securityModel,
         Session $session,
+        Database $db,
+        NotificationService $notificationService,
+        AuditTrail $auditTrail,
         LoggerInterface $logger,
         ?RateLimiter $rateLimiter = null
     ) {
@@ -54,6 +63,9 @@ class TwoFactorService extends \App\Services\BaseService
         $this->userModel = $userModel;
         $this->securityModel = $securityModel;
         $this->session = $session;
+        $this->db = $db;
+        $this->notificationService = $notificationService;
+        $this->auditTrail = $auditTrail;
         $this->rateLimiter = $rateLimiter;
     }
 
@@ -226,8 +238,7 @@ class TwoFactorService extends \App\Services\BaseService
 
         // HIGH-H-01 Fix: Record the action in AuditTrail
         try {
-            $auditTrail = app(\App\Services\AuditTrail::class);
-            $auditTrail->record('2fa.disabled', $userId, [
+            $this->auditTrail->record('2fa.disabled', $userId, [
                 'ip' => function_exists('get_client_ip') ? get_client_ip() : 'unknown',
                 'user_agent' => function_exists('get_user_agent') ? get_user_agent() : '',
             ], $userId);
@@ -279,8 +290,7 @@ class TwoFactorService extends \App\Services\BaseService
                 $this->userModel->update($userId, ['status' => 'locked_2fa']);
                 
                 try {
-                    $notifService = app(\App\Services\Notification\NotificationService::class);
-                    $notifService->securityAlert($userId, 'حساب شما به دلیل تلاش‌های مشکوک و بیش از حد مجاز با کدهای بازیابی قفل شد.', $this->clientIp());
+                    $this->notificationService->securityAlert($userId, 'حساب شما به دلیل تلاش‌های مشکوک و بیش از حد مجاز با کدهای بازیابی قفل شد.', $this->clientIp());
                 } catch (\Throwable $e) {
                     $this->logger->error('2fa.recovery_code.lockout_notif_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
                 }

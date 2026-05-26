@@ -7,12 +7,13 @@ namespace App\Services\CustomTask;
 use App\Services\BaseService;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\Notification\NotificationService;
 use App\Services\SettingService;
 use Core\Database;
 use Core\Logger;
 use App\Services\StateMachineService;
+use App\Events\TaskCompletedEvent;
 
 /**
  * AdminCustomTaskService - Handles admin-level features and scheduled background actions (Cron)
@@ -21,12 +22,13 @@ class AdminCustomTaskService extends BaseService
 {
     private Ads $taskModel;
     private CustomTaskSubmissionModel $submissionModel;
-    private Database $db;
     private WalletService $walletService;
     private NotificationService $notificationService;
     private CustomTaskModerationService $moderationService;
     private SettingService $settingService;
     private StateMachineService $stateMachine;
+
+    private ?\App\Services\OutboxService $outboxService = null;
 
     public function __construct(
         Logger $logger,
@@ -37,9 +39,10 @@ class AdminCustomTaskService extends BaseService
         NotificationService $notificationService,
         CustomTaskModerationService $moderationService,
         SettingService $settingService,
-        StateMachineService $stateMachine
+        StateMachineService $stateMachine,
+        ?\Core\EventDispatcher $eventDispatcher = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, null, null, null, null, null, $eventDispatcher);
         $this->db = $db;
         $this->taskModel = $taskModel;
         $this->submissionModel = $submissionModel;
@@ -48,6 +51,11 @@ class AdminCustomTaskService extends BaseService
         $this->moderationService = $moderationService;
         $this->settingService = $settingService;
         $this->stateMachine = $stateMachine;
+        try {
+            $this->outboxService = container()->get(\App\Services\OutboxService::class);
+        } catch (\Throwable $e) {
+            $this->outboxService = null;
+        }
     }
 
     public function getTaskDetailsForAdmin(int $taskId): ?array
@@ -95,13 +103,13 @@ class AdminCustomTaskService extends BaseService
                 return ['success' => false, 'message' => $transitionResult['message']];
             }
 
-            $this->notificationService->send(
-                $task->user_id,
-                'task_approved',
-                'وظیفه شما تایید شد',
-                "وظیفه «{$task->title}» توسط مدیریت تایید و فعال شد.",
-                ['task_id' => $taskId]
-            );
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => $task->user_id,
+                'type' => 'task_approved',
+                'title' => 'وظیفه شما تایید شد',
+                'message' => "وظیفه «{$task->title}» توسط مدیریت تایید و فعال شد.",
+                'data' => ['task_id' => $taskId]
+            ]);
 
             return ['success' => true, 'message' => 'وظیفه با موفقیت تایید شد.'];
         } catch (\Exception $e) {
@@ -131,14 +139,33 @@ class AdminCustomTaskService extends BaseService
                         $currency = $task->currency ?? 'irt';
 
                         $idempotencyKey = "task_reject_refund_{$taskId}";
-                        $txId = $this->walletService->deposit($task->user_id, $refundAmount, $currency, [
-                            'type' => 'escrow_refund',
-                            'description' => "برگشت بودجه وظیفه #{$taskId} به دلیل رد توسط مدیریت. علت: {$reason}",
-                            'idempotency_key' => $idempotencyKey
-                        ]);
+                        $payload = [
+                            'user_id' => (int)$task->user_id,
+                            'amount' => $refundAmount,
+                            'currency' => $currency,
+                            'metadata' => [
+                                'type' => 'escrow_refund',
+                                'description' => "برگشت بودجه وظیفه #{$taskId} به دلیل رد توسط مدیریت. علت: {$reason}",
+                                'idempotency_key' => $idempotencyKey,
+                                'task_id' => $taskId,
+                            ],
+                        ];
 
-                        if (!$txId) {
-                            throw new \RuntimeException('خطا در بازگشت بودجه به کیف پول.');
+                        if (isset($this->outboxService) && $this->outboxService) {
+                            $ok = $this->outboxService->record('custom_task', $taskId, 'wallet.deposit.requested', $payload);
+                            if (!$ok) {
+                                throw new \RuntimeException('خطا در بازگشت بودجه به کیف پول.');
+                            }
+                        } else {
+                            $txId = $this->walletService->deposit($task->user_id, $refundAmount, $currency, [
+                                'type' => 'escrow_refund',
+                                'description' => "برگشت بودجه وظیفه #{$taskId} به دلیل رد توسط مدیریت. علت: {$reason}",
+                                'idempotency_key' => $idempotencyKey
+                            ]);
+
+                            if (!$txId) {
+                                throw new \RuntimeException('خطا در بازگشت بودجه به کیف پول.');
+                            }
                         }
                     }
 
@@ -152,13 +179,13 @@ class AdminCustomTaskService extends BaseService
                 return ['success' => false, 'message' => $transitionResult['message']];
             }
 
-            $this->notificationService->send(
-                $task->user_id,
-                'task_rejected',
-                'وظیفه شما رد شد',
-                "وظیفه «{$task->title}» توسط مدیریت رد شد. علت: {$reason}",
-                ['task_id' => $taskId, 'reason' => $reason]
-            );
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => $task->user_id,
+                'type' => 'task_rejected',
+                'title' => 'وظیفه شما رد شد',
+                'message' => "وظیفه «{$task->title}» توسط مدیریت رد شد. علت: {$reason}",
+                'data' => ['task_id' => $taskId, 'reason' => $reason]
+            ]);
 
             return ['success' => true, 'message' => 'وظیفه رد و بودجه با موفقیت مسترد شد.'];
         } catch (\Exception $e) {
@@ -213,15 +240,35 @@ class AdminCustomTaskService extends BaseService
                 $currency = $task->currency ?? 'irt';
 
                 $idempotencyKey = "task_delete_refund_{$taskId}";
-                $txId = $this->walletService->deposit($task->user_id, $refundAmount, $currency, [
-                    'type' => 'escrow_refund',
-                    'description' => "برگشت بودجه وظیفه #{$taskId} به دلیل حذف توسط مدیریت.",
-                    'idempotency_key' => $idempotencyKey
-                ]);
+                $payload = [
+                    'user_id' => (int)$task->user_id,
+                    'amount' => $refundAmount,
+                    'currency' => $currency,
+                    'metadata' => [
+                        'type' => 'escrow_refund',
+                        'description' => "برگشت بودجه وظیفه #{$taskId} به دلیل حذف توسط مدیریت.",
+                        'idempotency_key' => $idempotencyKey,
+                        'task_id' => $taskId,
+                    ],
+                ];
 
-                if (!$txId) {
-                    $this->db->rollBack();
-                    return ['ok' => false, 'message' => 'خطا در بازگشت بودجه به کیف پول.'];
+                if (isset($this->outboxService) && $this->outboxService) {
+                    $ok = $this->outboxService->record('custom_task', $taskId, 'wallet.deposit.requested', $payload);
+                    if (!$ok) {
+                        $this->db->rollBack();
+                        return ['ok' => false, 'message' => 'خطا در بازگشت بودجه به کیف پول.'];
+                    }
+                } else {
+                    $txId = $this->walletService->deposit($task->user_id, $refundAmount, $currency, [
+                        'type' => 'escrow_refund',
+                        'description' => "برگشت بودجه وظیفه #{$taskId} به دلیل حذف توسط مدیریت.",
+                        'idempotency_key' => $idempotencyKey
+                    ]);
+
+                    if (!$txId) {
+                        $this->db->rollBack();
+                        return ['ok' => false, 'message' => 'خطا در بازگشت بودجه به کیف پول.'];
+                    }
                 }
             }
 
@@ -269,6 +316,21 @@ class AdminCustomTaskService extends BaseService
                 'submission_id' => $submission->id,
                 'admin_id' => $adminId,
             ]);
+
+            // Dispatch typed event for downstream consumers
+            try {
+                \Core\EventDispatcher::getInstance()->dispatch(TaskCompletedEvent::class, new TaskCompletedEvent(
+                    (int)$submission->worker_id,
+                    (int)$submission->task_id,
+                    (float)$submission->reward_amount,
+                    'CUSTOM_TASK'
+                ));
+            } catch (\Throwable $evtErr) {
+                $this->logger->warning('custom_task.taskcompleted.event_failed', [
+                    'submission_id' => $submission->id,
+                    'error' => $evtErr->getMessage()
+                ]);
+            }
 
             return ['ok' => true, 'message' => 'درخواست توسط ادمین تایید شد.'];
 
@@ -388,16 +450,16 @@ class AdminCustomTaskService extends BaseService
             if ($result['success']) {
                 $approved++;
 
-                $this->notificationService->send(
-                    $sub->worker_id,
-                    'auto_approved',
-                    'مدرک شما به صورت خودکار تایید شد',
-                    "مدرک شما برای وظیفه «{$sub->task_title}» به دلیل عدم بررسی توسط تبلیغ‌کننده، خودکار تایید و پاداش پرداخت شد.",
-                    [
+                $this->eventDispatcher->dispatch('notification.requested', [
+                    'user_id' => $sub->worker_id,
+                    'type' => 'auto_approved',
+                    'title' => 'مدرک شما به صورت خودکار تایید شد',
+                    'message' => "مدرک شما برای وظیفه «{$sub->task_title}» به دلیل عدم بررسی توسط تبلیغ‌کننده، خودکار تایید و پاداش پرداخت شد.",
+                    'data' => [
                         'submission_id' => $sub->id,
                         'task_id' => $sub->task_id
                     ]
-                );
+                ]);
             }
         }
 
@@ -457,15 +519,29 @@ class AdminCustomTaskService extends BaseService
                     $currency = $adArr['currency'] ?? 'irt';
 
                     $idempotencyKey = "escrow_rfnd_ad_" . ($adArr['id'] ?? 0) . "_del";
-                    
-                    $this->walletService->deposit($userId, $refundAmount, $currency, [
-                        'type' => 'escrow_refund',
-                        'description' => "استرداد بودجه تبلیغ #{$adArr['id']} به دلیل لغو حساب کاربری",
-                        'idempotency_key' => $idempotencyKey
-                    ]);
-
+                    // Update DB first to mark ad as refunded/completed, then perform async wallet deposit
                     $this->db->query("UPDATE ads SET remaining_budget = 0, status = 'completed', updated_at = NOW() WHERE id = ?", [$adArr['id']]);
-                    
+
+                    try {
+                        $this->eventDispatcher?->dispatchAsync('wallet.deposit.requested', [
+                            'user_id' => $userId,
+                            'amount' => $refundAmount,
+                            'currency' => $currency,
+                            'metadata' => [
+                                'type' => 'escrow_refund',
+                                'description' => "استرداد بودجه تبلیغ #{$adArr['id']} به دلیل لغو حساب کاربری",
+                                'idempotency_key' => $idempotencyKey,
+                                'ad_id' => $adArr['id']
+                            ]
+                        ]);
+                    } catch (\Throwable $e) {
+                        $this->logger->error('escrow.refund.dispatch_async_failed', [
+                            'ad_id' => $adArr['id'] ?? null,
+                            'user_id' => $userId,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
+
                     $this->logger->info('escrow.refunded_during_deletion', [
                         'ad_id' => $adArr['id'],
                         'user_id' => $userId,

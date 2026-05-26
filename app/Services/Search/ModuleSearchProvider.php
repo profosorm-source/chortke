@@ -14,6 +14,7 @@ class ModuleSearchProvider extends BaseSearchProvider
         \Core\Cache $cache,
         \App\Contracts\LoggerInterface $logger,
         private ModuleSearchGateway $gateway,
+        private AdminSearchGateway $adminSearchGateway,
         private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($searchModel, $cache, $logger);
@@ -35,8 +36,7 @@ class ModuleSearchProvider extends BaseSearchProvider
         $modules = is_array($modules) ? $modules : [$modules];
 
         $results = [];
-        $gateway = app(\App\Services\Search\AdminSearchGateway::class);
-        $registeredModules = $gateway->registeredModules();
+        $registeredModules = $this->adminSearchGateway->registeredModules();
 
         foreach ($modules as $module) {
             if (!in_array($module, $registeredModules, true)) {
@@ -53,7 +53,7 @@ class ModuleSearchProvider extends BaseSearchProvider
             }
 
             // Proxy directly to dynamic AdminSearchGateway to unify pagination, index-usage, and full text search
-            $searchResult = $gateway->searchRegistered($module, '', $filters, $limit, $offset);
+            $searchResult = $this->gateway->searchRegistered($module, '', $filters, $limit, $offset);
 
             // Use unified cache TTL from config, fallback to 15 mins
             $ttl = (int) config('search.cache_ttl', 900);
@@ -69,8 +69,7 @@ class ModuleSearchProvider extends BaseSearchProvider
      */
     public function invalidateModuleCache(string $module): void
     {
-        $gateway = app(\App\Services\Search\AdminSearchGateway::class);
-        if (!in_array($module, $gateway->registeredModules(), true)) {
+        if (!in_array($module, $this->adminSearchGateway->registeredModules(), true)) {
             return;
         }
 

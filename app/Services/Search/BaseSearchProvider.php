@@ -14,7 +14,7 @@ use App\Models\AdvancedSearch;
 abstract class BaseSearchProvider extends \App\Services\BaseService
 {
     protected AdvancedSearch $searchModel;
-    protected Cache $cache;
+    protected ?Cache $cache;
     protected LoggerInterface $logger;
 
     protected const CACHE_TTL_SECONDS = 300;

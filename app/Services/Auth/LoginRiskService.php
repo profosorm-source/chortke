@@ -28,9 +28,9 @@ class LoginRiskService extends \App\Services\BaseService
     public const FAIL_LIMIT_3 = 3;
     public const FAIL_LIMIT_4 = 4;
 
-    private Cache $cache;
+    protected ?Cache $cache;
     private SettingService $settingService;
-    private \Core\Redis $redis;
+    protected ?\Core\Redis $redis;
 
     public function __construct(Cache $cache, SettingService $settingService, LoggerInterface $logger, \Core\Redis $redis)
     {

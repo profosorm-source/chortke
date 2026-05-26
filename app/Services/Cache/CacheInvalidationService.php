@@ -4,123 +4,56 @@ declare(strict_types=1);
 
 namespace App\Services\Cache;
 
-use App\Contracts\LoggerInterface;
 use Core\Cache;
-use App\Services\BaseService;
+use App\Contracts\LoggerInterface;
 
 /**
- * Centralized cache invalidation rules.
- *
- * این سرویس فقط قوانین invalidation سطح application/domain را نگه می‌دارد؛
- * عملیات low-level همچنان در Core\Cache باقی می‌ماند.
+ * CacheInvalidationService - مرکز مدیریت باطل‌سازی کش‌های سیستم
  */
-class CacheInvalidationService extends BaseService
+class CacheInvalidationService
 {
     public function __construct(
         private Cache $cache,
-        LoggerInterface $logger
-    ) {
-        parent::__construct($logger);
-    }
+        private LoggerInterface $logger
+    ) {}
 
-    public function forgetMany(array $keys): int
+    /**
+     * باطل‌سازی تمام کش‌های مرتبط با کیف پول کاربر
+     * رفع نقص: تجمیع کلیدهای پراکنده (Balance, Limits, History)
+     */
+    public function invalidateWallet(int $userId): void
     {
-        $deleted = 0;
+        $keys = [
+            "wallet:balance:{$userId}:irt",
+            "wallet:balance:{$userId}:usdt",
+            "wallet:limits:{$userId}",
+            "wallet:summary:{$userId}",
+            "user:financial_status:{$userId}"
+        ];
 
-        foreach (array_unique(array_filter($keys)) as $key) {
-            try {
-                if ($this->cache->forget((string) $key)) {
-                    $deleted++;
-                }
-            } catch (\Throwable $e) {
-                $this->logger->warning('cache.invalidate_key_failed', [
-                    'key' => $key,
-                    'error' => $e->getMessage(),
-                ]);
-            }
+        foreach ($keys as $key) {
+            $this->cache->forget($key);
         }
 
-        return $deleted;
-    }
+        // استفاده از تگ برای پاکسازی لیست تراکنش‌ها (اگر درایور پشتیبانی کند)
+        $this->cache->tags(["wallet_tx_{$userId}"])->flush();
 
-    public function invalidateUser(int $userId): int
-    {
-        $deleted = $this->forgetMany([
-            "user_dashboard_stats:{$userId}",
-            "user_profile:{$userId}",
-            "user_permissions:{$userId}",
-            "user_notifications_count:{$userId}",
-            "user_settings:{$userId}",
-            "user_prefs:{$userId}",
-            "notif_unread:{$userId}",
-            "user_content_stats_{$userId}",
-            "user_revenue_{$userId}",
-        ]);
-
-        $this->flushTag("search:user:{$userId}");
-
-        return $deleted;
-    }
-
-    public function invalidateWallet(int $userId): int
-    {
-        return $this->forgetMany([
-            "wallet_balance:{$userId}",
-            "user_dashboard_stats:{$userId}",
-            "wallet_transactions_summary:{$userId}",
-        ]);
-    }
-
-    public function invalidateScore(int $userId, string $domain): int
-    {
-        $domain = trim($domain);
-
-        return $this->forgetMany([
-            "user_score:{$userId}:{$domain}",
-            "temp_{$domain}_score:{$userId}",
-        ]);
-    }
-
-    public function invalidateSearch(?string $scope = null, ?int $userId = null): void
-    {
-        if ($userId !== null) {
-            $this->flushTag("search:user:{$userId}");
-            return;
-        }
-
-        if ($scope !== null && $scope !== '') {
-            $this->flushTag("search:{$scope}");
-            return;
-        }
-
-        $this->flushTag('search');
+        $this->logger->info('cache.wallet_invalidated', ['user_id' => $userId]);
     }
 
     public function invalidateModuleSearch(string $module): void
     {
-        $module = trim($module);
-        if ($module === '') {
-            return;
-        }
-
-        $this->flushTag("search:module:{$module}");
-        // backward-compatible with old ModuleSearchProvider tags([$module]) keys
-        $this->flushTag($module);
+        $this->cache->tags(["search:{$module}"])->flush();
     }
 
-    private function flushTag(string $tag): void
+    public function invalidateScore(int $userId, string $domain): void
     {
-        try {
-            $this->cache->tags([$tag])->flush();
-            $this->logger->info('cache.tag_invalidated', [
-                'tag' => $tag,
-                'driver' => $this->cache->driver(),
-            ]);
-        } catch (\Throwable $e) {
-            $this->logger->warning('cache.tag_invalidation_failed', [
-                'tag' => $tag,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $this->cache->forget("score:user:{$userId}:{$domain}");
+        $this->cache->forget("temp_{$domain}_score:{$userId}");
+    }
+
+    public function invalidateSearch(): void
+    {
+        $this->cache->tags(['search_results'])->flush();
     }
 }

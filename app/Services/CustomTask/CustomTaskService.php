@@ -7,7 +7,7 @@ namespace App\Services\CustomTask;
 use App\Services\BaseService;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\SettingService;
 use App\Traits\ValidationTrait;
 use Core\Database;
@@ -23,7 +23,7 @@ class CustomTaskService extends BaseService
     use ValidationTrait;
     private Ads $taskModel;
     private CustomTaskSubmissionModel $submissionModel;
-    private Database $db;
+    protected ?Database $db;
     private WalletService $walletService;
     private SettingService $settingService;
     private \Core\RateLimiter $rateLimiter;

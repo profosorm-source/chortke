@@ -11,12 +11,12 @@ use App\Services\Cache\CacheInvalidationService;
 
 class NotificationPreferenceService extends \App\Services\BaseService
 {
-    private array $cache = [];
+    protected array $localCache = [];
 
     public function __construct(
         private NotificationPreference $prefModel,
         private Cache $cacheService,
-        protected LoggerInterface $logger,
+        LoggerInterface $logger,
         private ?CacheInvalidationService $cacheInvalidation = null
     ) {
         parent::__construct($logger);
@@ -32,15 +32,15 @@ class NotificationPreferenceService extends \App\Services\BaseService
         $prefs = $this->prefModel->getByUsers($userIds);
 
         foreach ($prefs as $pref) {
-            $this->cache[$pref->user_id] = $pref;
+            $this->localCache[$pref->user_id] = $pref;
             $this->cacheService->put("user_prefs:{$pref->user_id}", json_encode($pref), 300);
         }
     }
 
     public function getPreferences(int $userId): object
     {
-        if (isset($this->cache[$userId])) {
-            return $this->cache[$userId];
+        if (isset($this->localCache[$userId])) {
+            return $this->localCache[$userId];
         }
 
         try {
@@ -48,7 +48,7 @@ class NotificationPreferenceService extends \App\Services\BaseService
             if ($cached) {
                 $decoded = json_decode($cached);
                 if ($decoded) {
-                    $this->cache[$userId] = $decoded;
+                    $this->localCache[$userId] = $decoded;
                     return $decoded;
                 }
             }
@@ -56,7 +56,7 @@ class NotificationPreferenceService extends \App\Services\BaseService
         }
 
         $pref = $this->prefModel->getOrCreate($userId);
-        $this->cache[$userId] = $pref;
+        $this->localCache[$userId] = $pref;
 
         try {
             $this->cacheService->put("user_prefs:{$userId}", json_encode($pref), 300);
@@ -77,7 +77,7 @@ class NotificationPreferenceService extends \App\Services\BaseService
             }
         }
 
-        unset($this->cache[$userId]);
+        unset($this->localCache[$userId]);
         try {
             if ($this->cacheInvalidation) {
                 $this->cacheInvalidation->invalidateUser($userId);

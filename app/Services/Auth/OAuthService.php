@@ -31,7 +31,7 @@ class OAuthService extends \App\Services\BaseService
         private NotificationService $notificationService,
         private AuditTrail $auditTrail,
         private \Core\Session $session,
-        private \Core\Database $db,
+        protected ?\Core\Database $db,
         private DistributedLockService $lockService,
         private GoogleJwtVerifier $jwtVerifier,
         private array $oAuthConfig = []

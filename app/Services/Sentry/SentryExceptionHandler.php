@@ -14,6 +14,7 @@ use Core\Session;
  */
 class SentryExceptionHandler
 {
+    private static ?self $instance = null;
     private bool $registered = false;
 
     public function __construct(
@@ -22,6 +23,19 @@ class SentryExceptionHandler
         private Logger $logger,
         private Session $session
     ) {}
+
+    public static function setInstance(self $instance): void
+    {
+        self::$instance = $instance;
+    }
+
+    public static function getInstance(): self
+    {
+        if (self::$instance === null) {
+            throw new \RuntimeException('SentryExceptionHandler instance has not been initialized.');
+        }
+        return self::$instance;
+    }
 
     /**
      * 📝 Register - ثبت handlerها
@@ -219,7 +233,7 @@ class SentryExceptionHandler
 
     public static function captureException(\Throwable $exception, ?int $userId = null, array $context = []): ?string
     {
-        $handler = app(self::class);
+        $handler = self::getInstance();
         if ($handler->isCircuitOpen()) return null;
         try {
             return $handler->getErrorMonitor()->captureException($exception, $userId, $context);
@@ -231,7 +245,7 @@ class SentryExceptionHandler
 
     public static function captureMessage(string $message, string $level = 'info', ?int $userId = null, array $context = []): ?string
     {
-        $handler = app(self::class);
+        $handler = self::getInstance();
         if ($handler->isCircuitOpen()) return null;
         try {
             return $handler->getErrorMonitor()->captureMessage($message, $level, $userId, $context);
@@ -243,7 +257,7 @@ class SentryExceptionHandler
 
     public static function addBreadcrumb(string $message, string $category = 'default', string $level = 'info', array $data = []): void
     {
-        $handler = app(self::class);
+        $handler = self::getInstance();
         if ($handler->isCircuitOpen()) return;
         try {
             $handler->getErrorMonitor()->addBreadcrumb($message, $category, $level, $data);
@@ -254,7 +268,7 @@ class SentryExceptionHandler
 
     public static function startTransaction(string $name, string $op = 'http.request', array $data = []): ?string
     {
-        $handler = app(self::class);
+        $handler = self::getInstance();
         if ($handler->isCircuitOpen()) return null;
         try {
             return $handler->getPerformanceMonitor()->startTransaction($name, $op, $data);
@@ -266,7 +280,7 @@ class SentryExceptionHandler
 
     public static function startSpan(string $op, string $description, array $data = []): string
     {
-        $handler = app(self::class);
+        $handler = self::getInstance();
         if ($handler->isCircuitOpen()) return '';
         try {
             return $handler->getPerformanceMonitor()->startSpan($op, $description, $data);
@@ -278,7 +292,7 @@ class SentryExceptionHandler
 
     public static function finishSpan(string $spanId, array $data = []): void
     {
-        $handler = app(self::class);
+        $handler = self::getInstance();
         if ($handler->isCircuitOpen()) return;
         try {
             $handler->getPerformanceMonitor()->finishSpan($spanId, $data);
@@ -289,7 +303,7 @@ class SentryExceptionHandler
 
     public static function trackQuery(string $query, float $duration, ?array $params = null): void
     {
-        $handler = app(self::class);
+        $handler = self::getInstance();
         if ($handler->isCircuitOpen()) return;
         try {
             $handler->getPerformanceMonitor()->trackQuery($query, $duration, $params);

@@ -15,7 +15,7 @@ class NotificationTracker extends \App\Services\BaseService
 
     public function __construct(
         private Notification $notificationModel,
-        private Cache $cache,
+        protected ?Cache $cache,
         protected LoggerInterface $logger,
         private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
     ) {

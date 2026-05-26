@@ -35,7 +35,7 @@ class SentryPerformanceMonitor
         $this->config = array_merge($this->config, $config);
         
         // PM1: Calibrate timing back to application bootstrap entry bounds to fully capture request boot cost
-        $this->startTime = $_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true);
+        $this->startTime = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float) $_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
         $this->startMemory = memory_get_usage(true);
     }
 

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Services\Sentry\Alerting;
 
+use App\Events\AlertRequestedEvent;
 use App\Models\SentryModel;
+use Core\EventDispatcher;
 use Core\Logger;
 
 /**
@@ -21,7 +23,8 @@ class AlertDispatcher
 
     public function __construct(
         private SentryModel $model,
-        private Logger $logger
+        private Logger $logger,
+        private EventDispatcher $eventDispatcher
     ) {}
 
     /**
@@ -71,11 +74,24 @@ class AlertDispatcher
      */
     public function dispatch(array $alert): bool
     {
+        $listeners = $this->eventDispatcher->getListeners('alert.requested');
+        if (empty($listeners)) {
+            $this->logger->warning('alert.no_listeners', ['alert' => $alert['title'] ?? 'unknown']);
+            return false;
+        }
+
+        $event = new AlertRequestedEvent($alert);
+        $this->eventDispatcher->dispatch('alert.requested', $event);
+        return true;
+    }
+
+    public function handleAlertRequest(AlertRequestedEvent $event): bool
+    {
         try {
-            $alert = $this->normalizeAlert($alert);
+            $alert = $this->normalizeAlert($event->alert);
 
             if ($this->isThrottled($alert)) {
-                $this->logger->info('Alert throttled', ['alert' => $alert['title']]);
+                $this->logger->info('alert.throttled', ['alert' => $alert['title']]);
                 return false;
             }
 
@@ -97,12 +113,11 @@ class AlertDispatcher
             }
 
             return $sentCount > 0;
-
         } catch (\Throwable $e) {
             $this->logger->error('alert.dispatch.failed', [
                 'channel' => 'alerting',
                 'error' => $e->getMessage(),
-                'alert' => $alert['title'] ?? 'unknown',
+                'alert' => $event->alert['title'] ?? 'unknown',
             ]);
             return false;
         }

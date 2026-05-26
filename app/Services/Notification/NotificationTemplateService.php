@@ -15,7 +15,7 @@ class NotificationTemplateService extends \App\Services\BaseService
 
     public function __construct(
         private Notification $model,
-        private Cache $cache,
+        protected ?Cache $cache,
         protected LoggerInterface $logger
     ) {
         parent::__construct($logger);

@@ -9,7 +9,9 @@ use App\Adapters\Notification\SmsNotificationAdapter;
 use App\Adapters\Notification\FcmNotificationAdapter;
 use App\Adapters\Notification\LogNotificationAdapter;
 use App\Contracts\LoggerInterface;
+use Core\EventDispatcher;
 use Core\Queue;
+use App\Events\NotificationChannelRequestedEvent;
 use App\Jobs\SendBulkNotificationJob;
 
 /**
@@ -26,7 +28,8 @@ class NotificationDispatcher extends \App\Services\BaseService
         private LogNotificationAdapter $logAdapter,
         protected LoggerInterface $logger,
         private Queue $queue,
-        private NotificationRetryPolicy $retryPolicy
+        private NotificationRetryPolicy $retryPolicy,
+        protected ?EventDispatcher $eventDispatcher
     ) {
         parent::__construct($logger);
         $this->initializeDefaultChannels();
@@ -72,7 +75,55 @@ class NotificationDispatcher extends \App\Services\BaseService
         string $message,
         ?array $data = null,
         ?string $imageUrl = null,
-        ?string $actionUrl = null
+        ?string $actionUrl = null,
+        ?string $actionText = null,
+        string $priority = 'normal'
+    ): bool {
+        $event = new NotificationChannelRequestedEvent(
+            $channel,
+            $userId,
+            $title,
+            $message,
+            $data ?? [],
+            $imageUrl,
+            $actionUrl,
+            $actionText,
+            $priority
+        );
+
+        $listeners = $this->eventDispatcher->getListeners('notification.channel.requested');
+        if (empty($listeners)) {
+            $this->logger->warning('notif.channel.no_listeners', ['channel' => $channel]);
+            return false;
+        }
+
+        $this->eventDispatcher->dispatch('notification.channel.requested', $event);
+        return true;
+    }
+
+    public function handleChannelRequest(NotificationChannelRequestedEvent $event): bool
+    {
+        return $this->sendToChannel(
+            $event->channel,
+            $event->userId,
+            $event->title,
+            $event->message,
+            $event->data,
+            $event->imageUrl,
+            $event->actionUrl,
+            $event->actionText
+        );
+    }
+
+    private function sendToChannel(
+        string $channel,
+        int $userId,
+        string $title,
+        string $message,
+        ?array $data = null,
+        ?string $imageUrl = null,
+        ?string $actionUrl = null,
+        ?string $actionText = null
     ): bool {
         $channelName = strtolower(trim($channel));
 

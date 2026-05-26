@@ -11,8 +11,8 @@ use App\Services\PerformanceOptimizationService;
 
 class DashboardQueryService extends \App\Services\BaseService
 {
-    private Database $db;
-    private Cache $cache;
+    protected ?Database $db;
+    protected ?Cache $cache;
     private PerformanceOptimizationService $performance;
     private \App\Services\DistributedLockService $lockService;
     

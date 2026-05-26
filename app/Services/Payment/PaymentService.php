@@ -19,6 +19,7 @@ use App\Contracts\WalletServiceInterface;
 use App\Contracts\NotificationServiceInterface;
 use Core\EventDispatcher;
 use App\Services\OutboxService;
+use App\Events\PaymentCompletedEvent;
 use Core\RateLimiter;
 use App\Services\Cache\CacheInvalidationService;
 
@@ -32,8 +33,6 @@ class PaymentService extends PaymentBaseService
     private CurrencyServiceInterface $currencyService;
     private ReconciliationService $reconciliationService;
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
-    private EventDispatcher $eventDispatcher;
-    private \Core\Database $db;
     private ?CacheInvalidationService $cacheInvalidation;
     private ?OutboxService $outbox;
     private ?RateLimiter $rateLimiter;
@@ -55,18 +54,15 @@ class PaymentService extends PaymentBaseService
         ?OutboxService $outbox = null,
         ?RateLimiter $rateLimiter = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, $idempotencyKey, $db, $eventDispatcher);
         $this->log = $log;
         $this->wallet = $walletService;
         $this->notifier = $notificationService;
         $this->bankCardModel = $bankCardModel;
-        $this->idempotencyKey = $idempotencyKey;
         $this->gatewayFactory = $gatewayFactory;
         $this->currencyService = $currencyService;
         $this->reconciliationService = $reconciliationService;
         $this->fraudGuard = $fraudGuard;
-        $this->eventDispatcher = $eventDispatcher;
-        $this->db = $db;
         $this->cacheInvalidation = $cacheInvalidation;
         $this->outbox = $outbox;
         $this->rateLimiter = $rateLimiter;
@@ -663,36 +659,52 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
                 return ['success' => false, 'message' => $verify['message'] ?? 'تأیید پرداخت ناموفق'];
             }
 
-            // واریز مبلغ به کیف پول
-            try {
-                $ok = $this->wallet->deposit(
-                    (int) $pay->user_id,
-                    (string) $pay->amount,
-                    'irt',
-                    [
-                        'type'                   => 'gateway_deposit',
-                        'gateway'                => $gatewayName,
-                        'gateway_transaction_id' => $authority, // کلید حیاتی برای Reconciliation
-                        'ref_id'                 => $verify['ref_id'] ?? null,
-                        'idempotency_key'        => 'wallet_deposit:' . $gatewayName . ':' . $authority,
-                        'description'            => 'واریز آنلاین (درگاه)'
-                     ]
-                );
-            } catch (\Throwable $walletEx) {
-                $this->logger->critical('payment.wallet_deposit.exception', [
+            $payload = [
+                'user_id' => (int) $pay->user_id,
+                'amount' => (string) $pay->amount,
+                'currency' => 'irt',
+                'metadata' => [
+                    'type' => 'gateway_deposit',
                     'gateway' => $gatewayName,
-                    'authority' => $authority,
-                    'user_id' => $pay->user_id,
-                    'amount' => $pay->amount,
-                    'exception' => get_class($walletEx),
-                    'message' => $walletEx->getMessage()
-                ]);
-                
-                throw $walletEx; // Re-throw برای rollback اتمیک در catch بیرونی
+                    'gateway_transaction_id' => $authority, // کلید حیاتی برای Reconciliation
+                    'ref_id' => $verify['ref_id'] ?? null,
+                    'idempotency_key' => 'wallet_deposit:' . $gatewayName . ':' . $authority,
+                    'description' => 'واریز آنلاین (درگاه)',
+                ],
+            ];
+
+            if ($this->outbox) {
+                $ok = $this->outbox->record('gateway_payment', (int)$pay->id, 'wallet.deposit.requested', $payload);
+            } else {
+                try {
+                    $ok = $this->wallet->deposit(
+                        (int) $pay->user_id,
+                        (string) $pay->amount,
+                        'irt',
+                        [
+                            'type' => 'gateway_deposit',
+                            'gateway' => $gatewayName,
+                            'gateway_transaction_id' => $authority,
+                            'ref_id' => $verify['ref_id'] ?? null,
+                            'idempotency_key' => 'wallet_deposit:' . $gatewayName . ':' . $authority,
+                            'description' => 'واریز آنلاین (درگاه)',
+                        ]
+                    );
+                } catch (\Throwable $walletEx) {
+                    $this->logger->critical('payment.wallet_deposit.exception', [
+                        'gateway' => $gatewayName,
+                        'authority' => $authority,
+                        'user_id' => $pay->user_id,
+                        'amount' => $pay->amount,
+                        'exception' => get_class($walletEx),
+                        'message' => $walletEx->getMessage()
+                    ]);
+                    
+                    throw $walletEx; // Re-throw برای rollback اتمیک در catch بیرونی
+                }
             }
 
-            // چک کردن موفقیت شارژ کیف پول
-            if (!$ok['success']) {
+            if (!$ok || (is_array($ok) && empty($ok['success']))) {
                 $this->db->rollBack();
                 $this->logger->error('payment.wallet_deposit.failed', [
                     'gateway' => $gatewayName,
@@ -700,7 +712,7 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
                     'user_id' => $pay->user_id,
                     'amount' => $pay->amount,
                     'ref_id' => $verify['ref_id'] ?? null,
-                    'wallet_message' => $ok['message'] ?? 'unknown'
+                    'wallet_message' => is_array($ok) ? ($ok['message'] ?? 'unknown') : 'outbox_record_failed',
                 ]);
 
                 return [
@@ -754,15 +766,19 @@ public function callback(string $gatewayName, array $callbackData, ?int $session
                         'args' => [(int)$pay->user_id, (float)$pay->amount, 'IRT'],
                     ],
                 ]);
-            } else {
+                } else {
                 // Backward-compatible fallback if outbox is not wired in older test containers.
-                $this->eventDispatcher->dispatchAsync('payment.completed', new \App\Events\PaymentCompletedEvent(
-                    (int)$pay->user_id,
-                    (string)($verify['ref_id'] ?? $authority),
-                    (float)$pay->amount,
-                    'IRT',
-                    $gatewayName
-                ));
+                // Use class-based event name to enable class-listeners while preserving the Event object payload.
+                $this->eventDispatcher->dispatchAsync(
+                    PaymentCompletedEvent::class,
+                    new PaymentCompletedEvent(
+                        (int)$pay->user_id,
+                        (string)($verify['ref_id'] ?? $authority),
+                        (float)$pay->amount,
+                        'IRT',
+                        $gatewayName
+                    )
+                );
             }
 
             // commit تراکنش

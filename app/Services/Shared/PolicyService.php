@@ -21,7 +21,7 @@ class PolicyService extends \App\Services\BaseService
     private array $permissionCache = [];
 
     public function __construct(
-        private Database $db,
+        protected ?Database $db,
         protected LoggerInterface $logger,
         private User $userModel,
         private Role $roleModel,

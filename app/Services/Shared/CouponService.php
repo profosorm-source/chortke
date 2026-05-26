@@ -19,7 +19,7 @@ class CouponService extends \App\Services\BaseService
     public function __construct(
         private Coupon $couponModel,
         private CouponRedemption $redemptionModel,
-        private Database $db,
+        protected ?Database $db,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -514,7 +514,7 @@ class CouponService extends \App\Services\BaseService
     /**
      * Wrap closures within atomic database transactions.
      */
-    private function transaction(callable $callback): mixed
+    protected function transaction(callable $callback, int $maxRetries = 3): mixed
     {
         $started = !$this->db->inTransaction();
         if ($started) {

@@ -7,6 +7,7 @@ namespace App\Services\Auth;
 use App\Models\SecurityModel;
 use App\Services\AntiFraud\RiskPolicyService;
 use App\Services\DistributedLockService;
+use App\Services\Notification\NotificationService;
 use App\Contracts\LoggerInterface;
 use Core\Database;
 /**
@@ -30,9 +31,10 @@ class SessionService extends \App\Services\BaseService
     public function __construct(
         private SecurityModel $model,
         private RiskPolicyService $policy,
+        private NotificationService $notificationService,
         private DistributedLockService $lockService,
-        private Database $db,
-        private \Core\Redis $redis,
+        protected ?Database $db,
+        protected ?\Core\Redis $redis,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);
@@ -188,15 +190,12 @@ class SessionService extends \App\Services\BaseService
             ]);
             
             // Send notification to user if notification service is available
-            $notifyService = app(\App\Services\Notification\NotificationService::class);
-            if ($notifyService) {
-                $notifyService->sendToUser($userId, [
-                    'type' => 'security',
-                    'title' => 'پایان نشست قدیمی',
-                    'message' => 'یک نشست قدیمی از دستگاه "' . ($oldestSession->browser ?? 'نامشخص') . '" روی "' . ($oldestSession->device_type ?? 'دستگاه نامشخص') . '" به پایان رسید.',
-                    'priority' => 'high'
-                ]);
-            }
+            $this->notificationService->sendToUser($userId, [
+                'type' => 'security',
+                'title' => 'پایان نشست قدیمی',
+                'message' => 'یک نشست قدیمی از دستگاه "' . ($oldestSession->browser ?? 'نامشخص') . '" روی "' . ($oldestSession->device_type ?? 'دستگاه نامشخص') . '" به پایان رسید.',
+                'priority' => 'high'
+            ]);
         } catch (\Throwable $e) {
             // Don't fail the session termination if notification fails
             $this->logger->warning('session.notification_failed', [

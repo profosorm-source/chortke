@@ -16,7 +16,7 @@ use Core\Database;
 class RatingService extends \App\Services\BaseService
 {
     public function __construct(
-        private Database $db,
+        protected ?Database $db,
         private \Core\RateLimiter $rateLimiter,
         LoggerInterface $logger
     ) {

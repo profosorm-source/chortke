@@ -16,7 +16,7 @@ use Core\Database;
 class FavoriteService extends \App\Services\BaseService
 {
     public function __construct(
-        private Database $db,
+        protected ?Database $db,
         LoggerInterface $logger
     ) {
         parent::__construct($logger);

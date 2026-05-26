@@ -25,9 +25,9 @@ class AnalyticsQueryService extends \App\Services\BaseService
     private const CACHE_TTL_COLD = 86400;   // Historical: 24 ساعت (آمار تاریخی)
 
     public function __construct(
-        private \Core\Database $db,
+        protected ?\Core\Database $db,
         private KpiStatistics $kpiStats,
-        private Cache $cache,
+        protected ?Cache $cache,
         private CustomTaskAnalyticsModel $customTaskAnalyticsModel,
         private User $userModel,
         private KYCVerification $kycModel,

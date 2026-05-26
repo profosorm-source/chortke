@@ -17,7 +17,7 @@ use Core\EventDispatcher;
 class ReportService extends \App\Services\BaseService
 {
     public function __construct(
-        private Database $db,
+        protected ?Database $db,
         private EventDispatcher $eventDispatcher,
         LoggerInterface $logger
     ) {

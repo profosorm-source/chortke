@@ -8,17 +8,18 @@ use App\Services\BaseService;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
 use App\Models\User;
-use App\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use App\Services\Shared\ReferralService;
 use App\Services\Notification\NotificationService;
 use App\Services\SettingService;
 use App\Traits\ValidationTrait;
 use Core\Database;
 use Core\Logger;
+use Core\EventDispatcher;
 use App\Exceptions\BusinessException;
 use App\Validators\Requests\RateCustomTaskRequest;
-
 use App\Services\StateMachineService;
+use App\Events\TaskCompletedEvent;
 
 /**
  * CustomTaskModerationService - Handles advertiser moderation workflows (approving/rejecting submissions, rating workers, paying rewards)
@@ -30,7 +31,6 @@ class CustomTaskModerationService extends BaseService
     private CustomTaskSubmissionModel $submissionModel;
     private \App\Services\Interaction\RatingService $ratingService;
     private User $userModel;
-    private Database $db;
     private WalletService $walletService;
     private ReferralService $referralService;
     private NotificationService $notificationService;
@@ -48,9 +48,11 @@ class CustomTaskModerationService extends BaseService
         ReferralService $referralService,
         NotificationService $notificationService,
         SettingService $settingService,
-        ?StateMachineService $stateMachine = null
+        ?StateMachineService $stateMachine = null,
+        ?EventDispatcher $eventDispatcher = null,
+        ?\App\Services\OutboxService $outbox = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, null, null, null, null, null, $eventDispatcher);
         $this->db = $db;
         $this->taskModel = $taskModel;
         $this->submissionModel = $submissionModel;
@@ -60,6 +62,7 @@ class CustomTaskModerationService extends BaseService
         $this->referralService = $referralService;
         $this->notificationService = $notificationService;
         $this->settingService = $settingService;
+        $this->outbox = $outbox;
         $this->stateMachine = $stateMachine ?? new StateMachineService($logger, $db);
     }
 
@@ -167,33 +170,36 @@ class CustomTaskModerationService extends BaseService
                 'worker_id' => $submission->worker_id,
             ]);
 
-            try {
-                \Core\EventDispatcher::getInstance()->dispatch('custom_task.approved', [
-                    'submission_id' => $submission->id,
-                    'task_id' => $submission->task_id,
-                    'module' => 'custom_task',
-                    'type' => 'custom_task'
-                ]);
-            } catch (\Throwable $evtErr) {
-                $this->logger->warning('custom_task.approve.event_failed', [
-                    'submission_id' => $submission->id,
-                    'error' => $evtErr->getMessage()
-                ]);
-            }
+            // legacy string dispatch removed: migrated to typed TaskCompletedEvent
+            
+                // Dispatch typed TaskCompletedEvent for downstream consumers (XP, trust)
+                try {
+                    \Core\EventDispatcher::getInstance()->dispatch(TaskCompletedEvent::class, new TaskCompletedEvent(
+                        (int)$submission->worker_id,
+                        (int)$submission->task_id,
+                        (float)$submission->reward_amount,
+                        'CUSTOM_TASK'
+                    ));
+                } catch (\Throwable $evtErr) {
+                    $this->logger->warning('custom_task.taskcompleted.event_failed', [
+                        'submission_id' => $submission->id,
+                        'error' => $evtErr->getMessage()
+                    ]);
+                }
 
-            $this->notificationService->send(
-                $submission->worker_id,
-                'task_submission_approved',
-                'مدرک شما تایید شد',
-                "مدرک شما برای وظیفه «{$submission->task_title}» تایید شد و پاداش پرداخت گردید.",
-                [
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => $submission->worker_id,
+                'type' => 'task_submission_approved',
+                'title' => 'مدرک شما تایید شد',
+                'message' => "مدرک شما برای وظیفه «{$submission->task_title}» تایید شد و پاداش پرداخت گردید.",
+                'data' => [
                     'submission_id' => $submission->id,
                     'task_id' => $submission->task_id,
                     'reward' => $submission->reward_amount,
                     'currency' => $submission->reward_currency,
                     'url' => "/user/custom-tasks/my-submissions/{$submission->id}"
                 ]
-            );
+            ]);
 
             return ['success' => true, 'message' => 'درخواست تایید شد.'];
 
@@ -244,18 +250,18 @@ class CustomTaskModerationService extends BaseService
                 'reason' => $reason,
             ]);
 
-            $this->notificationService->send(
-                $submission->worker_id,
-                'task_submission_rejected',
-                'مدرک شما رد شد',
-                "متأسفانه مدرک شما برای وظیفه «{$submission->task_title}» رد شد. دلیل: {$reason}",
-                [
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => $submission->worker_id,
+                'type' => 'task_submission_rejected',
+                'title' => 'مدرک شما رد شد',
+                'message' => "متأسفانه مدرک شما برای وظیفه «{$submission->task_title}» رد شد. دلیل: {$reason}",
+                'data' => [
                     'submission_id' => $submission->id,
                     'task_id' => $submission->task_id,
                     'reason' => $reason,
                     'url' => "/user/custom-tasks/my-submissions/{$submission->id}"
                 ]
-            );
+            ]);
 
             return ['success' => true, 'message' => 'درخواست رد شد.'];
 
@@ -272,34 +278,68 @@ class CustomTaskModerationService extends BaseService
     public function payWorkerReward(object $submission): void
     {
         $idempotencyKey = "ctask_reward_{$submission->id}";
+        // Use transactional outbox to enqueue async wallet deposit so it's durable with DB transaction
+        try {
+            $payload = [
+                'user_id' => $submission->worker_id,
+                'amount' => $submission->reward_amount,
+                'currency' => $submission->reward_currency,
+                'metadata' => [
+                    'type' => 'task_reward',
+                    'description' => "پاداش وظیفه #{$submission->task_id}",
+                    'idempotency_key' => $idempotencyKey,
+                    'submission_id' => $submission->id,
+                ],
+            ];
 
-        $txId = $this->walletService->deposit(
-            $submission->worker_id,
-            $submission->reward_amount,
-            $submission->reward_currency,
-            [
-                'type' => 'task_reward',
-                'description' => "پاداش وظیفه #{$submission->task_id}",
-                'idempotency_key' => $idempotencyKey,
-            ]
-        );
+            if ($this->outbox) {
+                $ok = $this->outbox->record('custom_task_submission', (int)$submission->id, 'wallet.deposit.requested', $payload);
+                if ($ok) {
+                    $this->submissionModel->submission_update($submission->id, [
+                        'reward_paid' => 1,
+                        'reward_transaction_id' => null,
+                    ]);
+                } else {
+                    $this->logger->error('custom_task.outbox_record_failed', ['submission_id' => $submission->id]);
+                }
+            } else {
+                // Fallback: synchronous deposit
+                $txId = $this->walletService->deposit(
+                    $submission->worker_id,
+                    $submission->reward_amount,
+                    $submission->reward_currency,
+                    [
+                        'type' => 'task_reward',
+                        'description' => "پاداش وظیفه #{$submission->task_id}",
+                        'idempotency_key' => $idempotencyKey,
+                    ]
+                );
 
-        if (isset($txId['success']) && $txId['success']) {
-            $this->submissionModel->submission_update($submission->id, [
-                'reward_paid' => 1,
-                'reward_transaction_id' => $txId['transaction_id'],
-            ]);
-            
-            $userRecord = $this->userModel->findById($submission->worker_id);
-            if ($userRecord && !empty($userRecord->referred_by)) {
-                if ($this->referralService) {
-                    $this->referralService->processCommission((int)$userRecord->referred_by, (float)$submission->reward_amount, $submission->reward_currency, [
-                        'action' => 'custom_task_reward',
-                        'executor_id' => $submission->worker_id,
-                        'execution_id' => $submission->id
+                if (isset($txId['success']) && $txId['success']) {
+                    $this->submissionModel->submission_update($submission->id, [
+                        'reward_paid' => 1,
+                        'reward_transaction_id' => $txId['transaction_id'],
                     ]);
                 }
             }
+
+            $userRecord = $this->userModel->findById($submission->worker_id);
+            if ($userRecord && !empty($userRecord->referred_by)) {
+                // Migrated to event-driven referral commission (unchanged)
+                $this->eventDispatcher?->dispatch('referral.commission.process', [
+                    'referrer_id' => (int)$userRecord->referred_by,
+                    'amount' => (float)$submission->reward_amount,
+                    'currency' => $submission->reward_currency,
+                    'source_user_id' => $submission->worker_id,
+                    'context' => [
+                        'action' => 'custom_task_reward',
+                        'executor_id' => $submission->worker_id,
+                        'execution_id' => $submission->id
+                    ]
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('custom_task.pay_worker_outbox_failed', ['submission_id' => $submission->id, 'error' => $e->getMessage()]);
         }
     }
 
@@ -369,16 +409,16 @@ class CustomTaskModerationService extends BaseService
 
             $this->db->commit();
 
-            $this->notificationService->send(
-                $ratedUserId,
-                'new_rating_received',
-                'امتیاز جدید دریافت کردید',
-                "امتیاز {$rating} ستاره برای وظیفه «{$task->title}» دریافت کردید.",
-                [
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => $ratedUserId,
+                'type' => 'new_rating_received',
+                'title' => 'امتیاز جدید دریافت کردید',
+                'message' => "امتیاز {$rating} ستاره برای وظیفه «{$task->title}» دریافت کردید.",
+                'data' => [
                     'task_id' => $task->id,
                     'rating' => $rating
                 ]
-            );
+            ]);
 
             return [
                 'success' => true,

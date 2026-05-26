@@ -42,9 +42,10 @@ class SilentAntiFraudService extends \App\Services\BaseService
         private AuditTrail $auditTrail,
         private NotificationServiceInterface $notificationService,
         private SettingService $settingService,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, null, null, null, null, null, $eventDispatcher);
     }
 
     /**
@@ -181,16 +182,20 @@ class SilentAntiFraudService extends \App\Services\BaseService
 
             // ENHANCEMENT: Notify administrator automatically when highly critical rejections warrant verification flag
             if ($flagReview) {
-                $this->notificationService->send([
-                    'to' => 'admin',
+                $adminId = (int)$this->settingService->get('system_admin_user_id', 1);
+                $this->eventDispatcher->dispatch('notification.requested', [
+                    'user_id' => $adminId,
                     'type' => 'antifraud.critical_rejection_flagged',
-                    'payload' => [
-                        'user_id'      => $userId,
+                    'title' => 'هشدار: رد بحرانی تشخیص داده شد',
+                    'message' => "رد بحرانی برای کاربر {$userId} شناسایی شد. امتیاز: {$taskScore}، ریسک: {$riskScore}",
+                    'data' => [
+                        'user_id' => $userId,
                         'execution_id' => $executionId,
-                        'task_score'   => $taskScore,
-                        'risk_score'   => $riskScore,
-                        'reason'       => $reason
-                    ]
+                        'task_score' => $taskScore,
+                        'risk_score' => $riskScore,
+                        'reason' => $reason
+                    ],
+                    'priority' => 'urgent'
                 ]);
             }
         }

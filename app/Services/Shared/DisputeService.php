@@ -22,17 +22,20 @@ class DisputeService extends \App\Services\BaseService
         'daily' => 3,
         'weekly' => 10
     ];
+    private ?\App\Services\OutboxService $outboxService = null;
 
     public function __construct(
-        private Database $db,
-        protected LoggerInterface $logger,
+        ?Database $db,
+        LoggerInterface $logger,
         private NotificationServiceInterface $notificationService,
         private Dispute $disputeModel,
         private WalletServiceInterface $walletService,
         private ReconciliationService $reconciliationService,
-        private \App\Models\Transaction $transactionModel
+        private \App\Models\Transaction $transactionModel,
+        ?\App\Services\OutboxService $outboxService = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, $db);
+        $this->outboxService = $outboxService;
     }
 
     /**
@@ -121,9 +124,19 @@ class DisputeService extends \App\Services\BaseService
             'resolved_by' => $initiatorId
         ]);
         
-        $this->notificationService->send($dispute->user_id, 'system', 'حل اختلاف به صورت دوستانه', 'اختلاف سفارش شما به توافق طرفین خاتمه یافت.');
+        $this->eventDispatcher->dispatch('notification.requested', [
+            'user_id' => (int)$dispute->user_id,
+            'type' => 'system',
+            'title' => 'حل اختلاف به صورت دوستانه',
+            'message' => 'اختلاف سفارش شما به توافق طرفین خاتمه یافت.'
+        ]);
         if ($dispute->target_user_id) {
-            $this->notificationService->send($dispute->target_user_id, 'system', 'حل اختلاف به صورت دوستانه', 'اختلاف سفارش شما به توافق طرفین خاتمه یافت.');
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => (int)$dispute->target_user_id,
+                'type' => 'system',
+                'title' => 'حل اختلاف به صورت دوستانه',
+                'message' => 'اختلاف سفارش شما به توافق طرفین خاتمه یافت.'
+            ]);
         }
         
         return ['success' => true];
@@ -212,14 +225,32 @@ class DisputeService extends \App\Services\BaseService
                         );
                     } else {
                         // سناریوی ۲: بازگشت جزئی (درصدی) یا روش جایگزین
-                        $res = $this->walletService->deposit((int)$dispute->user_id, $refundAmount, $currency, [
-                            'type' => 'refund',
-                            'description' => "استرداد وجه ({$refundPercent}٪) مربوط به حل اختلاف شماره {$disputeId}",
-                            'ref_id' => $disputeId,
-                            'ref_type' => 'dispute',
-                            'admin_id' => $adminId
-                        ]);
-                        $success = isset($res['success']) && $res['success'] === true;
+                        $payload = [
+                            'user_id' => (int)$dispute->user_id,
+                            'amount' => $refundAmount,
+                            'currency' => $currency,
+                            'metadata' => [
+                                'type' => 'refund',
+                                'description' => "استرداد وجه ({$refundPercent}٪) مربوط به حل اختلاف شماره {$disputeId}",
+                                'ref_id' => $disputeId,
+                                'ref_type' => 'dispute',
+                                'admin_id' => $adminId
+                            ],
+                        ];
+
+                        if ($this->outboxService) {
+                            $ok = $this->outboxService->record('dispute', $disputeId, 'wallet.deposit.requested', $payload);
+                            $success = $ok === true;
+                        } else {
+                            $res = $this->walletService->deposit((int)$dispute->user_id, $refundAmount, $currency, [
+                                'type' => 'refund',
+                                'description' => "استرداد وجه ({$refundPercent}٪) مربوط به حل اختلاف شماره {$disputeId}",
+                                'ref_id' => $disputeId,
+                                'ref_type' => 'dispute',
+                                'admin_id' => $adminId
+                            ]);
+                            $success = isset($res['success']) && $res['success'] === true;
+                        }
                     }
 
                     if ($success) {
@@ -259,9 +290,19 @@ class DisputeService extends \App\Services\BaseService
                 }
             }
             
-            $this->notificationService->send($dispute->user_id, 'system', 'رأی داوری صادر شد', 'داور سیستم رأی پرونده اختلاف را صادر کرد.');
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => (int)$dispute->user_id,
+                'type' => 'system',
+                'title' => 'رأی داوری صادر شد',
+                'message' => 'داور سیستم رأی پرونده اختلاف را صادر کرد.'
+            ]);
             if ($dispute->target_user_id) {
-                $this->notificationService->send($dispute->target_user_id, 'system', 'رأی داوری صادر شد', 'داور سیستم رأی پرونده اختلاف را صادر کرد.');
+                $this->eventDispatcher->dispatch('notification.requested', [
+                    'user_id' => (int)$dispute->target_user_id,
+                    'type' => 'system',
+                    'title' => 'رأی داوری صادر شد',
+                    'message' => 'داور سیستم رأی پرونده اختلاف را صادر کرد.'
+                ]);
             }
             
             return ['success' => true];

@@ -26,13 +26,10 @@ class CustomTaskExecutorService extends BaseService
     private Ads $taskModel;
     private CustomTaskSubmissionModel $submissionModel;
     private CustomTaskAnalyticsModel $analyticsModel;
-    private Database $db;
     private SettingService $settingService;
     private \Core\RateLimiter $rateLimiter;
     private NotificationService $notificationService;
     private FraudGuardService $fraudGuard;
-
-    private \Core\EventDispatcher $eventDispatcher;
 
     public function __construct(
         Logger $logger,
@@ -235,17 +232,18 @@ class CustomTaskExecutorService extends BaseService
             ]);
 
             $task = $this->taskModel->find($submission->task_id);
-            $this->notificationService->send(
-                $task->user_id,
-                'task_proof_submitted',
-                'مدرک جدید دریافت شد',
-                "مدرک جدیدی برای وظیفه «{$task->title}» ارسال شد و منتظر بررسی است.",
-                [
+            // migrated to event-driven notification
+            $this->eventDispatcher->dispatch('notification.requested', [
+                'user_id' => $task->user_id,
+                'type' => 'task_proof_submitted',
+                'title' => 'مدرک جدید دریافت شد',
+                'message' => "مدرک جدیدی برای وظیفه «{$task->title}» ارسال شد و منتظر بررسی است.",
+                'data' => [
                     'task_id' => $task->id,
                     'submission_id' => $submissionId,
                     'url' => "/user/custom-tasks/submissions/{$submissionId}"
                 ]
-            );
+            ]);
 
             $autoApproveHours = (int) $this->settingService->get('custom_task_auto_approve_hours', 48);
             

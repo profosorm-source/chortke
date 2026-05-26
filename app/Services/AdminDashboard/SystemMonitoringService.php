@@ -12,8 +12,8 @@ use App\Constants\TimeConstants;
 
 class SystemMonitoringService extends \App\Services\BaseService
 {
-    private Database $db;
-    private Cache $cache;
+    protected ?Database $db;
+    protected ?Cache $cache;
     
     public function __construct(Database $db, Cache $cache, LoggerInterface $logger)
     {

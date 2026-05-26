@@ -21,7 +21,6 @@ class CryptoDepositService extends \App\Services\BaseService
 {
     private const ALLOWED_NETWORKS = ['TRC20', 'BNB20', 'ERC20', 'TON', 'SOL'];
 
-    private Database $db;
     private CryptoDepositIntent $intentModel;
     private CryptoDeposit $depositModel;
     private NotificationServiceInterface $notifier;
@@ -32,8 +31,6 @@ class CryptoDepositService extends \App\Services\BaseService
     private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
     private ?OutboxService $outbox;
     private StateMachineService $stateMachine;
-
-    private \Core\EventDispatcher $eventDispatcher;
 
     public function __construct(
         Database $db,
@@ -311,11 +308,11 @@ class CryptoDepositService extends \App\Services\BaseService
                 return ['success' => false, 'message' => "تغییر وضعیت از وضعیت فعلی ({$currentStatus}) به verified مجاز نیست"];
             }
 
-            $depositResult = $this->wallet->deposit(
-                (int)$deposit->user_id,
-                (string)$deposit->amount,
-                'usdt',
-                [
+            $payload = [
+                'user_id' => (int)$deposit->user_id,
+                'amount' => (string)$deposit->amount,
+                'currency' => 'usdt',
+                'metadata' => [
                     'type' => 'crypto_deposit',
                     'gateway' => 'usdt_' . $deposit->network,
                     'gateway_transaction_id' => $deposit->tx_hash,
@@ -324,12 +321,36 @@ class CryptoDepositService extends \App\Services\BaseService
                     'tx_hash' => $deposit->tx_hash,
                     'deposit_id' => $depositId,
                     'approved_by' => $adminId,
-                ]
-            );
+                ],
+            ];
 
-            if (!$depositResult['success']) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'خطا در واریز به کیف پول'];
+            if ($this->outbox) {
+                $ok = $this->outbox->record('crypto_deposit', $depositId, 'wallet.deposit.requested', $payload);
+                if (!$ok) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در ثبت رکورد خروجی برای واریز کریپتو'];
+                }
+            } else {
+                $depositResult = $this->wallet->deposit(
+                    (int)$deposit->user_id,
+                    (string)$deposit->amount,
+                    'usdt',
+                    [
+                        'type' => 'crypto_deposit',
+                        'gateway' => 'usdt_' . $deposit->network,
+                        'gateway_transaction_id' => $deposit->tx_hash,
+                        'description' => 'واریز USDT - ' . strtoupper((string)$deposit->network),
+                        'network' => $deposit->network,
+                        'tx_hash' => $deposit->tx_hash,
+                        'deposit_id' => $depositId,
+                        'approved_by' => $adminId,
+                    ]
+                );
+
+                if (!$depositResult['success']) {
+                    $this->db->rollBack();
+                    return ['success' => false, 'message' => 'خطا در واریز به کیف پول'];
+                }
             }
 
             // Use nesting-safe updateStatus()

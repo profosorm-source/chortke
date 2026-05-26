@@ -4,83 +4,97 @@ declare(strict_types=1);
 
 namespace App\Services\Notification;
 
-use App\Models\Notification;
-use Core\RateLimiter;
-use App\Services\EmailService;
-use App\Services\SettingService;
-use App\Services\Notification\FcmService;
-
 use App\Contracts\LoggerInterface;
 use App\Contracts\NotificationServiceInterface;
+use App\Services\SettingService;
+use Core\RateLimiter;
+use Core\EventDispatcher;
 
 /**
- * NotificationService — Orchestrator و Facade اصلی سیستم نوتیفیکیشن
+ * NotificationService - Lean Orchestrator
+ * 
+ * این سرویس پس از ریفکتور، فقط مسئولیت هماهنگی ارسال را دارد.
+ * کارهای سنگین رهگیری (Tracking) و آمار (Analytics) به DomainActivityListener منتقل شده است.
  */
 class NotificationService extends \App\Services\BaseService implements NotificationServiceInterface
 {
-    private const RATE_MAX_PER_USER_PER_HOUR = 20;
-    private const RATE_WINDOW_MINUTES        = 60;
-    private const BULK_USER_BATCH            = 200;
-
     public function __construct(
-        private Notification $model,
-        private NotificationPolicyService $policyService,
+        private NotificationDispatcher $dispatcher,
+        LoggerInterface $logger,
+        private RateLimiter $rateLimiter,
         private NotificationTemplateService $templateService,
-        private NotificationTracker $tracker,
-        private \Core\Queue $queue,
-        protected LoggerInterface $logger,
-        private ?\App\Services\OutboxService $outbox = null
+        private NotificationPreferenceService $preferenceService,
+        private SettingService $settingService,
+        EventDispatcher $eventDispatcher
     ) {
-        parent::__construct($logger);
+        // انتقال زیرساخت‌ها به BaseService
+        parent::__construct($logger, null, null, null, null, null, null, $eventDispatcher);
     }
 
     /**
-     * ارسال نوتیفیکیشن به یک کاربر (بخش‌بندی شده برای کاهش وابستگی‌های یکپارچه)
-     *
-     * Section 8.2 — Opt-in idempotency: callers can pass
-     *   $data['idempotency_key'] = 'business_intent:identifier'
-     * to prevent duplicate notification rows when the same business event
-     * fires twice (e.g. webhook replay, queue at-least-once retry).
-     * Without that key, send() behaves exactly as before.
+     * ارسال هوشمند نوتیفیکیشن با بررسی ترجیحات و ریت‌لیمیت
      */
     public function send(
-        int     $userId,
-        string  $type,
-        string  $title,
-        string  $message,
-        ?array  $data        = null,
-        ?string $actionUrl   = null,
-        ?string $actionText  = null,
-        string  $priority    = Notification::PRIORITY_NORMAL,
-        ?string $expiresAt   = null,
-        ?string $imageUrl    = null,
-        ?string $groupKey    = null,
+        int $userId,
+        string $type,
+        string $title,
+        string $message,
+        ?array $data = null,
+        ?string $actionUrl = null,
+        ?string $actionText = null,
+        string $priority = 'normal',
+        ?string $expiresAt = null,
+        ?string $imageUrl = null,
+        ?string $groupKey = null,
         ?string $scheduledAt = null
     ): ?int {
-        $idemKey = is_array($data) && !empty($data['idempotency_key'])
-            ? (string)$data['idempotency_key']
-            : null;
+        try {
+            if (!$this->preferenceService->isNotificationEnabled($userId, $type)) {
+                return null;
+            }
 
-        if ($idemKey !== null) {
-            $result = $this->idempotent(
-                'notification.send',
+            if (!$this->rateLimiter->attempt("notif_limit:{$userId}:{$type}", 5, 60)) {
+                $this->logger->warning('notification.rate_limited', ['user_id' => $userId, 'type' => $type]);
+                return null;
+            }
+
+            return $this->sendInternal(
                 $userId,
-                ['type' => $type, 'idem' => $idemKey],
-                fn() => ['id' => $this->sendInternal(
-                    $userId, $type, $title, $message, $data,
-                    $actionUrl, $actionText, $priority, $expiresAt,
-                    $imageUrl, $groupKey, $scheduledAt
-                )]
+                $type,
+                $title,
+                $message,
+                $data,
+                $actionUrl,
+                $actionText,
+                $priority,
+                $expiresAt,
+                $imageUrl,
+                $groupKey,
+                $scheduledAt
             );
-            $id = $result['id'] ?? null;
-            return is_int($id) ? $id : null;
+        } catch (\Throwable $e) {
+            $this->logger->error('notification.send_failed', [
+                'user_id' => $userId,
+                'error'   => $e->getMessage()
+            ]);
+            return null;
         }
+    }
 
-        return $this->sendInternal(
-            $userId, $type, $title, $message, $data,
-            $actionUrl, $actionText, $priority, $expiresAt,
-            $imageUrl, $groupKey, $scheduledAt
-        );
+    /**
+     * ارسال انبوه به صورت بهینه
+     */
+    public function sendBulk(array $userIds, string $type, string $title, string $message, array $data = [], ?string $actionUrl = null): int
+    {
+        $count = 0;
+        foreach ($userIds as $userId) {
+            if ($this->send($userId, $type, $title, $message, $data, $actionUrl)) {
+                $count++;
+            }
+            // جلوگیری از مسدود شدن پروسه در حجم بالا
+            if ($count % 50 === 0) usleep(100000); 
+        }
+        return $count;
     }
 
     private function sendInternal(
@@ -369,24 +383,7 @@ class NotificationService extends \App\Services\BaseService implements Notificat
         return ['sent' => $totalSent, 'queued_batches' => $totalQueued, 'segment' => $segment];
     }
 
-    public function sendBulk(
-        array   $userIds,
-        string  $type,
-        string  $title,
-        string  $message,
-        ?array  $data      = null,
-        ?string $actionUrl = null,
-        string  $priority  = Notification::PRIORITY_NORMAL
-    ): int {
-        $sent = 0;
-        foreach ($userIds as $userId) {
-            if ($this->send((int)$userId, $type, $title, $message, $data, $actionUrl, null, $priority)) {
-                $sent++;
-            }
-        }
-        return $sent;
-    }
-
+    
     private function sendBulkToUsers(
         array $userIds, string $type, string $title, string $message,
         ?array $data, ?string $actionUrl, ?string $actionText, string $priority, ?string $scheduledAt

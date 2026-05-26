@@ -13,7 +13,8 @@ class UserSearchProvider extends BaseSearchProvider
         \App\Models\AdvancedSearch $searchModel,
         \Core\Cache $cache,
         \App\Contracts\LoggerInterface $logger,
-        private UserSearchGateway $gateway
+        private UserSearchGateway $gateway,
+        private AdminSearchGateway $adminSearchGateway
     ) {
         parent::__construct($searchModel, $cache, $logger);
     }
@@ -57,28 +58,22 @@ class UserSearchProvider extends BaseSearchProvider
             }
         }
 
-        $results['total'] = $total;
+        $finalResult = ['items' => $results, 'total' => $total];
 
         $ttl = (int) config('search.cache_ttl', 900);
-        $this->cacheSetSeconds($cacheKey, $results, $ttl, $tags);
+        $this->cacheSetSeconds($cacheKey, $finalResult, $ttl, $tags);
 
-        return $results;
+        return $finalResult;
     }
 
     /**
      * جستجوی سراسری توسط یک کاربر در یک دامین خاص (مثلا withdrawals, tickets, ...)
-     * @param string $domain نام دامین (module/table)
-     * @param string $query عبارت جستجو
-     * @param int $userId شناسه کاربر
-     * @param array $filters فیلترهای اضافی
-     * @param int $limit تعداد
-     * @param int $offset صفحه
      */
     public function searchDomain(string $domain, string $query, int $userId, array $filters = [], int $limit = 20, int $offset = 0): array
     {
         $this->logSearch("user_{$domain}", $query, $userId);
 
-        $filters['user_id'] = $userId; // 🔒 Force scope to the specific user
+        $filters['user_id'] = $userId;
         
         $cacheKey = $this->generateCacheKey("user_{$domain}_{$userId}", $filters, $limit, $offset) . ':' . md5($query);
         $tags = $this->searchTags("search:user", "search:user:{$userId}", "search:domain:{$domain}");
@@ -89,11 +84,12 @@ class UserSearchProvider extends BaseSearchProvider
         }
 
         $q = $this->sanitize($query);
-        
-        // Use the centralized Gateway for all read operations, ensuring full-text/index usage, unified pagination, and consistent filtering
-        $results = app(\App\Services\Search\AdminSearchGateway::class)->searchRegistered($domain, $q, $filters, $limit, $offset);
 
-        // Standardize TTL to 15 minutes (900 seconds) since we have event-driven invalidation, but keeps a fallback window
+        // 🚀 استفاده از شیء SearchQuery برای استانداردسازی
+        $searchQuery = new SearchQuery($q, $filters, $limit, $offset);
+        
+        $results = $this->adminSearchGateway->searchRegistered($domain, $searchQuery)->toArray();
+
         $ttl = (int) config('search.cache_ttl', 900);
         $this->cacheSetSeconds($cacheKey, $results, $ttl, $tags);
 
