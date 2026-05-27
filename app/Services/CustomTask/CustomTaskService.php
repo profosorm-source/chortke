@@ -29,6 +29,9 @@ class CustomTaskService extends BaseService
     private \Core\RateLimiter $rateLimiter;
     private \App\Models\CustomTaskAnalyticsModel $analyticsModel;
     private \App\Contracts\SearchServiceInterface $searchOrchestrator;
+    private \App\Services\EscrowService $escrowService;
+    private \App\Services\Interaction\RatingService $ratingService;
+    private \Core\EventDispatcher $eventDispatcher;
 
     public function __construct(
         LoggerInterface $logger,
@@ -39,7 +42,10 @@ class CustomTaskService extends BaseService
         CustomTaskSubmissionModel $submissionModel,
         \Core\RateLimiter $rateLimiter,
         \App\Models\CustomTaskAnalyticsModel $analyticsModel,
-        \App\Contracts\SearchServiceInterface $searchOrchestrator
+        \App\Contracts\SearchServiceInterface $searchOrchestrator,
+        ?\App\Services\EscrowService $escrowService = null,
+        ?\App\Services\Interaction\RatingService $ratingService = null,
+        ?\Core\EventDispatcher $eventDispatcher = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -50,6 +56,11 @@ class CustomTaskService extends BaseService
         $this->rateLimiter = $rateLimiter;
         $this->analyticsModel = $analyticsModel;
         $this->searchOrchestrator = $searchOrchestrator;
+        
+        $container = function_exists('container') ? container() : null;
+        $this->escrowService = $escrowService ?? ($container ? $container->get(\App\Services\EscrowService::class) : null);
+        $this->ratingService = $ratingService ?? ($container ? $container->get(\App\Services\Interaction\RatingService::class) : null);
+        $this->eventDispatcher = $eventDispatcher ?? \Core\EventDispatcher::getInstance();
     }
 
     public function guardCanCreateTask(int $creatorId, array $data): void
@@ -158,22 +169,6 @@ class CustomTaskService extends BaseService
                 'amount' => $totalWithFee,
                 'currency' => $currency
             ]);
-            
-            $txId = $this->walletService->withdraw(
-                $creatorId,
-                $totalWithFee,
-                $currency,
-                [
-                    'type' => 'task_budget',
-                    'description' => "بودجه وظیفه: {$data['title']}",
-                    'idempotency_key' => $idempotencyKey,
-                ]
-            );
-
-            if (!$txId) {
-                $this->db->rollBack();
-                return ['success' => false, 'message' => 'موجودی کافی نیست.'];
-            }
 
             $status = $this->settingService->get('custom_task_auto_approve', 0) ? 'active' : 'pending_review';
 
@@ -209,17 +204,34 @@ class CustomTaskService extends BaseService
                 $this->db->rollBack();
                 return ['success' => false, 'message' => 'خطا در ایجاد وظیفه.'];
             }
+            
+            // Delegate financial hold to EscrowService to enforce boundary
+            $escrowResult = $this->escrowService->holdFunds(
+                (int)$task->id,
+                'custom_task_budget',
+                $creatorId, // buyer
+                0, // System/Escrow holds it, no specific seller initially
+                (string)$totalWithFee,
+                $currency
+            );
+
+            if (empty($escrowResult['ok'])) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => $escrowResult['error'] ?? 'خطا در مسدودسازی بودجه وظیفه.'];
+            }
 
             $this->db->commit();
 
-            $this->logger->info('Custom task created', [
+            $this->logger->info('Custom task created and budget escrowed', [
                 'task_id' => $task->id,
                 'creator_id' => $creatorId,
                 'budget' => $totalWithFee,
+                'escrow_id' => $escrowResult['escrow_id'] ?? null
             ]);
 
             try {
-                \Core\EventDispatcher::getInstance()->dispatch('custom_task.created', [
+                // Event-Driven integration
+                $this->eventDispatcher->dispatchAsync('custom_task.created', [
                     'task_id' => $task->id,
                     'module' => 'custom_task',
                     'type' => 'custom_task'
@@ -326,17 +338,17 @@ class CustomTaskService extends BaseService
     {
         $analytics = $this->analyticsModel->getTaskAnalytics($taskId);
 
-        $stmt = $this->db->prepare("
-            SELECT i.value as rating, i.created_at, u.full_name as rater_name
-            FROM interactions i
-            LEFT JOIN users u ON u.id = i.user_id
-            WHERE i.interactable_type = 'custom_task' 
-              AND i.interactable_id = ?
-              AND i.interaction_type = 'rating'
-            ORDER BY i.created_at DESC LIMIT 100
-        ");
-        $stmt->execute([$taskId]);
-        $ratings = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $ratings = [];
+        if ($this->ratingService) {
+            $ratingsRaw = $this->ratingService->getRatingsByRef('custom_task', $taskId, 100);
+            foreach ($ratingsRaw as $r) {
+                $ratings[] = [
+                    'rating' => $r['stars'] ?? $r['value'] ?? 0,
+                    'created_at' => $r['created_at'],
+                    'rater_name' => $r['rater_name'] ?? 'کاربر',
+                ];
+            }
+        }
 
         return [
             'overall' => $analytics['overall'],

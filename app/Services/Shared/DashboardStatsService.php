@@ -48,15 +48,16 @@ class DashboardStatsService extends \App\Services\BaseService
     public function getGlobalStats(): array
     {
         return $this->cache->remember('global_stats', 3600, function() {
-            $stmt1 = $this->db->prepare("SELECT COUNT(*) FROM users");
-            $stmt1->execute();
-
-            $stmt2 = $this->db->prepare("SELECT COUNT(*) FROM custom_tasks WHERE status = ?");
-            $stmt2->execute(['active']);
+            $sql = "SELECT 
+                        (SELECT COUNT(*) FROM users) as users_count,
+                        (SELECT COUNT(*) FROM custom_tasks WHERE status = ?) as active_tasks";
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute(['active']);
+            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
 
             return [
-                'users_count' => (int)$stmt1->fetchColumn(),
-                'active_tasks' => (int)$stmt2->fetchColumn()
+                'users_count' => (int)($row['users_count'] ?? 0),
+                'active_tasks' => (int)($row['active_tasks'] ?? 0)
             ];
         });
     }

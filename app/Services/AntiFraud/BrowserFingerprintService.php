@@ -12,12 +12,15 @@ class BrowserFingerprintService extends \App\Services\BaseService
 {
     private IpAndDeviceModel $model;
     private RiskPolicyService $policy;
+    private ?\App\Services\User\UserService $userService;
     
-    public function __construct(IpAndDeviceModel $model, RiskPolicyService $policy, LoggerInterface $logger)
+    public function __construct(IpAndDeviceModel $model, RiskPolicyService $policy, LoggerInterface $logger, ?\App\Services\User\UserService $userService = null)
     {
         parent::__construct($logger);
         $this->model = $model;
         $this->policy = $policy;
+        $container = function_exists('container') ? container() : null;
+        $this->userService = $userService ?? ($container ? $container->get(\App\Services\User\UserService::class) : null);
     }
     
     /**
@@ -137,6 +140,10 @@ class BrowserFingerprintService extends \App\Services\BaseService
     private function isExemptFromSharedChecks(int $userId, string $fingerprint): bool
     {
         try {
+            if ($this->userService) {
+                $user = $this->userService->findById($userId);
+                return $user && ((isset($user->is_corporate) && $user->is_corporate) || (isset($user->status) && $user->status === 'whitelisted'));
+            }
             // Evaluates status, corporate alignment or direct administrative device whitelisting.
             $exemptCount = $this->model->fetch(
                 "SELECT COUNT(*) as count FROM users WHERE id = ? AND (is_corporate = 1 OR status = 'whitelisted')",

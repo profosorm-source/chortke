@@ -124,14 +124,14 @@ class DisputeService extends \App\Services\BaseService
             'resolved_by' => $initiatorId
         ]);
         
-        $this->eventDispatcher->dispatch('notification.requested', [
+        $this->eventDispatcher->dispatchAsync('notification.requested', [
             'user_id' => (int)$dispute->user_id,
             'type' => 'system',
             'title' => 'حل اختلاف به صورت دوستانه',
             'message' => 'اختلاف سفارش شما به توافق طرفین خاتمه یافت.'
         ]);
         if ($dispute->target_user_id) {
-            $this->eventDispatcher->dispatch('notification.requested', [
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
                 'user_id' => (int)$dispute->target_user_id,
                 'type' => 'system',
                 'title' => 'حل اختلاف به صورت دوستانه',
@@ -290,14 +290,14 @@ class DisputeService extends \App\Services\BaseService
                 }
             }
             
-            $this->eventDispatcher->dispatch('notification.requested', [
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
                 'user_id' => (int)$dispute->user_id,
                 'type' => 'system',
                 'title' => 'رأی داوری صادر شد',
                 'message' => 'داور سیستم رأی پرونده اختلاف را صادر کرد.'
             ]);
             if ($dispute->target_user_id) {
-                $this->eventDispatcher->dispatch('notification.requested', [
+                $this->eventDispatcher->dispatchAsync('notification.requested', [
                     'user_id' => (int)$dispute->target_user_id,
                     'type' => 'system',
                     'title' => 'رأی داوری صادر شد',

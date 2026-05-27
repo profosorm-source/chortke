@@ -59,7 +59,7 @@ class ReportService extends \App\Services\BaseService
 
             // در صورتی که تعداد ریپورت‌های یک محتوا از حدی گذشت، ایونت شلیک شود
             if ($this->getReportCount($interactableType, $interactableId) >= 5) {
-                $this->eventDispatcher->dispatch('report.threshold_reached', (object)[
+                $this->eventDispatcher->dispatchAsync('report.threshold_reached', (object)[
                     'entity_type' => $interactableType,
                     'entity_id' => $interactableId,
                     'context' => $context->value

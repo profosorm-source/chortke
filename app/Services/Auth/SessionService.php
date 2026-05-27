@@ -33,11 +33,11 @@ class SessionService extends \App\Services\BaseService
         private RiskPolicyService $policy,
         private NotificationService $notificationService,
         private DistributedLockService $lockService,
-        protected ?Database $db,
-        protected ?\Core\Redis $redis,
+        ?Database $db,
+        ?\Core\Redis $redis,
         LoggerInterface $logger
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, $db, null, null, null, $redis);
     }
 
     /**
@@ -189,8 +189,10 @@ class SessionService extends \App\Services\BaseService
                 'created_at' => $oldestSession->created_at ?? 'unknown'
             ]);
             
-            // Send notification to user if notification service is available
-            $this->notificationService->sendToUser($userId, [
+            // 🚀 ارسال async به جای notificationService->sendToUser مستقیم
+            // تا جلوگیری از بلاک شدن سشن در صورت خطای ارسال اطلاعیه
+            \Core\EventDispatcher::getInstance()->dispatchAsync('notification.requested', [
+                'user_id' => $userId,
                 'type' => 'security',
                 'title' => 'پایان نشست قدیمی',
                 'message' => 'یک نشست قدیمی از دستگاه "' . ($oldestSession->browser ?? 'نامشخص') . '" روی "' . ($oldestSession->device_type ?? 'دستگاه نامشخص') . '" به پایان رسید.',

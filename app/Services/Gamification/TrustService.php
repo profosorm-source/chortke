@@ -60,7 +60,7 @@ class TrustService extends \App\Services\BaseService
 
             // شلیک رویداد در صورت افت شدید Trust (مثلا برای مسدودسازی خودکار کاربر متقلب)
             if ($delta < 0 && $currentTrust < -50.0) {
-                $this->eventDispatcher->dispatch('trust.critical_drop', (object)[
+                $this->eventDispatcher->dispatchAsync('trust.critical_drop', (object)[
                     'user_id' => $user->id,
                     'context' => $context->value,
                     'current_trust' => $currentTrust

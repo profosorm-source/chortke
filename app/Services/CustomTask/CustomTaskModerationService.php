@@ -187,7 +187,7 @@ class CustomTaskModerationService extends BaseService
                     ]);
                 }
 
-            $this->eventDispatcher->dispatch('notification.requested', [
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
                 'user_id' => $submission->worker_id,
                 'type' => 'task_submission_approved',
                 'title' => 'مدرک شما تایید شد',
@@ -250,7 +250,7 @@ class CustomTaskModerationService extends BaseService
                 'reason' => $reason,
             ]);
 
-            $this->eventDispatcher->dispatch('notification.requested', [
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
                 'user_id' => $submission->worker_id,
                 'type' => 'task_submission_rejected',
                 'title' => 'مدرک شما رد شد',
@@ -409,7 +409,7 @@ class CustomTaskModerationService extends BaseService
 
             $this->db->commit();
 
-            $this->eventDispatcher->dispatch('notification.requested', [
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
                 'user_id' => $ratedUserId,
                 'type' => 'new_rating_received',
                 'title' => 'امتیاز جدید دریافت کردید',

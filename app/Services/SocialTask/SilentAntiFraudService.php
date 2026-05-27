@@ -183,7 +183,7 @@ class SilentAntiFraudService extends \App\Services\BaseService
             // ENHANCEMENT: Notify administrator automatically when highly critical rejections warrant verification flag
             if ($flagReview) {
                 $adminId = (int)$this->settingService->get('system_admin_user_id', 1);
-                $this->eventDispatcher->dispatch('notification.requested', [
+                $this->eventDispatcher->dispatchAsync('notification.requested', [
                     'user_id' => $adminId,
                     'type' => 'antifraud.critical_rejection_flagged',
                     'title' => 'هشدار: رد بحرانی تشخیص داده شد',

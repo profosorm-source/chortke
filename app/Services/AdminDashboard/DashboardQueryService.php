@@ -116,11 +116,24 @@ class DashboardQueryService extends \App\Services\BaseService
     private function getConsolidatedStats()
     {
         $cacheKey = 'dashboard:admin:consolidated_stats';
+        $staleCacheKey = 'dashboard:admin:consolidated_stats_stale';
         
-        // First check: cheap read without lock
+        // First check: fresh read without lock
         $cached = $this->cache->get($cacheKey);
         if ($cached !== null) {
             return $cached;
+        }
+
+        // 🛡️ Stale-While-Revalidate Pattern
+        $staleCached = $this->cache->get($staleCacheKey);
+        
+        // If we have stale data, serve it instantly and rebuild in background
+        if ($staleCached !== null) {
+            if (class_exists('\\Core\\EventDispatcher')) {
+                // Dispatch background job to rebuild the stats
+                \Core\EventDispatcher::getInstance()->dispatchAsync('dashboard.stats.rebuild_requested', []);
+            }
+            return $staleCached;
         }
 
         // 🛡️ MED-04 Fix: Use distributed lock to prevent Cache Stampede in heavy-load scenarios
@@ -140,6 +153,8 @@ class DashboardQueryService extends \App\Services\BaseService
                     $result = $this->buildConsolidatedStats();
                     if ($result) {
                         $this->cache->put($cacheKey, $result, 60);
+                        // Save stale backup for 24 hours
+                        $this->cache->put($staleCacheKey, $result, 86400); 
                     }
                     return $result;
                 } finally {
@@ -154,7 +169,13 @@ class DashboardQueryService extends \App\Services\BaseService
             }
         } else {
             // Fallback: no distributed lock available
-            return $this->cache->remember($cacheKey, 60, fn() => $this->buildConsolidatedStats());
+            return $this->cache->remember($cacheKey, 60, function() use ($staleCacheKey) {
+                $result = $this->buildConsolidatedStats();
+                if ($result) {
+                    $this->cache->put($staleCacheKey, $result, 86400);
+                }
+                return $result;
+            });
         }
     }
 
@@ -175,23 +196,33 @@ class DashboardQueryService extends \App\Services\BaseService
 
         // HIGH-08: Completely eliminate complex inline string concatenations in the SQL generator.
         // Instead, compile discrete, static SELECT expressions inside a clean associative array map.
+        
+        // Fetch financial stats from Materialized View to prevent scanning the massive transactions table
+        $mv = null;
+        try {
+            $mv = $this->db->fetch("SELECT total_transactions as fin_count, total_deposits as fin_volume FROM mv_dashboard_stats WHERE currency = 'irt'");
+        } catch (\Throwable $e) {}
+        
+        $finCount = (int)($mv->fin_count ?? 0);
+        $finVolume = (float)($mv->fin_volume ?? 0);
+
         $selects = [
-            "(SELECT COUNT(*) FROM users) as users_total",
-            "(SELECT COUNT(*) FROM users WHERE status = 'active') as users_active",
-            "(SELECT COUNT(*) FROM users WHERE two_factor_enabled = 1) as users_with_2fa",
-            "(SELECT COUNT(*) FROM users WHERE kyc_status = 'pending') as users_pending_kyc",
+            "(SELECT IFNULL(table_rows, 0) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users') as users_total",
+            "(SELECT COUNT(id) FROM users WHERE status = 'active') as users_active",
+            "(SELECT COUNT(id) FROM users WHERE two_factor_enabled = 1) as users_with_2fa",
+            "(SELECT COUNT(id) FROM users WHERE kyc_status = 'pending') as users_pending_kyc",
             
-            "(SELECT COUNT(*) FROM transactions WHERE status = 'completed') as fin_count",
-            "(SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE status = 'completed') as fin_volume",
+            "{$finCount} as fin_count",
+            "{$finVolume} as fin_volume",
             
-            "(SELECT COUNT(*) FROM tickets) as tickets_total",
-            "(SELECT COUNT(*) FROM tickets WHERE status = 'pending') as tickets_pending",
+            "(SELECT IFNULL(table_rows, 0) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'tickets') as tickets_total",
+            "(SELECT COUNT(id) FROM tickets WHERE status = 'pending') as tickets_pending",
         ];
 
         if ($hasDisputes) {
-            $selects[] = "(SELECT COUNT(*) FROM disputes) as disputes_total";
-            $selects[] = "(SELECT COUNT(*) FROM disputes WHERE status IN ('open', 'open_peer', 'under_review', 'escalated')) as disputes_open";
-            $selects[] = "(SELECT COUNT(*) FROM disputes WHERE status IN ('resolved_peer', 'resolved_admin', 'closed')) as disputes_resolved";
+            $selects[] = "(SELECT IFNULL(table_rows, 0) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'disputes') as disputes_total";
+            $selects[] = "(SELECT COUNT(id) FROM disputes WHERE status IN ('open', 'open_peer', 'under_review', 'escalated')) as disputes_open";
+            $selects[] = "(SELECT COUNT(id) FROM disputes WHERE status IN ('resolved_peer', 'resolved_admin', 'closed')) as disputes_resolved";
         } else {
             $selects[] = "0 as disputes_total";
             $selects[] = "0 as disputes_open";
@@ -199,8 +230,8 @@ class DashboardQueryService extends \App\Services\BaseService
         }
 
         if ($hasAppeals) {
-            $selects[] = "(SELECT COUNT(*) FROM appeals) as appeals_total";
-            $selects[] = "(SELECT COUNT(*) FROM appeals WHERE status = 'pending') as appeals_pending";
+            $selects[] = "(SELECT IFNULL(table_rows, 0) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'appeals') as appeals_total";
+            $selects[] = "(SELECT COUNT(id) FROM appeals WHERE status = 'pending') as appeals_pending";
         } else {
             $selects[] = "0 as appeals_total";
             $selects[] = "0 as appeals_pending";

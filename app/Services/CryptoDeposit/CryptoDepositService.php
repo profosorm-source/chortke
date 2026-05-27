@@ -387,7 +387,7 @@ class CryptoDepositService extends \App\Services\BaseService
 
             $this->db->commit();
 
-            $this->eventDispatcher->dispatch('crypto.deposit.confirmed', [
+            $this->eventDispatcher->dispatchAsync('crypto.deposit.confirmed', [
                 'deposit_id' => $depositId,
                 'user_id' => (int)$deposit->user_id,
                 'amount' => $deposit->amount,
@@ -400,17 +400,17 @@ class CryptoDepositService extends \App\Services\BaseService
             // MED-27: Fix severe application crash (TypeError) by ensuring correct string inputs to notification engines
             if (!$this->outbox) {
                 try {
-                    $this->notifier->send(
-                    (int)$deposit->user_id,
-                    'deposit', // Valid mapping
-                    'واریز کریپتو تأیید شد',
-                    'تراکنش واریز شما در شبکه ' . strtoupper((string)$deposit->network) . ' به مبلغ ' . $deposit->amount . ' USDT تأیید شد.',
-                    [
-                        'amount' => $deposit->amount,
-                        'network' => $deposit->network,
-                        'tx_hash' => $deposit->tx_hash,
-                    ]
-                );
+                    $this->eventDispatcher->dispatchAsync('notification.requested', [
+                        'user_id' => (int)$deposit->user_id,
+                        'channel' => 'deposit',
+                        'title' => 'واریز کریپتو تأیید شد',
+                        'body' => 'تراکنش واریز شما در شبکه ' . strtoupper((string)$deposit->network) . ' به مبلغ ' . $deposit->amount . ' USDT تأیید شد.',
+                        'data' => [
+                            'amount' => $deposit->amount,
+                            'network' => $deposit->network,
+                            'tx_hash' => $deposit->tx_hash,
+                        ]
+                    ]);
                 } catch (\Throwable $notifErr) {
                     $this->logger->error('crypto.deposit.approve.notification_failed', [
                         'deposit_id' => $depositId,
@@ -517,18 +517,18 @@ class CryptoDepositService extends \App\Services\BaseService
             // Notify user (M-11)
             if (!$this->outbox) {
                 try {
-                    $this->notifier->send(
-                    (int)$deposit->user_id,
-                    'deposit',
-                    'واریز کریپتو رد شد',
-                    'درخواست واریز کریپتو شما به مبلغ ' . $deposit->amount . ' USDT رد شد. دلیل: ' . $reason,
-                    [
-                        'amount' => $deposit->amount,
-                        'network' => $deposit->network,
-                        'tx_hash' => $deposit->tx_hash,
-                        'reason' => $reason,
-                    ]
-                );
+                    $this->eventDispatcher->dispatchAsync('notification.requested', [
+                        'user_id' => (int)$deposit->user_id,
+                        'channel' => 'deposit',
+                        'title' => 'واریز کریپتو رد شد',
+                        'body' => 'درخواست واریز کریپتو شما به مبلغ ' . $deposit->amount . ' USDT رد شد. دلیل: ' . $reason,
+                        'data' => [
+                            'amount' => $deposit->amount,
+                            'network' => $deposit->network,
+                            'tx_hash' => $deposit->tx_hash,
+                            'reason' => $reason,
+                        ]
+                    ]);
                 } catch (\Throwable $notifErr) {
                     $this->logger->error('crypto.deposit.reject.notification_failed', [
                         'deposit_id' => $depositId,
@@ -775,7 +775,7 @@ class CryptoDepositService extends \App\Services\BaseService
 
                     $this->db->commit();
 
-                    $this->eventDispatcher->dispatch('crypto.deposit.confirmed', [
+                    $this->eventDispatcher->dispatchAsync('crypto.deposit.confirmed', [
                         'deposit_id' => $depositId,
                         'user_id' => (int)$d->user_id,
                         'amount' => $d->amount,
@@ -788,17 +788,17 @@ class CryptoDepositService extends \App\Services\BaseService
                     // Notify user on auto-verify success (H-03/H-06)
                     if (!$this->outbox) {
                         try {
-                            $this->notifier->send(
-                            (int)$d->user_id,
-                            'deposit',
-                            'واریز خودکار کریپتو تأیید شد',
-                            'تراکنش واریز خودکار شما در شبکه ' . strtoupper((string)$d->network) . ' به مبلغ ' . $d->amount . ' USDT با موفقیت تأیید و به کیف پول شما واریز شد.',
-                            [
-                                'amount' => $d->amount,
-                                'network' => $d->network,
-                                'tx_hash' => $d->tx_hash,
-                            ]
-                        );
+                            $this->eventDispatcher->dispatchAsync('notification.requested', [
+                                'user_id' => (int)$d->user_id,
+                                'channel' => 'deposit',
+                                'title' => 'واریز خودکار کریپتو تأیید شد',
+                                'body' => 'تراکنش واریز خودکار شما در شبکه ' . strtoupper((string)$d->network) . ' به مبلغ ' . $d->amount . ' USDT با موفقیت تأیید و به کیف پول شما واریز شد.',
+                                'data' => [
+                                    'amount' => $d->amount,
+                                    'network' => $d->network,
+                                    'tx_hash' => $d->tx_hash,
+                                ]
+                            ]);
                         } catch (\Throwable $notifErr) {
                             $this->logger->error('crypto.verify.auto_success.notification_failed', [
                                 'deposit_id' => $depositId,
@@ -810,18 +810,18 @@ class CryptoDepositService extends \App\Services\BaseService
                     if (!$reconciliation['success']) {
                         // L-05: Proactively alert administrators of a critical reconciliation failure
                         try {
-                            $this->notifier->sendToAdmins(
-                                'crypto_reconciliation_failure',
-                                'خطای تطبیق واریز کریپتو',
-                                "سیستم قادر به تطبیق تراکنش کریپتو با شناسه واریز {$depositId} و کاربر {$d->user_id} به مبلغ {$d->amount} نشد.",
-                                [
+                            $this->eventDispatcher->dispatchAsync('admin_notification.requested', [
+                                'type' => 'crypto_reconciliation_failure',
+                                'title' => 'خطای تطبیق واریز کریپتو',
+                                'body' => "سیستم قادر به تطبیق تراکنش کریپتو با شناسه واریز {$depositId} و کاربر {$d->user_id} به مبلغ {$d->amount} نشد.",
+                                'data' => [
                                     'deposit_id' => $depositId,
                                     'user_id' => $d->user_id,
                                     'network' => $d->network,
                                     'tx_hash' => $d->tx_hash,
                                     'message' => $reconciliation['message'] ?? 'Unknown error'
                                 ]
-                            );
+                            ]);
                         } catch (\Throwable $notifErr) {
                             $this->logger->error('crypto.verify.reconciliation_notification_failed', [
                                 'error' => $notifErr->getMessage()

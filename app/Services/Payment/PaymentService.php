@@ -935,13 +935,13 @@ private function createPendingVerificationReview(object $pay, array $verify): vo
                                 'response_data' => json_encode($responseData, JSON_UNESCAPED_UNICODE)
                             ]);
                             
-                            $this->notifier->sendToAdmins(
-                                'payment_failed_max_retries',
-                                'خطای بحرانی پرداخت',
-                                "پرداخت شماره {$pay->id} پس از ۵ بار تلاش ناموفق بود. کاربر: {$pay->user_id}، مبلغ: {$pay->amount}",
-                                ['payment_id' => $pay->id, 'user_id' => $pay->user_id, 'amount' => $pay->amount],
-                                'high'
-                            );
+                            $this->eventDispatcher->dispatchAsync('admin_notification.requested', [
+                                'type' => 'payment_failed_max_retries',
+                                'title' => 'خطای بحرانی پرداخت',
+                                'body' => "پرداخت شماره {$pay->id} پس از ۵ بار تلاش ناموفق بود. کاربر: {$pay->user_id}، مبلغ: {$pay->amount}",
+                                'data' => ['payment_id' => $pay->id, 'user_id' => $pay->user_id, 'amount' => $pay->amount],
+                                'priority' => 'high'
+                            ]);
                         }
                     }
                 } catch (\Throwable $innerEx) {

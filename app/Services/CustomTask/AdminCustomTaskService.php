@@ -103,7 +103,7 @@ class AdminCustomTaskService extends BaseService
                 return ['success' => false, 'message' => $transitionResult['message']];
             }
 
-            $this->eventDispatcher->dispatch('notification.requested', [
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
                 'user_id' => $task->user_id,
                 'type' => 'task_approved',
                 'title' => 'وظیفه شما تایید شد',
@@ -179,7 +179,7 @@ class AdminCustomTaskService extends BaseService
                 return ['success' => false, 'message' => $transitionResult['message']];
             }
 
-            $this->eventDispatcher->dispatch('notification.requested', [
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
                 'user_id' => $task->user_id,
                 'type' => 'task_rejected',
                 'title' => 'وظیفه شما رد شد',
@@ -450,7 +450,7 @@ class AdminCustomTaskService extends BaseService
             if ($result['success']) {
                 $approved++;
 
-                $this->eventDispatcher->dispatch('notification.requested', [
+                $this->eventDispatcher->dispatchAsync('notification.requested', [
                     'user_id' => $sub->worker_id,
                     'type' => 'auto_approved',
                     'title' => 'مدرک شما به صورت خودکار تایید شد',

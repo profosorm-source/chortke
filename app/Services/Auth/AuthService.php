@@ -37,6 +37,7 @@ class AuthService extends \App\Services\BaseService
 
     public function __construct(
         Logger $logger,
+        \Core\Database $db,
         private UserService $userService,
         private User $userModel,
         private SecurityModel $securityModel,
@@ -46,11 +47,11 @@ class AuthService extends \App\Services\BaseService
         private AuditTrail $auditTrail,
         private TwoFactorService $twoFactorService,
         private \App\Services\SettingService $settingService,
-        protected ?EventDispatcher $eventDispatcher,
-        protected ?Redis $redis,
+        ?EventDispatcher $eventDispatcher,
+        ?Redis $redis,
         private ?EmailService $emailService = null
     ) {
-        parent::__construct($logger);
+        parent::__construct($logger, null, $db, null, null, null, $redis, $eventDispatcher);
     }
 
     /**
@@ -247,8 +248,8 @@ class AuthService extends \App\Services\BaseService
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
         if (!$requires2FA) {
             // Clear rate limit and lockout counters on successful login (only after full auth)
-            $this->rateLimiter->clearLoginAttempts($idKey);
-            $this->rateLimiter->clearLoginAttempts($ipKey);
+            $this->rateLimiter->clear($idKey);
+            $this->rateLimiter->clear($ipKey);
             \Core\Cache::getInstance()->forget('login_attempts:' . hash('sha256', $identifier));
             $this->createSession($user, $remember);
         } else {
@@ -412,8 +413,8 @@ class AuthService extends \App\Services\BaseService
         // CRIT-01 Fix: Ensure consistent identifier normalization for rate-limit clearing
         $identifier = mb_strtolower($user->email ?? (string)$user->username, 'UTF-8');
         
-        $this->rateLimiter->clearLoginAttempts('login_id:' . hash('sha256', $identifier));
-        $this->rateLimiter->clearLoginAttempts('login_ip:' . hash('sha256', $this->clientIp()));
+        $this->rateLimiter->clear('login_id:' . hash('sha256', $identifier));
+        $this->rateLimiter->clear('login_ip:' . hash('sha256', $this->clientIp()));
         \Core\Cache::getInstance()->forget('login_attempts:' . hash('sha256', $identifier));
         
         // Record final login event after 2FA

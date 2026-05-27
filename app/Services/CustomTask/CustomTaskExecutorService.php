@@ -217,7 +217,7 @@ class CustomTaskExecutorService extends BaseService
 
             $this->db->commit();
 
-            $this->eventDispatcher->dispatch('custom_task.submission_created', [
+            $this->eventDispatcher->dispatchAsync('custom_task.submission_created', [
                 'submission_id' => $submissionId,
                 'task_id' => $submission->task_id,
                 'worker_id' => $workerId,
@@ -233,7 +233,7 @@ class CustomTaskExecutorService extends BaseService
 
             $task = $this->taskModel->find($submission->task_id);
             // migrated to event-driven notification
-            $this->eventDispatcher->dispatch('notification.requested', [
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
                 'user_id' => $task->user_id,
                 'type' => 'task_proof_submitted',
                 'title' => 'مدرک جدید دریافت شد',

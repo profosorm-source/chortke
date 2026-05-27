@@ -60,7 +60,8 @@ class SocialTaskService extends \App\Services\BaseService
         private ?CameraVerificationService $cameraVerification = null,
         private ?\App\Services\AntiFraud\FraudGuardService $fraudGuard = null,
         private ?\App\Services\OutboxService $outboxService = null,
-        private ?SocialTaskAnalyticsModel $analyticsModel = null
+        private ?SocialTaskAnalyticsModel $analyticsModel = null,
+        private ?\App\Services\User\ProfileService $profileService = null
     ) {
         // 🛡️ H11 Fix: Pass logger to parent constructor instead of using uninitialized $this->logger
         parent::__construct($logger);
@@ -623,33 +624,18 @@ class SocialTaskService extends \App\Services\BaseService
 
     public function getUserAccounts(int $userId): array
     {
-        $sql = "SELECT * FROM user_social_accounts WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC";
-        return $this->model->getDb()->query($sql, [$userId])->fetchAll(\PDO::FETCH_ASSOC);
+        if ($this->profileService) {
+            return $this->profileService->getUserSocialAccounts($userId);
+        }
+        return [];
     }
 
     public function addAccount(int $userId, string $platform, string $username, string $accessToken = ''): array
     {
-        try {
-            return $this->transaction(function() use ($userId, $platform, $username, $accessToken) {
-                $existsSql = "SELECT COUNT(*) FROM user_social_accounts WHERE platform = ? AND username = ? AND deleted_at IS NULL";
-                $count = (int)$this->model->getDb()->fetchColumn($existsSql, [$platform, $username]);
-                if ($count > 0) {
-                    return ['success' => false, 'message' => 'این حساب کاربری قبلاً ثبت شده است'];
-                }
-    
-                $sql = "INSERT INTO user_social_accounts (user_id, platform, username, profile_url, follower_count, following_count, post_count, engagement_rate, account_age_months, status, created_at, updated_at) 
-                        VALUES (?, ?, ?, ?, 0, 0, 0, 0.0, 0, 'pending', NOW(), NOW())";
-                
-                $profileUrl = "https://{$platform}.com/{$username}";
-                $this->model->getDb()->query($sql, [$userId, $platform, $username, $profileUrl]);
-    
-                $accountId = (int)$this->model->getDb()->lastInsertId();
-    
-                return ['success' => true, 'id' => $accountId, 'message' => 'حساب با موفقیت ثبت شد'];
-            });
-        } catch (\Throwable $e) {
-            return ['success' => false, 'message' => 'خطا در ثبت حساب: ' . $e->getMessage()];
+        if ($this->profileService) {
+            return $this->profileService->addSocialAccount($userId, $platform, $username, $accessToken);
         }
+        return ['success' => false, 'message' => 'سرویس پروفایل در دسترس نیست'];
     }
 
     public function getExecutorStats(int $userId): object
