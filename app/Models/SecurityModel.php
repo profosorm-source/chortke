@@ -196,6 +196,16 @@ class SecurityModel extends Model
         );
     }
 
+    public function getOldestActiveSession(int $userId): ?object
+    {
+        return $this->db->fetch(
+            "SELECT * FROM user_sessions 
+             WHERE user_id = ? AND is_active = 1 
+             ORDER BY last_activity ASC LIMIT 1",
+            [$userId]
+        );
+    }
+
     public function countActiveSessions(int $userId): int
     {
         $row = $this->db->fetch(

@@ -51,6 +51,22 @@ class Score extends Model
     public function createEvent(int $userId, string $domain, string $source, float $delta, array $meta = []): bool
     {
         $domain = self::normalizeDomain($domain);
+        
+        $redis = class_exists('\Core\Cache') ? \Core\Cache::getInstance()->redis() : null;
+        if ($redis) {
+            $payload = json_encode([
+                'entity_type' => 'user',
+                'entity_id'   => $userId,
+                'domain'      => $domain,
+                'delta'       => $delta,
+                'source'      => $source,
+                'meta_json'   => !empty($meta) ? json_encode($meta, JSON_UNESCAPED_UNICODE) : null,
+                'created_at'  => date('Y-m-d H:i:s')
+            ]);
+            $redis->rPush('chortke:score_events_buffer', $payload);
+            return true;
+        }
+
         $stmt = $this->db->prepare("
             INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at)
             VALUES ('user', ?, ?, ?, ?, ?, NOW())
@@ -160,6 +176,22 @@ class Score extends Model
     public function addEvent(array $data): bool
     {
         $data['domain'] = self::normalizeDomain((string)($data['domain'] ?? ''));
+        
+        $redis = class_exists('\Core\Cache') ? \Core\Cache::getInstance()->redis() : null;
+        if ($redis) {
+            $payload = json_encode([
+                'entity_type' => $data['entity_type'],
+                'entity_id'   => $data['entity_id'],
+                'domain'      => $data['domain'],
+                'delta'       => $data['delta'],
+                'source'      => $data['source'],
+                'meta_json'   => json_encode($data['meta'] ?? []),
+                'created_at'  => date('Y-m-d H:i:s')
+            ]);
+            $redis->rPush('chortke:score_events_buffer', $payload);
+            return true;
+        }
+
         $stmt = $this->db->prepare("
             INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at)
             VALUES (?, ?, ?, ?, ?, ?, NOW())
@@ -192,12 +224,11 @@ class Score extends Model
     public function getDomainScore(int $userId, string $domain): float
     {
         $domain = self::normalizeDomain($domain);
-        // 🔒 جلوگیری از Race Condition با قفل کردن آخرین رکورد رویداد امتیاز (به جای جدول کاربران)
-        if ($this->db->inTransaction()) {
-            $this->db->query("SELECT id FROM score_events WHERE entity_id = ? AND entity_type = 'user' AND domain = ? ORDER BY id DESC LIMIT 1 FOR UPDATE", [$userId, $domain]);
-        }
+        // FOR UPDATE lock on score_events removed to prevent Database Contention.
+        // We now rely on Redis buffer and async flushing for score updates, 
+        // so row-level locking for reading sum is both unnecessary and harmful to performance.
 
-        // جدول یکپارچه score_events (داده‌های legacy حذف شده‌اند)
+        // جدول یکپارچه score_events
         $stmt = $this->db->prepare("
             SELECT COALESCE(SUM(delta), 0.0) FROM score_events
             WHERE entity_id = ? AND entity_type = 'user' AND domain = ?
@@ -307,24 +338,90 @@ class Score extends Model
         $ok = $stmt->execute([$adjustmentId]);
 
         if ($ok) {
-            // Log the event (Unified)
-            $ev = $this->db->prepare("
-                INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at)
-                VALUES ('user', ?, ?, ?, ?, ?, NOW())
-            ");
-            $ev->execute([
-                (int)$adj['user_id'],
-                (string)$adj['domain'],
-                0,
-                'admin_adjustment_revoke',
-                json_encode([
-                    'adjustment_id' => $adjustmentId,
-                    'reason' => $reason,
-                    'admin_id' => $adminId,
-                ], JSON_UNESCAPED_UNICODE),
-            ]);
+            $redis = class_exists('\Core\Cache') ? \Core\Cache::getInstance()->redis() : null;
+            if ($redis) {
+                $payload = json_encode([
+                    'entity_type' => 'user',
+                    'entity_id'   => (int)$adj['user_id'],
+                    'domain'      => (string)$adj['domain'],
+                    'delta'       => 0,
+                    'source'      => 'admin_adjustment_revoke',
+                    'meta_json'   => json_encode([
+                        'adjustment_id' => $adjustmentId,
+                        'reason' => $reason,
+                        'admin_id' => $adminId,
+                    ], JSON_UNESCAPED_UNICODE),
+                    'created_at'  => date('Y-m-d H:i:s')
+                ]);
+                $redis->rPush('chortke:score_events_buffer', $payload);
+            } else {
+                // Log the event (Unified)
+                $ev = $this->db->prepare("
+                    INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at)
+                    VALUES ('user', ?, ?, ?, ?, ?, NOW())
+                ");
+                $ev->execute([
+                    (int)$adj['user_id'],
+                    (string)$adj['domain'],
+                    0,
+                    'admin_adjustment_revoke',
+                    json_encode([
+                        'adjustment_id' => $adjustmentId,
+                        'reason' => $reason,
+                        'admin_id' => $adminId,
+                    ], JSON_UNESCAPED_UNICODE),
+                ]);
+            }
         }
 
         return $ok;
+    }
+
+    /**
+     * Flush buffered events from Redis into DB using Bulk Insert.
+     * Called via CronJob.
+     */
+    public function flushBuffer(int $batchSize = 1000): int
+    {
+        $redis = class_exists('\Core\Cache') ? \Core\Cache::getInstance()->redis() : null;
+        if (!$redis) {
+            return 0;
+        }
+
+        $items = $redis->lRange('chortke:score_events_buffer', 0, $batchSize - 1);
+        if (empty($items)) {
+            return 0;
+        }
+
+        // Truncate the buffer
+        $redis->lTrim('chortke:score_events_buffer', count($items), -1);
+
+        $values = [];
+        $params = [];
+        foreach ($items as $itemStr) {
+            $item = json_decode($itemStr, true);
+            if (!$item) continue;
+
+            $values[] = '(?, ?, ?, ?, ?, ?, ?)';
+            array_push($params,
+                $item['entity_type'],
+                $item['entity_id'],
+                $item['domain'],
+                $item['delta'],
+                $item['source'],
+                $item['meta_json'],
+                $item['created_at']
+            );
+        }
+
+        if (empty($values)) {
+            return 0;
+        }
+
+        $sql = "INSERT INTO score_events (entity_type, entity_id, domain, delta, source, meta_json, created_at) VALUES " . implode(', ', $values);
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+
+        return count($items);
     }
 }
