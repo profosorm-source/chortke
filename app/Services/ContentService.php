@@ -365,11 +365,11 @@ $this->logInfo('content_rejection', ['message' => "Admin {$adminId} rejected con
                 'published_by' => $adminId,
             ]);
 
-                        $this->eventDispatcher->dispatchAsync('content.rejected', [
+            $this->eventDispatcher->dispatchAsync('content.published', [
                 'submission_id' => $submissionId,
                 'user_id' => $submission->user_id,
-                'rejected_by' => $adminId,
-                'reason' => $reason
+                'published_by' => $adminId,
+                'published_url' => $publishedUrl
             ]);
 
 $this->logInfo('content_publish', ['message' => "Admin {$adminId} published content #{$submissionId}"]);

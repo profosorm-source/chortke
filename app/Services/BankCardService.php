@@ -233,11 +233,8 @@ class BankCardService extends \App\Services\BaseService
             }
 
             if ($approve) {
-                // Fetch user with FOR UPDATE lock to strictly comply with the KYC / DB Integrity Rule
-                $user = $this->db->query(
-                    "SELECT id, full_name, kyc_status FROM users WHERE id = ? FOR UPDATE",
-                    [(int)$card->user_id]
-                )->fetch(\PDO::FETCH_OBJ);
+                // Fetch user to strictly comply with the KYC / DB Integrity Rule
+                $user = $this->userModel->find((int)$card->user_id);
 
                 if (!$user) {
                     if ($startedTransaction && $this->db->inTransaction()) {

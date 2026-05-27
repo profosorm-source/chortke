@@ -42,7 +42,9 @@ class ScoreService extends BaseService
     {
         $domain = ScoreDomain::normalize($domain);
 
-        $ok = $this->transaction(function() use ($entityType, $entityId, $domain, $delta, $source, $meta) {
+        $eventPayload = null;
+
+        $ok = $this->transaction(function() use ($entityType, $entityId, $domain, $delta, $source, $meta, &$eventPayload) {
             // 1. ثبت در Ledger (Immutable) و ایجاد قفل برای پایداری همزمانی
             $success = $this->scoreModel->addEvent([
                 'entity_type' => $entityType,
@@ -70,9 +72,8 @@ class ScoreService extends BaseService
                 $stmt->execute([$delta, $entityId, $domain]);
             }
 
-            // 3. ثبت رویداد برای پردازش جانبی (جلوگیری از Circular Dependency با Outbox)
+            // 3. آماده‌سازی داده رویداد — dispatch بعد از commit انجام می‌شود
             if ($success) {
-                // read current projection score to compute old/new values
                 $newScore = null;
                 if ($entityType === 'user') {
                     try {
@@ -87,23 +88,35 @@ class ScoreService extends BaseService
 
                 $oldScore = $newScore !== null ? $newScore - $delta : 0.0;
 
-                $this->eventDispatcher->dispatch(ScoreUpdatedEvent::class, new ScoreUpdatedEvent(
-                    $entityId,
-                    (float)$oldScore,
-                    $newScore !== null ? (float)$newScore : (float)$delta,
-                    $source
-                ));
+                // ذخیره snapshot برای dispatch بعد از commit
+                $eventPayload = [
+                    'entityId' => $entityId,
+                    'oldScore' => (float)$oldScore,
+                    'newScore' => $newScore !== null ? (float)$newScore : (float)$delta,
+                    'source'   => $source,
+                ];
             }
 
             return $success;
         });
 
-        // 4. Cache Invalidation (خارج از تراکنش برای جلوگیری از Race Condition)
+        // 4. 🚀 dispatch رویداد بعد از commit تراکنش — جلوگیری از بلاک شدن تراکنش توسط handler
+        if ($ok && $eventPayload !== null) {
+            $this->eventDispatcher->dispatchAsync(ScoreUpdatedEvent::class, new ScoreUpdatedEvent(
+                $eventPayload['entityId'],
+                $eventPayload['oldScore'],
+                $eventPayload['newScore'],
+                $eventPayload['source']
+            ));
+        }
+
+        // 5. Cache Invalidation (خارج از تراکنش برای جلوگیری از Race Condition)
         if ($ok) {
             $this->invalidateScoreCache($entityType, $entityId, $domain);
         }
 
         return $ok;
+
     }
 
     /**

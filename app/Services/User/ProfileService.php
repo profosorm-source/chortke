@@ -357,5 +357,43 @@ class ProfileService extends \App\Services\BaseService
         if (is_bool($value)) return $value ? '1' : '0';
         return (string)$value;
     }
+
+    /**
+     * واکشی حساب‌های متصل شبکه‌های اجتماعی کاربر
+     */
+    public function getUserSocialAccounts(int $userId): array
+    {
+        $sql = "SELECT * FROM user_social_accounts WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC";
+        return $this->model->getDb()->query($sql, [$userId])->fetchAll(\PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * ثبت حساب شبکه اجتماعی جدید برای کاربر
+     */
+    public function addSocialAccount(int $userId, string $platform, string $username, string $accessToken = ''): array
+    {
+        try {
+            return $this->transaction(function() use ($userId, $platform, $username, $accessToken) {
+                $existsSql = "SELECT COUNT(*) FROM user_social_accounts WHERE platform = ? AND username = ? AND deleted_at IS NULL";
+                $count = (int)$this->model->getDb()->fetchColumn($existsSql, [$platform, $username]);
+                if ($count > 0) {
+                    return ['success' => false, 'message' => 'این حساب کاربری قبلاً ثبت شده است'];
+                }
+    
+                $sql = "INSERT INTO user_social_accounts (user_id, platform, username, profile_url, follower_count, following_count, post_count, engagement_rate, account_age_months, status, created_at, updated_at) 
+                        VALUES (?, ?, ?, ?, 0, 0, 0, 0.0, 0, 'pending', NOW(), NOW())";
+                
+                $profileUrl = "https://{$platform}.com/{$username}";
+                $this->model->getDb()->query($sql, [$userId, $platform, $username, $profileUrl]);
+    
+                $accountId = (int)$this->model->getDb()->lastInsertId();
+    
+                return ['success' => true, 'id' => $accountId, 'message' => 'حساب با موفقیت ثبت شد'];
+            });
+        } catch (\Throwable $e) {
+            $this->logger->error('user.social_account.add_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'خطا در ثبت حساب شبکه‌های اجتماعی'];
+        }
+    }
 }
 

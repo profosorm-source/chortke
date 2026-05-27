@@ -238,7 +238,7 @@ class AccountDeletionService extends \App\Services\BaseService
 
             // 📢 شلیک رویداد حذف حساب برای سایر بخش‌های سیستم (معماری رویداد محور)
             try {
-                $this->eventDispatcher->dispatch('account.deleted', new \App\Events\AccountDeletedEvent(
+                $this->eventDispatcher->dispatchAsync('account.deleted', new \App\Events\AccountDeletedEvent(
                     $userId,
                     $user['email'] ?? 'unknown',
                     $reason ?? 'Unknown reason'

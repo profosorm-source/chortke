@@ -192,11 +192,10 @@ class SeoService extends \App\Services\BaseService
     /**
      * تکمیل تسک و محاسبه پاداش
      */
-     public function completeTask(int $executionId, int $userId, array $engagementData): array
+    public function completeTask(int $executionId, int $userId, array $engagementData): array
     {
         try {
             return $this->transaction(function() use ($executionId, $userId, $engagementData) {
-                // قفل گذاری روی سطر اجرا برای جلوگیری از Double Payout
                 $execution = $this->executionModel->findByIdForUpdate($executionId);
                 
                 if (!$execution || $execution->user_id !== $userId) {
@@ -204,11 +203,52 @@ class SeoService extends \App\Services\BaseService
                 }
         
                 if ($execution->status !== 'started') {
-                    return ['success' => false, 'message' => 'این تسک قبلاً پردازش شده است'];
+                    return ['success' => false, 'message' => 'این تسک در حال پردازش یا تکمیل شده است'];
                 }
         
+                // Mark as processing
+                $this->db->query("UPDATE seo_executions SET status = 'processing' WHERE id = ?", [$executionId]);
+
+                // 🚀 Send heavy work to background queue
+                if ($this->eventDispatcher) {
+                    $this->eventDispatcher->dispatchAsync('seo_task.process_requested', [
+                        'execution_id' => $executionId,
+                        'user_id' => $userId,
+                        'ad_id' => $execution->ad_id,
+                        'engagement_data' => $engagementData
+                    ]);
+                } else {
+                    // Fallback to synchronous if no dispatcher available
+                    return $this->processTaskAsync($executionId, $userId, $execution->ad_id, $engagementData);
+                }
+
+                return [
+                    'success' => true,
+                    'message' => 'تسک شما دریافت شد و پاداش در حال محاسبه است.',
+                    'status' => 'processing'
+                ];
+            });
+        } catch (\Exception $e) {
+            $this->logger->error('seo_task.complete_failed', ['error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'خطای سیستمی'];
+        }
+    }
+
+    /**
+     * پردازش در پس‌زمینه (Async Queue Worker)
+     */
+    public function processTaskAsync(int $executionId, int $userId, int $adId, array $engagementData): array
+    {
+        try {
+            return $this->transaction(function() use ($executionId, $userId, $adId, $engagementData) {
+                $execution = $this->executionModel->findByIdForUpdate($executionId);
+                
+                if (!$execution || $execution->user_id !== $userId) {
+                    return ['success' => false, 'message' => 'تسک یافت نشد'];
+                }
+
                 // قفل گذاری روی آگهی برای بررسی و کسر بودجه
-                $ad = $this->adModel->findByIdForUpdate($execution->ad_id);
+                $ad = $this->adModel->findByIdForUpdate($adId);
                 
                 if (!$ad) {
                     return ['success' => false, 'message' => 'آگهی یافت نشد'];
@@ -216,6 +256,7 @@ class SeoService extends \App\Services\BaseService
     
                 // 1. اعتبارسنجی داده‌ها
                 if (!isset($engagementData['duration'], $engagementData['scroll_depth'], $engagementData['interactions'])) {
+                    $this->executionModel->reject($executionId, 'داده‌های تعامل ناقص است');
                     return ['success' => false, 'message' => 'داده‌های تعامل ناقص است'];
                 }
     
@@ -246,7 +287,7 @@ class SeoService extends \App\Services\BaseService
     
                     return [
                         'success'        => false,
-                        'message'        => $isFraud ? 'تعامل شما معتبر تشخیص داده نشد' : 'تکمیل تسک به دلایل نظارتی مسدود شد.',
+                        'message'        => 'تعامل شما معتبر تشخیص داده نشد',
                         'fraud_detected' => true,
                     ];
                 }
@@ -256,8 +297,7 @@ class SeoService extends \App\Services\BaseService
                     $this->executionModel->reject($executionId, "امتیاز کمتر از حد مجاز ({$ad->min_score})");
                     return [
                         'success' => false,
-                        'message' => "امتیاز شما ({$scores['final_score']}) کمتر از حداقل مجاز ({$ad->min_score}) است",
-                        'score' => $scores['final_score'],
+                        'message' => "امتیاز شما ({$scores['final_score']}) کمتر از حداقل مجاز است",
                     ];
                 }
     
@@ -273,12 +313,12 @@ class SeoService extends \App\Services\BaseService
     
                 $payout = $payoutResult['payout'];
     
-                // 6. تکمیل Execution (با چک کردن تغییر وضعیت اتمیک)
+                // 6. تکمیل Execution
                 if (!$this->executionModel->complete($executionId, $scores, $payout)) {
                     throw new \Exception('این تسک قبلاً تکمیل یا لغو شده است');
                 }
     
-                // 7. کسر از بودجه آگهی (با تایید موفقیت تراکنش انتقال بودجه امانی)
+                // 7. کسر از بودجه آگهی
                 if (!$this->payoutService->deductFromBudget($ad->id, $payout)) {
                     throw new \Exception('موجودی امانی آگهی کافی نیست');
                 }
@@ -305,11 +345,10 @@ class SeoService extends \App\Services\BaseService
                     throw new \Exception('خطا در واریز پاداش');
                 }
     
-                // 9. پورسانت ریفرال (event-driven)
+                // 9. پورسانت ریفرال (event-driven via async)
                 $userRecord = $this->userModel->findById($userId);
                 if ($userRecord && !empty($userRecord->referred_by)) {
-                    // Migrated to event-driven referral commission
-                    $this->eventDispatcher?->dispatch('referral.commission.process', [
+                    $this->eventDispatcher?->dispatchAsync('referral.commission.process', [
                         'referrer_id' => (int)$userRecord->referred_by,
                         'amount' => $payout,
                         'currency' => $adCurrency,
@@ -326,12 +365,15 @@ class SeoService extends \App\Services\BaseService
                     'success' => true,
                     'message' => 'تسک با موفقیت تایید شد و پاداش واریز گردید',
                     'payout' => $payout,
-                    'score' => $scores['final_score'],
                 ];
             });
         } catch (\Exception $e) {
-            $this->logger->error('seo_task.complete_failed', ['error' => $e->getMessage()]);
-            return ['success' => false, 'message' => $e->getMessage() !== 'خطای سیستمی' ? $e->getMessage() : 'خطای سیستمی'];
+            $this->logger->error('seo_task.async_process_failed', ['error' => $e->getMessage()]);
+            // If failed, revert to rejected if it's still processing
+            try {
+                $this->executionModel->reject($executionId, 'خطای سیستمی در پردازش');
+            } catch (\Throwable $err) {}
+            return ['success' => false, 'message' => 'خطای سیستمی'];
         }
     }
 
@@ -482,11 +524,13 @@ class SeoService extends \App\Services\BaseService
         if ($ok) {
             $this->logger->activity('seo_ad.approved', "آگهی SEO #{$adId} تایید شد", user_id(), ['ad_id' => $adId]);
             try {
-                \Core\EventDispatcher::getInstance()->dispatch('seo_ad.approved', [
-                    'ad_id' => $adId,
-                    'module' => 'seo_ad',
-                    'type' => 'seo_ad'
-                ]);
+                if (\Core\EventDispatcher::getInstance()) {
+                    \Core\EventDispatcher::getInstance()->dispatchAsync('seo_ad.approved', [
+                        'ad_id' => $adId,
+                        'module' => 'seo_ad',
+                        'type' => 'seo_ad'
+                    ]);
+                }
             } catch (\Throwable $evtErr) {
                 $this->logger->warning('seo_ad.approved.event_failed', [
                     'ad_id' => $adId,
@@ -514,11 +558,13 @@ class SeoService extends \App\Services\BaseService
         if ($ok) {
             $this->logger->activity('seo_ad.rejected', "آگهی SEO #{$adId} رد شد", user_id(), ['ad_id' => $adId, 'reason' => $reason]);
             try {
-                \Core\EventDispatcher::getInstance()->dispatch('seo_ad.rejected', [
-                    'ad_id' => $adId,
-                    'module' => 'seo_ad',
-                    'type' => 'seo_ad'
-                ]);
+                if (\Core\EventDispatcher::getInstance()) {
+                    \Core\EventDispatcher::getInstance()->dispatchAsync('seo_ad.rejected', [
+                        'ad_id' => $adId,
+                        'module' => 'seo_ad',
+                        'type' => 'seo_ad'
+                    ]);
+                }
             } catch (\Throwable $evtErr) {
                 $this->logger->warning('seo_ad.rejected.event_failed', [
                     'ad_id' => $adId,
@@ -545,11 +591,13 @@ class SeoService extends \App\Services\BaseService
         if ($ok) {
             $this->logger->activity('seo_ad.paused', "آگهی SEO #{$adId} متوقف شد", user_id(), ['ad_id' => $adId]);
             try {
-                \Core\EventDispatcher::getInstance()->dispatch('seo_ad.paused', [
-                    'ad_id' => $adId,
-                    'module' => 'seo_ad',
-                    'type' => 'seo_ad'
-                ]);
+                if (\Core\EventDispatcher::getInstance()) {
+                    \Core\EventDispatcher::getInstance()->dispatchAsync('seo_ad.paused', [
+                        'ad_id' => $adId,
+                        'module' => 'seo_ad',
+                        'type' => 'seo_ad'
+                    ]);
+                }
             } catch (\Throwable $evtErr) {
                 $this->logger->warning('seo_ad.paused.event_failed', [
                     'ad_id' => $adId,

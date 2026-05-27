@@ -20,6 +20,7 @@ class InfluencerService extends \App\Services\BaseService
     private WalletServiceInterface $walletService;
     private SettingService  $settingService;
     private ?\App\Services\OutboxService $outboxService = null;
+    private ?\App\Services\FinancialEscrowService $escrowService = null;
 
     public function __construct(
         InfluencerModel $profileModel,
@@ -28,7 +29,8 @@ class InfluencerService extends \App\Services\BaseService
         SettingService  $settingService,
         LoggerInterface $logger,
         Database $db,
-        EventDispatcher $eventDispatcher
+        EventDispatcher $eventDispatcher,
+        ?\App\Services\FinancialEscrowService $escrowService = null
     ) {
         // انتقال زیرساخت به والد
         parent::__construct($logger, null, $db, null, null, null, null, $eventDispatcher);
@@ -42,6 +44,8 @@ class InfluencerService extends \App\Services\BaseService
         } catch (\Throwable $e) {
             $this->outboxService = null;
         }
+        $container = function_exists('container') ? container() : null;
+        $this->escrowService = $escrowService ?? ($container ? $container->get(\App\Services\FinancialEscrowService::class) : null);
     }
 
     // ══════════════════════════════════════════════════════
@@ -77,7 +81,7 @@ class InfluencerService extends \App\Services\BaseService
             return ['success' => false, 'message' => 'خطا در ثبت پیج.'];
         }
 
-        $this->eventDispatcher->dispatch('influencer.profile_registered', [
+        $this->eventDispatcher->dispatchAsync('influencer.profile_registered', [
             'user_id' => $userId,
             'profile_id' => $profile->id,
             'username' => $profile->username,
@@ -109,7 +113,7 @@ class InfluencerService extends \App\Services\BaseService
             'status'                => 'pending_admin_review',
         ]);
 
-        $this->eventDispatcher->dispatch('influencer.verification_submitted', [
+        $this->eventDispatcher->dispatchAsync('influencer.verification_submitted', [
             'user_id' => $userId,
             'profile_id' => $profile->id,
             'post_url' => $postUrl,
@@ -158,16 +162,7 @@ class InfluencerService extends \App\Services\BaseService
         try {
             $order = null;
             $this->transaction(function() use ($customerId, $influencerId, $profile, $orderType, $duration, $price, $feeAmount, $feePercent, $influencerEarning, $data, $idempotencyKey, &$order) {
-                $txResult = $this->walletService->withdraw(
-                    $customerId,
-                    $price,
-                    $profile->currency,
-                    ['type' => 'escrow', 'description' => "سفارش {$orderType} - @{$profile->username}", 'idempotency_key' => $idempotencyKey]
-                );
-                if (!($txResult['success'] ?? false)) {
-                    throw new \Exception('موجودی کافی نیست.');
-                }
-
+                
                 $order = $this->orderModel->create([
                     'customer_id'            => $customerId,
                     'influencer_id'          => $influencerId,
@@ -184,8 +179,8 @@ class InfluencerService extends \App\Services\BaseService
                     'site_fee_percent'       => $feePercent,
                     'site_fee_amount'        => $feeAmount,
                     'influencer_earning'     => $influencerEarning,
-                    'status'                 => 'paid',
-                    'payment_transaction_id' => $txResult['transaction_id'] ?? null,
+                    'status'                 => 'pending',
+                    'payment_transaction_id' => null,
                     'idempotency_key'        => $idempotencyKey,
                 ]);
 
@@ -193,8 +188,34 @@ class InfluencerService extends \App\Services\BaseService
                     throw new \Exception('خطا در ثبت سفارش.');
                 }
 
+                if ($this->escrowService) {
+                    $escrowResult = $this->escrowService->holdFunds(
+                        (int)$order->id,
+                        'influencer_order',
+                        $customerId,
+                        (int)$profile->user_id,
+                        (string)$price,
+                        $profile->currency
+                    );
+                    
+                    if (empty($escrowResult['ok'])) {
+                        throw new \Exception($escrowResult['error'] ?? 'خطا در بلوکه کردن مبلغ سفارش');
+                    }
+                } else {
+                    $txResult = $this->walletService->withdraw(
+                        $customerId,
+                        $price,
+                        $profile->currency,
+                        ['type' => 'escrow', 'description' => "سفارش {$orderType} - @{$profile->username}", 'idempotency_key' => $idempotencyKey]
+                    );
+                    if (!($txResult['success'] ?? false)) {
+                        throw new \Exception('موجودی کافی نیست.');
+                    }
+                    $this->orderModel->update($order->id, ['payment_transaction_id' => $txResult['transaction_id'] ?? null]);
+                }
+
                 // 🚀 Side effects moved to central listener
-                $this->eventDispatcher->dispatch('influencer.order_created', [
+                $this->eventDispatcher->dispatchAsync('influencer.order_created', [
                     'order_id'           => $order->id,
                     'customer_id'        => $customerId,
                     'influencer_user_id' => (int)$profile->user_id,
@@ -231,7 +252,7 @@ class InfluencerService extends \App\Services\BaseService
 
         if ($decision === 'accept') {
             $this->orderModel->update($orderId, ['status' => 'accepted']);
-            $this->eventDispatcher->dispatch('influencer.order_accepted', [
+            $this->eventDispatcher->dispatchAsync('influencer.order_accepted', [
                 'order_id'           => $orderId,
                 'customer_id'        => (int)$order->customer_id,
                 'influencer_user_id' => $influencerUserId
@@ -246,7 +267,7 @@ class InfluencerService extends \App\Services\BaseService
 
         $this->refundCustomer($order, 'rejected_by_influencer');
         
-        $this->eventDispatcher->dispatch('influencer.order_rejected', [
+        $this->eventDispatcher->dispatchAsync('influencer.order_rejected', [
             'order_id'           => $orderId,
             'customer_id'        => (int)$order->customer_id,
             'influencer_user_id' => $influencerUserId,
@@ -286,7 +307,7 @@ class InfluencerService extends \App\Services\BaseService
 
         $this->orderModel->update($orderId, $updateData);
 
-        $this->eventDispatcher->dispatch('influencer.proof_submitted', [
+        $this->eventDispatcher->dispatchAsync('influencer.proof_submitted', [
             'order_id'           => $orderId,
             'customer_id'        => (int)$order->customer_id,
             'influencer_user_id' => $influencerUserId,
@@ -334,7 +355,7 @@ class InfluencerService extends \App\Services\BaseService
             'peer_resolution_started_at' => \date('Y-m-d H:i:s'),
         ]);
 
-        $this->eventDispatcher->dispatch('influencer.dispute_opened', [
+        $this->eventDispatcher->dispatchAsync('influencer.dispute_opened', [
             'order_id'           => $orderId,
             'customer_id'        => $customerId,
             'influencer_user_id' => (int)$order->influencer_user_id,
@@ -401,7 +422,7 @@ class InfluencerService extends \App\Services\BaseService
             }
         });
 
-        $this->eventDispatcher->dispatch('influencer.order_completed', [
+        $this->eventDispatcher->dispatchAsync('influencer.order_completed', [
             'order_id'           => $orderId,
             'influencer_user_id' => (int)$order->influencer_user_id,
             'influencer_id'      => (int)$order->influencer_id,
@@ -513,7 +534,7 @@ class InfluencerService extends \App\Services\BaseService
             $this->cacheInvalidation->invalidateWallet((int)$order->influencer_user_id);
         }
 
-        $this->eventDispatcher->dispatch('notification.requested', [
+        $this->eventDispatcher->dispatchAsync('notification.requested', [
             'user_id' => (int)$order->customer_id,
             'type' => 'influencer_order_refunded',
             'title' => 'بازگشت وجه سفارش',
@@ -589,11 +610,20 @@ class InfluencerService extends \App\Services\BaseService
         $profile = $this->profileModel->findByUserId((int)$order->influencer_user_id);
         if ($profile) {
             $pts = (int) $this->settingService->get('influencer_rep_reject_points', -3);
-            $this->scoreService->applyDelta('profile', (int)$profile->id, 'reputation', $pts, 'order_rejected', [
-                'user_id' => (int)$order->influencer_user_id,
-                'order_id' => (int)$o->id,
-                'note' => 'عدم پاسخ در مهلت مقرر',
-            ]);
+            if ($this->eventDispatcher) {
+                $this->eventDispatcher->dispatchAsync('influencer.score_update_requested', [
+                    'entity_type' => 'profile',
+                    'entity_id' => (int)$profile->id,
+                    'type' => 'reputation',
+                    'points' => $pts,
+                    'reason' => 'order_rejected',
+                    'metadata' => [
+                        'user_id' => (int)$order->influencer_user_id,
+                        'order_id' => (int)$o->id,
+                        'note' => 'عدم پاسخ در مهلت مقرر',
+                    ]
+                ]);
+            }
         }
 
         $count++;

@@ -447,7 +447,7 @@ class BulkOperationsService extends \App\Services\BaseService
         foreach ($batches as $batch) {
             foreach ($batch as $userId) {
                 try {
-                    $this->eventDispatcher->dispatch('notification.requested', [
+                    $this->eventDispatcher->dispatchAsync('notification.requested', [
                         'user_id' => $userId,
                         'type' => $type,
                         'title' => $title,

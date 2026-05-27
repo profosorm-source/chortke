@@ -223,6 +223,7 @@ class QueueWorker extends BaseService
             \App\Jobs\InfluencerOrderTimeoutJob::class,
             \App\Jobs\SocialTaskApprovalReminderJob::class,
             \App\Jobs\AggregateAnalyticsJob::class,
+            \App\Jobs\RunCronTaskJob::class,
         ];
     }
 

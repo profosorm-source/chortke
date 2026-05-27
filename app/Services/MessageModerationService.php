@@ -16,6 +16,7 @@ extends \App\Services\BaseService
     private MessageModerationModel $moderationModel;
     private ?\App\Services\SettingService $settingService;
     private NotificationServiceInterface $notificationService;
+    private ?\App\Services\User\UserService $userService;
 
     public function __construct(
         Database $db, 
@@ -24,7 +25,9 @@ extends \App\Services\BaseService
         MessageModerationModel $moderationModel,
         \Core\Cache $cache,
         NotificationServiceInterface $notificationService,
-        ?\App\Services\SettingService $settingService = null
+        ?\App\Services\SettingService $settingService = null,
+        ?\Core\EventDispatcher $eventDispatcher = null,
+        ?\App\Services\User\UserService $userService = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -33,6 +36,10 @@ extends \App\Services\BaseService
         $this->cache = $cache;
         $this->notificationService = $notificationService;
         $this->settingService = $settingService;
+        $this->eventDispatcher = $eventDispatcher ?? \Core\EventDispatcher::getInstance();
+        
+        $container = function_exists('container') ? container() : null;
+        $this->userService = $userService ?? ($container ? $container->get(\App\Services\User\UserService::class) : null);
     }
 
     public function getReports(string $status, int $limit, int $offset): array
@@ -110,7 +117,7 @@ extends \App\Services\BaseService
             }
 
             $this->db->commit();
-            $this->cache->forget('message_moderation_stats_v2');
+            $this->eventDispatcher->dispatchAsync('cache.invalidate', ['key' => 'message_moderation_stats_v2']);
             return ['success' => true, 'message' => 'گزارش تایید شد'];
         } catch (\Throwable $e) {
             $this->db->rollBack();
@@ -134,7 +141,7 @@ extends \App\Services\BaseService
             }
             $ok = $this->moderationModel->updateReportStatus($reportId, 'dismissed', $adminId);
             $this->db->commit();
-            $this->cache->forget('message_moderation_stats_v2');
+            $this->eventDispatcher->dispatchAsync('cache.invalidate', ['key' => 'message_moderation_stats_v2']);
             return $ok;
         } catch (\Throwable) {
             $this->db->rollBack();
@@ -243,20 +250,22 @@ extends \App\Services\BaseService
             'report_id' => $reportId
         ]);
         
-        $this->cache->forget('message_moderation_stats_v2');
+        $this->eventDispatcher->dispatchAsync('cache.invalidate', ['key' => 'message_moderation_stats_v2']);
     }
 
     private function warnUser(int $userId, int $adminId, int $reportId): void
     {
-        $this->db->query(
-            "UPDATE users
-             SET warning_count = warning_count + 1
-             WHERE id = ?",
-            [$userId]
-        );
-
-        $countResult = $this->db->query("SELECT warning_count FROM users WHERE id = ?", [$userId])->fetch(\PDO::FETCH_ASSOC);
-        $count = (int)($countResult['warning_count'] ?? 0);
+        if ($this->userService) {
+            $this->userService->incrementWarningCount($userId);
+            $newWarningCount = $this->userService->getWarningCount($userId);
+        } else {
+            $this->db->query(
+                "UPDATE users SET warning_count = warning_count + 1 WHERE id = ?",
+                [$userId]
+            );
+            $countResult = $this->db->query("SELECT warning_count FROM users WHERE id = ?", [$userId])->fetch(\PDO::FETCH_ASSOC);
+            $newWarningCount = $countResult ? (int)$countResult['warning_count'] : 1;
+        }
 
         $this->logger->info('user_warned', [
             'user_id' => $userId,
@@ -287,7 +296,7 @@ extends \App\Services\BaseService
         }
 
         // 🛡️ CRITICAL-16: Alert the user via an in-app notification when a warning is issued
-        $this->eventDispatcher->dispatch('notification.requested', [
+        $this->eventDispatcher->dispatchAsync('notification.requested', [
             'user_id' => $userId,
             'type' => \App\Models\Notification::TYPE_SECURITY,
             'title' => 'اخطار مدیریت پیام‌ها',
@@ -300,7 +309,7 @@ extends \App\Services\BaseService
             $this->banUser($userId, $adminId, $reportId);
         }
 
-        $this->cache->forget('message_moderation_stats_v2');
+        $this->eventDispatcher->dispatchAsync('cache.invalidate', ['key' => 'message_moderation_stats_v2']);
     }
 
     private function banUser(int $userId, int $adminId, int $reportId): void
@@ -341,7 +350,7 @@ extends \App\Services\BaseService
         }
 
         // 🛡️ CRITICAL-16: Alert the user via an in-app notification when they are banned
-        $this->eventDispatcher->dispatch('notification.requested', [
+        $this->eventDispatcher->dispatchAsync('notification.requested', [
             'user_id' => $userId,
             'type' => \App\Models\Notification::TYPE_SECURITY,
             'title' => 'مسدودسازی حساب کاربری',
@@ -350,7 +359,7 @@ extends \App\Services\BaseService
             'priority' => \App\Models\Notification::PRIORITY_URGENT
         ]);
 
-        $this->cache->forget('message_moderation_stats_v2');
+        $this->eventDispatcher->dispatchAsync('cache.invalidate', ['key' => 'message_moderation_stats_v2']);
     }
 
     /**
@@ -398,7 +407,7 @@ extends \App\Services\BaseService
             );
 
             $this->db->commit();
-            $this->cache->forget('message_moderation_stats_v2');
+            $this->eventDispatcher->dispatchAsync('cache.invalidate', ['key' => 'message_moderation_stats_v2']);
             $this->logger->info('user.blocked', ['user_id' => $userId, 'admin_id' => $adminId, 'reason' => $reason]);
             return ['success' => true, 'message' => 'کاربر مسدود شد'];
         } catch (\Throwable $e) {
@@ -415,7 +424,7 @@ extends \App\Services\BaseService
     {
         try {
             $this->db->query("DELETE FROM user_blocks WHERE user_id = ?", [$userId]);
-            $this->cache->forget('message_moderation_stats_v2');
+            $this->eventDispatcher->dispatchAsync('cache.invalidate', ['key' => 'message_moderation_stats_v2']);
             $this->logger->info('user.unblocked', ['user_id' => $userId]);
             return true;
         } catch (\Exception $e) {

@@ -227,7 +227,7 @@ class KYCService extends \App\Services\BaseService
 
         $this->db->commit();
 
-        $this->eventDispatcher->dispatch('kyc.status_changed', [
+        $this->eventDispatcher->dispatchAsync('kyc.status_changed', [
             'kyc_id' => (int)$kycId,
             'user_id' => $userId,
             'old_status' => null,
@@ -303,7 +303,7 @@ class KYCService extends \App\Services\BaseService
 
         $this->db->commit();
 
-        $this->eventDispatcher->dispatch('kyc.status_changed', [
+        $this->eventDispatcher->dispatchAsync('kyc.status_changed', [
             'kyc_id' => $kycId,
             'user_id' => (int)$kyc->user_id,
             'old_status' => $kyc->status,
@@ -312,7 +312,7 @@ class KYCService extends \App\Services\BaseService
         ]);
 
         // Dispatch class-based approved event for new listeners
-        $this->eventDispatcher->dispatch(
+        $this->eventDispatcher->dispatchAsync(
             KYCApprovedEvent::class,
             new KYCApprovedEvent((int)$kyc->user_id, $kycId)
         );
@@ -388,7 +388,7 @@ class KYCService extends \App\Services\BaseService
 
         $this->db->commit();
 
-        $this->eventDispatcher->dispatch('kyc.status_changed', [
+        $this->eventDispatcher->dispatchAsync('kyc.status_changed', [
             'kyc_id' => $kycId,
             'user_id' => (int)$kyc->user_id,
             'old_status' => $kyc->status,

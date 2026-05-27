@@ -162,8 +162,8 @@ EOT;
                 
                 $this->db->commit();
 
-                // 🚀 جایگزینی کدهای بالا با یک Event ساده
-                $this->eventDispatcher->dispatch(
+                // 🚀 بعد از commit تراکنش، رویداد به صورت async ارسال می‌شود
+                $this->eventDispatcher->dispatchAsync(
                     InvestmentCreatedEvent::class,
                     new InvestmentCreatedEvent(
                         $userId,
@@ -443,7 +443,7 @@ EOT;
                 $typeLabel       = $isProfit ? 'سود' : 'ضرر';
                 $amountFormatted = $this->currencyService->formatAmount(abs($netAmount), 'usdt');
                 
-                $this->eventDispatcher->dispatch('investment.profit_applied', [
+                $this->eventDispatcher->dispatchAsync('investment.profit_applied', [
                     'user_id' => $inv->user_id,
                     'amount_formatted' => $amountFormatted,
                     'period' => $period
@@ -627,7 +627,7 @@ EOT;
                         'current_balance' => 0
                     ]);
 
-                    \Core\EventDispatcher::getInstance()->dispatch('investment.matured', [
+                    \Core\EventDispatcher::getInstance()->dispatchAsync('investment.matured', [
                         'investment_id' => $investment->id,
                         'user_id' => (int)$investment->user_id,
                         'amount' => $investment->amount,
@@ -647,7 +647,7 @@ EOT;
                 'admin_id'        => $adminId,
             ], $adminId);
 
-            $this->eventDispatcher->dispatch('investment.withdrawal_approved', [
+            $this->eventDispatcher->dispatchAsync('investment.withdrawal_approved', [
                 'user_id' => $withdrawal->user_id,
                 'amount' => $withdrawal->amount
             ]);
@@ -703,7 +703,7 @@ EOT;
                 'admin_id'      => $adminId,
             ], $adminId);
 
-            $this->eventDispatcher->dispatch('investment.withdrawal_rejected', [
+            $this->eventDispatcher->dispatchAsync('investment.withdrawal_rejected', [
                 'user_id' => $withdrawal->user_id,
                 'reason' => $reason
             ]);

@@ -137,11 +137,8 @@ class ManualDepositService extends \App\Services\BaseService
 
         $this->db->beginTransaction();
         try {
-            // بررسی مجدد وضعیت احراز هویت کاربر داخل تراکنش با قفل FOR SHARE جهت جلوگیری از Race Condition
-            $userLock = $this->db->query(
-                "SELECT id, kyc_status FROM users WHERE id = ? FOR SHARE",
-                [$userId]
-            )->fetch(\PDO::FETCH_OBJ);
+            // بررسی مجدد وضعیت احراز هویت کاربر داخل تراکنش جهت جلوگیری از Race Condition
+            $userLock = $this->userModel->find($userId);
 
             if (!$userLock || $userLock->kyc_status !== 'verified') {
                 $this->db->rollBack();
@@ -222,7 +219,7 @@ class ManualDepositService extends \App\Services\BaseService
             
             $depositId = (int)($id->id ?? 0);
 
-            $this->eventDispatcher->dispatch('deposit.manual_created', [
+            $this->eventDispatcher->dispatchAsync('deposit.manual_created', [
                 'user_id' => $userId,
                 'deposit_id' => $depositId,
                 'amount' => $amount
@@ -370,7 +367,7 @@ class ManualDepositService extends \App\Services\BaseService
                         'error' => $reconciliation['message'] ?? 'Unknown'
                     ]);
                     // 🚀 اعلام شکست در تطبیق برای Alerting در Listener
-                    $this->eventDispatcher->dispatch('reconciliation.failed', [
+                    $this->eventDispatcher->dispatchAsync('reconciliation.failed', [
                         'type' => 'manual_deposit',
                         'id' => $depositId,
                         'user_id' => (int)$d->user_id,
@@ -394,7 +391,7 @@ class ManualDepositService extends \App\Services\BaseService
                 }
             }
 
-            $this->eventDispatcher->dispatch('deposit.manual_approved', [
+            $this->eventDispatcher->dispatchAsync('deposit.manual_approved', [
                 'user_id' => (int)$d->user_id,
                 'deposit_id' => $depositId,
                 'amount' => $amountStr,
@@ -458,7 +455,7 @@ class ManualDepositService extends \App\Services\BaseService
 
             $this->db->commit();
 
-            $this->eventDispatcher->dispatch('deposit.manual_rejected', [
+            $this->eventDispatcher->dispatchAsync('deposit.manual_rejected', [
                 'user_id' => (int)$d->user_id,
                 'deposit_id' => $depositId,
                 'amount' => $amountStr,

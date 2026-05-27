@@ -61,7 +61,9 @@ class WalletMutationService
     public function processDeposit(int $userId, string $amount, string $currency, array $metadata, string $requestId, string $ipAddress, string $deviceFingerprint): array
     {
         $currency = strtolower($currency);
-        $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+        
+        // Use non-locking SELECT to check current state
+        $wallet = $this->walletModel->findByUserId($userId);
         if (!$wallet) {
             throw new \RuntimeException('خطا در دریافت wallet');
         }
@@ -78,7 +80,8 @@ class WalletMutationService
         $scale = $this->getScale($currency);
         $balanceAfter = bcadd($balanceBefore, $amount, $scale);
 
-        if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
+        // Atomic DB Update (removes FOR UPDATE queue wait bottleneck)
+        if (!$this->walletModel->updateBalance($userId, $amount, $currency)) {
             throw new \RuntimeException('خطا در بروزرسانی موجودی');
         }
 
@@ -141,7 +144,9 @@ class WalletMutationService
     public function processWithdraw(int $userId, string $amount, string $currency, array $metadata, string $requestId, string $ipAddress, string $deviceFingerprint): array
     {
         $currency = strtolower($currency);
-        $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+        
+        // Non-locking read
+        $wallet = $this->walletModel->findByUserId($userId);
         if (!$wallet) {
             throw new \RuntimeException('خطا در دریافت کیف پول');
         }
@@ -160,6 +165,7 @@ class WalletMutationService
         $balanceBefore = $currentBalance;
         $balanceAfter = bcsub($balanceBefore, $amount, $scale);
 
+        // Atomic lock balance update
         if (!$this->walletModel->lockBalance($userId, $amount, $currency)) {
             throw new \RuntimeException('خطا در قفل کردن موجودی');
         }
@@ -217,7 +223,9 @@ class WalletMutationService
     public function processPay(int $userId, string $amount, string $currency, array $metadata, string $requestId, string $ipAddress, string $deviceFingerprint): array
     {
         $currency = strtolower($currency);
-        $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+        
+        // Non-locking read
+        $wallet = $this->walletModel->findByUserId($userId);
         if (!$wallet) {
             throw new \RuntimeException('خطا در دریافت کیف پول');
         }
@@ -236,11 +244,12 @@ class WalletMutationService
         $balanceBefore = $currentBalance;
         $balanceAfter = bcsub($balanceBefore, $amount, $scale);
 
-        if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
+        $negativeAmount = bcmul($amount, '-1', $scale);
+        
+        // Atomic balance update
+        if (!$this->walletModel->updateBalance($userId, $negativeAmount, $currency)) {
             throw new \RuntimeException('خطا در کسر موجودی');
         }
-
-        $negativeAmount = bcmul($amount, '-1', $scale);
         $transaction = $this->transactionModel->create([
             'user_id'            => $userId,
             'type'               => $metadata['type'] ?? 'payment',
@@ -300,8 +309,8 @@ class WalletMutationService
         $firstId  = min($fromUserId, $toUserId);
         $secondId = max($fromUserId, $toUserId);
 
-        $firstWallet  = $this->walletModel->findByUserIdForUpdate($firstId);
-        $secondWallet = $this->walletModel->findByUserIdForUpdate($secondId);
+        $firstWallet  = $this->walletModel->findByUserId($firstId);
+        $secondWallet = $this->walletModel->findByUserId($secondId);
 
         if (!$firstWallet || !$secondWallet) {
             throw new \RuntimeException('کیف پول یافت نشد');

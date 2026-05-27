@@ -36,7 +36,8 @@ class EscrowService extends \App\Services\BaseService
         IdempotencyKey $idempotencyKey,
         LedgerService $ledgerService,
         ?StateMachineService $stateMachine = null,
-        ?\Core\EventDispatcher $eventDispatcher = null
+        ?\Core\EventDispatcher $eventDispatcher = null,
+        ?\App\Services\DistributedLockService $lockService = null
     ) {
         parent::__construct($logger, $idempotencyKey);
         $this->escrowModel = $escrowModel;
@@ -45,6 +46,10 @@ class EscrowService extends \App\Services\BaseService
         $this->idempotencyKey = $idempotencyKey;
         $this->stateMachine = $stateMachine ?? new StateMachineService($logger, $db);
         $this->eventDispatcher = $eventDispatcher ?? \Core\EventDispatcher::getInstance();
+        $this->lockService = $lockService ?? (function() {
+            try { return container()->get(\App\Services\DistributedLockService::class); }
+            catch (\Throwable $e) { return null; }
+        })();
     }
 
     /**
@@ -91,50 +96,58 @@ class EscrowService extends \App\Services\BaseService
                     throw new \RuntimeException('holdFunds must be called inside an active transaction');
                 }
 
-                // ✅ Check if escrow already exists
-                $existing = $this->escrowModel->findByOrderId($orderId, $orderType, 'refunded');
+                $execute = function() use ($orderId, $orderType, $buyerId, $sellerId, $amount, $currency) {
+                    // ✅ Check if escrow already exists
+                    $existing = $this->escrowModel->findByOrderId($orderId, $orderType, 'refunded');
 
-                if ($existing) {
-                    return ['ok' => false, 'error' => 'Escrow already exists for this order'];
+                    if ($existing) {
+                        return ['ok' => false, 'error' => 'Escrow already exists for this order'];
+                    }
+
+                    // ✅ Validate amount
+                    if (bccomp($amount, '0', 8) <= 0) {
+                        return ['ok' => false, 'error' => 'Invalid amount'];
+                    }
+
+                    $escrowId = $this->escrowModel->createEscrow(
+                        $orderId,
+                        $orderType,
+                        $buyerId,
+                        $sellerId,
+                        $amount,
+                        $currency
+                    );
+
+                    if (!$escrowId) {
+                        throw new \Exception('Failed to create escrow record');
+                    }
+
+                    $this->logger->info('escrow.hold_requested', [
+                        'order_id' => $orderId,
+                        'order_type' => $orderType,
+                        'amount' => $amount,
+                        'buyer_id' => $buyerId,
+                        'seller_id' => $sellerId,
+                    ]);
+
+                    $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
+                        'escrow_id' => (int)$escrowId,
+                        'order_id' => $orderId,
+                        'order_type' => $orderType,
+                        'old_status' => null,
+                        'new_status' => 'pending',
+                        'amount' => $amount,
+                        'currency' => $currency
+                    ]);
+
+                    return ['ok' => true, 'escrow_id' => (int)$escrowId];
+                };
+
+                if (isset($this->lockService) && $this->lockService) {
+                    return $this->lockService->synchronized("escrow_hold_{$orderType}_{$orderId}", $execute);
                 }
-
-                // ✅ Validate amount
-                if (bccomp($amount, '0', 8) <= 0) {
-                    return ['ok' => false, 'error' => 'Invalid amount'];
-                }
-
-                $escrowId = $this->escrowModel->createEscrow(
-                    $orderId,
-                    $orderType,
-                    $buyerId,
-                    $sellerId,
-                    $amount,
-                    $currency
-                );
-
-                if (!$escrowId) {
-                    throw new \Exception('Failed to create escrow record');
-                }
-
-                $this->logger->info('escrow.hold_requested', [
-                    'order_id' => $orderId,
-                    'order_type' => $orderType,
-                    'amount' => $amount,
-                    'buyer_id' => $buyerId,
-                    'seller_id' => $sellerId,
-                ]);
-
-                $this->eventDispatcher->dispatch('escrow.state_changed', [
-                    'escrow_id' => (int)$escrowId,
-                    'order_id' => $orderId,
-                    'order_type' => $orderType,
-                    'old_status' => null,
-                    'new_status' => 'pending',
-                    'amount' => $amount,
-                    'currency' => $currency
-                ]);
-
-                return ['ok' => true, 'escrow_id' => (int)$escrowId];
+                
+                return $execute();
             },
             $idempotencyKey
         );
@@ -175,7 +188,7 @@ class EscrowService extends \App\Services\BaseService
             'amount' => $escrow->amount,
         ]);
 
-        $this->eventDispatcher->dispatch('escrow.state_changed', [
+        $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
             'escrow_id' => (int)$escrow->id,
             'order_id' => (int)$escrow->order_id,
             'order_type' => $escrow->order_type,
@@ -250,7 +263,7 @@ class EscrowService extends \App\Services\BaseService
         ]);
 
         // Dispatch a typed event for released state to decouple downstream side-effects
-        $this->eventDispatcher->dispatch(
+        $this->eventDispatcher->dispatchAsync(
             EscrowReleasedEvent::class,
             new EscrowReleasedEvent(
                 $escrowId,
@@ -319,7 +332,7 @@ class EscrowService extends \App\Services\BaseService
                 ['escrow_id' => $escrowId, 'released_by' => 'seller', 'reason' => $reason]
             );
 
-            $this->eventDispatcher->dispatch('escrow.state_changed', [
+            $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
                 'escrow_id' => $escrowId,
                 'order_id' => (int)$escrow->order_id,
                 'order_type' => $escrow->order_type,
@@ -396,7 +409,7 @@ class EscrowService extends \App\Services\BaseService
             'reason' => $reason,
         ]);
 
-        $this->eventDispatcher->dispatch('escrow.state_changed', [
+        $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
             'escrow_id' => $escrowId,
             'order_id' => (int)$escrow->order_id,
             'order_type' => $escrow->order_type,
@@ -437,7 +450,7 @@ class EscrowService extends \App\Services\BaseService
             return ['ok' => false, 'error' => 'Failed to mark as disputed'];
         }
 
-        $this->eventDispatcher->dispatch('escrow.state_changed', [
+        $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
             'escrow_id' => $escrowId,
             'order_id' => (int)$escrow->order_id,
             'order_type' => $escrow->order_type,
@@ -448,7 +461,7 @@ class EscrowService extends \App\Services\BaseService
             'reason' => $reason
         ]);
 
-        $this->eventDispatcher->dispatch('dispute.created', [
+        $this->eventDispatcher->dispatchAsync('dispute.created', [
             'escrow_id' => $escrowId,
             'order_id' => (int)$escrow->order_id,
             'order_type' => $escrow->order_type,
@@ -461,7 +474,7 @@ class EscrowService extends \App\Services\BaseService
         ]);
 
         // Dispatch class-based event for new listeners
-        $this->eventDispatcher->dispatch(
+        $this->eventDispatcher->dispatchAsync(
             DisputeOpenedEvent::class,
             new DisputeOpenedEvent(
                 (int)$escrow->buyer_id,
@@ -531,7 +544,7 @@ class EscrowService extends \App\Services\BaseService
             );
         }
 
-        $this->eventDispatcher->dispatch('escrow.state_changed', [
+        $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
             'escrow_id' => $escrowId,
             'order_id' => (int)$escrow->order_id,
             'order_type' => $escrow->order_type,

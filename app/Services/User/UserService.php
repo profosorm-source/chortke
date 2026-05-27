@@ -324,4 +324,38 @@ class UserService extends \App\Services\BaseService
             return $this->model->getAdminStats();
         });
     }
+
+    public function getWarningCount(int $userId): int
+    {
+        $user = $this->findById($userId);
+        return $user ? (int)($user->warning_count ?? 0) : 0;
+    }
+
+    public function incrementWarningCount(int $userId): bool
+    {
+        return (bool)$this->model->getDb()->query(
+            "UPDATE users SET warning_count = warning_count + 1 WHERE id = ?",
+            [$userId]
+        );
+    }
+
+    public function decrementWarningCount(int $userId): bool
+    {
+        return (bool)$this->model->getDb()->query(
+            "UPDATE users SET warning_count = GREATEST(0, warning_count - 1) WHERE id = ?",
+            [$userId]
+        );
+    }
+
+    public function getFraudScore(int $userId): int
+    {
+        $user = $this->findById($userId);
+        return $user ? (int)($user->fraud_score ?? 0) : 0;
+    }
+
+    public function getKycStatus(int $userId): string
+    {
+        $user = $this->findById($userId);
+        return $user ? (string)($user->kyc_status ?? 'unverified') : 'unverified';
+    }
 }

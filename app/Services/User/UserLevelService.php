@@ -191,7 +191,9 @@ class UserLevelService extends \App\Services\BaseService
         $idempotencyKey = "level_purch_{$userId}_{$levelSlug}_" . \date('YmdH');
 
         try {
-            return $this->transaction(function() use ($userId, $levelSlug, $level, $price, $currency, $idempotencyKey) {
+            $referralPayload = null;
+
+            $result = $this->transaction(function() use ($userId, $levelSlug, $level, $price, $currency, $idempotencyKey, &$referralPayload) {
                 // 🛡️ Pessimistic Lock on Users and Wallet together to prevent race conditions (CRIT-04)
                 $stmt = $this->db->prepare("SELECT level_slug, level_expires_at, level_type FROM users WHERE id = ? FOR UPDATE");
                 $stmt->execute([$userId]);
@@ -216,7 +218,6 @@ class UserLevelService extends \App\Services\BaseService
                 }
 
                 // 🛡️ MED-12 Fix (CRITICAL): Implement atomic transaction-level locking
-                // Lock user wallet with FOR UPDATE to prevent race conditions during purchase
                 $stmt = $this->db->prepare("SELECT balance_irt, balance_usdt FROM wallets WHERE user_id = ? FOR UPDATE");
                 $stmt->execute([$userId]);
                 $wallet = $stmt->fetch(\PDO::FETCH_OBJ);
@@ -225,7 +226,6 @@ class UserLevelService extends \App\Services\BaseService
                     return ['success' => false, 'message' => 'کیف پول کاربر یافت نشد.'];
                 }
 
-                // Check balance before withdrawal to prevent TOCTOU
                 $balanceField = ($currency === 'usdt') ? 'balance_usdt' : 'balance_irt';
                 $currentBalance = (float)$wallet->$balanceField;
                 
@@ -233,7 +233,6 @@ class UserLevelService extends \App\Services\BaseService
                     return ['success' => false, 'message' => 'موجودی کافی نیست.'];
                 }
 
-                // Use withdrawInTransaction() for atomic transaction-based withdrawal
                 $withdrawResult = $this->walletService->withdrawInTransaction(
                     $userId,
                     $price,
@@ -252,11 +251,9 @@ class UserLevelService extends \App\Services\BaseService
 
                 $txId = $withdrawResult['transaction_id'] ?? null;
 
-                // تاریخ انقضا
                 $duration = (int) $level->purchase_duration_days;
                 $expiresAt = \date('Y-m-d H:i:s', \strtotime("+{$duration} days"));
 
-                // ثبت خرید
                 $stmt = $this->db->prepare("
                     INSERT INTO user_level_purchases 
                     (user_id, level_slug, amount, currency, duration_days, starts_at, expires_at, status, transaction_id, idempotency_key)
@@ -264,7 +261,6 @@ class UserLevelService extends \App\Services\BaseService
                 ");
                 $stmt->execute([$userId, $levelSlug, $price, $currency, $duration, $expiresAt, $txId, $idempotencyKey]);
 
-                // بروزرسانی سطح کاربر
                 $stmt = $this->db->prepare("SELECT level_slug FROM users WHERE id = ?");
                 $stmt->execute([$userId]);
                 $currentUser = $stmt->fetch(\PDO::FETCH_OBJ);
@@ -279,7 +275,6 @@ class UserLevelService extends \App\Services\BaseService
                 ");
                 $stmt->execute([$levelSlug, $expiresAt, $userId]);
 
-                // ثبت تاریخچه
                 $this->historyModel->create([
                     'user_id' => $userId,
                     'from_level' => $fromLevel,
@@ -289,20 +284,18 @@ class UserLevelService extends \App\Services\BaseService
                     'metadata' => ['price' => $price, 'currency' => $currency, 'duration' => $duration],
                 ]);
 
-                // Migrated to event-driven referral commission
-                if ($this->eventDispatcher) {
-                    $this->eventDispatcher->dispatch('referral.commission.process', [
-                        'referrer_id' => $userId,
-                        'amount' => $price,
-                        'currency' => $currency,
-                        'source_user_id' => $userId,
-                        'context' => [
-                            'action' => 'vip_purchase',
-                            'level' => $levelSlug,
-                            'duration' => $duration
-                        ]
-                    ]);
-                }
+                // آماده‌سازی payload کمیسیون معرفی — dispatch بعد از commit انجام می‌شود
+                $referralPayload = [
+                    'referrer_id' => $userId,
+                    'amount' => $price,
+                    'currency' => $currency,
+                    'source_user_id' => $userId,
+                    'context' => [
+                        'action' => 'vip_purchase',
+                        'level' => $levelSlug,
+                        'duration' => $duration
+                    ]
+                ];
 
                 $this->logger->info('User level purchased', [
                     'user_id' => $userId,
@@ -318,6 +311,13 @@ class UserLevelService extends \App\Services\BaseService
                     'expires_at' => $expiresAt,
                 ];
             });
+
+            // 🚀 Migrated to event-driven referral commission — بعد از commit تراکنش، async ارسال می‌شود
+            if (!empty($result['success']) && $referralPayload !== null && $this->eventDispatcher) {
+                $this->eventDispatcher->dispatchAsync('referral.commission.process', $referralPayload);
+            }
+
+            return $result;
 
         } catch (\Exception $e) {
             $this->logger->error('level.purchase.failed', [
@@ -507,7 +507,7 @@ class UserLevelService extends \App\Services\BaseService
         // 📢 شلیک رویداد ارتقا فقط در صورتی که ارتقای واقعی، ادمین یا خرید باشد
         if (in_array($changeType, ['upgrade', 'purchase', 'admin'])) {
             try {
-                $this->eventDispatcher->dispatch('level.upgraded', new \App\Events\LevelUpgradedEvent(
+                $this->eventDispatcher->dispatchAsync('level.upgraded', new \App\Events\LevelUpgradedEvent(
                     $userId,
                     $realFromSlug ?? 'none',
                     $toSlug,

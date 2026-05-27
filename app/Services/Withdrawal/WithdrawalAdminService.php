@@ -44,11 +44,11 @@ class WithdrawalAdminService extends PaymentBaseService
 
     public function adminApprove(int $withdrawalId, int $adminId, ?string $paymentReference = null): array
     {
-        return $this->db->transaction(function() use ($withdrawalId, $adminId, $paymentReference) {
+        $result = $this->db->transaction(function() use ($withdrawalId, $adminId, $paymentReference) {
             $withdrawal = $this->db->query("SELECT * FROM withdrawals WHERE id = ? FOR UPDATE", [$withdrawalId])->fetch(\PDO::FETCH_OBJ);
             
             if (!$withdrawal || $withdrawal->status === 'completed') {
-                return ['success' => true, 'message' => 'قبلاً تأیید شده است'];
+                return ['success' => true, 'message' => 'قبلاً تأیید شده است', '_skip_event' => true];
             }
 
             if (!$this->wallet->completeWithdrawal((int)$withdrawal->user_id, (string)$withdrawal->amount, (string)$withdrawal->currency, (string)$withdrawal->transaction_id)) {
@@ -62,20 +62,34 @@ class WithdrawalAdminService extends PaymentBaseService
                 'payment_reference' => $paymentReference,
             ], $adminId);
 
-            // dispatch class-based event for withdrawal approval
-            EventDispatcher::getInstance()->dispatch(
+            return [
+                'success' => true,
+                'message' => 'تأیید شد',
+                '_withdrawal_snapshot' => [
+                    'user_id' => (int)$withdrawal->user_id,
+                    'amount' => (float)$withdrawal->amount,
+                    'currency' => (string)$withdrawal->currency,
+                ],
+            ];
+        });
+
+        // 🚀 رویداد را بعد از commit تراکنش به صورت async ارسال می‌کنیم
+        if (!empty($result['success']) && empty($result['_skip_event'])) {
+            $snap = $result['_withdrawal_snapshot'];
+            EventDispatcher::getInstance()->dispatchAsync(
                 WithdrawalApprovedEvent::class,
                 new WithdrawalApprovedEvent(
-                    (int)$withdrawal->user_id,
+                    $snap['user_id'],
                     $withdrawalId,
-                    (float)$withdrawal->amount,
-                    (string)$withdrawal->currency,
+                    $snap['amount'],
+                    $snap['currency'],
                     $adminId
                 )
             );
-            
-            return ['success' => true, 'message' => 'تأیید شد'];
-        });
+        }
+        unset($result['_withdrawal_snapshot'], $result['_skip_event']);
+
+        return $result;
     }
 
     public function adminReject(int $withdrawalId, int $adminId, ?string $reason = null): array

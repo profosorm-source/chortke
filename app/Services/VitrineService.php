@@ -77,8 +77,7 @@ class VitrineService extends \App\Services\BaseService
             return ['ok' => false, 'message' => 'برای استفاده از ویترین ابتدا باید احراز هویت (KYC) را تکمیل کنید.'];
         }
 
-        $user = $this->db->query("SELECT is_blacklisted, fraud_score FROM users WHERE id = ?", [$userId])->fetch();
-        if ($user && $user->is_blacklisted) {
+        if ($this->userService->isBlacklisted($userId)) {
             return ['ok' => false, 'message' => 'حساب شما محدود شده است. با پشتیبانی تماس بگیرید.'];
         }
 
@@ -343,19 +342,22 @@ public function adminRefundListing(int $listingId, int $adminId): array
         if (!$req) return ['success' => false, 'message' => 'خطا در ثبت درخواست.'];
 
         // اعلان به فروشنده
-        $requesterName = $this->db->query("SELECT full_name FROM users WHERE id = ?", [$requesterId])->fetch()->full_name ?? 'کاربر';
+        $requester = $this->userService->findById($requesterId);
+        $requesterName = $requester ? $requester->full_name : 'کاربر';
         $offerText = $req->offer_price ? ' با قیمت پیشنهادی ' . number_format((float)$req->offer_price, 2) . ' USDT' : '';
 
-        $this->notif->send(
-            (int) $listing->seller_id,
-            Notification::TYPE_INFO,
-            'درخواست خرید آگهی شما',
-            "کاربر «{$requesterName}»{$offerText} برای آگهی «{$listing->title}» درخواست خرید ثبت کرد.",
-            ['listing_id' => $listingId, 'request_id' => $req->id],
-            url('/vitrine/' . $listingId),
-            'مشاهده آگهی',
-            'high'
-        );
+        if (isset($this->eventDispatcher) && $this->eventDispatcher) {
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
+                'user_id' => (int) $listing->seller_id,
+                'type' => \App\Models\Notification::TYPE_INFO,
+                'title' => 'درخواست خرید آگهی شما',
+                'message' => "کاربر «{$requesterName}»{$offerText} برای آگهی «{$listing->title}» درخواست خرید ثبت کرد.",
+                'data' => ['listing_id' => $listingId, 'request_id' => $req->id],
+                'action_url' => url('/vitrine/' . $listingId),
+                'action_text' => 'مشاهده آگهی',
+                'priority' => 'high'
+            ]);
+        }
 
         $this->logger->info('vitrine.request_sent', [
             'listing_id'   => $listingId,
@@ -413,16 +415,18 @@ public function adminRefundListing(int $listingId, int $adminId): array
         }
 
         // اعلان به خریدار
-        $this->notif->send(
-            (int) $req->requester_id,
-            Notification::TYPE_INFO,
-            'درخواست شما پذیرفته شد',
-            "فروشنده درخواست شما برای آگهی «{$listing->title}» را پذیرفت. لطفاً پرداخت را انجام دهید.",
-            ['listing_id' => $req->listing_id, 'request_id' => $requestId],
-            url('/vitrine/' . $req->listing_id),
-            'پرداخت و تکمیل خرید',
-            'urgent'
-        );
+        if (isset($this->eventDispatcher) && $this->eventDispatcher) {
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
+                'user_id' => (int) $req->requester_id,
+                'type' => \App\Models\Notification::TYPE_INFO,
+                'title' => 'درخواست شما پذیرفته شد',
+                'message' => "فروشنده درخواست شما برای آگهی «{$listing->title}» را پذیرفت. لطفاً پرداخت را انجام دهید.",
+                'data' => ['listing_id' => $req->listing_id, 'request_id' => $requestId],
+                'action_url' => url('/vitrine/' . $req->listing_id),
+                'action_text' => 'پرداخت و تکمیل خرید',
+                'priority' => 'urgent'
+            ]);
+        }
 
         return ['success' => true, 'final_price' => $finalPrice];
     }
@@ -438,15 +442,18 @@ public function adminRefundListing(int $listingId, int $adminId): array
         // اعلان به خریدار
         $listing = $this->listing->find((int) $req->listing_id);
         if ($listing) {
-            $this->notif->send(
-                (int) $req->requester_id,
-                Notification::TYPE_INFO,
-                'درخواست شما رد شد',
-                "متأسفانه فروشنده درخواست شما برای آگهی «{$listing->title}» را رد کرد.",
-                ['listing_id' => $req->listing_id],
-                url('/vitrine'),
-                'مشاهده آگهی‌های دیگر'
-            );
+            if (isset($this->eventDispatcher) && $this->eventDispatcher) {
+                $this->eventDispatcher->dispatchAsync('notification.requested', [
+                    'user_id' => (int) $req->requester_id,
+                    'type' => \App\Models\Notification::TYPE_INFO,
+                    'title' => 'درخواست شما رد شد',
+                    'message' => "متأسفانه فروشنده درخواست شما برای آگهی «{$listing->title}» را رد کرد.",
+                    'data' => ['listing_id' => $req->listing_id],
+                    'action_url' => url('/vitrine'),
+                    'action_text' => 'مشاهده آگهی‌های دیگر',
+                    'priority' => 'normal'
+                ]);
+            }
         }
 
         return ['success' => true];
@@ -461,18 +468,21 @@ public function adminRefundListing(int $listingId, int $adminId): array
         $check = $this->canTrade($buyerId);
         if (!$check['ok']) return ['success' => false, 'message' => $check['message']];
 
-        $listing = $this->listing->find($listingId);
-        if (!$listing || $listing->status !== \App\Models\VitrineListing::STATUS_ACTIVE) {
-            return ['success' => false, 'message' => 'آگهی فعال نیست.'];
-        }
-        if ((int) $listing->seller_id === $buyerId) {
-            return ['success' => false, 'message' => 'نمی‌توانید آگهی خود را بخرید.'];
-        }
-
-        $finalPrice = $listing->offer_price_usdt ?? $listing->price_usdt;
-
         $this->db->beginTransaction();
         try {
+            $listing = $this->db->query("SELECT * FROM vitrine_listings WHERE id = ? FOR UPDATE", [$listingId])->fetch(\PDO::FETCH_OBJ);
+
+            if (!$listing || $listing->status !== \App\Models\VitrineListing::STATUS_ACTIVE) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'آگهی فعال نیست.'];
+            }
+            if ((int) $listing->seller_id === $buyerId) {
+                $this->db->rollBack();
+                return ['success' => false, 'message' => 'نمی‌توانید آگهی خود را بخرید.'];
+            }
+
+            $finalPrice = $listing->offer_price_usdt ?? $listing->price_usdt;
+
             $debit = $this->wallet->pay($buyerId, $finalPrice, 'usdt', [
                 'type' => 'vitrine_escrow',
                 'description' => "اسکرو ویترین #{$listingId}"
@@ -502,13 +512,18 @@ public function adminRefundListing(int $listingId, int $adminId): array
             return ['success' => false, 'message' => 'خطای سیستمی.'];
         }
 
-        $this->notif->send(
-            (int) $listing->seller_id,
-            \App\Models\Notification::TYPE_INFO,
-            "پرداخت انجام شد",
-            "خریدار مبلغ را پرداخت کرد. لطفا کالا/خدمات را تحویل دهید تا وجه پس از تایید آزاد شود.",
-            ['action_url' => url("/user/vitrine/{$listingId}")]
-        );
+        if (isset($this->eventDispatcher) && $this->eventDispatcher) {
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
+                'user_id' => (int) $listing->seller_id,
+                'type' => \App\Models\Notification::TYPE_INFO,
+                'title' => "پرداخت انجام شد",
+                'message' => "خریدار مبلغ را پرداخت کرد. لطفا کالا/خدمات را تحویل دهید تا وجه پس از تایید آزاد شود.",
+                'data' => ['action_url' => url("/user/vitrine/{$listingId}")],
+                'action_url' => null,
+                'action_text' => null,
+                'priority' => 'normal'
+            ]);
+        }
 
         $this->auditTrail->record('vitrine.escrow.locked', $buyerId, [
             'listing_id' => $listingId,
@@ -538,6 +553,7 @@ public function adminRefundListing(int $listingId, int $adminId): array
         $net        = round($amount * (1 - $commission), 6);
 
         $this->db->beginTransaction();
+        $referralCommissionPayload = null;
         try {
             $payload = [
                 'user_id' => (int) $listing->seller_id,
@@ -574,8 +590,8 @@ public function adminRefundListing(int $listingId, int $adminId): array
             // پورسانت ریفرال (معرف فروشنده محصول)
             $userRecord = $this->userService->findById((int)$listing->seller_id);
             if ($userRecord && !empty($userRecord->referred_by)) {
-                // Migrated to event-driven referral commission
-                $this->eventDispatcher->dispatch('referral.commission.process', [
+                // آماده‌سازی payload — dispatch بعد از commit انجام می‌شود
+                $referralCommissionPayload = [
                     'referrer_id' => (int)$userRecord->referred_by,
                     'amount' => $net,
                     'currency' => 'usdt',
@@ -585,7 +601,7 @@ public function adminRefundListing(int $listingId, int $adminId): array
                         'seller_id' => $listing->seller_id,
                         'listing_id' => $listing->id
                     ]
-                ]);
+                ];
             }
 
             $extra = ['auto_confirmed' => ($reason === 'auto_cron') ? 1 : 0];
@@ -602,13 +618,23 @@ public function adminRefundListing(int $listingId, int $adminId): array
             return ['success' => false, 'message' => 'خطای سیستمی.'];
         }
 
-        $this->notif->send(
-            (int) $listing->seller_id,
-            \App\Models\Notification::TYPE_SUCCESS,
-            "وجه آزاد شد",
-            "مبلغ {$net} USDT به حساب شما واریز شد.",
-            ['action_url' => url("/user/vitrine/{$listing->id}")]
-        );
+        if (isset($this->eventDispatcher) && $this->eventDispatcher) {
+            // 🚀 رویداد کمیسیون معرفی — بعد از commit تراکنش و async
+            if ($referralCommissionPayload !== null) {
+                $this->eventDispatcher->dispatchAsync('referral.commission.process', $referralCommissionPayload);
+            }
+
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
+                'user_id' => (int) $listing->seller_id,
+                'type' => \App\Models\Notification::TYPE_SUCCESS,
+                'title' => "وجه آزاد شد",
+                'message' => "مبلغ {$net} USDT به حساب شما واریز شد.",
+                'data' => ['action_url' => url("/user/vitrine/{$listing->id}")],
+                'action_url' => null,
+                'action_text' => null,
+                'priority' => 'normal'
+            ]);
+        }
 
         $this->auditTrail->record('vitrine.escrow.released', (int)$listing->seller_id, [
             'listing_id' => $listing->id,
@@ -705,16 +731,18 @@ public function adminRefundListing(int $listingId, int $adminId): array
                 return ['success' => false, 'message' => 'خطای سیستمی.'];
             }
 
-            $this->notif->send(
-                (int) $listing->buyer_id,
-                Notification::TYPE_INFO,
-                'اختلاف به نفع شما حل شد — وجه بازگشت',
-                "وجه " . number_format($amount, 2) . " USDT برای آگهی «{$listing->title}» به کیف پول شما بازگشت.",
-                ['listing_id' => $listingId],
-                url('/wallet'),
-                'مشاهده کیف پول',
-                'high'
-            );
+            if (isset($this->eventDispatcher) && $this->eventDispatcher) {
+                $this->eventDispatcher->dispatchAsync('notification.requested', [
+                    'user_id' => (int) $listing->buyer_id,
+                    'type' => \App\Models\Notification::TYPE_INFO,
+                    'title' => 'اختلاف به نفع شما حل شد — وجه بازگشت',
+                    'message' => "وجه " . number_format($amount, 2) . " USDT برای آگهی «{$listing->title}» به کیف پول شما بازگشت.",
+                    'data' => ['listing_id' => $listingId],
+                    'action_url' => url('/wallet'),
+                    'action_text' => 'مشاهده کیف پول',
+                    'priority' => 'high'
+                ]);
+            }
             $result = ['success' => true];
         }
 
@@ -740,15 +768,18 @@ public function adminRefundListing(int $listingId, int $adminId): array
         $users = $this->listing->getCategoryAlertUsers($newListing->category, $newListing->platform);
         foreach ($users as $userId) {
             if ((int) $userId === (int) $newListing->seller_id) continue;
-            $this->notif->send(
-                (int) $userId,
-                Notification::TYPE_INFO,
-                'آگهی مشابه جدید در ویترین',
-                "آگهی جدیدی در دسته «{$newListing->category}» منتشر شد: «{$newListing->title}»",
-                ['listing_id' => $newListing->id],
-                url('/vitrine/' . $newListing->id),
-                'مشاهده آگهی'
-            );
+            if (isset($this->eventDispatcher) && $this->eventDispatcher) {
+                $this->eventDispatcher->dispatchAsync('notification.requested', [
+                    'user_id' => (int) $userId,
+                    'type' => \App\Models\Notification::TYPE_INFO,
+                    'title' => 'آگهی مشابه جدید در ویترین',
+                    'message' => "آگهی جدیدی در دسته «{$newListing->category}» منتشر شد: «{$newListing->title}»",
+                    'data' => ['listing_id' => $newListing->id],
+                    'action_url' => url('/vitrine/' . $newListing->id),
+                    'action_text' => 'مشاهده آگهی',
+                    'priority' => 'normal'
+                ]);
+            }
         }
     }
 
@@ -757,16 +788,18 @@ public function adminRefundListing(int $listingId, int $adminId): array
      */
     public function notifyListingApproved(int $sellerId, object $listing): void
     {
-        $this->notif->send(
-            $sellerId,
-            Notification::TYPE_INFO,
-            'آگهی شما تایید شد',
-            "آگهی «{$listing->title}» توسط تیم ویترین تایید و منتشر شد.",
-            ['listing_id' => $listing->id],
-            url('/vitrine/' . $listing->id),
-            'مشاهده آگهی',
-            'high'
-        );
+        if (isset($this->eventDispatcher) && $this->eventDispatcher) {
+            $this->eventDispatcher->dispatchAsync('notification.requested', [
+                'user_id' => $sellerId,
+                'type' => \App\Models\Notification::TYPE_INFO,
+                'title' => 'آگهی شما تایید شد',
+                'message' => "آگهی «{$listing->title}» توسط تیم ویترین تایید و منتشر شد.",
+                'data' => ['listing_id' => $listing->id],
+                'action_url' => url('/vitrine/' . $listing->id),
+                'action_text' => 'مشاهده آگهی',
+                'priority' => 'high'
+            ]);
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

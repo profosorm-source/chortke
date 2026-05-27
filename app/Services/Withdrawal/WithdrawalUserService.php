@@ -62,7 +62,7 @@ class WithdrawalUserService extends PaymentBaseService
             ?? hash('sha256', $userId . '|' . $amount . '|' . date('YmdHi'));
 
         return $this->idempotent('withdrawal.user_request', $userId, ['key' => $idempotencyKey], function() use ($userId, $payload, $amount, $currency, $bankCardId, $idempotencyKey) {
-            return $this->db->transaction(function() use ($userId, $payload, $amount, $currency, $bankCardId, $idempotencyKey) {
+            $result = $this->db->transaction(function() use ($userId, $payload, $amount, $currency, $bankCardId, $idempotencyKey) {
                 
                 // قفل کردن کیف پول جهت جلوگیری از Race Condition
                 $this->db->query("SELECT id FROM wallets WHERE user_id = ? FOR UPDATE", [$userId]);
@@ -96,22 +96,30 @@ class WithdrawalUserService extends PaymentBaseService
                     'created_at' => date('Y-m-d H:i:s'),
                 ]);
 
-                EventDispatcher::getInstance()->dispatch(
+                return [
+                    'success' => true,
+                    'data' => ['withdrawal_id' => $withdrawal->id],
+                    '_withdrawal_id' => (int)$withdrawal->id,
+                ];
+            });
+
+            // 🚀 رویداد را بعد از commit تراکنش به صورت async ارسال می‌کنیم
+            // تا از بلاک شدن تراکنش توسط handler رویداد جلوگیری شود
+            if (!empty($result['success'])) {
+                EventDispatcher::getInstance()->dispatchAsync(
                     WithdrawalCreatedEvent::class,
                     new WithdrawalCreatedEvent(
                         $userId,
-                        (int)$withdrawal->id,
+                        $result['_withdrawal_id'],
                         (float)$amount,
                         $currency,
                         'pending'
                     )
                 );
+                unset($result['_withdrawal_id']);
+            }
 
-                return [
-                    'success' => true,
-                    'data' => ['withdrawal_id' => $withdrawal->id]
-                ];
-            });
+            return $result;
         }, $idempotencyKey);
     }
 

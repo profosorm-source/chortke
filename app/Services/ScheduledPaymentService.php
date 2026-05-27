@@ -14,14 +14,19 @@ use App\Contracts\LoggerInterface;
 class ScheduledPaymentService extends \App\Services\BaseService
 {
 
+    private ?\App\Services\FinancialEscrowService $escrowService = null;
+
     public function __construct(
         private ScheduledPayment $scheduledPaymentModel,
         private WalletServiceInterface $walletService,
         protected ?Database $db,
         LoggerInterface $logger,
-        private ReconciliationService $reconciliationService
+        private ReconciliationService $reconciliationService,
+        ?\App\Services\FinancialEscrowService $escrowService = null
     ) {
         parent::__construct($logger);
+        $container = function_exists('container') ? container() : null;
+        $this->escrowService = $escrowService ?? ($container ? $container->get(\App\Services\FinancialEscrowService::class) : null);
     }
 
     public function createSchedule(array $data): ?object
@@ -62,22 +67,34 @@ class ScheduledPaymentService extends \App\Services\BaseService
                             return;
                         }
 
-                        // 🔒 FIXED SECURITY VULNERABILITY: Replaced manual unsafe balance decrement
-                        // with robust, auditable atomic withdraw mechanism via unified WalletService.
-                        $txId = $this->walletService->withdraw(
-                            (int)$payment->user_id,
-                            (string)$payment->amount,
-                            $payment->currency,
-                            [
-                                'type' => 'scheduled_payment',
-                                'description' => $payment->description ?? 'Scheduled payment charge',
-                                'scheduled_payment_id' => $payment->id,
-                                'idempotency_key' => hash('sha256', 'sched_payment|' . $payment->id . '|' . $payment->next_run_at)
-                            ]
-                        );
+                        if ($this->escrowService) {
+                            $txId = $this->escrowService->holdFunds(
+                                (int)$payment->id,
+                                'scheduled_payment',
+                                (int)$payment->user_id,
+                                -1,
+                                (string)$payment->amount,
+                                $payment->currency
+                            );
+                            if (empty($txId) || empty($txId['ok'])) {
+                                throw new \RuntimeException('Failed to hold funds in escrow: ' . ($txId['error'] ?? 'Unknown error'));
+                            }
+                        } else {
+                            $txId = $this->walletService->withdraw(
+                                (int)$payment->user_id,
+                                (string)$payment->amount,
+                                $payment->currency,
+                                [
+                                    'type' => 'scheduled_payment',
+                                    'description' => $payment->description ?? 'Scheduled payment charge',
+                                    'scheduled_payment_id' => $payment->id,
+                                    'idempotency_key' => hash('sha256', 'sched_payment|' . $payment->id . '|' . $payment->next_run_at)
+                                ]
+                            );
 
-                        if (empty($txId) || !is_array($txId) || empty($txId['success']) || empty($txId['transaction_id'])) {
-                            throw new \RuntimeException('Failed to execute atomic wallet withdrawal: ' . ($txId['message'] ?? 'Unknown error'));
+                            if (empty($txId) || !is_array($txId) || empty($txId['success']) || empty($txId['transaction_id'])) {
+                                throw new \RuntimeException('Failed to execute atomic wallet withdrawal: ' . ($txId['message'] ?? 'Unknown error'));
+                            }
                         }
 
                         $nextRun = $this->calculateNextRun((string)$payment->frequency, (string)$payment->next_run_at);

@@ -341,4 +341,27 @@ class CronService extends \App\Services\BaseService
             'message' => "بررسی ریزش امتیاز عدم فعالیت برای {$processed} کاربر انجام شد."
         ];
     }
+
+    /**
+     * فلاش کردن بافر امتیازات از Redis به Database
+     */
+    public function flushScoreEventsBuffer(int $batchSize = 1000): array
+    {
+        try {
+            $scoreModel = new \App\Models\Score($this->db);
+            $flushed = $scoreModel->flushBuffer($batchSize);
+            return [
+                'success' => true,
+                'message' => "{$flushed} score events flushed to database.",
+                'count' => $flushed
+            ];
+        } catch (\Throwable $e) {
+            $this->logger->error('cron.flush_score_events.failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'خطا در فلاش کردن بافر امتیازات',
+                'error' => $e->getMessage()
+            ];
+        }
+    }
 }

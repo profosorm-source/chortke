@@ -329,7 +329,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 return $this->standardizeResponse($check['result']);
             }
 
-            $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+            $wallet = $this->walletModel->findByUserId($userId);
             if (!$wallet) {
                 throw new \RuntimeException('خطا در دریافت wallet');
             }
@@ -345,7 +345,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             $scale         = $this->getScale($currency);
             $balanceAfter  = bcadd($balanceBefore, $amount, $scale);
 
-            if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
+            if (!$this->walletModel->updateBalance($userId, $amount, $currency)) {
                 throw new \RuntimeException('خطا در بروزرسانی موجودی');
             }
 
@@ -520,7 +520,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
         }
 
         try {
-            $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+            $wallet = $this->walletModel->findByUserId($userId);
             if (!$wallet) {
                 throw new \Core\Exceptions\EntityNotFoundException('خطا در دریافت کیف پول');
             }
@@ -539,7 +539,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             $balanceBefore = $currentBalance;
             $balanceAfter = bcsub($balanceBefore, $amount, $scale);
 
-            if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
+            if (!$this->walletModel->lockBalance($userId, $amount, $currency)) {
                 throw new \RuntimeException('خطا در بروزرسانی موجودی');
             }
 
@@ -646,7 +646,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                 $this->db->beginTransaction();
             }
 
-            $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+            $wallet = $this->walletModel->findByUserId($userId);
             if (!$wallet) {
                 throw new \Core\Exceptions\EntityNotFoundException('خطا در دریافت کیف پول');
             }
@@ -799,7 +799,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                         $this->db->beginTransaction();
                     }
 
-                    $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+                    $wallet = $this->walletModel->findByUserId($userId);
                     if (!$wallet) {
                         throw new \Core\Exceptions\EntityNotFoundException('خطا در دریافت کیف پول');
                     }
@@ -818,11 +818,11 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                     $balanceBefore = $currentBalance;
                     $balanceAfter  = bcsub($balanceBefore, $amount, $scale);
 
-                    if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
+                    $negativeAmount = bcmul($amount, '-1', $scale);
+                    if (!$this->walletModel->updateBalance($userId, $negativeAmount, $currency)) {
                         throw new \RuntimeException('خطا در کسر موجودی');
                     }
 
-                    $negativeAmount = bcmul($amount, '-1', $scale);
                     $transaction = $this->transactionModel->create([
                         'user_id'            => $userId,
                         'type'               => $metadata['type'] ?? 'payment',
@@ -936,7 +936,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                         $this->db->beginTransaction();
                     }
 
-                    $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+                    $wallet = $this->walletModel->findByUserId($userId);
                     if (!$wallet) {
                         throw new \RuntimeException("کیف پول کاربر یافت نشد.");
                     }
@@ -1012,7 +1012,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                         $this->db->beginTransaction();
                     }
 
-                    $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+                    $wallet = $this->walletModel->findByUserId($userId);
                     if (!$wallet) {
                         throw new \RuntimeException("کیف پول کاربر یافت نشد.");
                     }
@@ -1179,8 +1179,8 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
             $firstId  = min($fromUserId, $toUserId);
             $secondId = max($fromUserId, $toUserId);
 
-            $firstWallet  = $this->walletModel->findByUserIdForUpdate($firstId);
-            $secondWallet = $this->walletModel->findByUserIdForUpdate($secondId);
+            $firstWallet  = $this->walletModel->findByUserId($firstId);
+            $secondWallet = $this->walletModel->findByUserId($secondId);
 
             if (!$firstWallet || !$secondWallet) {
                 throw new \RuntimeException('کیف پول یافت نشد');
@@ -1315,7 +1315,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                         $this->db->beginTransaction();
                     }
 
-                    $wallet = $this->walletModel->findByUserIdForUpdate($userId);
+                    $wallet = $this->walletModel->findByUserId($userId);
                     if (!$wallet) {
                         throw new \RuntimeException('خطا در دریافت wallet');
                     }
@@ -1334,7 +1334,7 @@ class WalletService extends \App\Services\BaseService implements WalletServiceIn
                         throw new \RuntimeException("موجودی کافی برای بازگشت تراکنش وجود ندارد (موجودی فعلی: {$currentBalance}، مقدار مورد نیاز برای کسر: {$amount})");
                     }
 
-                    if (!$this->walletModel->setBalance($userId, $balanceAfter, $currency)) {
+                    if (!$this->walletModel->updateBalance($userId, $reverseAmount, $currency)) {
                         throw new \RuntimeException('خطا در بروزرسانی موجودی در تراکنش بازگشت');
                     }
 

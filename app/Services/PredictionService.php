@@ -38,7 +38,8 @@ class PredictionService extends \App\Services\BaseService
         WalletServiceInterface  $walletService,
         LoggerInterface       $logger,
         \App\Services\AuditTrail $auditTrail,
-        ?StateMachineService $stateMachine = null
+        ?StateMachineService $stateMachine = null,
+        ?\App\Services\FinancialEscrowService $escrowService = null
     ) {
         parent::__construct($logger);
         $this->db = $db;
@@ -47,6 +48,8 @@ class PredictionService extends \App\Services\BaseService
         $this->walletService = $walletService;
         $this->auditTrail = $auditTrail;
         $this->stateMachine = $stateMachine ?? new StateMachineService($logger, $db);
+        $container = function_exists('container') ? container() : null;
+        $this->escrowService = $escrowService ?? ($container ? $container->get(\App\Services\FinancialEscrowService::class) : null);
         try {
             $this->outboxService = container()->get(\App\Services\OutboxService::class);
         } catch (\Throwable $e) {
@@ -122,22 +125,38 @@ class PredictionService extends \App\Services\BaseService
                     throw new \RuntimeException('شما قبلاً در این بازی شرط‌بندی کرده‌اید.');
                 }
 
-                // کسر موجودی از کیف پول با استفاده از withdrawInTransaction
-                // تا عملیات برداشت و ایجاد شرط در یک تراکنش مشترک باقی بماند.
-                $debitResult = $this->walletService->withdrawInTransaction(
-                    $userId,
-                    $amount,
-                    'usdt',
-                    [
-                        'type'        => 'prediction_bet',
-                        'description' => "شرط بازی #{$gameId}: {$game->title}",
-                        'game_id'     => $gameId,
-                        'idempotency_key' => $explicitKey,
-                    ]
-                );
+                if (isset($this->escrowService) && $this->escrowService) {
+                    $debitResult = $this->escrowService->holdFunds(
+                        $gameId,
+                        'prediction_bet',
+                        $userId,
+                        -1, // System seller
+                        (string)$amount,
+                        'usdt'
+                    );
+                    if (empty($debitResult) || empty($debitResult['ok'])) {
+                        throw new \RuntimeException($debitResult['error'] ?? 'خطا در بلوکه کردن مبلغ شرط.');
+                    }
+                    $transactionId = $debitResult['escrow_id'] ?? null;
+                } else {
+                    // کسر موجودی از کیف پول با استفاده از withdrawInTransaction
+                    // تا عملیات برداشت و ایجاد شرط در یک تراکنش مشترک باقی بماند.
+                    $debitResult = $this->walletService->withdrawInTransaction(
+                        $userId,
+                        $amount,
+                        'usdt',
+                        [
+                            'type'        => 'prediction_bet',
+                            'description' => "شرط بازی #{$gameId}: {$game->title}",
+                            'game_id'     => $gameId,
+                            'idempotency_key' => $explicitKey,
+                        ]
+                    );
 
-                if (!$debitResult['success']) {
-                    throw new \RuntimeException($debitResult['message'] ?? 'موجودی کافی نیست.');
+                    if (!$debitResult['success']) {
+                        throw new \RuntimeException($debitResult['message'] ?? 'موجودی کافی نیست.');
+                    }
+                    $transactionId = $debitResult['transaction_id'] ?? null;
                 }
 
                 // ثبت شرط
@@ -146,6 +165,7 @@ class PredictionService extends \App\Services\BaseService
                     'game_id'     => $gameId,
                     'prediction'  => $prediction,
                     'amount_usdt' => $amount,
+                    'transaction_id' => $transactionId, // Store escrow_id or tx_id if schema allows it
                 ]);
 
                 if (!$bet) {
