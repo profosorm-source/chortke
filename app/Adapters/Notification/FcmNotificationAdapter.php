@@ -263,23 +263,44 @@ class FcmNotificationAdapter
             openssl_sign($signingInput, $signature, $serviceAccount['private_key'], 'SHA256');
             $jwt = "{$signingInput}." . $this->base64UrlEncode($signature);
 
-            // exchange JWT → access token
-            $ch = curl_init('https://oauth2.googleapis.com/token');
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_POST           => true,
-                CURLOPT_POSTFIELDS     => http_build_query([
-                    'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-                    'assertion'  => $jwt,
-                ]),
-                CURLOPT_TIMEOUT        => 10,
-            ]);
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
+            // Section 8.3/8.4 — exchange JWT → access token (under CircuitBreaker + retry)
+            // OAuth با Google نیز یک external call است و باید با همان الگوی FCM dispatch
+            // محافظت شود تا یک خرابی OAuth، کل سیستم نوتیفیکیشن را قفل نکند.
+            try {
+                $response = $this->callWithBreaker('fcm_oauth', function () use ($jwt): string {
+                    return $this->retryTransient(function () use ($jwt): string {
+                        $ch = curl_init('https://oauth2.googleapis.com/token');
+                        curl_setopt_array($ch, [
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_POST           => true,
+                            CURLOPT_POSTFIELDS     => http_build_query([
+                                'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+                                'assertion'  => $jwt,
+                            ]),
+                            CURLOPT_TIMEOUT        => 10,
+                            CURLOPT_CONNECTTIMEOUT => 5,
+                        ]);
+                        $body  = curl_exec($ch);
+                        $code  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        $errno = (int) curl_errno($ch);
+                        curl_close($ch);
 
-            if ($httpCode !== 200) {
-                $this->logger->error('fcm.token_exchange_failed', ['http' => $httpCode]);
+                        if ($code === 200 && is_string($body) && $body !== '') {
+                            return $body;
+                        }
+                        throw $this->classifyHttpFailure($code, $errno, (string)$body, ['provider' => 'fcm_oauth']);
+                    });
+                });
+            } catch (\Core\Exceptions\PermanentFailure $e) {
+                // اطلاعات اعتباری اشتباه/ساعت سیستم اشتباه → 4xx — retry بی‌فایده است.
+                $this->logger->error('fcm.token_exchange_permanent', ['error' => $e->getMessage()]);
+                return null;
+            } catch (\Throwable $e) {
+                // CB-open، یا خطای transient که retry نتوانست برطرف کند.
+                $this->logger->error('fcm.token_exchange_failed', [
+                    'class' => get_class($e),
+                    'error' => $e->getMessage(),
+                ]);
                 return null;
             }
 

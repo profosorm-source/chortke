@@ -5,20 +5,31 @@ declare(strict_types=1);
 namespace App\Adapters;
 
 use App\Contracts\LoggerInterface;
+use App\Traits\ExternalCallTrait;
 use Core\CircuitBreaker;
 
 /**
  * DeepFaceKycAdapter
- * پیاده‌سازی برای فراخوانی یک میکروسرویس هوش مصنوعی (مثلاً پایتونی خودمیزبان یا کلود) 
+ * پیاده‌سازی برای فراخوانی یک میکروسرویس هوش مصنوعی (مثلاً پایتونی خودمیزبان یا کلود)
  * جهت بررسی وجود چهره، تشخیص زنده‌بودن (Liveness) و جلوگیری از تقلب در تصاویر ارسالی KYC.
+ *
+ * Section 8.3/8.4 — کل HTTP call داخل Core\CircuitBreaker انجام می‌شود و خطاهای
+ * transient (timeout, 5xx) با retryTransient() تکرار می‌شوند. خطاهای 4xx
+ * permanent محسوب شده و بدون retry پاس می‌شوند.
  */
 class DeepFaceKycAdapter implements KycFaceVerificationAdapter
 {
+    use ExternalCallTrait;
+
     private ?string $apiUrl;
     private ?string $apiToken;
     private LoggerInterface $logger;
     private \Core\Database $db;
-    private ?CircuitBreaker $circuitBreaker;
+
+    /**
+     * @internal exposed for ExternalCallTrait::resolveCircuitBreaker()
+     */
+    protected ?CircuitBreaker $circuitBreaker;
 
     public function __construct(LoggerInterface $logger, \Core\Database $db, ?CircuitBreaker $circuitBreaker = null)
     {
@@ -56,82 +67,62 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
             ];
         }
 
+        // Comprehensive timeout configuration for AI processing
+        $timeout = (int)config('services.deepface.timeout', 30);  // AI might need longer
+        $connectTimeout = max(3, (int)floor($timeout / 4));
+        $apiUrl   = $this->apiUrl;
+        $apiToken = $this->apiToken;
+
         try {
-            // ساخت بدنه درخواست شامل فایل آپلودی به صورت multipart
-            $ch = curl_init();
-            $curlClosed = false;
+            // CB + retry روی فراخوانی AI — یک curl handle جدید در هر retry تا
+            // در صورت خطای انتقال داده، state تمیز بماند.
+            $responseRaw = $this->callWithBreaker('deepface_kyc', function () use ($apiUrl, $apiToken, $absoluteFilePath, $timeout, $connectTimeout): string {
+                return $this->retryTransient(function () use ($apiUrl, $apiToken, $absoluteFilePath, $timeout, $connectTimeout): string {
+                    $ch = curl_init();
+                    try {
+                        $cFile = new \CURLFile($absoluteFilePath);
+                        $postData = ['image' => $cFile];
 
-            $cFile = new \CURLFile($absoluteFilePath);
-            $postData = [
-                'image' => $cFile
-            ];
+                        curl_setopt_array($ch, [
+                            CURLOPT_URL => $apiUrl,
+                            CURLOPT_POST => true,
+                            CURLOPT_POSTFIELDS => $postData,
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_TIMEOUT => $timeout,                    // Total timeout for AI analysis
+                            CURLOPT_CONNECTTIMEOUT => $connectTimeout,      // Connection timeout
+                            CURLOPT_DNS_CACHE_TIMEOUT => 120,               // Cache DNS
+                            CURLOPT_SSL_VERIFYPEER => false,                // For local self-hosted testing
+                            CURLOPT_FAILONERROR => false,                   // Don't fail silently
+                        ]);
 
-            // Comprehensive timeout configuration for AI processing
-            $timeout = (int)config('services.deepface.timeout', 30);  // AI might need longer
-            $connectTimeout = max(3, (int)floor($timeout / 4));
+                        if ($apiToken) {
+                            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                                'Authorization: Bearer ' . $apiToken
+                            ]);
+                        }
 
-            curl_setopt_array($ch, [
-                CURLOPT_URL => $this->apiUrl,
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => $postData,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT => $timeout,                    // Total timeout for AI analysis
-                CURLOPT_CONNECTTIMEOUT => $connectTimeout,      // Connection timeout
-                CURLOPT_DNS_CACHE_TIMEOUT => 120,               // Cache DNS
-                CURLOPT_SSL_VERIFYPEER => false,                // For local self-hosted testing
-                CURLOPT_FAILONERROR => false,                   // Don't fail silently
-            ]);
+                        $raw  = curl_exec($ch);
+                        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        $errno = (int) curl_errno($ch);
+                    } finally {
+                        @curl_close($ch);
+                    }
 
-            if ($this->apiToken) {
-                curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                    'Authorization: Bearer ' . $this->apiToken
-                ]);
-            }
+                    if ($code === 200 && is_string($raw) && $raw !== '') {
+                        return $raw;
+                    }
 
-            $runner = function () use ($ch) {
-                $raw = curl_exec($ch);
-                $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                $curlErr = curl_errno($ch);
-                $curlErrMsg = curl_error($ch);
-
-                // Handle curl-level errors (connection timeouts, DNS failures, etc.)
-                if ($curlErr !== 0) {
-                    throw new \Core\Exceptions\TransientException(
-                        "درخواست AI انجام نشد: {$curlErrMsg} (کد: {$curlErr})"
-                    );
-                }
-
-                // Handle HTTP-level errors
-                if ($code >= 500 || $code === 408 || $code === 504) {
-                    throw new \Core\Exceptions\TransientException(
-                        "سرویس AI پاسخ نداد (HTTP {$code})"
-                    );
-                }
-
-                if ($code !== 200 || !$raw) {
-                    throw new \Core\Exceptions\TransientException(
-                        "Invalid AI service response (HTTP {$code})"
-                    );
-                }
-                return [$raw, $code];
-            };
-
-            [$responseRaw, $httpCode] = $this->circuitBreaker
-                ? $this->circuitBreaker->call('deepface_kyc', $runner)
-                : $runner();
-            curl_close($ch);
-            $curlClosed = true;
-
-            if ($httpCode !== 200 || !$responseRaw) {
-                throw new \Exception("Invalid AI service response (HTTP $httpCode)");
-            }
+                    // طبقه‌بندی استاندارد: 4xx → PermanentFailure (no retry)،
+                    // 5xx/timeout/network → Transient/Provider (retry)
+                    throw $this->classifyHttpFailure($code, $errno, (string)$raw, ['provider' => 'deepface_kyc']);
+                }, 3, 500, 4000);
+            });
 
             $response = json_decode($responseRaw, true);
 
             // مفروضات خروجی میکروسرویس AI:
             // { "verified": true, "confidence": 0.98, "has_face": true, "error_code": 0 }
-            
-            $isValid = (bool)($response['verified'] ?? false);
+            $isValid    = (bool)($response['verified'] ?? false);
             $confidence = (float)($response['confidence'] ?? 0.0);
 
             $this->logger->info('kyc.ai.analyzed', [
@@ -147,12 +138,22 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
                 'ai_notes' => $response['notes'] ?? 'تحلیل با موفقیت انجام شد.'
             ];
 
+        } catch (\Core\Exceptions\PermanentFailure $e) {
+            // 4xx از سرویس AI: درخواست نامعتبر — بازگشت به مسیر دستی
+            $this->logger->warning('kyc.ai.permanent_failure', [
+                'error' => $e->getMessage(),
+                'file' => basename($absoluteFilePath),
+            ]);
+            return [
+                'success' => false,
+                'is_valid' => false,
+                'ai_notes' => 'پاسخ نامعتبر از سرویس هوش مصنوعی.'
+            ];
         } catch (\Throwable $e) {
-            if (isset($ch, $curlClosed) && !$curlClosed) {
-                @curl_close($ch);
-            }
+            // CB-open، یا transient که پس از retry هم برطرف نشد، یا خطای داخلی
             $this->logger->error('kyc.ai.failed', [
                 'error' => $e->getMessage(),
+                'class' => get_class($e),
                 'file' => basename($absoluteFilePath)
             ]);
 
@@ -165,5 +166,3 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
         }
     }
 }
-
-

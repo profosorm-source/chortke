@@ -6,20 +6,36 @@ namespace App\Adapters\Notification;
 
 use App\Models\Notification;
 use App\Models\SystemTelemetryModel;
+use App\Traits\ExternalCallTrait;
+use Core\CircuitBreaker;
 use Core\Logger;
 
 /**
  * LogNotificationService
- * 
+ *
  * سرویس ارسال نوتیفیکیشن‌ها و مدیریت هشدارها
+ *
+ * Section 8.3/8.4 — فراخوانی‌های HTTP خارجی (Telegram, Webhook) از طریق
+ * ExternalCallTrait درون Core\CircuitBreaker اجرا می‌شوند تا در صورت
+ * cascading failure مسیر hot به‌سرعت fail-fast شود.
  */
 class LogNotificationAdapter
 {
+    use ExternalCallTrait;
+
+    /**
+     * @internal exposed for ExternalCallTrait::resolveCircuitBreaker()
+     */
+    protected ?CircuitBreaker $circuit;
+
     public function __construct(
         private Notification $notification,
         private SystemTelemetryModel $telemetry,
-        private Logger $logger
-    ) {}
+        private Logger $logger,
+        ?CircuitBreaker $circuit = null
+    ) {
+        $this->circuit = $circuit;
+    }
 
     /**
      * ارسال هشدار به تمام کانال‌های فعال
@@ -31,7 +47,7 @@ class LogNotificationAdapter
         foreach ($channels as $channel) {
             try {
                 $config = json_decode((string)$channel->config, true);
-                
+
                 $sent = match($channel->channel_type) {
                     'telegram' => $this->sendTelegram($config, $title, $message, $severity),
                     'email' => $this->sendEmail($config, $title, $message),
@@ -59,7 +75,7 @@ class LogNotificationAdapter
     }
 
     /**
-     * ارسال پیام تلگرام
+     * ارسال پیام تلگرام (با CircuitBreaker + retry روی خطاهای transient)
      */
     private function sendTelegram(array $config, string $title, string $message, string $severity): bool
     {
@@ -77,7 +93,7 @@ class LogNotificationAdapter
 
         $text = "{$emoji} *{$title}*\n\n{$message}\n\n⏰ " . date('Y-m-d H:i:s');
         $url = "https://api.telegram.org/bot{$config['bot_token']}/sendMessage";
-        
+
         $data = [
             'chat_id' => $config['chat_id'],
             'text' => $text,
@@ -85,20 +101,37 @@ class LogNotificationAdapter
         ];
 
         try {
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-            
-            curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
+            return (bool) $this->callWithBreaker('log_notif_telegram', function () use ($url, $data): bool {
+                return $this->retryTransient(function () use ($url, $data): bool {
+                    $ch = curl_init($url);
+                    curl_setopt_array($ch, [
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_POST           => true,
+                        CURLOPT_POSTFIELDS     => $data,
+                        CURLOPT_TIMEOUT        => 10,
+                        CURLOPT_CONNECTTIMEOUT => 5,
+                    ]);
+                    $response = curl_exec($ch);
+                    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $errno    = (int) curl_errno($ch);
+                    curl_close($ch);
 
-            return $httpCode === 200;
+                    if ($httpCode === 200) {
+                        return true;
+                    }
+                    throw $this->classifyHttpFailure($httpCode, $errno, (string)$response, ['provider' => 'log_notif_telegram']);
+                });
+            });
+        } catch (\Core\Exceptions\PermanentFailure $e) {
+            $this->logger->warning('log_notification.telegram.permanent_failure', [
+                'channel' => 'notification',
+                'error' => $e->getMessage(),
+            ]);
+            return false;
         } catch (\Throwable $e) {
             $this->logger->error('log_notification.telegram.send.failed', [
                 'channel' => 'notification',
+                'class' => get_class($e),
                 'error' => $e->getMessage(),
             ]);
             return false;
@@ -144,7 +177,7 @@ class LogNotificationAdapter
     }
 
     /**
-     * ارسال به Webhook
+     * ارسال به Webhook (با CircuitBreaker + retry روی خطاهای transient)
      */
     private function sendWebhook(array $config, string $title, string $message, string $severity): bool
     {
@@ -159,24 +192,45 @@ class LogNotificationAdapter
             'timestamp' => time()
         ]);
 
-        try {
-            $ch = curl_init((string)$config['url']);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-            
-            curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
+        // مشتق نام برای CB از host وب‌هوک تا breakerهای کانال‌های جدا مستقل باشند
+        $host = parse_url((string)$config['url'], PHP_URL_HOST) ?: 'unknown';
+        $providerName = 'log_notif_webhook_' . $host;
 
-            return $httpCode >= 200 && $httpCode < 300;
+        try {
+            return (bool) $this->callWithBreaker($providerName, function () use ($config, $payload): bool {
+                return $this->retryTransient(function () use ($config, $payload): bool {
+                    $ch = curl_init((string)$config['url']);
+                    curl_setopt_array($ch, [
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_POST           => true,
+                        CURLOPT_POSTFIELDS     => $payload,
+                        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                        CURLOPT_TIMEOUT        => 10,
+                        CURLOPT_CONNECTTIMEOUT => 5,
+                    ]);
+                    $response = curl_exec($ch);
+                    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $errno    = (int) curl_errno($ch);
+                    curl_close($ch);
+
+                    if ($httpCode >= 200 && $httpCode < 300) {
+                        return true;
+                    }
+                    throw $this->classifyHttpFailure($httpCode, $errno, (string)$response, ['provider' => $providerName ?? 'log_notif_webhook']);
+                });
+            });
+        } catch (\Core\Exceptions\PermanentFailure $e) {
+            $this->logger->warning('log_notification.webhook.permanent_failure', [
+                'channel' => 'notification',
+                'error' => $e->getMessage(),
+            ]);
+            return false;
         } catch (\Throwable $e) {
             $this->logger->error('log_notification.webhook.send.failed', [
                 'channel' => 'notification',
+                'class' => get_class($e),
                 'error' => $e->getMessage(),
-                ]);
+            ]);
             return false;
         }
     }
@@ -193,12 +247,12 @@ class LogNotificationAdapter
         }
 
         $config = json_decode((string)$channel->config, true);
-        
+
         $success = match($channel->channel_type) {
             'telegram' => $this->sendTelegram(
-                $config, 
-                'تست سیستم', 
-                'این یک پیام تست است', 
+                $config,
+                'تست سیستم',
+                'این یک پیام تست است',
                 'low'
             ),
             'email' => $this->sendEmail($config, 'تست سیستم', 'این یک ایمیل تست است'),
@@ -225,7 +279,7 @@ class LogNotificationAdapter
 
                 if ($triggered) {
                     $lastTrigger = $rule->last_triggered_at ? strtotime((string)$rule->last_triggered_at) : 0;
-                    
+
                     if (time() - $lastTrigger < 3600) {
                         continue;
                     }
@@ -255,7 +309,7 @@ class LogNotificationAdapter
     {
         $metric = $condition['metric'] ?? '';
         $operator = $condition['operator'] ?? '>';
-        
+
         $value = match($metric) {
             'error_count' => $this->telemetry->getErrorCount((int)$rule->time_window),
             'critical_errors' => $this->telemetry->getCriticalErrorCount((int)$rule->time_window),
@@ -274,5 +328,3 @@ class LogNotificationAdapter
         };
     }
 }
-
-
