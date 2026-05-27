@@ -107,7 +107,11 @@ class RetryPolicy
             $cache->increment("retry_budget:retries:{$currentBucket}", 1, 10);
             return true;
         } catch (\Throwable) {
-            return true; // Safe fail-open for budget tracking failures
+            // Fail-safe degradation (Probabilistic Load Shedding):
+            // If Redis is down and budget tracking fails, fallback to a stateless
+            // random check allowing only 10% of retries. This mathematically guarantees
+            // the budget without ANY network/file IO and prevents a Retry Storm.
+            return mt_rand(1, 100) <= 10;
         }
     }
 

@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 
 use Core\Container;
 use Core\Application;
@@ -2203,6 +2203,7 @@ try {
     // Notification request listener - routes notification requests through NotificationService
     $notificationRequestListener = $container->make(\App\Listeners\NotificationRequestListener::class);
     $dispatcher->listen('notification.requested', [$notificationRequestListener, 'handle']);
+    $dispatcher->listen('cache.invalidate', [\App\Listeners\CacheInvalidateListener::class, 'handle']);
 
     // Channel-level notification dispatch listener - routes channel events through NotificationDispatcher
     $notificationChannelDispatchListener = $container->make(\App\Listeners\NotificationChannelDispatchListener::class);

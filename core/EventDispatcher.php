@@ -85,7 +85,11 @@ class EventDispatcher
      */
     public function restoreBootstrapState(): void
     {
+        // بازگردانی شنونده‌ها به حالت اولیه (حذف هرگونه Closure اضافه شده در Job)
         $this->listeners = $this->bootstrapListeners;
+        
+        // پاکسازی وابستگی‌های کش شده داخل این سینگلتون برای جلوگیری از نشت مموری
+        $this->auditTrail = null;
     }
 
     /**

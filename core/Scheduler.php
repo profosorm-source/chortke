@@ -221,6 +221,84 @@ class Scheduler
         return $results;
     }
 
+    /**
+     * ارسال تمامی وظایف به Queue به جای اجرای همزمان (Synchronous)
+     */
+    public function dispatchAllAsync(?string $onlyJobName = null): array
+    {
+        $results = [];
+        $queue = \Core\Container::getInstance()->make(\Core\Queue::class);
+
+        foreach ($this->jobs as $job) {
+            if ($onlyJobName !== null && $job['name'] !== $onlyJobName) {
+                continue;
+            }
+
+            $lastRunKey = 'cron_last_run:' . md5($job['key']);
+
+            if ($onlyJobName === null) {
+                $lastRun = Cache::getInstance()->get($lastRunKey);
+                if ($lastRun && (time() - (int)$lastRun) < ($job['interval'] - 5)) {
+                    $results[$job['name']] = ['status' => 'skipped', 'reason' => 'already_run_within_interval'];
+                    continue;
+                }
+            }
+
+            try {
+                // فقط به جای اجرای مستقیم، تسک را به صف Queue ارسال می‌کنیم
+                $queue->push(\App\Jobs\RunCronTaskJob::class, ['task_name' => $job['name']]);
+                
+                Cache::getInstance()->forever($lastRunKey, time());
+                $results[$job['name']] = ['status' => 'queued'];
+            } catch (\Throwable $e) {
+                $results[$job['name']] = ['status' => 'error', 'message' => $e->getMessage()];
+                $this->logger->error("Cron Dispatch [{$job['name']}] FAILED: " . $e->getMessage());
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * اجرای مستقیم یک Job از طریق نام (برای استفاده در Queue Worker)
+     */
+    public function executeJobByName(string $name): mixed
+    {
+        foreach ($this->jobs as $job) {
+            if ($job['name'] === $name) {
+                $mutexKey = 'cron_mutex:' . md5($job['key']);
+                
+                // قفل کوتاه مدت در سطح اجرای Worker
+                if (!Cache::getInstance()->lock($mutexKey, 300)) {
+                    $this->logger->warning("Cron Worker [{$job['name']}] skipped due to lock.");
+                    return ['status' => 'skipped', 'reason' => 'concurrent_mutex'];
+                }
+
+                $start = microtime(true);
+                try {
+                    $output = ($job['callback'])();
+                    $duration = round((microtime(true) - $start) * 1000, 2);
+
+                    $loggedOutput = is_array($output) ? $this->redactSensitiveData($output) : ($output ?? []);
+                    $this->logger->info("Cron [{$job['name']}] OK in {$duration}ms", is_array($loggedOutput) ? $loggedOutput : []);
+
+                    try {
+                        $this->activityLog->log('cron', $job['name'], null, array_merge(
+                            is_array($loggedOutput) ? $loggedOutput : [],
+                            ['execution_time' => $duration . 'ms']
+                        ));
+                    } catch (\Throwable $logEx) {}
+
+                    return $output;
+                } finally {
+                    Cache::getInstance()->unlock($mutexKey);
+                }
+            }
+        }
+        
+        throw new \RuntimeException("Cron job not found: {$name}");
+    }
+
     // ==========================================
     //  private helpers
     // ==========================================
