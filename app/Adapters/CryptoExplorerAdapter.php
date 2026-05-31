@@ -8,9 +8,9 @@ use Core\CircuitBreaker;
 class CryptoExplorerAdapter implements CryptoVerificationAdapter
 {
     private LoggerInterface $logger;
-    private ?CircuitBreaker $circuitBreaker;
+    private CircuitBreaker $circuitBreaker;
 
-    public function __construct(LoggerInterface $logger, ?CircuitBreaker $circuitBreaker = null)
+    public function __construct(LoggerInterface $logger, CircuitBreaker $circuitBreaker)
     {
         $this->logger = $logger;
         $this->circuitBreaker = $circuitBreaker;
@@ -35,9 +35,7 @@ class CryptoExplorerAdapter implements CryptoVerificationAdapter
                 }
                 return $html;
             };
-            $html = $this->circuitBreaker
-                ? $this->circuitBreaker->call('crypto_explorer_' . strtolower($network), $runner)
-                : $runner();
+            $html = $this->circuitBreaker->call('crypto_explorer_' . strtolower($network), $runner);
         } catch (\Throwable $e) {
             $this->logger->warning('crypto.explorer.unavailable', [
                 'network' => $network,

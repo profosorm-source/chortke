@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Validators\Requests;
 
 use App\Validators\BaseFormRequest;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use Core\Container;
 
 /**

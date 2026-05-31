@@ -6,9 +6,9 @@ use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use App\Models\Ads;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use Core\Database;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 
 /**
  * CustomTaskAdapter — Adapter برای سیستم Custom Tasks
@@ -17,10 +17,10 @@ class CustomTaskAdapter extends AdapterBase implements AdSystemContract
 {
     public function __construct(
         private Ads $taskModel,
-        private WalletService $walletService,
+        private WalletServiceInterface $walletService,
         private Database $db,
         LoggerInterface $logger,
-        SettingService $settingService,
+        AppSettings $appSettings,
         ValidatorFactoryInterface $validatorFactory
     ) {
         parent::__construct($logger, $settingService, $validatorFactory);
@@ -36,14 +36,14 @@ class CustomTaskAdapter extends AdapterBase implements AdSystemContract
         try {
             $this->validateData($data);
         } catch (\Core\Exceptions\ValidationException $e) {
-            return $this->errorResponse('داده‌های ورودی نامعتبر', $e->getErrors());
+            throw new \Core\Exceptions\BusinessException('داده‌های ورودی نامعتبر', $e->getErrors());
         }
 
         $currency = $data['currency'] ?? 'irt';
         $pricePerTask = (float) ($data['price_per_task'] ?? 0);
         $quantity = (int) ($data['total_quantity'] ?? 1);
 
-        $feePercent = (float) $this->settingService->get('custom_task_site_fee_percent', 10);
+        $feePercent = (float) $this->appSettings->get('custom_task_site_fee_percent', 10);
         $totalBudget = $pricePerTask * $quantity;
         $totalWithFee = $totalBudget + ($totalBudget * $feePercent / 100);
 
@@ -65,7 +65,7 @@ class CustomTaskAdapter extends AdapterBase implements AdSystemContract
 
             if (!$txId) {
                 $this->db->rollBack();
-                return $this->errorResponse('موجودی کافی نیست');
+                throw new \Core\Exceptions\BusinessException('موجودی کافی نیست');
             }
 
             $task = $this->taskModel->create([
@@ -76,14 +76,14 @@ class CustomTaskAdapter extends AdapterBase implements AdSystemContract
                 'currency' => $currency,
                 'total_budget' => $totalBudget,
                 'total_quantity' => $quantity,
-                'status' => $this->settingService->get('custom_task_auto_approve', 0) ? 'active' : 'pending_review',
+                'status' => $this->appSettings->get('custom_task_auto_approve', 0) ? 'active' : 'pending_review',
                 'site_fee_percent' => $feePercent,
                 'site_fee_amount' => $totalBudget * $feePercent / 100,
             ]);
 
             if (!$task) {
                 $this->db->rollBack();
-                return $this->errorResponse('خطا در ایجاد تسک');
+                throw new \Core\Exceptions\BusinessException('خطا در ایجاد تسک');
             }
 
             $this->db->commit();
@@ -92,7 +92,7 @@ class CustomTaskAdapter extends AdapterBase implements AdSystemContract
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logError('create', $e->getMessage());
-            return $this->errorResponse('خطای سیستمی: ' . $e->getMessage());
+            throw new \Core\Exceptions\BusinessException('خطای سیستمی: ' . $e->getMessage());
         }
     }
 
@@ -141,7 +141,7 @@ class CustomTaskAdapter extends AdapterBase implements AdSystemContract
 
     public function calculateCost(float $amount, array $context = []): float
     {
-        $feePercent = (float) $this->settingService->get('custom_task_site_fee_percent', 10);
+        $feePercent = (float) $this->appSettings->get('custom_task_site_fee_percent', 10);
         return $amount * ($feePercent / 100);
     }
 
@@ -164,14 +164,14 @@ class CustomTaskAdapter extends AdapterBase implements AdSystemContract
             return $this->successResponse('پرداخت موفق', ['transaction_id' => $result]);
         }
 
-        return $this->errorResponse('خطا در پرداخت');
+        throw new \Core\Exceptions\BusinessException('خطا در پرداخت');
     }
 
     public function track(int $adId, string $eventType, ?int $userId = null): array
     {
         $task = $this->taskModel->find($adId);
         if (!$task) {
-            return $this->errorResponse('تسک یافت نشد');
+            throw new \Core\Exceptions\BusinessException('تسک یافت نشد');
         }
 
         // ردیابی رویداد برای تحلیل

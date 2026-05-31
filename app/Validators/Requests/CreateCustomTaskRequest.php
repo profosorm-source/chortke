@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Validators\Requests;
 
 use App\Validators\BaseFormRequest;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use Core\Container;
 
 /**
@@ -70,7 +70,7 @@ class CreateCustomTaskRequest extends BaseFormRequest
         $price = (float)($validated['price_per_task'] ?? 0);
 
         try {
-            $settings = Container::getInstance()->make(SettingService::class);
+            $settings = Container::getInstance()->make(AppSettings::class);
             $minKey = $currency === 'IRT' 
                 ? 'custom_task_min_price_irt' 
                 : 'custom_task_min_price_usdt';

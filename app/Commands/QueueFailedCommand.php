@@ -6,6 +6,7 @@ namespace App\Commands;
 
 use Core\Command;
 use Core\Database;
+use Core\Queue;
 use App\Contracts\LoggerInterface;
 
 /**
@@ -17,6 +18,7 @@ class QueueFailedCommand extends Command
 {
     public function __construct(
         private Database $db,
+        private Queue $queue,
         private LoggerInterface $logger
     ) {}
 
@@ -75,24 +77,8 @@ class QueueFailedCommand extends Command
     public function replayAll(): void
     {
         try {
-            $jobs = $this->db->fetchAll("SELECT id FROM failed_jobs");
-            $total = count($jobs);
-
-            if ($total === 0) {
-                $this->info("هیچ جابی برای Replay وجود ندارد.");
-                return;
-            }
-
-            $this->info("در حال اجرای مجدد {$total} جاب...");
-            $successCount = 0;
-
-            foreach ($jobs as $job) {
-                if ($this->processRetry((int)$job->id)) {
-                    $successCount++;
-                }
-            }
-
-            $this->info("عملیات پایان یافت: {$successCount} موفق، " . ($total - $successCount) . " خطا.");
+            $stats = $this->queue->retryFailedJobsBatch(null, 1000);
+            $this->info("عملیات پایان یافت: {$stats['requeued']} موفق، {$stats['errors']} خطا و {$stats['skipped']} نادیده گرفته شد.");
         } catch (\Throwable $e) {
             $this->error("خطای کلی در Replay: " . $e->getMessage());
         }
@@ -113,19 +99,22 @@ class QueueFailedCommand extends Command
         try {
             $this->db->beginTransaction();
 
-            // ۱. درج مجدد در جدول اصلی صف (Resetting attempts to 0)
-            $stmt = $this->db->prepare("
-                INSERT INTO queue (queue, payload, attempts, reserved_at, available_at, created_at)
-                VALUES (?, ?, 0, NULL, NOW(), NOW())
-            ");
-            
-            $success = $stmt->execute([
-                $job->queue,
-                $job->payload
-            ]);
+            $payload = json_decode((string)$job->payload, true);
+            if (!is_array($payload) || empty($payload['job'])) {
+                $this->db->rollBack();
+                $this->logger->warning('queue.retry.invalid_payload', ['id' => $id]);
+                return false;
+            }
+
+            // درج در سیستم صف واقعی (چه دیتابیس باشد چه ردیس)
+            $success = $this->queue->push(
+                (string)$payload['job'],
+                (array)($payload['data'] ?? []),
+                (string)($job->queue ?? 'default')
+            );
 
             if ($success) {
-                // ۲. حذف از لیست شکست‌ها فقط در صورت موفقیت درج
+                // حذف از لیست شکست‌ها فقط در صورت موفقیت درج
                 $this->db->prepare("DELETE FROM failed_jobs WHERE id = ?")->execute([$id]);
                 
                 $this->db->commit();

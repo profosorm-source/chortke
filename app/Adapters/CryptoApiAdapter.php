@@ -2,7 +2,7 @@
 
 namespace App\Adapters;
 
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use Core\Database;
 use App\Contracts\LoggerInterface;
 use Core\Cache;
@@ -15,20 +15,20 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
 
     private Database $db;
     private LoggerInterface $logger;
-    private SettingService $settingService;
+    private AppSettings $appSettings;
     private array $siteWallets = [];
 
-    private ?CircuitBreaker $circuit;
+    private CircuitBreaker $circuit;
 
     public function __construct(
         Database $db,
         LoggerInterface $logger,
-        SettingService $settingService,
-        ?CircuitBreaker $circuit = null
+        AppSettings $appSettings,
+        CircuitBreaker $circuit
     ) {
         $this->db = $db;
         $this->logger = $logger;
-        $this->settingService = $settingService;
+        $this->appSettings = $appSettings;
         $this->circuit = $circuit;
         $this->loadSiteWallets();
     }
@@ -47,11 +47,11 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function loadSiteWallets(): void
     {
         $this->siteWallets = [
-            'BNB20' => $this->settingService->get('site_wallet_bnb20', ''),
-            'TRC20' => $this->settingService->get('site_wallet_trc20', ''),
-            'ERC20' => $this->settingService->get('site_wallet_erc20', ''),
-            'TON'   => $this->settingService->get('site_wallet_ton', ''),
-            'SOL'   => $this->settingService->get('site_wallet_sol', ''),
+            'BNB20' => $this->appSettings->get('site_wallet_bnb20', ''),
+            'TRC20' => $this->appSettings->get('site_wallet_trc20', ''),
+            'ERC20' => $this->appSettings->get('site_wallet_erc20', ''),
+            'TON'   => $this->appSettings->get('site_wallet_ton', ''),
+            'SOL'   => $this->appSettings->get('site_wallet_sol', ''),
         ];
     }
 
@@ -100,55 +100,75 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     /**
      * Section 8.3/8.4 — single source of truth for circuit-breaker + retry +
      * failure classification via App\Traits\ExternalCallTrait.
+     * Supports multiple URLs for Provider Chain / Fallback Strategy.
      *
-     * Returns the response body on success, or null on (Permanent/CB-open).
+     * Returns the response body on success, or null on (Permanent/CB-open) across all URLs.
      */
-    private function executeWithRetry(string $url): ?string
+    private function executeWithRetry(array $urls): ?string
     {
-        $timeout = (int)$this->settingService->get('crypto_api_timeout', 15);
+        $timeout = (int)$this->appSettings->get('crypto_api_timeout', 15);
+        $lastError = null;
 
-        try {
-            return $this->callWithBreaker('crypto_api', function () use ($url, $timeout): ?string {
-                return $this->retryTransient(function () use ($url, $timeout): string {
-                    $ch = \curl_init($url);
-                    \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                    \curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
-                    \curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, min(8, max(2, (int)floor($timeout / 2))));
-                    \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-                    \curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge([
-                        'User-Agent: ChortkeSecureApp/1.0 (+https://chortke.com)',
-                        'Accept: application/json',
-                    ], trace_headers()));
-                    $response = \curl_exec($ch);
-                    $httpCode = (int) \curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    $errno    = (int) \curl_errno($ch);
-                    $error    = \curl_error($ch);
-                    \curl_close($ch);
+        foreach ($urls as $index => $url) {
+            try {
+                // Use a separate breaker for each endpoint to isolate failures
+                $breakerName = 'crypto_api_' . parse_url($url, PHP_URL_HOST);
+                
+                $response = $this->callWithBreaker($breakerName, function () use ($url, $timeout): ?string {
+                    return $this->retryTransient(function () use ($url, $timeout): string {
+                        $ch = \curl_init($url);
+                        \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                        \curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+                        \curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, min(8, max(2, (int)floor($timeout / 2))));
+                        \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+                        \curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge([
+                            'User-Agent: ChortkeSecureApp/1.0 (+https://chortke.com)',
+                            'Accept: application/json',
+                        ], trace_headers()));
+                        $response = \curl_exec($ch);
+                        $httpCode = (int) \curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        $errno    = (int) \curl_errno($ch);
+                        $error    = \curl_error($ch);
+                        \curl_close($ch);
 
-                    if ($httpCode === 200 && is_string($response) && $response !== '') {
-                        return $response;
-                    }
+                        if ($httpCode === 200 && is_string($response) && $response !== '') {
+                            return $response;
+                        }
 
-                    $this->logger->warning('crypto.api.attempt_failed', [
-                        'url'       => $url,
-                        'http_code' => $httpCode,
-                        'errno'     => $errno,
-                        'error'     => $error ?: 'HTTP Status ' . $httpCode,
-                    ]);
-                    throw $this->classifyHttpFailure($httpCode, $errno, (string)$response, ['provider' => 'crypto_api']);
-                }, 3, 500, 4000);
-            });
-        } catch (\Core\Exceptions\PermanentFailure $e) {
-            $this->logger->warning('crypto.api.permanent_failure', ['url' => $url, 'error' => $e->getMessage()]);
-            return null;
-        } catch (\Throwable $e) {
-            $this->logger->error('crypto.api.unavailable', [
-                'url'   => $url,
-                'class' => get_class($e),
-                'error' => $e->getMessage(),
-            ]);
-            return null;
+                        $this->logger->warning('crypto.api.attempt_failed', [
+                            'url'       => $url,
+                            'http_code' => $httpCode,
+                            'errno'     => $errno,
+                            'error'     => $error ?: 'HTTP Status ' . $httpCode,
+                        ]);
+                        throw $this->classifyHttpFailure($httpCode, $errno, (string)$response, ['provider' => 'crypto_api']);
+                    }, 3, 500, 4000);
+                });
+
+                if ($response !== null) {
+                    return $response;
+                }
+            } catch (\Core\Exceptions\PermanentFailure $e) {
+                $lastError = $e->getMessage();
+                $this->logger->warning('crypto.api.permanent_failure', ['url' => $url, 'error' => $lastError]);
+                // If permanent failure (e.g., 400 Bad Request), it's usually bad input, not a node issue.
+                // However, we still try the next node just in case it's a proxy error.
+            } catch (\Throwable $e) {
+                $lastError = $e->getMessage();
+                $this->logger->error('crypto.api.unavailable', [
+                    'url'   => $url,
+                    'class' => get_class($e),
+                    'error' => $lastError,
+                ]);
+            }
         }
+        
+        $this->logger->critical('crypto.api.all_nodes_failed', [
+            'urls' => $urls,
+            'last_error' => $lastError
+        ]);
+        
+        return null;
     }
 
     /**
@@ -174,8 +194,11 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function verifyTronTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
         try {
-            $url = "https://apilist.tronscan.org/api/transaction-info?hash=" . urlencode($txHash);
-            $response = $this->executeWithRetry($url);
+            $urls = [
+                "https://apilist.tronscan.org/api/transaction-info?hash=" . urlencode($txHash),
+                "https://api.trongrid.io/v1/transactions/" . urlencode($txHash) . "/events", // Fallback
+            ];
+            $response = $this->executeWithRetry($urls);
 
             if (!$response) {
                 return ['status' => 'error', 'reason' => 'خطا در اتصال به TronScan API یا فعال بودن مدار قطع‌کننده (Circuit Breaker)'];
@@ -192,8 +215,11 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             }
 
             // Get dynamic block confirmations count (C-05)
-            $currentBlockUrl = "https://apilist.tronscan.org/api/system/status";
-            $blockResponse = $this->executeWithRetry($currentBlockUrl);
+            $currentBlockUrls = [
+                "https://apilist.tronscan.org/api/system/status",
+                "https://api.trongrid.io/wallet/getnowblock" // Fallback
+            ];
+            $blockResponse = $this->executeWithRetry($currentBlockUrls);
             $currentBlock = 0;
             if ($blockResponse) {
                 $blockData = json_decode($blockResponse, true);
@@ -202,14 +228,14 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
 
             $txBlock = (int)($data['block'] ?? 0);
             $confirmations = ($currentBlock > 0 && $txBlock > 0) ? ($currentBlock - $txBlock) : (isset($data['confirmations']) ? (int)$data['confirmations'] : 0);
-            $minConfirmations = (int) $this->settingService->get('crypto_min_confirmations_trc20', 19);
+            $minConfirmations = (int) $this->appSettings->get('crypto_min_confirmations_trc20', 19);
 
             if ($confirmations < $minConfirmations) {
                 return ['status' => 'pending', 'reason' => "تعداد تاییدهای تراکنش TRON کافی نیست (نیاز به حداقل $minConfirmations تایید دارد، فعلی: $confirmations)"];
             }
 
             // Issue 2: Poisoning check (Fake Token Transfer) with config support and normalization
-            $validContract = $this->settingService->get('crypto_contract_trc20_usdt', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t');
+            $validContract = $this->appSettings->get('crypto_contract_trc20_usdt', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t');
             $receivedContract = $data['contractData']['contract_address'] ?? '';
 
             if ($this->normalizeAddress($receivedContract, 'tron') !== $this->normalizeAddress($validContract, 'tron')) {
@@ -248,13 +274,16 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function verifyBscTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
         try {
-            $apiKey = $this->settingService->get('bscscan_api_key', '');
+            $apiKey = $this->appSettings->get('bscscan_api_key', '');
             if (!$apiKey) {
                 return ['status' => 'error', 'reason' => 'BscScan API key not configured'];
             }
-            $url = "https://api.bscscan.com/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey);
+            $urls = [
+                "https://api.bscscan.com/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey),
+                "https://api-testnet.bscscan.com/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey), // Fallback
+            ];
             
-            $response = $this->executeWithRetry($url);
+            $response = $this->executeWithRetry($urls);
 
             if (!$response) {
                 return ['status' => 'error', 'reason' => 'خطا در اتصال به BscScan API یا فعال بودن مدار قطع‌کننده (Circuit Breaker)'];
@@ -276,13 +305,13 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             }
 
             $confirmations = isset($tx['confirmations']) ? (int)$tx['confirmations'] : 0;
-            $minConfirmations = (int) $this->settingService->get('crypto_min_confirmations_bnb20', \App\Constants\CryptoConstants::DEFAULT_MIN_CONFIRMATIONS_BNB20);
+            $minConfirmations = (int) $this->appSettings->get('crypto_min_confirmations_bnb20', \App\Constants\CryptoConstants::DEFAULT_MIN_CONFIRMATIONS_BNB20);
             if ($confirmations < $minConfirmations) {
                 return ['status' => 'pending', 'reason' => "تعداد تاییدهای تراکنش BSC کافی نیست (حداقل $minConfirmations تایید نیاز است، فعلی: $confirmations)"];
             }
 
             // Issue 2: Poisoning check (USDT BEP20) from Settings/Config
-            $validContract = $this->settingService->get('crypto_contract_bnb20_usdt', '0x55d398326f99059ff775485246999027b3197955');
+            $validContract = $this->appSettings->get('crypto_contract_bnb20_usdt', '0x55d398326f99059ff775485246999027b3197955');
             if ($this->normalizeAddress($tx['contractAddress'] ?? '', 'bsc') !== $this->normalizeAddress($validContract, 'bsc')) {
                 return ['status' => 'mismatch', 'reason' => 'توکن ارسالی USDT (BEP20) نیست'];
             }
@@ -295,15 +324,15 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             // Check amount using integer raw comparisons (H-02, M-05)
             $decimals = (int)($tx['tokenDecimal'] ?? 18);
             $amountRaw = $tx['value'] ?? '0';
-            $expectedRaw = bcmul((string)$expectedAmount, bcpow('10', (string)$decimals, 0), 0);
-            $toleranceRaw = bcmul('0.01', bcpow('10', (string)$decimals, 0), 0);
+            $expectedRaw = \Core\ValueObjects\Money::fromString((string)((string)$expectedAmount))->multiply((string)(bcpow('10'))->getAmount()$decimals, 0), 0);
+            $toleranceRaw = \Core\ValueObjects\Money::fromString((string)('0.01'))->multiply((string)(bcpow('10'))->getAmount()$decimals, 0), 0);
 
-            $diff = bcsub($amountRaw, $expectedRaw, 0);
+            $diff = \Core\ValueObjects\Money::fromString((string)($amountRaw))->subtract(\Core\ValueObjects\Money::fromString((string)($expectedRaw)))->getAmount();
             if (str_starts_with($diff, '-')) {
                 $diff = substr($diff, 1);
             }
 
-            if (bccomp($diff, $toleranceRaw, 0) > 0) {
+            if (\Core\ValueObjects\Money::fromString((string)($diff))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($toleranceRaw)))) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
@@ -324,12 +353,15 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function verifyEthereumTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
         try {
-            $apiKey = $this->settingService->get('etherscan_api_key', '');
+            $apiKey = $this->appSettings->get('etherscan_api_key', '');
             if (!$apiKey) {
                 return ['status' => 'error', 'reason' => 'Etherscan API key not configured'];
             }
-            $url = "https://api.etherscan.io/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey);
-            $response = $this->executeWithRetry($url);
+            $urls = [
+                "https://api.etherscan.io/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey),
+                "https://api-sepolia.etherscan.io/api?module=account&action=tokentx&txhash=" . urlencode($txHash) . "&apikey=" . urlencode($apiKey), // Fallback
+            ];
+            $response = $this->executeWithRetry($urls);
             if (!$response) {
                 return ['status' => 'error', 'reason' => 'خطا در اتصال به Etherscan API یا فعال بودن مدار قطع‌کننده'];
             }
@@ -349,12 +381,12 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             }
 
             $confirmations = isset($tx['confirmations']) ? (int)$tx['confirmations'] : 0;
-            $minConfirmations = (int) $this->settingService->get('crypto_min_confirmations_erc20', \App\Constants\CryptoConstants::DEFAULT_MIN_CONFIRMATIONS_ERC20);
+            $minConfirmations = (int) $this->appSettings->get('crypto_min_confirmations_erc20', \App\Constants\CryptoConstants::DEFAULT_MIN_CONFIRMATIONS_ERC20);
             if ($confirmations < $minConfirmations) {
                 return ['status' => 'pending', 'reason' => "تعداد تاییدهای تراکنش Ethereum کافی نیست (حداقل $minConfirmations تایید نیاز است، فعلی: $confirmations)"];
             }
 
-            $validContract = $this->settingService->get('crypto_contract_erc20_usdt', '0xdac17f958d2ee523a2206206994597c13d831ec7');
+            $validContract = $this->appSettings->get('crypto_contract_erc20_usdt', '0xdac17f958d2ee523a2206206994597c13d831ec7');
             if ($this->normalizeAddress($tx['contractAddress'] ?? '', 'ethereum') !== $this->normalizeAddress($validContract, 'ethereum')) {
                 return ['status' => 'mismatch', 'reason' => 'توکن ارسالی USDT (ERC20) نیست'];
             }
@@ -365,15 +397,15 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
 
             $decimals = (int)($tx['tokenDecimal'] ?? 6);
             $amountRaw = $tx['value'] ?? '0';
-            $expectedRaw = bcmul((string)$expectedAmount, bcpow('10', (string)$decimals, 0), 0);
-            $toleranceRaw = bcmul('0.01', bcpow('10', (string)$decimals, 0), 0);
+            $expectedRaw = \Core\ValueObjects\Money::fromString((string)((string)$expectedAmount))->multiply((string)(bcpow('10'))->getAmount()$decimals, 0), 0);
+            $toleranceRaw = \Core\ValueObjects\Money::fromString((string)('0.01'))->multiply((string)(bcpow('10'))->getAmount()$decimals, 0), 0);
 
-            $diff = bcsub($amountRaw, $expectedRaw, 0);
+            $diff = \Core\ValueObjects\Money::fromString((string)($amountRaw))->subtract(\Core\ValueObjects\Money::fromString((string)($expectedRaw)))->getAmount();
             if (str_starts_with($diff, '-')) {
                 $diff = substr($diff, 1);
             }
 
-            if (bccomp($diff, $toleranceRaw, 0) > 0) {
+            if (\Core\ValueObjects\Money::fromString((string)($diff))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($toleranceRaw)))) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
@@ -393,12 +425,17 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function verifyTonTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
         try {
-            $apiKey = $this->settingService->get('toncenter_api_key', '');
-            $url = "https://toncenter.com/api/v2/getTransactions?address=" . urlencode($toWallet) . "&limit=20&archival=true";
+            $apiKey = $this->appSettings->get('toncenter_api_key', '');
+            $baseUrl = "https://toncenter.com/api/v2/getTransactions?address=" . urlencode($toWallet) . "&limit=20&archival=true";
             if ($apiKey) {
-                $url .= "&api_key=" . urlencode($apiKey);
+                $baseUrl .= "&api_key=" . urlencode($apiKey);
             }
-            $response = $this->executeWithRetry($url);
+            $urls = [
+                $baseUrl,
+                // Fallback example (using testnet or another provider if configured)
+                str_replace("toncenter.com", "testnet.toncenter.com", $baseUrl)
+            ];
+            $response = $this->executeWithRetry($urls);
             if (!$response) {
                 return ['status' => 'error', 'reason' => 'خطا در اتصال به Toncenter API'];
             }
@@ -424,14 +461,14 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             $inMsg = $foundTx['in_msg'] ?? [];
             $value = $inMsg['value'] ?? '0';
             
-            $expectedRaw = bcmul((string)$expectedAmount, '1000000', 0);
-            $toleranceRaw = bcmul('0.01', '1000000', 0);
+            $expectedRaw = \Core\ValueObjects\Money::fromString((string)((string)$expectedAmount))->multiply((string)('1000000'))->getAmount();
+            $toleranceRaw = \Core\ValueObjects\Money::fromString((string)('0.01'))->multiply((string)('1000000'))->getAmount();
             
-            $diff = bcsub($value, $expectedRaw, 0);
+            $diff = \Core\ValueObjects\Money::fromString((string)($value))->subtract(\Core\ValueObjects\Money::fromString((string)($expectedRaw)))->getAmount();
             if (str_starts_with($diff, '-')) {
                 $diff = substr($diff, 1);
             }
-            if (bccomp($diff, $toleranceRaw, 0) > 0) {
+            if (\Core\ValueObjects\Money::fromString((string)($diff))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($toleranceRaw)))) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
@@ -451,7 +488,7 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
     private function verifySolanaTransaction(string $txHash, string $toWallet, float $expectedAmount): array
     {
         try {
-            $rpcUrl = $this->settingService->get('solana_rpc_url', 'https://api.mainnet-beta.solana.com');
+            $rpcUrl = $this->appSettings->get('solana_rpc_url', 'https://api.mainnet-beta.solana.com');
             $payload = json_encode([
                 'jsonrpc' => '2.0',
                 'id' => 1,
@@ -462,7 +499,7 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
                 ]
             ]);
 
-            $timeout = (int)$this->settingService->get('solana_api_timeout', 15);
+            $timeout = (int)$this->appSettings->get('solana_api_timeout', 15);
             $connectTimeout = max(2, (int)floor($timeout / 3));
 
             $ch = \curl_init($rpcUrl);

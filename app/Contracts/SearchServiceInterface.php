@@ -7,40 +7,47 @@ namespace App\Contracts;
 /**
  * SearchServiceInterface — قرارداد جامع خدمات جستجوی سیستم
  * 
- * L-SRV-03 Fix: تعریف اینترفیس رسمی برای سرویس ارکستریتور جستجو جهت تسهیل تمسخر (Mocking) و تست‌پذیری
+ * 
+ * @method array searchBanners(string $q, array $filters = [], int $limit = 20, int $offset = 0)
+ * @method array searchContent(string $q, array $filters = [], int $limit = 20, int $offset = 0)
+ * @method array searchContentForExport(string $q, array $filters = [], int $limit = 1000, int $offset = 0)
+ * @method array searchTokens(string $q, array $filters = [], int $limit = 20, int $offset = 0)
+ * @method array searchEmails(string $q, array $filters = [], int $limit = 20, int $offset = 0)
+ * @method array searchAdTasks(string $q, array $filters = [], int $limit = 20, int $offset = 0)
+ * @method array searchInvestments(string $q, array $filters = [], int $limit = 20, int $offset = 0)
+ * @method array searchTickets(string $q, array $filters = [], int $limit = 20, int $offset = 0)
+ * @method array searchInfluencers(string $q, array $filters = [], int $limit = 20, int $offset = 0)
+ * @method array quickSearchAds(string $q, ?int $userId, int $limit)
+ * @method array quickSearchSubmissions(string $q, ?int $userId, int $limit)
  */
 interface SearchServiceInterface
 {
-    public function searchAdmin(string $query, int $limit = 5, int $offset = 0): array;
+    /**
+     * روش جدید و اصلی برای جستجو (استفاده از الگوی Strategy و اشیاء Query)
+     */
+    public function searchQuery(\App\Services\Search\SearchQuery $query): \App\Services\Search\SearchResult;
+
+    /**
+     * @deprecated استفاده از searchQuery توصیه می‌شود
+     */
+    public function searchAdmin(\App\Services\Search\SearchQuery $query): array;
     
-    public function searchUser(string $query, int $userId, int $limit = 5, int $offset = 0): array;
+    /**
+     * @deprecated استفاده از searchQuery توصیه می‌شود
+     */
+    public function searchUser(\App\Services\Search\SearchQuery $query, int $userId): array;
     
-    public function searchModules($modules, array $filters = [], int $limit = 20, int $offset = 0): array;
+    /**
+     * @deprecated استفاده از searchQuery توصیه می‌شود
+     */
+    public function searchModules($modules, \App\Services\Search\SearchQuery $query): array;
     
     public function invalidateModuleCache(string $module): void;
-    
-    public function searchBanners(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
-    
-    public function searchContent(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
-    public function searchContentForExport(string $q, array $filters = [], int $limit = 1000, int $offset = 0): array;
-    
-    public function searchTokens(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
-    
-    public function searchEmails(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
-    
-    public function searchAdTasks(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
-    
-    public function searchInvestments(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
-    
-    public function searchTickets(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
-    
-    public function searchInfluencers(string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
 
-    public function searchAdminModule(string $module, string $q, array $filters = [], int $limit = 20, int $offset = 0): array;
+    /**
+     * @deprecated استفاده از searchQuery توصیه می‌شود
+     */
+    public function searchAdminModule(string $module, \App\Services\Search\SearchQuery $query): array;
 
     public function registeredAdminModules(): array;
-
-    public function quickSearchAds(string $q, ?int $userId, int $limit): array;
-
-    public function quickSearchSubmissions(string $q, ?int $userId, int $limit): array;
 }

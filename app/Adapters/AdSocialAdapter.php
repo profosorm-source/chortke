@@ -8,7 +8,7 @@ use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use Core\Database;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use App\Constants\PercentageConstants;
 use App\Models\Ads;
 
@@ -19,10 +19,10 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
 {
     public function __construct(
         private Ads $adModel,
-        private \App\Services\Wallet\WalletService $walletService,
+        private \App\Contracts\WalletServiceInterface $walletService,
         private Database $db,
         LoggerInterface $logger,
-        SettingService $settingService,
+        AppSettings $appSettings,
         ValidatorFactoryInterface $validatorFactory
     ) {
         parent::__construct($logger, $settingService, $validatorFactory);
@@ -37,7 +37,7 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
     {
         $valid = $this->validate($data);
         if (!$valid['valid']) {
-            return $this->errorResponse('اطلاعات وارد شده معتبر نیست', $valid['errors']);
+            throw new \Core\Exceptions\BusinessException('اطلاعات وارد شده معتبر نیست', $valid['errors']);
         }
 
         $currency = $data['currency'] ?? 'irt';
@@ -45,7 +45,7 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
         $quantity = (int) ($data['total_count'] ?? 1);
         
         // بازیابی درصد کمیسیون از تنظیمات سیستم یا استفاده از مقدار پیش‌فرض MagicNumbers
-        $feePercent = (float) $this->settingService->get('social_task_site_fee_percent', PercentageConstants::SOCIAL_TASK_FEE_PERCENT);
+        $feePercent = (float) $this->appSettings->get('social_task_site_fee_percent', PercentageConstants::SOCIAL_TASK_FEE_PERCENT);
         $totalBudget = $pricePerTask * $quantity;
         $totalWithFee = $totalBudget + ($totalBudget * $feePercent / 100);
 
@@ -72,7 +72,7 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
 
             if (!$txId) {
                 $this->db->rollBack();
-                return $this->errorResponse('موجودی کیف پول برای ثبت آگهی کافی نیست.');
+                throw new \Core\Exceptions\BusinessException('موجودی کیف پول برای ثبت آگهی کافی نیست.');
             }
 
             // درج مستقیم در جدول واحد ads با نوع 'social_task'
@@ -98,7 +98,7 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
 
             if (!$ad) {
                  $this->db->rollBack();
-                 return $this->errorResponse('خطا در نهایی‌سازی تراکنش تبلیغ در سیستم.');
+                 throw new \Core\Exceptions\BusinessException('خطا در نهایی‌سازی تراکنش تبلیغ در سیستم.');
             }
 
             $this->db->commit();
@@ -109,7 +109,7 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logError('create', $e->getMessage());
-            return $this->errorResponse('خطا در سیستم تراکنش: ' . $e->getMessage());
+            throw new \Core\Exceptions\BusinessException('خطا در سیستم تراکنش: ' . $e->getMessage());
         }
     }
 
@@ -140,7 +140,7 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
         }
 
         $price = (float)($data['price_per_task'] ?? 0);
-        $minPrice = (float)$this->settingService->get('social_task_min_price', 10);
+        $minPrice = (float)$this->appSettings->get('social_task_min_price', 10);
         if ($price < $minPrice) {
             $errors[] = "حداقل قیمت هر تسک در شبکه های اجتماعی {$minPrice} تومان است";
         }
@@ -161,7 +161,7 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
 
     public function calculateCost(float $amount, array $context = []): float
     {
-        $feePercent = (float) $this->settingService->get('social_task_site_fee_percent', PercentageConstants::SOCIAL_TASK_FEE_PERCENT);
+        $feePercent = (float) $this->appSettings->get('social_task_site_fee_percent', PercentageConstants::SOCIAL_TASK_FEE_PERCENT);
         return $amount * ($feePercent / 100);
     }
 

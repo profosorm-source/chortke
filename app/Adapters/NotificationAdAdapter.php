@@ -8,9 +8,9 @@ use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use App\Models\Ads;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use Core\Database;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use Core\Exceptions\ValidationException;
 
 /**
@@ -20,10 +20,10 @@ class NotificationAdAdapter extends AdapterBase implements AdSystemContract
 {
     public function __construct(
         private Ads $adModel,
-        private WalletService $walletService,
+        private WalletServiceInterface $walletService,
         private Database $db,
         LoggerInterface $logger,
-        SettingService $settingService,
+        AppSettings $appSettings,
         ValidatorFactoryInterface $validatorFactory
     ) {
         parent::__construct($logger, $settingService, $validatorFactory);
@@ -41,13 +41,13 @@ class NotificationAdAdapter extends AdapterBase implements AdSystemContract
                 'target_link'   => 'nullable|url'
             ]);
         } catch (ValidationException $e) {
-            return $this->errorResponse('ورودی‌های آگهی معتبر نیستند.', $e->getErrors());
+            throw new \Core\Exceptions\BusinessException('ورودی‌های آگهی معتبر نیستند.', $e->getErrors());
         }
 
         $budget = (float) ($data['budget'] ?? 0);
         
         // 1. Calculate pricing fee based on dynamic platform settings
-        $feePercent = (float) $this->settingService->get('notification_ad_fee_percent', 15.0);
+        $feePercent = (float) $this->appSettings->get('notification_ad_fee_percent', 15.0);
         $totalWithFee = $budget + ($budget * $feePercent / 100);
 
         try {
@@ -69,7 +69,7 @@ class NotificationAdAdapter extends AdapterBase implements AdSystemContract
 
             if (!$txId) {
                 $this->db->rollBack();
-                return $this->errorResponse('موجودی برای پرداخت هزینه آگهی نوتیفیکیشن کافی نیست.');
+                throw new \Core\Exceptions\BusinessException('موجودی برای پرداخت هزینه آگهی نوتیفیکیشن کافی نیست.');
             }
 
             // 3. Centralized Ingestion
@@ -99,7 +99,7 @@ class NotificationAdAdapter extends AdapterBase implements AdSystemContract
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logError('push_ad_fail', $e->getMessage());
-            return $this->errorResponse('بروز خطا در ثبت آگهی: ' . $e->getMessage());
+            throw new \Core\Exceptions\BusinessException('بروز خطا در ثبت آگهی: ' . $e->getMessage());
         }
     }
 
@@ -126,7 +126,7 @@ class NotificationAdAdapter extends AdapterBase implements AdSystemContract
 
     public function calculateCost(float $amount, array $context = []): float
     {
-        $fee = (float) $this->settingService->get('notification_ad_fee_percent', 15.0);
+        $fee = (float) $this->appSettings->get('notification_ad_fee_percent', 15.0);
         return $amount * ($fee / 100);
     }
 

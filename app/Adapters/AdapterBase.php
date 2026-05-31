@@ -7,7 +7,7 @@ namespace App\Adapters;
 use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use Core\Exceptions\ValidationException;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 
 /**
  * AdapterBase - پایه مشترک برای همه آداپترهای خارجی
@@ -24,13 +24,13 @@ abstract class AdapterBase
     use \App\Traits\ExternalCallTrait;
 
     protected LoggerInterface $logger;
-    protected SettingService $settingService;
+    protected AppSettings $appSettings;
     protected ?ValidatorFactoryInterface $validatorFactory;
 
-    public function __construct(LoggerInterface $logger, SettingService $settingService, ?ValidatorFactoryInterface $validatorFactory = null)
+    public function __construct(LoggerInterface $logger, AppSettings $appSettings, ?ValidatorFactoryInterface $validatorFactory = null)
     {
         $this->logger = $logger;
-        $this->settingService = $settingService;
+        $this->appSettings = $appSettings;
         $this->validatorFactory = $validatorFactory;
     }
 

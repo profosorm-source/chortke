@@ -8,9 +8,9 @@ use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use App\Models\Ads;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use Core\Database;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use Core\Exceptions\ValidationException;
 
 /**
@@ -26,10 +26,10 @@ class BannerAdapter extends AdapterBase implements AdSystemContract
 {
     public function __construct(
         private Ads $bannerModel,
-        private WalletService $walletService,
+        private WalletServiceInterface $walletService,
         private Database $db,
         LoggerInterface $logger,
-        SettingService $settingService,
+        AppSettings $appSettings,
         ValidatorFactoryInterface $validatorFactory
     ) {
         parent::__construct($logger, $settingService, $validatorFactory);
@@ -47,7 +47,7 @@ class BannerAdapter extends AdapterBase implements AdSystemContract
                 'budget'    => 'required|numeric|min:100'
             ]);
         } catch (ValidationException $e) {
-            return $this->errorResponse('ورودی‌های بنر معتبر نیستند', $e->getErrors());
+            throw new \Core\Exceptions\BusinessException('ورودی‌های بنر معتبر نیستند', $e->getErrors());
         }
 
         $budget = (float) ($data['budget'] ?? 0);
@@ -80,7 +80,7 @@ class BannerAdapter extends AdapterBase implements AdSystemContract
 
             if (!$txId) {
                 $this->db->rollBack();
-                return $this->errorResponse('موجودی کیف پول برای پرداخت هزینه بنر کافی نیست.');
+                throw new \Core\Exceptions\BusinessException('موجودی کیف پول برای پرداخت هزینه بنر کافی نیست.');
             }
 
             // 3. Creation in Central Ads ecosystem (100% Unified)
@@ -112,7 +112,7 @@ class BannerAdapter extends AdapterBase implements AdSystemContract
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logError('banner_creation_fail', $e->getMessage());
-            return $this->errorResponse('سیستم در حال حاضر امکان ثبت بنر ندارد: ' . $e->getMessage());
+            throw new \Core\Exceptions\BusinessException('سیستم در حال حاضر امکان ثبت بنر ندارد: ' . $e->getMessage());
         }
     }
 
@@ -186,12 +186,12 @@ class BannerAdapter extends AdapterBase implements AdSystemContract
     private function calculateDynamicFeePercent(string $placement, bool $isStartup): float
     {
         // Default standard fee
-        $standardFee = (float) $this->settingService->get('banner_fee_percent', 12.0);
+        $standardFee = (float) $this->appSettings->get('banner_fee_percent', 12.0);
         
         if ($placement === 'homepage_slider' && $isStartup) {
             // SPECIAL BUSINESS RULE: Ultra-cheap or Free for startups in homepage slider.
             // Fallback to 2.0% if not explicitly set in admin settings.
-            return (float) $this->settingService->get('banner_startup_slider_fee_percent', 2.0);
+            return (float) $this->appSettings->get('banner_startup_slider_fee_percent', 2.0);
         }
 
         return $standardFee;

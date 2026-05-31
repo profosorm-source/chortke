@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Validators\Requests;
 
 use App\Validators\BaseFormRequest;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use Core\Container;
 use App\Exceptions\BusinessException;
 
@@ -65,7 +65,7 @@ class CreateWithdrawalRequest extends BaseFormRequest
         $amount = (float)($validated['amount'] ?? 0);
 
         try {
-            $settings = Container::getInstance()->make(SettingService::class);
+            $settings = Container::getInstance()->make(AppSettings::class);
             $minKey = $currency === 'IRT' ? 'min_withdrawal_irt' : 'min_withdrawal_usdt';
             $minAmount = (float)$settings->get($minKey, $currency === 'IRT' ? 50000 : 10);
 

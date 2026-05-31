@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Commands;
 
-use App\Services\FinancialEscrowService;
+use App\Domain\Financial\Services\FinancialEscrowService;
 use Core\Database;
 use App\Contracts\LoggerInterface;
 

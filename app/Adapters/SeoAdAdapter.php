@@ -6,18 +6,18 @@ use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use App\Models\Ads;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use Core\Database;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 
 class SeoAdAdapter extends AdapterBase implements AdSystemContract
 {
     public function __construct(
         private Ads $adModel,
-        private WalletService $walletService,
+        private WalletServiceInterface $walletService,
         private Database $db,
         LoggerInterface $logger,
-        SettingService $settingService,
+        AppSettings $appSettings,
         ValidatorFactoryInterface $validatorFactory
     ) {
         parent::__construct($logger, $settingService, $validatorFactory);
@@ -30,11 +30,11 @@ class SeoAdAdapter extends AdapterBase implements AdSystemContract
         try {
             $this->validateData($data);
         } catch (\Core\Exceptions\ValidationException $e) {
-            return $this->errorResponse('ورودی‌های تبلیغ سئو معتبر نیستند', $e->getErrors());
+            throw new \Core\Exceptions\BusinessException('ورودی‌های تبلیغ سئو معتبر نیستند', $e->getErrors());
         }
 
         $budget = (float) ($data['budget'] ?? 0);
-        $feePercent = (float) $this->settingService->get('seo_ad_site_fee_percent', 15);
+        $feePercent = (float) $this->appSettings->get('seo_ad_site_fee_percent', 15);
         $totalWithFee = $budget + ($budget * $feePercent / 100);
 
         try {
@@ -57,7 +57,7 @@ class SeoAdAdapter extends AdapterBase implements AdSystemContract
 
             if (!$txId) {
                 $this->db->rollBack();
-                return $this->errorResponse('موجودی کافی نیست');
+                throw new \Core\Exceptions\BusinessException('موجودی کافی نیست');
             }
 
             $ad = $this->adModel->create([
@@ -79,7 +79,7 @@ class SeoAdAdapter extends AdapterBase implements AdSystemContract
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logError('create', $e->getMessage());
-            return $this->errorResponse('خطا: ' . $e->getMessage());
+            throw new \Core\Exceptions\BusinessException('خطا: ' . $e->getMessage());
         }
     }
 
@@ -91,7 +91,7 @@ class SeoAdAdapter extends AdapterBase implements AdSystemContract
 
     public function calculateCost(float $amount, array $context = []): float
     {
-        return $amount * ((float) $this->settingService->get('seo_ad_site_fee_percent', 15) / 100);
+        return $amount * ((float) $this->appSettings->get('seo_ad_site_fee_percent', 15) / 100);
     }
 
     public function processPayment(int $adId, int $userId, float $amount, string $currency): array

@@ -289,6 +289,12 @@ class ErrorContract
             $response['error']['details'] = $this->details;
         }
 
+        // Add standardized meta block
+        $response['meta'] = [
+            'trace_id' => $_SERVER['HTTP_X_REQUEST_ID'] ?? $_SERVER['REQUEST_ID'] ?? uniqid('req-'),
+            'timestamp' => gmdate('Y-m-d\TH:i:s\Z')
+        ];
+
         return $response;
     }
 

@@ -18,14 +18,14 @@ class ProcessScheduledTasksCommand
 {
     private AccountDeletionService $accountDeletionService;
     private DataExportService $dataExportService;
-    private \App\Services\FinancialEscrowService $escrowService;
+    private \App\Domain\Financial\Services\FinancialEscrowService $escrowService;
     private \Core\Database $db;
     private LoggerInterface $logger;
 
     public function __construct(
         AccountDeletionService $accountDeletionService,
         DataExportService $dataExportService,
-        \App\Services\FinancialEscrowService $escrowService,
+        \App\Domain\Financial\Services\FinancialEscrowService $escrowService,
         \Core\Database $db,
         LoggerInterface $logger
     ) {

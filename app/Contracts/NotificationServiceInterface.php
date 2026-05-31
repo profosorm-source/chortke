@@ -29,5 +29,17 @@ interface NotificationServiceInterface
         string $priority = 'normal'
     ): int;
 
+    public function dispatch(
+        string $channel,
+        int $userId,
+        string $title,
+        string $message,
+        ?array $data = null,
+        ?string $imageUrl = null,
+        ?string $actionUrl = null,
+        ?string $actionText = null,
+        string $priority = 'normal'
+    ): bool;
+
     public function depositSuccess(int $userId, float $amount, string $currency): ?int;
 }

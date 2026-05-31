@@ -6,7 +6,7 @@ use App\Contracts\AdSystemContract;
 use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use Core\Database;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use App\Constants\PercentageConstants;
 use App\Models\Ads;
 
@@ -14,10 +14,10 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
 {
     public function __construct(
         private Ads $adModel,
-        private \App\Services\Wallet\WalletService $walletService,
+        private \App\Contracts\WalletServiceInterface $walletService,
         private Database $db,
         LoggerInterface $logger,
-        SettingService $settingService,
+        AppSettings $appSettings,
         ValidatorFactoryInterface $validatorFactory
     ) {
         parent::__construct($logger, $settingService, $validatorFactory);
@@ -29,14 +29,14 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
     {
         $valid = $this->validate($data);
         if (!$valid['valid']) {
-            return $this->errorResponse('اطلاعات وارد شده معتبر نیست', $valid['errors']);
+            throw new \Core\Exceptions\BusinessException('اطلاعات وارد شده معتبر نیست', $valid['errors']);
         }
 
         $currency = $data['currency'] ?? 'irt';
         $pricePerTask = (float) ($data['price_per_task'] ?? 0);
         $quantity = (int) ($data['total_count'] ?? 1);
         
-        $feePercent = (float) $this->settingService->get('adtube_site_fee_percent', 10);
+        $feePercent = (float) $this->appSettings->get('adtube_site_fee_percent', 10);
         $totalBudget = $pricePerTask * $quantity;
         $totalWithFee = $totalBudget + ($totalBudget * $feePercent / 100);
 
@@ -62,7 +62,7 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
 
             if (!$txId) {
                 $this->db->rollBack();
-                return $this->errorResponse('موجودی کیف پول کافی نیست.');
+                throw new \Core\Exceptions\BusinessException('موجودی کیف پول کافی نیست.');
             }
 
             // ایجاد تبلیغ در جدول متمرکز
@@ -88,7 +88,7 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
 
             if (!$ad) {
                  $this->db->rollBack();
-                 return $this->errorResponse('خطا در ذخیره نهایی تبلیغ');
+                 throw new \Core\Exceptions\BusinessException('خطا در ذخیره نهایی تبلیغ');
             }
 
             $this->db->commit();
@@ -99,7 +99,7 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
         } catch (\Exception $e) {
             $this->db->rollBack();
             $this->logError('create', $e->getMessage());
-            return $this->errorResponse('خطا در فرآیند ثبت: ' . $e->getMessage());
+            throw new \Core\Exceptions\BusinessException('خطا در فرآیند ثبت: ' . $e->getMessage());
         }
     }
 
@@ -115,7 +115,7 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
         }
 
         $price = (float)($data['price_per_task'] ?? 0);
-        $minPrice = (float)$this->settingService->get('adtube_min_price_per_view', 100);
+        $minPrice = (float)$this->appSettings->get('adtube_min_price_per_view', 100);
         if ($price < $minPrice) {
             $errors[] = "حداقل هزینه هر نمایش {$minPrice} تومان می‌باشد";
         }
@@ -136,7 +136,7 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
 
     public function calculateCost(float $amount, array $context = []): float
     {
-        return $amount * ((float) $this->settingService->get('adtube_site_fee_percent', PercentageConstants::AD_TUBE_FEE_PERCENT) / 100);
+        return $amount * ((float) $this->appSettings->get('adtube_site_fee_percent', PercentageConstants::AD_TUBE_FEE_PERCENT) / 100);
     }
 
     public function processPayment(int $adId, int $userId, float $amount, string $currency): array

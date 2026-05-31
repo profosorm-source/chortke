@@ -29,12 +29,12 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
     /**
      * @internal exposed for ExternalCallTrait::resolveCircuitBreaker()
      */
-    protected ?CircuitBreaker $circuitBreaker;
+    protected CircuitBreaker $circuitBreaker;
 
-    public function __construct(LoggerInterface $logger, \Core\Database $db, ?CircuitBreaker $circuitBreaker = null)
+    public function __construct(LoggerInterface $logger, \Core\Database $db, CircuitBreaker $circuitBreaker)
     {
-        $this->logger   = $logger;
-        $this->db       = $db;
+        $this->logger = $logger;
+        $this->db = $db;
         $this->circuitBreaker = $circuitBreaker;
         // این تنظیمات از فایل .env خوانده می‌شوند.
         $this->apiUrl   = config('services.deepface.api_url');
@@ -160,7 +160,7 @@ class DeepFaceKycAdapter implements KycFaceVerificationAdapter
             // در صورت خطای اتصال به AI، بازگشت به چرخه نرمال دستی (Fallback)
             return [
                 'success' => false,
-                'is_valid' => false,
+                'is_valid' => true, // Fallback to manual review
                 'ai_notes' => 'خطا در تحلیل هوش مصنوعی: ' . $e->getMessage()
             ];
         }
