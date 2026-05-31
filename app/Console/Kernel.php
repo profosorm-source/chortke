@@ -5,7 +5,7 @@ use Core\Container;
 use App\Services\EmailService;
 use App\Services\CryptoDeposit\CryptoDepositService;
 use App\Services\User\UserLevelService;
-use App\Services\LotteryService;
+use App\Services\Lottery\LotteryService;
 use App\Services\BannerService;
 use App\Services\InfluencerService;
 use App\Services\Shared\DisputeService;
@@ -40,146 +40,40 @@ $scheduler->everyMinute(function () {
 
 // پردازش صف عمومی سیستم
 $scheduler->everyMinute(function () {
-    $db = Database::getInstance();
-    $queue = new \Core\Queue($db);
-    $processed = 0;
     $maxJobsToProcess = max(1, min(100, (int) feature_config('cron_queue_jobs_limit', 'rollout_percentage', 10)));
     
-    for ($i = 0; $i < $maxJobsToProcess; $i++) {
-        $job = $queue->pop();
-        if (!$job) {
-            break;
-        }
-        
-        $jobClass = $job['job'];
-        $data = $job['data'];
-        
-        // ✅ UPG-04: پشتیبانی از رویدادهای ناهمگام (Async Events) سیستم EventDispatcher چورتکه
-        if ($jobClass === 'dispatch_event') {
-            try {
-                Container::resetTraceStack();
-                $dispatcher = Container::getInstance()->make(\Core\EventDispatcher::class);
-                $dispatcher->processQueuedEvent($job);
-                
-                $queue->delete($job['id']);
-                $processed++;
-                continue;
-            } catch (\Throwable $e) {
-                $attempts = (int)($job['attempts'] ?? 0);
-                logger()->error('queue_async_event_failed', [
-                    'job_id' => $job['id'],
-                    'attempts' => $attempts,
-                    'error' => $e->getMessage()
-                ]);
-                
-                if ($attempts >= $queue->getMaxAttempts()) {
-                    // ارسال به DLQ با API واقعی Core\Queue
-                    $queue->fail((int)$job['id'], $e);
-                } else {
-                    // تلاش مجدد با backoff استاندارد Queue
-                    $queue->release((int)$job['id']);
-                }
-                continue;
-            }
-        }
-
-        // CORE-045: Whitelist of allowed Job classes from config or default stack
-        $allowedJobs = config('queue.allowed_jobs') ?? [
-            \App\Jobs\ApplyWeeklyProfitLossJob::class,
-            \App\Jobs\LogPerformanceJob::class,
-            \App\Jobs\SendBulkNotificationJob::class,
-            \App\Jobs\PersistBulkInAppNotificationJob::class,
-            \App\Jobs\SendEmailJob::class,
-            \App\Jobs\UpdateFraudScoreJob::class,
-            \App\Jobs\InvestmentProfitDistributionJob::class,
-            \App\Jobs\NotificationCleanupJob::class,
-            \App\Jobs\EscrowTimeoutJob::class,
-            \App\Jobs\CacheWarmupJob::class,
-            \App\Jobs\ScoreRecalculationJob::class,
-            \App\Jobs\PredictionGameSettlementJob::class,
-            \App\Jobs\VitrineListingExpiryJob::class,
-            \App\Jobs\InfluencerOrderTimeoutJob::class,
-            \App\Jobs\SocialTaskApprovalReminderJob::class,
-            \App\Jobs\AggregateAnalyticsJob::class,
-            \App\Jobs\RunCronTaskJob::class,
-        ];
-
-        if (!in_array($jobClass, $allowedJobs, true)) {
-            logger()->error('queue_job_not_allowed', ['job' => $jobClass]);
-            continue;
-        }
-
-        try {
-            if (class_exists($jobClass)) {
-                // H15 Fix: جلوگیری از هم‌پوشانی استک کانتینر بین جاب‌های مختلف در فرآیند CLI طولانی
-                Container::resetTraceStack();
-                
-                $handler = Container::getInstance()->make($jobClass);
-                
-                if (method_exists($handler, 'handle')) {
-                    $handler->handle($data);
-                    $queue->delete($job['id']);
-                    $processed++;
-                } else {
-                    logger()->error('queue_job_invalid_method', ['job' => $jobClass]);
-                }
-            } else {
-                logger()->error('queue_job_not_found', ['job' => $jobClass]);
-            }
-        } catch (\Throwable $e) {
-            $logData = [
-                'job'   => $jobClass,
-                'error' => $e->getMessage(),
-                'file'  => $e->getFile(),
-                'line'  => $e->getLine(),
-            ];
-            if (config('app.debug')) {
-                $logData['trace'] = substr($e->getTraceAsString(), 0, 2048);
-            }
-            logger()->error('queue_job_failed', $logData);
-
-            // UPG-04: مدیریت هوشمند شکست جاب و انتقال به DLQ یا رهاسازی (رفع انباشتگی)
-            try {
-                $attempts = (int)($job['attempts'] ?? 0);
-                $maxAttempts = $queue->getMaxAttempts();
-                
-                if ($attempts >= $maxAttempts) {
-                    // ارسال نهایی به Dead Letter Queue و حذف از صف اصلی
-                    $queue->fail((int)$job['id'], $e);
-                    logger()->warning('queue_job_sent_to_dlq', ['job' => $jobClass, 'id' => $job['id']]);
-                } else {
-                    // CORE-047: Exponential backoff (base * attempts^2) with random jitter
-                    $baseDelay = 60; // 60 seconds
-                    $exponential = $baseDelay * pow(2, $attempts - 1);
-                    $jitter = rand(5, 45);
-                    $delay = min($exponential + $jitter, 14400); // Max 4 hours
-
-                    $queue->release((int)$job['id'], (int)$delay);
-                    
-                    // CORE-044: Explicit releasing warning log for audit
-                    logger()->warning('queue_job_released_retry', [
-                        'job' => $jobClass,
-                        'id' => $job['id'],
-                        'delay' => (int)$delay,
-                        'attempts' => $attempts
-                    ]);
-                }
-            } catch (\Throwable $failError) {
-                logger()->critical('queue_dlq_handler_critical_error', [
-                    'error' => $failError->getMessage(),
-                    'job_id' => $job['id']
-                ]);
-            }
-        }
-    }
+    $command = Container::getInstance()->make(\App\Commands\QueueWorkCommand::class);
+    $result = $command->run(['cli.php', 'queue:work', "--limit={$maxJobsToProcess}"]);
     
-    return ['processed_jobs' => $processed];
+    return ['processed_jobs' => $result['processed_jobs'] ?? 0];
 }, 'system_queue_processor');
+
+// Poison Message Handler: بازپخش هوشمند خطاهای موقت
+$scheduler->everyMinutes(5, function () {
+    $queue = Container::getInstance()->make(\Core\Queue::class);
+    $limit = max(1, min(100, (int) feature_config('cron_dlq_retry_limit', 'rollout_percentage', 50)));
+    
+    $stats = $queue->retryEligibleFailedJobs(null, $limit, false);
+    
+    return [
+        'requeued_poison_messages' => $stats['requeued'] ?? 0,
+        'failed_retries' => $stats['errors'] ?? 0
+    ];
+}, 'poison_message_smart_retry');
+
+// تخلیه بافر امتیازات از Redis به دیتابیس (حلوگیری از از دست رفتن دیتا)
+$scheduler->everyMinute(function () {
+    $cronService = Container::getInstance()->make(\App\Services\Cron\CronService::class);
+    $result = $cronService->flushScoreEventsBuffer();
+    return [
+        'flushed_scores' => $result['count'] ?? 0
+    ];
+}, 'flush_score_events_buffer');
 
 // تأیید خودکار واریزهای کریپتو در انتظار
 $scheduler->everyMinute(function () {
     $db      = Database::getInstance();
-    $service = Container::getInstance()->make(\App\Services\CryptoDeposit\CryptoDepositService::class);
+    $job = Container::getInstance()->make(\App\Jobs\VerifyCryptoDepositJob::class);
 
     // واریزهای pending که هنوز تأیید نشده‌اند
     // مشکل #10: cast + validate — هرگز مستقیم در SQL interpolate نمی‌شوند
@@ -198,7 +92,7 @@ $scheduler->everyMinute(function () {
     $verified = 0;
     foreach ($pending as $row) {
         $id     = is_array($row) ? (int)$row['id'] : (int)$row->id;
-        $result = $service->tryAutoVerify($id);
+        $result = $job->handle(['deposit_id' => $id]);
         if (($result['auto'] ?? false) === true) {
             $verified++;
         }
@@ -756,6 +650,16 @@ $scheduler->daily('03:00', function () {
     return ['deleted_emails' => $affected];
 }, 'cleanup_email_queue');
 
+// پاک‌سازی خطاهای قدیمی نهایی شده در Poison Messages (بیش از ۳۰ روز)
+$scheduler->daily('03:05', function () {
+    $queue = Container::getInstance()->make(\Core\Queue::class);
+    $days = max(1, min(365, (int) feature_config('cron_dlq_retention_days', 'rollout_percentage', 30)));
+    
+    $deleted = $queue->cleanDeadLetters($days);
+    
+    return ['deleted_dead_letters' => $deleted];
+}, 'cleanup_dead_letters');
+
 // پردازش پرداخت‌های زمانبندی‌شده
 $scheduler->daily('03:15', function () {
     $service = Container::getInstance()->make(\App\Services\ScheduledPaymentService::class);
@@ -1023,7 +927,7 @@ $scheduler->hourly(function () use ($container) {
  * روزانه: ریزش امتیاز کاربران غایب
  */
 $scheduler->daily('02:20', function () use ($container) {
-    $cronService = $container->make(\App\Services\CronService::class);
+    $cronService = $container->make(\App\Services\Cron\CronService::class);
     return $cronService->applyInactivityScoreDecay();
 }, 'inactivity_score_decay');
 
@@ -1103,7 +1007,7 @@ $scheduler->hourly(function () use ($container) {
     echo "Running DLQ Auto-Retry...\n";
     try {
         $queue = $container->make(\Core\Queue::class);
-        $stats = $queue->retryFailedJobs(50);
+        $stats = $queue->retryFailedJobsBatch(null, 50);
         if ($stats['requeued'] > 0 || $stats['errors'] > 0) {
             echo "DLQ Auto-Retry: {$stats['requeued']} requeued, {$stats['errors']} errors.\n";
             logger()->info('queue_dlq_auto_retry_results', $stats);

@@ -26,13 +26,13 @@ class LogNotificationAdapter
     /**
      * @internal exposed for ExternalCallTrait::resolveCircuitBreaker()
      */
-    protected ?CircuitBreaker $circuit;
+    protected CircuitBreaker $circuit;
 
     public function __construct(
         private Notification $notification,
         private SystemTelemetryModel $telemetry,
         private Logger $logger,
-        ?CircuitBreaker $circuit = null
+        CircuitBreaker $circuit
     ) {
         $this->circuit = $circuit;
     }

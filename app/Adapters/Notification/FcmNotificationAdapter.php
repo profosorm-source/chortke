@@ -29,7 +29,7 @@ class FcmNotificationAdapter
     private Cache     $cache;
     private Database  $db;
     private MetricsCollectorInterface $metrics;
-    private ?CircuitBreaker $circuit;
+    private CircuitBreaker $circuit;
     private ?string   $projectId;
     private ?string   $serviceAccountPath;
 
@@ -43,7 +43,7 @@ class FcmNotificationAdapter
         Cache $cache,
         Database $db,
         MetricsCollectorInterface $metrics,
-        ?CircuitBreaker $circuit = null
+        CircuitBreaker $circuit
     ) {
         $this->logger             = $logger;
         $this->cache              = $cache;
@@ -421,6 +421,21 @@ class FcmNotificationAdapter
                     ]);
                     throw $this->classifyHttpFailure($httpCode, $errno, (string)$response, ['provider' => 'fcm']);
                 });
+            }, function (\Core\Exceptions\CircuitBreakerOpenException $e) use ($payload) {
+                // Fallback: If circuit is open, queue the FCM push instead of dropping it
+                $this->logger->warning('fcm.circuit_open_fallback_to_queue');
+                
+                try {
+                    $queue = \Core\Container::getInstance()->make(\Core\Queue::class);
+                    // Push to generic notifications queue
+                    $queue->push('App\\Jobs\\SendFcmJob', [
+                        'payload' => $payload
+                    ], 'notifications', 60); // Delay 60s
+                    return true;
+                } catch (\Throwable $qe) {
+                    $this->logger->error('fcm.queue_fallback_failed', ['error' => $qe->getMessage()]);
+                    return false;
+                }
             });
         } catch (\Core\Exceptions\PermanentFailure $e) {
             // Permanent 4xx — log + return false (do NOT propagate up to caller as exception)

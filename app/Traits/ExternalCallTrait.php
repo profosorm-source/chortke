@@ -47,10 +47,11 @@ trait ExternalCallTrait
      * @template T
      * @param string $providerName  نام منطقی provider برای CB state key
      * @param callable():T $operation
+     * @param callable(\Core\Exceptions\CircuitBreakerOpenException):T|null $fallback استراتژی جایگزین در صورت باز بودن مدار
      * @return T
      * @throws \Throwable
      */
-    protected function callWithBreaker(string $providerName, callable $operation): mixed
+    protected function callWithBreaker(string $providerName, callable $operation, ?callable $fallback = null): mixed
     {
         $providerName = $this->sanitizeProviderName($providerName);
 
@@ -62,6 +63,11 @@ trait ExternalCallTrait
 
         try {
             return $breaker->call($providerName, $operation);
+        } catch (\Core\Exceptions\CircuitBreakerOpenException $e) {
+            if ($fallback !== null) {
+                return $fallback($e);
+            }
+            throw $e;
         } catch (PermanentFailure $e) {
             // PermanentFailure should never have tripped CB — re-throw as-is.
             // (CircuitBreaker::call already counted it; we accept the noise
@@ -180,6 +186,31 @@ trait ExternalCallTrait
     // -------------------------------------------------------------------------
     // helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * สร้าง Stream Context ایمن با زمان‌بندی دقیق برای استفاده در file_get_contents و soap
+     */
+    protected function getStreamContextWithTimeout(int $timeoutSeconds = 5)
+    {
+        return stream_context_create([
+            'http' => [
+                'timeout' => $timeoutSeconds,
+                'ignore_errors' => true // برای دریافت کدهای 4xx/5xx به جای Warning
+            ],
+            'ssl' => [
+                'timeout' => $timeoutSeconds,
+            ]
+        ]);
+    }
+
+    /**
+     * پیکربندی زمان‌بندی دقیق و امن برای cURL
+     */
+    protected function setupCurlTimeout(\CurlHandle $ch, int $timeoutSeconds = 5): void
+    {
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeoutSeconds);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, max(1, $timeoutSeconds - 2));
+    }
 
     private function resolveCircuitBreaker(): ?CircuitBreaker
     {

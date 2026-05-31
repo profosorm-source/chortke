@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Validators;
 
 use Core\Validator;
+use Core\Exceptions\ValidationException;
 
 abstract class BaseFormRequest
 {
@@ -46,9 +47,32 @@ abstract class BaseFormRequest
         return true;
     }
 
+    /**
+     * Validate and throw ValidationException on failure.
+     * Simplifies controller code: one call instead of validate()+if(fails()).
+     *
+     * @return array Validated data
+     * @throws ValidationException
+     */
+    public function validateOrFail(): array
+    {
+        if (!$this->validate()) {
+            throw new ValidationException(
+                $this->errors,
+                'اطلاعات ورودی نامعتبر است'
+            );
+        }
+        return $this->validated ?? [];
+    }
+
     public function validated(): array
     {
         return $this->validated ?? [];
+    }
+
+    public function fails(): bool
+    {
+        return !empty($this->errors);
     }
 
     public function errors(): array
@@ -56,3 +80,4 @@ abstract class BaseFormRequest
         return $this->errors;
     }
 }
+

@@ -139,30 +139,31 @@ class CommonPasswordsExamples
      */
     public static function example7_RealWorldIntegration()
     {
-        // در UserValidator یا Registration Controller:
-        
+        // در RegisterRequest یا Registration Controller (نمونه‌ی کد، نه اجرایی):
+        echo <<<'PHP_EXAMPLE'
         class RegistrationValidator {
             public function validatePassword(string $password): array {
                 $errors = [];
-                
+
                 // چک 1: طول
                 if (strlen($password) < 8) {
                     $errors[] = 'Password must be at least 8 characters';
                 }
-                
-                // چک 2: ✅ استفاده از بهبود‌یافته
-                if (CommonPasswordsImproved::isCommon($password)) {
+
+                // چک 2: استفاده از CommonPasswords
+                if (\App\Data\CommonPasswords::isCommon($password)) {
                     $errors[] = 'Password is too common. Choose a stronger one';
                 }
-                
+
                 // چک 3: Complexity
                 if (!preg_match('/[A-Z]/', $password)) {
                     $errors[] = 'Must contain uppercase letter';
                 }
-                
+
                 return $errors;
             }
         }
+        PHP_EXAMPLE;
     }
     
     /**
@@ -216,37 +217,28 @@ class CommonPasswordsExamples
      */
     public static function example9_MetricsMonitoring()
     {
-        // Tracking usage
+        // Tracking usage (نمونه‌ی کد، نه اجرایی):
+        echo <<<'PHP_EXAMPLE'
         class PasswordCheckMetrics {
             private static $stats = [
                 'total_checks' => 0,
                 'common_found' => 0,
                 'avg_time_ms' => 0,
             ];
-            
+
             public static function recordCheck(bool $isCommon, float $timeMs) {
                 self::$stats['total_checks']++;
                 if ($isCommon) {
                     self::$stats['common_found']++;
                 }
-                
+
                 // Moving average
                 $alpha = 0.1;
-                self::$stats['avg_time_ms'] = 
+                self::$stats['avg_time_ms'] =
                     $alpha * $timeMs + (1 - $alpha) * self::$stats['avg_time_ms'];
-                
-                // Log metrics every 1000 checks
-                if (self::$stats['total_checks'] % 1000 === 0) {
-                    $rejection = round(
-                        (self::$stats['common_found'] / self::$stats['total_checks']) * 100, 2
-                    );
-                    
-                    echo "📊 Metrics (every 1000 checks):\n";
-                    echo "   Rejection rate: {$rejection}%\n";
-                    echo "   Avg check time: " . round(self::$stats['avg_time_ms'], 3) . "ms\n";
-                }
             }
         }
+        PHP_EXAMPLE;
     }
     
     /**
@@ -285,7 +277,7 @@ class CommonPasswordsExamples
  * Quick Reference / راهنمای سریع
  * 
  * کنونی:         CommonPasswords::isCommon($pwd)
- * بهبود‌یافته:   CommonPasswordsImproved::isCommon($pwd)
+ * بهبود‌یافته:   CommonPasswords::isCommon($pwd)  // (نسخه‌ی بهبودیافته‌ی فعلی)
  * 
  * دو آنها interface یکسانی دارند!
  * 

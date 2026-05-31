@@ -17,7 +17,12 @@ trait ClientInfoTrait
      */
     protected function clientIp(): string
     {
-        return get_client_ip();
+        // تشخیص محیط اجرا (CLI یا Queue Worker) جهت جلوگیری از باگ $_SERVER
+        if (php_sapi_name() === 'cli' || defined('STDIN') || !isset($_SERVER['REMOTE_ADDR'])) {
+            return '127.0.0.1'; // آی‌پی پیش‌فرض آفلاین
+        }
+        
+        return function_exists('get_client_ip') ? get_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
     }
 
     /**
@@ -25,7 +30,11 @@ trait ClientInfoTrait
      */
     protected function userAgent(): string
     {
-        return get_user_agent();
+        if (php_sapi_name() === 'cli' || defined('STDIN') || !isset($_SERVER['HTTP_USER_AGENT'])) {
+            return 'Background-Worker/1.0'; // مرورگر پیش‌فرض آفلاین
+        }
+
+        return function_exists('get_user_agent') ? get_user_agent() : ($_SERVER['HTTP_USER_AGENT'] ?? 'Unknown');
     }
 
     /**
@@ -33,7 +42,16 @@ trait ClientInfoTrait
      */
     protected function currentUserId(): ?int
     {
-        $session = \Core\Session::getInstance();
-        return $session->get('user_id');
+        if (php_sapi_name() === 'cli' || defined('STDIN')) {
+            // در پس‌زمینه نشست سشن وجود ندارد
+            return null;
+        }
+
+        try {
+            $session = \Core\Session::getInstance();
+            return $session->get('user_id');
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 }

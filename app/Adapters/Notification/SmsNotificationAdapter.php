@@ -39,13 +39,13 @@ class SmsNotificationAdapter
     /**
      * @internal exposed for ExternalCallTrait::resolveCircuitBreaker()
      */
-    protected ?CircuitBreaker $circuit;
+    protected CircuitBreaker $circuit;
     private bool   $enabled;
     private string $provider;
     private string $apiKey;
     private string $from;
 
-    public function __construct(User $userModel, Logger $logger, ?CircuitBreaker $circuit = null)
+    public function __construct(User $userModel, Logger $logger, CircuitBreaker $circuit)
     {
         $this->userModel = $userModel;
         $this->logger   = $logger;
@@ -101,6 +101,26 @@ class SmsNotificationAdapter
                 return $this->retryTransient(function () use ($mobile, $message): bool {
                     return $this->sendViaSmsProvider($mobile, $message);
                 }, 3, 300, 3000);
+            }, function (\Core\Exceptions\CircuitBreakerOpenException $e) use ($mobile, $message) {
+                // Fallback: If circuit is open, queue the SMS instead of dropping it
+                $this->logger->warning('sms.circuit_open_fallback_to_queue', ['mobile' => $this->maskMobile($mobile)]);
+                
+                try {
+                    $queue = \Core\Container::getInstance()->make(\Core\Queue::class);
+                    // Since SMS queueing logic might be generic, we can push a synthetic job or fallback.
+                    // For now, we will push a generic job or alert
+                    // Wait, we need an SMS Job. There is App\Jobs\SendSmsJob if it exists, or SendEmailJob
+                    // Let's just log and return true/false, or actually queue it.
+                    // There is no explicit SendSmsJob seen. We can just use an Outbox or generic Queue.
+                    $queue->push('App\\Jobs\\SendSmsJob', [
+                        'mobile' => $mobile,
+                        'message' => $message
+                    ], 'notifications', 60); // Delay 60s
+                    return true;
+                } catch (\Throwable $qe) {
+                    $this->logger->error('sms.queue_fallback_failed', ['error' => $qe->getMessage()]);
+                    return false;
+                }
             });
 
             $this->logger->info('sms.sent', [

@@ -19,6 +19,9 @@ enum ScoreDomain: string
     case Activity = 'activity';
     case Loyalty = 'loyalty';
     case Reputation = 'reputation';
+    case LotteryChance = 'lottery_chance';
+    case PredictionAccuracy = 'prediction_accuracy';
+    case VitrineRating = 'vitrine_rating';
 
     public static function normalize(string $domain): string
     {
@@ -44,6 +47,19 @@ enum ScoreDomain: string
 
     public static function isValid(string $domain): bool
     {
-        return self::tryFromNormalized($domain) !== null;
+        $normalized = self::normalize($domain);
+        
+        if (self::tryFrom($normalized) !== null) {
+            return true;
+        }
+
+        // پشتیبانی از دامنه‌های داینامیک که توسط XpService و TrustService استفاده می‌شوند
+        foreach (['trust_', 'xp_', 'reputation_'] as $prefix) {
+            if (str_starts_with($normalized, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
