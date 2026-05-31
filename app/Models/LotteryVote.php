@@ -6,6 +6,8 @@ use Core\Model;
 
 class LotteryVote extends Model
 {
+    protected static string $table = 'lottery_votes';
+
     /**
      * ثبت رأی
      * خروجی: id یا null

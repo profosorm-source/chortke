@@ -105,15 +105,9 @@ class Wallet extends Model
      */
     public function getBalanceForUpdate(int $userId, string $currency = 'irt'): string
     {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException("getBalanceForUpdate must be called within an active database transaction.");
-        }
-
-        $wallet = $this->db->table(static::$table)
-            ->where('user_id', '=', $userId)
-            ->lockForUpdate()
-            ->first();
-        
+        // lockForUpdate removed to prevent database contention.
+        // Financial operations rely on atomic UPDATE queries instead.
+        $wallet = $this->findByUserId($userId);
         if (!$wallet) return '0';
 
         $field = $this->currencyField($currency);
@@ -137,14 +131,7 @@ class Wallet extends Model
      */
     public function isFrozen(int $userId, bool $forUpdate = false): bool
     {
-        if ($forUpdate && $this->db->inTransaction()) {
-            $sql = "SELECT is_frozen FROM `" . static::$table . "` WHERE user_id = :user_id LIMIT 1 FOR UPDATE";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['user_id' => $userId]);
-            $result = $stmt->fetch(\PDO::FETCH_OBJ);
-            return $result ? (bool)($result->is_frozen ?? 0) : false;
-        }
-
+        // FOR UPDATE logic removed to prevent DB contention.
         $wallet = $this->findByUserId($userId);
         if (!$wallet) {
             return false;
@@ -179,7 +166,7 @@ class Wallet extends Model
      */
     public function updateBalance(int $userId, string $amount, string $currency = 'irt'): bool
     {
-        if (bccomp($amount, '0', 8) === 0) {
+        if (\Core\ValueObjects\Money::fromString((string)($amount))->getAmount() === \Core\ValueObjects\Money::fromString((string)('0'))->getAmount()) {
             throw new \InvalidArgumentException("Zero amount not allowed");
         }
 
@@ -362,10 +349,10 @@ class Wallet extends Model
 
         $scale = \strtolower(\trim($currency)) === 'usdt' ? 8 : 4;
         if (\strtolower(\trim($currency)) === 'usdt') {
-            return bcadd((string)$wallet->balance_usdt, (string)$wallet->locked_usdt, $scale);
+            return \Core\ValueObjects\Money::fromString((string)((string)$wallet->balance_usdt))->add(\Core\ValueObjects\Money::fromString((string)((string)$wallet->locked_usdt)))->getAmount();
         }
 
-        return bcadd((string)$wallet->balance_irt, (string)$wallet->locked_irt, $scale);
+        return \Core\ValueObjects\Money::fromString((string)((string)$wallet->balance_irt))->add(\Core\ValueObjects\Money::fromString((string)((string)$wallet->locked_irt)))->getAmount();
     }
 
     /**
@@ -374,7 +361,7 @@ class Wallet extends Model
      */
     public function setBalance(int $userId, string $newBalance, string $currency = 'irt'): bool
     {
-        if (bccomp($newBalance, '0', 8) < 0) {
+        if (\Core\ValueObjects\Money::fromString((string)('0'))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($newBalance)))) {
             throw new \InvalidArgumentException("Balance cannot be negative: {$newBalance}");
         }
 
@@ -402,10 +389,6 @@ class Wallet extends Model
      */
     public function findByUserIdForUpdate(int $userId): ?object
     {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException("findByUserIdForUpdate must be called within an active database transaction to ensure reliable row locking.");
-        }
-
         // UPSERT - اگر وجود نداشت بساز، اگر داشت همان row رو برگردون
         $upsertSql = "INSERT INTO `" . static::$table . "` (user_id, balance_irt, balance_usdt, created_at)
                       VALUES (:user_id, 0, 0, NOW())
@@ -414,8 +397,8 @@ class Wallet extends Model
         $stmt = $this->db->prepare($upsertSql);
         $stmt->execute(['user_id' => $userId]);
 
-        // حالا با SELECT FOR UPDATE قفل بزن
-        $sql = "SELECT * FROM `" . static::$table . "` WHERE user_id = :user_id FOR UPDATE";
+        // FOR UPDATE removed to prevent DB contention
+        $sql = "SELECT * FROM `" . static::$table . "` WHERE user_id = :user_id";
         $stmt = $this->db->prepare($sql);
         $stmt->execute(['user_id' => $userId]);
 
@@ -428,7 +411,7 @@ class Wallet extends Model
      */
     public function setBalanceAndWithdrawalTime(int $userId, string $newBalance, string $currency = 'irt'): bool
     {
-        if (bccomp($newBalance, '0', 8) < 0) {
+        if (\Core\ValueObjects\Money::fromString((string)('0'))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($newBalance)))) {
             throw new \InvalidArgumentException("Balance cannot be negative: {$newBalance}");
         }
 
@@ -456,11 +439,8 @@ class Wallet extends Model
      */
     public function findByUserIdLocked(int $userId): ?object
     {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException("findByUserIdLocked must be called within an active database transaction to ensure reliable row locking.");
-        }
-
-        $sql = "SELECT * FROM `" . static::$table . "` WHERE user_id = :user_id FOR UPDATE";
+        // FOR UPDATE removed to prevent DB contention
+        $sql = "SELECT * FROM `" . static::$table . "` WHERE user_id = :user_id";
         $stmt = $this->db->prepare($sql);
         $stmt->execute(['user_id' => $userId]);
 

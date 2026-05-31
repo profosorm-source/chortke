@@ -6,6 +6,7 @@ use Core\Model;
 use Core\Database;
 
 class LotteryRound extends Model {
+    protected static string $table = 'lottery_rounds';
     public const STATUS_ACTIVE = 'active';
     public const STATUS_VOTING = 'voting';
     public const STATUS_CALCULATING = 'calculating';

@@ -36,6 +36,22 @@ class Withdrawal extends Model
         return null;
     }
 
+    /**
+     * قفل کردن رکورد برداشت برای جلوگیری از تداخل تراکنش‌ها (Pessimistic Locking)
+     */
+    public function lockForUpdate(int $id): ?object
+    {
+        if (!$this->db->inTransaction()) {
+            throw new \RuntimeException('Withdrawal::lockForUpdate() requires an active transaction.');
+        }
+
+        $stmt = $this->db->prepare("SELECT * FROM " . static::$table . " WHERE id = ? FOR UPDATE");
+        $stmt->execute([$id]);
+        $result = $stmt->fetch(\PDO::FETCH_OBJ);
+        
+        return $result ?: null;
+    }
+
     public function getSummaryStats(): array
     {
         $sql = "SELECT
@@ -131,9 +147,7 @@ class Withdrawal extends Model
 
         try {
             // H14 Fix (BUG-05): دریافت رکورد درخواست برداشت با قفل بدبینانه ردیفی جهت جلوگیری از تداخل ادمین‌ها (BUG-12)
-            $stmt = $this->db->prepare("SELECT * FROM " . static::$table . " WHERE id = ? FOR UPDATE");
-            $stmt->execute([$id]);
-            $withdrawal = $stmt->fetch(\PDO::FETCH_OBJ);
+            $withdrawal = $this->lockForUpdate($id);
             if (!$withdrawal) {
                 return false;
             }

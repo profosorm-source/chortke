@@ -6,6 +6,8 @@ use Core\Model;
 use Core\Database;
 
 class TicketMessage extends Model {
+    protected static string $table = 'ticket_messages';
+
 /* -------------------------
      * Helpers (DB wrappers)
      * ------------------------- */

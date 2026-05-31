@@ -19,7 +19,7 @@ class CaptchaLog extends Model
     public function getRecentAttempts(int $limit = 50): array
     {
         return $this->db->table(self::$table)
-            ->select('id', 'user_id', 'ip_address', 'success', 'created_at')
+            ->select('id', 'user_id', 'ip_address', 'is_success AS success', 'created_at')
             ->orderBy('created_at', 'DESC')
             ->limit($limit)
             ->get() ?? [];
@@ -30,7 +30,7 @@ class CaptchaLog extends Model
         return (int)$this->db->table(self::$table)
             ->where('ip_address', '=', $ip)
             ->where('created_at', '>=', $since)
-            ->where('success', '=', 0)
+            ->where('is_success', '=', 0)
             ->count();
     }
 }

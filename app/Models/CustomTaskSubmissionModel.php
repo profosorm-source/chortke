@@ -28,6 +28,17 @@ class CustomTaskSubmissionModel extends Model
         return $r ?: null;
     }
 
+    public function submission_findByIdForUpdate(int $id): ?object
+    {
+        if (!$this->db->inTransaction()) {
+            throw new \RuntimeException("submission_findByIdForUpdate must be called within an active database transaction.");
+        }
+        $stmt = $this->db->prepare("SELECT * FROM custom_task_submissions WHERE id = ? FOR UPDATE");
+        $stmt->execute([$id]);
+        $r = $stmt->fetch(\PDO::FETCH_OBJ);
+        return $r ?: null;
+    }
+
     public function submission_create(array $d): ?object
     {
         try {

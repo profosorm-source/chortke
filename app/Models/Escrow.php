@@ -158,40 +158,26 @@ class Escrow extends Model
 
     public function logEscrowAction(int $escrowId, string $action, string $amount, string $performedBy, ?string $note = null): bool
     {
-        try {
-            $stmt = $this->db->prepare(
-                "INSERT INTO escrow_audit 
-                 (escrow_id, action, amount, performed_by, note, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?)"
-            );
+        $stmt = $this->db->prepare(
+            "INSERT INTO escrow_audit 
+             (escrow_id, action, amount, performed_by, note, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)"
+        );
 
-            return $stmt->execute([
-                $escrowId,
-                $action,
-                $amount,
-                $performedBy,
-                $note,
-                date('Y-m-d H:i:s')
-            ]);
-        } catch (\Throwable $e) {
-            // M-09: Audit logging must not break business transactions
-            // Log the failure to monitoring system but don't throw to avoid disrupting critical transactions
-            try {
-                $container = \Core\Container::getInstance();
-                if ($container && $container->has(\App\Contracts\LoggerInterface::class)) {
-                    $logger = $container->get(\App\Contracts\LoggerInterface::class);
-                    $logger->critical('escrow.audit_log_failed', [
-                        'escrow_id' => $escrowId,
-                        'action' => $action,
-                        'amount' => $amount,
-                        'error' => $e->getMessage()
-                    ]);
-                }
-            } catch (\Throwable $logEx) {
-                // Prevent secondary log exceptions from propagating
-            }
-            return false;
+        $result = $stmt->execute([
+            $escrowId,
+            $action,
+            $amount,
+            $performedBy,
+            $note,
+            date('Y-m-d H:i:s')
+        ]);
+
+        if (!$result) {
+            throw new \RuntimeException("Failed to log escrow action: {$action} for escrow {$escrowId}");
         }
+
+        return true;
     }
 
     public function findRefundable(int $escrowId, int $buyerId): ?object

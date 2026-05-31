@@ -6,6 +6,9 @@ use Core\Model;
 use Core\Database;
 
 class LotteryChanceLog extends Model {
+
+    protected static string $table = 'lottery_chance_logs';
+
 /**
      * ثبت لاگ تغییر شانس
      * خروجی: id یا null

@@ -6,6 +6,7 @@ use Core\Model;
 use Core\Database;
 
 class LotteryParticipation extends Model {
+    protected static string $table = 'lottery_participations';
     public const MIN_CHANCE = 5.0;
     public const DEFAULT_CHANCE = 100.0;
     public const BASE_REWARD = 2.5;

@@ -101,7 +101,7 @@ class TransactionQuery
             'total_transactions' => (int)$row->total_transactions,
             'active_users' => (int)$row->active_users,
             'arpu' => $row->active_users > 0 ? (float)bcdiv((string)$row->monthly_revenue, (string)$row->active_users, strtolower($currency) === 'usdt' ? 8 : 4) : 0.0,
-            'net_flow' => (float)bcsub((string)$row->total_deposits, (string)$row->total_withdrawals, strtolower($currency) === 'usdt' ? 8 : 4),
+            'net_flow' => (float)\Core\ValueObjects\Money::fromString((string)((string)$row->total_deposits))->subtract(\Core\ValueObjects\Money::fromString((string)((string)$row->total_withdrawals)))->getAmount() === 'usdt' ? 8 : 4),
             'last_updated' => $row->updated_at
         ];
     }

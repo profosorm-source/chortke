@@ -31,9 +31,36 @@ class Ads extends Model implements AdsRepositoryInterface
      */
     public function findByIdForUpdate(int $id): ?object
     {
+        if (!$this->db->inTransaction()) {
+            throw new \RuntimeException("findByIdForUpdate must be called within an active database transaction.");
+        }
         $stmt = $this->db->prepare("SELECT * FROM ads WHERE id = ? FOR UPDATE");
         $stmt->execute([$id]);
         return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
+    }
+
+    public function cancelAdRemainingBudget(int $id): bool
+    {
+        $stmt = $this->db->prepare("UPDATE ads SET remaining_budget = 0, updated_at = NOW() WHERE id = ?");
+        return $stmt->execute([$id]);
+    }
+
+    public function completeAdAndClearBudget(int $id, bool $softDelete = false): bool
+    {
+        $sql = "UPDATE ads SET remaining_budget = 0, status = 'completed', updated_at = NOW()";
+        if ($softDelete) {
+            $sql .= ", deleted_at = NOW()";
+        }
+        $sql .= " WHERE id = ?";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([$id]);
+    }
+
+    public function cancelUserCustomTasks(int $userId): bool
+    {
+        // Notice: This matches the old behavior of querying custom_tasks table
+        $stmt = $this->db->prepare("UPDATE custom_tasks SET status = 'cancelled', updated_at = NOW() WHERE user_id = ? AND status NOT IN ('completed', 'cancelled')");
+        return $stmt->execute([$userId]);
     }
 
     public function getByAdvertiser(int $userId, int $limit = 20, int $offset = 0, string $type = null, ?string $status = null): array

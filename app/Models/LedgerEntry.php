@@ -20,12 +20,12 @@ class LedgerEntry extends Model
         $debitVal = (string)($data['debit'] ?? '0');
         $creditVal = (string)($data['credit'] ?? '0');
 
-        if (bccomp($debitVal, '0', 8) < 0 || bccomp($creditVal, '0', 8) < 0) {
+        if (\Core\ValueObjects\Money::fromString((string)('0'))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($debitVal))) || \Core\ValueObjects\Money::fromString((string)('0'))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($creditVal)))) {
             throw new \InvalidArgumentException('debit and credit must be non-negative values');
         }
 
-        $hasDebit = bccomp($debitVal, '0', 8) > 0;
-        $hasCredit = bccomp($creditVal, '0', 8) > 0;
+        $hasDebit = \Core\ValueObjects\Money::fromString((string)($debitVal))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)('0')));
+        $hasCredit = \Core\ValueObjects\Money::fromString((string)($creditVal))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)('0')));
 
         if (($hasDebit && $hasCredit) || (!$hasDebit && !$hasCredit)) {
             throw new \InvalidArgumentException('LedgerEntry must have either debit or credit, but not both or neither');

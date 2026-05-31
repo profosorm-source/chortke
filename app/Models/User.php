@@ -88,6 +88,17 @@ class User extends Model
             ->first();  // ✓ Returns all columns
     }
 
+    public function findByIdForUpdate(int $userId): ?object
+    {
+        if (!$this->db->inTransaction()) {
+            throw new \RuntimeException("findByIdForUpdate must be called within an active database transaction.");
+        }
+        
+        $stmt = $this->db->prepare("SELECT id FROM users WHERE id = ? FOR UPDATE");
+        $stmt->execute([$userId]);
+        return $stmt->fetch(\PDO::FETCH_OBJ) ?: null;
+    }
+
     public function incrementFraudScore(int $userId, int $amount = 1): bool
     {
         return (bool)$this->db->query(
