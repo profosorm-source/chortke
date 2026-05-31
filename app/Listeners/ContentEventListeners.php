@@ -26,13 +26,15 @@ use App\Enums\ModuleContext;
  */
 class ContentEventListeners
 {
-    protected Container $container;
-    protected LoggerInterface $logger;
-
-    public function __construct()
-    {
-        $this->container = Container::getInstance();
-        $this->logger = $this->container->make(LoggerInterface::class);
+    public function __construct(
+        protected LoggerInterface $logger,
+        protected XpService $xpService,
+        protected ReferralService $referralService,
+        protected NotificationService $notificationService,
+        protected CacheInvalidationService $cacheInvalidationService,
+        protected WalletServiceInterface $walletService,
+        protected ?\App\Services\OutboxService $outbox = null
+    ) {
     }
 
     /**
@@ -266,8 +268,7 @@ class ContentEventListeners
     private function awardContentApprovalXp(int $userId, int $submissionId): void
     {
         try {
-            /** @var XpService $xpService */
-            $xpService = $this->container->make(XpService::class);
+            $xpService = $this->xpService;
 
             // 50 XP برای تایید محتوا
             $baseXp = 50.0;
@@ -307,8 +308,7 @@ class ContentEventListeners
     private function processReferralBonus(int $userId, int $submissionId): void
     {
         try {
-            /** @var ReferralService $referralService */
-            $referralService = $this->container->make(ReferralService::class);
+            $referralService = $this->referralService;
 
             // بررسی اینکه آیا این کاربر از طریق referral وارد شده است
             $referralResult = $referralService->checkAndAwardBonus(
@@ -338,8 +338,7 @@ class ContentEventListeners
     private function notifyContentApproved(int $userId, int $submissionId): void
     {
         try {
-            /** @var NotificationService $notificationService */
-            $notificationService = $this->container->make(NotificationService::class);
+            $notificationService = $this->notificationService;
 
             $notificationService->notify(
                 userId: $userId,
@@ -371,8 +370,7 @@ class ContentEventListeners
     private function notifyContentRejected(int $userId, int $submissionId, string $reason): void
     {
         try {
-            /** @var NotificationService $notificationService */
-            $notificationService = $this->container->make(NotificationService::class);
+            $notificationService = $this->notificationService;
 
             $notificationService->notify(
                 userId: $userId,
@@ -404,8 +402,7 @@ class ContentEventListeners
     private function notifyContentPublished(int $userId, int $submissionId): void
     {
         try {
-            /** @var NotificationService $notificationService */
-            $notificationService = $this->container->make(NotificationService::class);
+            $notificationService = $this->notificationService;
 
             $notificationService->notify(
                 userId: $userId,
@@ -437,8 +434,7 @@ class ContentEventListeners
     private function notifyContentRevenuePaid(int $userId, float $amount): void
     {
         try {
-            /** @var NotificationService $notificationService */
-            $notificationService = $this->container->make(NotificationService::class);
+            $notificationService = $this->notificationService;
 
             $notificationService->notify(
                 userId: $userId,
@@ -469,8 +465,7 @@ class ContentEventListeners
     private function invalidateContentCache(): void
     {
         try {
-            /** @var CacheInvalidationService $cacheInvalidationService */
-            $cacheInvalidationService = $this->container->make(CacheInvalidationService::class);
+            $cacheInvalidationService = $this->cacheInvalidationService;
 
             $cacheInvalidationService->invalidateModuleSearch('content');
 
@@ -488,14 +483,8 @@ class ContentEventListeners
     private function depositToWallet(int $userId, float $amount, string $type, int $referenceId): void
     {
         try {
-            /** @var WalletServiceInterface $walletService */
-            $walletService = $this->container->make(WalletServiceInterface::class);
-            $outbox = null;
-            try {
-                $outbox = $this->container->make(\App\Services\OutboxService::class);
-            } catch (\Throwable $e) {
-                // no outbox
-            }
+            $walletService = $this->walletService;
+            $outbox = $this->outbox;
 
             $payload = [
                 'user_id' => (int)$userId,

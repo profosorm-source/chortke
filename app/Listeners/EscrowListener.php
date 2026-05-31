@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Listeners;
 
 use App\Events\EscrowReleasedEvent;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\Notification\NotificationService;
 use App\Services\AuditTrail;
 use App\Contracts\LoggerInterface;

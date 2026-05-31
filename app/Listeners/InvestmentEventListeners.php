@@ -10,7 +10,7 @@ use Core\Container;
 /**
  * InvestmentEventListeners - Centralized event handling for investment domain
  * 
- * Decouples InvestmentService from WalletService, NotificationService, UserService, and ReferralService
+ * Decouples InvestmentService from WalletServiceInterface, NotificationService, UserService, and ReferralService
  * by replacing direct method calls with event-driven handlers.
  * 
  * Dependencies are lazy-loaded via Container to avoid constructor bloat.

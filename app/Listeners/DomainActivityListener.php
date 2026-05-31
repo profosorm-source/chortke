@@ -138,7 +138,7 @@ class DomainActivityListener
         $this->xpService->award($data['user_id'], 'PREDICTION', $xp, "game_{$data['game_id']}");
         // Integration با سیستم Trust (ScoreService)
         $trustDelta = $data['is_winner'] ? 1.0 : -0.5;
-        $this->xpService->incrementFraudRawScore($data['user_id'], $trustDelta, 'prediction_result');
+        $this->xpService->applyDelta('user', $data['user_id'], \App\Enums\ScoreDomain::Fraud->value, $trustDelta, 'prediction_result');
     }
 
     private function handleLotteryWon(array $data): void
@@ -274,7 +274,7 @@ class DomainActivityListener
     {
         $this->auditTrail->record('lottery.participation', $data['user_id'], $data);
         // افزایش امتیاز اعتماد برای شرکت در فعالیت‌های سایت
-        $this->xpService->incrementFraudRawScore($data['user_id'], 0.1, 'lottery_participation');
+        $this->xpService->applyDelta('user', $data['user_id'], \App\Enums\ScoreDomain::Fraud->value, 0.1, 'lottery_participation');
     }
 
     private function handlePredictionBet(array $data): void

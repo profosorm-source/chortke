@@ -101,7 +101,7 @@ class WithdrawalListener
 
             // Update trust score
             $scoreService = $this->container->make(\App\Services\ScoreService::class);
-            $scoreService->addScore($userId, 'trust', 5, 'withdrawal_approved');
+            $scoreService->applyDelta('user', $userId, 'score_trust', 5, 'withdrawal_approved');
 
             // Log to audit trail
             $auditTrail = $this->container->make(AuditTrail::class);

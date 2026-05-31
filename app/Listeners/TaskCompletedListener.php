@@ -11,6 +11,7 @@ use App\Services\ScoreService;
 use App\Services\AuditTrail;
 use App\Contracts\LoggerInterface;
 use App\Enums\ModuleContext;
+use App\Services\OutboxService;
 use Core\Container;
 
 /**
@@ -61,7 +62,7 @@ class TaskCompletedListener
 
             // Update trust score
             $scoreService = $this->container->make(ScoreService::class);
-            $scoreService->addScore($userId, 'trust', 3, 'task_completed');
+            $scoreService->applyDelta('user', $userId, 'score_trust', 3, 'task_completed');
 
             // Log to audit trail
             $auditTrail = $this->container->make(AuditTrail::class);
@@ -75,14 +76,24 @@ class TaskCompletedListener
                 ]
             ]);
 
-            // Send notification
-            $notificationService = $this->container->make(NotificationService::class);
-            $notificationService->send(
-                $userId,
-                'task.completed',
-                'تسک تکمیل شد',
-                "تسک \"$title\" تکمیل شد. $xpReward XP کسب کردید!",
-                ['task_id' => $taskId, 'xp_reward' => $xpReward]
+            // Send notification asynchronously via OutboxService
+            $outboxService = $this->container->make(OutboxService::class);
+            $outboxService->record(
+                'notification',
+                $userId . '_task_completed',
+                'send_notification',
+                [
+                    'notification' => [
+                        'method' => 'send',
+                        'args' => [
+                            $userId,
+                            'task.completed',
+                            'تسک تکمیل شد',
+                            "تسک \"$title\" تکمیل شد. $xpReward XP کسب کردید!",
+                            ['task_id' => $taskId, 'xp_reward' => $xpReward]
+                        ]
+                    ]
+                ]
             );
 
         } catch (\Throwable $e) {

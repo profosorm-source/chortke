@@ -11,7 +11,7 @@ use Core\Container;
 /**
  * InfluencerEventListeners - Centralized event handling for influencer domain
  * 
- * Decouples InfluencerService from WalletService, NotificationService, XpService, 
+ * Decouples InfluencerService from WalletServiceInterface, NotificationService, XpService, 
  * ScoreService, and ReferralService by replacing direct method calls with event-driven handlers.
  * 
  * Dependencies are lazy-loaded via Container to avoid constructor bloat.
