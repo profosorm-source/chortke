@@ -63,7 +63,15 @@ class Cache
 
     public static function reset(): void
     {
+        if (static::$instance !== null) {
+            static::$instance->flushAllLocks();
+        }
         static::$instance = null;
+    }
+
+    public function __destruct()
+    {
+        $this->flushAllLocks();
     }
 
     /** نوع درایور فعال: 'redis' یا 'file' */
@@ -280,7 +288,15 @@ class Cache
 
         // CORE-039: Cache Stampede mitigation using distributed double-check lock
         $lockKey = 'remember:' . $key;
-        if ($this->lock($lockKey, 30, 5)) {
+        $lockAcquired = false;
+        try {
+            $lockAcquired = $this->lock($lockKey, 30, 5);
+        } catch (\RuntimeException $e) {
+            // Lock is fail-closed in production without Redis. Proceed without locking for non-atomic operations.
+            $lockAcquired = false;
+        }
+
+        if ($lockAcquired) {
             try {
                 // Double check
                 $value = $this->get($key);
@@ -340,7 +356,7 @@ class Cache
     public function increment(string $key, int $step = 1, int $ttlSeconds = 0): int|false
     {
         // CORE-038: Fail-closed if distributed state operations called without real-time central store
-        if ($this->driver !== 'redis' && config('app.env') === 'production') {
+        if ($this->driver !== 'redis' && (config('app.env') === 'production' || env('APP_ENV') === 'production')) {
             throw new \RuntimeException('Atomic counters/limiters require Redis driver in production to prevent split-brain.', 500);
         }
 
@@ -420,7 +436,7 @@ LUA;
 
     public function incrementFloat(string $key, float $step = 1.0, int $ttlSeconds = 0): float|false
     {
-        if ($this->driver !== 'redis' && config('app.env') === 'production') {
+        if ($this->driver !== 'redis' && (config('app.env') === 'production' || env('APP_ENV') === 'production')) {
             throw new \RuntimeException('Atomic float counters require Redis driver in production.', 500);
         }
 
@@ -564,7 +580,7 @@ $data = $this->safeUnserialize($raw === false ? null : $raw);
     public function lock(string $key, int $ttl = 30, int $wait = 1): bool
     {
         // CORE-038: Prevent unsafe local lock fallback on production
-        if ($this->driver !== 'redis' && config('app.env') === 'production') {
+        if ($this->driver !== 'redis' && (config('app.env') === 'production' || env('APP_ENV') === 'production')) {
             throw new \RuntimeException('Distributed locking functionality requires the Redis driver in production.', 500);
         }
 

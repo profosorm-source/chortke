@@ -425,13 +425,11 @@ class QueryBuilder
             return (bool)$stmt->rowCount();
         } catch (\PDOException $e) {
             try {
-                if (function_exists('logger')) {
-                    logger()->error('database.increment.failed', [
+                if (isset($this->logger)) { $this->logger->error('database.increment.failed', [
                         'channel' => 'database',
                         'sql' => $sql ?? null,
                         'error' => $e->getMessage(),
-                    ]);
-                }
+                    ]); }
             } catch (\Throwable $logError) {
                 error_log('QueryBuilder increment failed: ' . $e->getMessage());
             }
@@ -492,8 +490,7 @@ class QueryBuilder
         } catch (\PDOException $e) {
             // ✅ Safe logging
             try {
-                if (function_exists('logger')) {
-                    logger()->error('database.builder.query.failed', [
+                if (isset($this->logger)) { $this->logger->error('database.builder.query.failed', [
                         'channel' => 'database',
                         'sql' => $sql ?? null,
                         'bindings' => $bindings,
@@ -501,8 +498,7 @@ class QueryBuilder
                         'exception' => get_class($e),
                         'file' => $e->getFile(),
                         'line' => $e->getLine(),
-                    ]);
-                }
+                    ]); }
             } catch (\Throwable $logError) {
                 error_log('QueryBuilder query failed: ' . $e->getMessage());
             }
@@ -606,16 +602,14 @@ class QueryBuilder
     } catch (\PDOException $e) {
         // ✅ Safe logging
         try {
-            if (function_exists('logger')) {
-                logger()->error('database.insert.failed', [
+            if (isset($this->logger)) { $this->logger->error('database.insert.failed', [
                     'channel' => 'database',
                     'sql' => $sql ?? null,
                     'error' => $e->getMessage(),
                     'exception' => get_class($e),
                     'file' => $e->getFile(),
                     'line' => $e->getLine(),
-                ]);
-            }
+                ]); }
         } catch (\Throwable $logError) {
             error_log('QueryBuilder insert failed: ' . $e->getMessage());
         }
@@ -671,8 +665,7 @@ class QueryBuilder
         } catch (\PDOException $e) {
             // ✅ Safe logging
             try {
-                if (function_exists('logger')) {
-                    logger()->error('database.update.failed', [
+                if (isset($this->logger)) { $this->logger->error('database.update.failed', [
                         'channel' => 'database',
                         'sql' => $sql ?? null,
                         'data' => $data ?? [],
@@ -680,8 +673,7 @@ class QueryBuilder
                         'exception' => get_class($e),
                         'file' => $e->getFile(),
                         'line' => $e->getLine(),
-                    ]);
-                }
+                    ]); }
             } catch (\Throwable $logError) {
                 error_log('QueryBuilder update failed: ' . $e->getMessage());
             }
@@ -717,16 +709,14 @@ class QueryBuilder
         } catch (\PDOException $e) {
             // ✅ Safe logging
             try {
-                if (function_exists('logger')) {
-                    logger()->error('database.delete.failed', [
+                if (isset($this->logger)) { $this->logger->error('database.delete.failed', [
                         'channel' => 'database',
                         'sql' => $sql ?? null,
                         'error' => $e->getMessage(),
                         'exception' => get_class($e),
                         'file' => $e->getFile(),
                         'line' => $e->getLine(),
-                    ]);
-                }
+                    ]); }
             } catch (\Throwable $logError) {
                 error_log('QueryBuilder delete failed: ' . $e->getMessage());
             }

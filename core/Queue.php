@@ -53,9 +53,7 @@ class Queue
             }
         } catch (\Throwable $e) {
             $this->useRedis = false;
-            if (function_exists('logger')) {
-                logger()->warning('queue.redis_init_failed', ['error' => $e->getMessage()]);
-            }
+            if (isset($this->logger)) { $this->logger->warning('queue.redis_init_failed', ['error' => $e->getMessage()]); }
         }
     }
 
@@ -69,6 +67,23 @@ class Queue
         }
 
         $jobClass = trim($job, '\\');
+
+        // بررسی صفت به صورت داینامیک بدون نیاز به ساخت کلاس Attribute (Lazy Evaluation)
+        try {
+            if (class_exists($jobClass)) {
+                $reflection = new \ReflectionClass($jobClass);
+                foreach ($reflection->getAttributes() as $attribute) {
+                    if (str_ends_with($attribute->getName(), 'Queue')) {
+                        $args = $attribute->getArguments();
+                        if (!empty($args[0])) {
+                            return (string) $args[0];
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // نادیده گرفتن خطاهای Reflection و رجوع به Fallback
+        }
 
         $mapping = [
             // notifications
@@ -123,13 +138,11 @@ class Queue
         $size = (int) $cache->remember($cacheKey, 5, fn() => $this->size($queue));
         
         if ($size >= $limit) {
-            if (function_exists('logger')) {
-                logger()->critical('queue.backpressure.activated', [
+            if (isset($this->logger)) { $this->logger->critical('queue.backpressure.activated', [
                     'queue' => $queue,
                     'size' => $size,
                     'limit' => $limit
-                ]);
-            }
+                ]); }
             throw new \RuntimeException("Backpressure Active: Queue {$queue} is full (size: {$size}). Please try again later.");
         }
     }
@@ -156,14 +169,12 @@ class Queue
                     $cache->incrementFloat($tempKey, $delta);
                     $cache->forget("user_score:{$userId}:{$domain}");
                 } catch (\Throwable $e) {
-                    if (function_exists('logger')) {
-                        logger()->warning('queue.delta_buffer.failed', [
+                    if (isset($this->logger)) { $this->logger->warning('queue.delta_buffer.failed', [
                             'user_id' => $userId,
                             'domain' => $domain,
                             'delta' => $delta,
                             'error' => $e->getMessage()
-                        ]);
-                    }
+                        ]); }
                 }
             }
         }
@@ -201,13 +212,11 @@ class Queue
 
                 return true;
             } catch (\Throwable $e) {
-                if (function_exists('logger')) {
-                    logger()->error('queue.redis.push_failed_falling_back', [
+                if (isset($this->logger)) { $this->logger->error('queue.redis.push_failed_falling_back', [
                         'job' => $job,
                         'queue' => $queue,
                         'error' => $e->getMessage(),
-                    ]);
-                }
+                    ]); }
                 // در صورت بروز خطا در Redis، به صف دیتابیس سوئیچ می‌کند
             }
         }
@@ -256,13 +265,11 @@ class Queue
         $count = \Core\Cache::getInstance()->increment($cacheKey, 1, max(60, $uniqueForSeconds));
 
         if ($count !== 1) {
-            if (function_exists('logger')) {
-                logger()->info('queue.unique_duplicate_skipped', [
+            if (isset($this->logger)) { $this->logger->info('queue.unique_duplicate_skipped', [
                     'queue' => $queue,
                     'job' => $job,
                     'dedup_key' => $dedupKey,
-                ]);
-            }
+                ]); }
             return false;
         }
 
@@ -378,12 +385,10 @@ LUA;
                     'attempts' => $newAttempts
                 ];
             } catch (\Throwable $e) {
-                if (function_exists('logger')) {
-                    logger()->error('queue.redis.pop_failed_falling_back', [
+                if (isset($this->logger)) { $this->logger->error('queue.redis.pop_failed_falling_back', [
                         'queue' => $queue,
                         'error' => $e->getMessage(),
-                    ]);
-                }
+                    ]); }
                 // در صورت بروز هر خطایی، به عنوان Fallback سراغ دیتابیس می‌رود
             }
         }
@@ -469,12 +474,10 @@ LUA;
                     return true;
                 }
             } catch (\Throwable $e) {
-                if (function_exists('logger')) {
-                    logger()->error('queue.redis.delete_failed', [
+                if (isset($this->logger)) { $this->logger->error('queue.redis.delete_failed', [
                         'id' => $id,
                         'error' => $e->getMessage(),
-                    ]);
-                }
+                    ]); }
             }
         }
 
@@ -484,6 +487,49 @@ LUA;
             ->delete();
 
         return $result > 0;
+    }
+
+    /**
+     * تمدید زمان رزرو جاب (Heartbeat) برای جلوگیری از بازگشت زودهنگام به صف در جاب‌های طولانی
+     */
+    public function keepAlive(int $id, ?string $queue = null, int $extraTime = 90): bool
+    {
+        if ($this->useRedis) {
+            try {
+                if ($queue === null) {
+                    $jobDataJson = $this->redis->get("{$this->redisPrefix}:job:{$id}");
+                    if (!$jobDataJson) return false;
+                    $jobData = json_decode($jobDataJson, true);
+                    $queue = $jobData['queue'] ?? 'default';
+                }
+
+                $newTimeout = time() + $extraTime;
+                
+                // Update score in reserved set to prevent self-healing script from grabbing it
+                $score = $this->redis->zScore("{$this->redisPrefix}:{$queue}:reserved", (string)$id);
+                if ($score !== false) {
+                    $this->redis->zAdd("{$this->redisPrefix}:{$queue}:reserved", $newTimeout, (string)$id);
+                    return true;
+                }
+                return false;
+            } catch (\Throwable $e) {
+                if (isset($this->logger)) { $this->logger->error('queue.redis.keepalive_failed', ['id' => $id, 'error' => $e->getMessage()]); }
+                return false;
+            }
+        }
+
+        // Database mode
+        try {
+            $nowStr = date('Y-m-d H:i:s');
+            // در دیتابیس reserved_at نشان دهنده زمان رزرو است، با بروزرسانی آن به زمان حال، visibility_timeout تمدید می‌شود
+            $result = $this->db->execute(
+                "UPDATE queues SET reserved_at = :now WHERE id = :id AND reserved_at IS NOT NULL",
+                ['now' => $nowStr, 'id' => $id]
+            );
+            return $result > 0;
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**
@@ -519,12 +565,10 @@ LUA;
                     return true;
                 }
             } catch (\Throwable $e) {
-                if (function_exists('logger')) {
-                    logger()->error('queue.redis.release_failed', [
+                if (isset($this->logger)) { $this->logger->error('queue.redis.release_failed', [
                         'id' => $id,
                         'error' => $e->getMessage(),
-                    ]);
-                }
+                    ]); }
             }
         }
 
@@ -577,12 +621,10 @@ LUA;
                 $reserved = $this->redis->zCard("{$this->redisPrefix}:{$queue}:reserved");
                 return (int)($pending + $reserved);
             } catch (\Throwable $e) {
-                if (function_exists('logger')) {
-                    logger()->error('queue.redis.size_failed', [
+                if (isset($this->logger)) { $this->logger->error('queue.redis.size_failed', [
                         'queue' => $queue,
                         'error' => $e->getMessage(),
-                    ]);
-                }
+                    ]); }
             }
         }
 
@@ -594,7 +636,7 @@ LUA;
     /**
      * انتقال جاب شکست خورده نهایی به Dead Letter Queue (DLQ) و حذف از صف اصلی
      */
-    public function fail(int $id, \Throwable $exception): bool
+    public function fail(int $id, \Throwable $exception, string $errorClass = 'unknown', string $status = 'pending_analysis', ?int $nextRetryAt = null): bool
     {
         try {
             $this->db->beginTransaction();
@@ -612,9 +654,7 @@ LUA;
                         $payloadStr = $jobData['payload'] ?? '';
                     }
                 } catch (\Throwable $e) {
-                    if (function_exists('logger')) {
-                        logger()->error('queue.redis.fail_read_failed', ['id' => $id, 'error' => $e->getMessage()]);
-                    }
+                    if (isset($this->logger)) { $this->logger->error('queue.redis.fail_read_failed', ['id' => $id, 'error' => $e->getMessage()]); }
                 }
             }
 
@@ -633,20 +673,26 @@ LUA;
             $exceptionStr = get_class($exception) . ': ' . $exception->getMessage() . "\n" . $exception->getTraceAsString();
 
             // لاگ کردن رویداد به عنوان یک خطا در poison message
-            if (function_exists('logger')) {
-                logger()->critical('queue_job_failed_dlq_moved', [
+            if (isset($this->logger)) { $this->logger->critical('queue_job_failed_dlq_moved', [
                     'job_id' => $id,
                     'queue' => $queueName,
                     'payload' => $payloadStr,
-                    'error' => $exception->getMessage()
-                ]);
-            }
+                    'error' => $exception->getMessage(),
+                    'classification' => $errorClass,
+                    'status' => $status
+                ]); }
+
+            $nextRetryFormatted = $nextRetryAt ? date('Y-m-d H:i:s', $nextRetryAt) : null;
 
             $this->db->table('failed_jobs')->insert([
                 'queue' => $queueName,
                 'payload' => $payloadStr,
                 'exception' => $exceptionStr,
-                'failed_at' => date('Y-m-d H:i:s')
+                'failed_at' => date('Y-m-d H:i:s'),
+                'error_classification' => $errorClass,
+                'status' => $status,
+                'retry_count' => 0,
+                'next_retry_at' => $nextRetryFormatted
             ]);
 
             // ۳. حذف از صف اصلی
@@ -658,6 +704,51 @@ LUA;
             $this->db->rollback();
             throw $e;
         }
+    }
+
+    /**
+     * دریافت آمار Poison Messages
+     */
+    public function getDlqMetrics(): array
+    {
+        try {
+            $sql = "SELECT 
+                        COUNT(*) as total_failed,
+                        SUM(CASE WHEN error_classification = 'transient' THEN 1 ELSE 0 END) as transient_count,
+                        SUM(CASE WHEN error_classification = 'permanent' THEN 1 ELSE 0 END) as permanent_count,
+                        SUM(CASE WHEN error_classification = 'business' THEN 1 ELSE 0 END) as business_count,
+                        SUM(CASE WHEN status = 'quarantined' THEN 1 ELSE 0 END) as quarantined_count,
+                        SUM(CASE WHEN status = 'dead_letter' THEN 1 ELSE 0 END) as dead_letter_count,
+                        SUM(CASE WHEN status = 'retrying' THEN 1 ELSE 0 END) as retrying_count
+                    FROM failed_jobs";
+            $row = $this->db->fetch($sql);
+            
+            return [
+                'total' => (int)($row->total_failed ?? 0),
+                'by_class' => [
+                    'transient' => (int)($row->transient_count ?? 0),
+                    'permanent' => (int)($row->permanent_count ?? 0),
+                    'business'  => (int)($row->business_count ?? 0),
+                ],
+                'by_status' => [
+                    'quarantined' => (int)($row->quarantined_count ?? 0),
+                    'dead_letter' => (int)($row->dead_letter_count ?? 0),
+                    'retrying'    => (int)($row->retrying_count ?? 0),
+                ]
+            ];
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * حذف خودکار جاب‌های بسیار قدیمی (Expiration Policy)
+     */
+    public function cleanDeadLetters(int $days = 30): int
+    {
+        $cutoff = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+        $sql = "DELETE FROM failed_jobs WHERE status = 'dead_letter' AND failed_at < ?";
+        return (int) $this->db->execute($sql, [$cutoff]);
     }
 
     /**
@@ -725,18 +816,46 @@ LUA;
      */
     public function retryFailedJobsBatch(?string $queue = null, int $limit = 100): array
     {
+        return $this->retryEligibleFailedJobs($queue, $limit, true); // true = ignore next_retry_at for manual execution
+    }
+
+    /**
+     * بازپخش هوشمند جاب‌های ناموفق (Poison Message Smart Retry)
+     */
+    public function retryEligibleFailedJobs(?string $queue = null, int $limit = 100, bool $forceManual = false): array
+    {
         $limit = max(1, min(1000, $limit));
         $stats = ['requeued' => 0, 'skipped' => 0, 'errors' => 0];
 
-        $sql = "SELECT id, queue, payload FROM failed_jobs";
+        $sql = "SELECT id, queue, payload, retry_count FROM failed_jobs WHERE ";
+        if ($forceManual) {
+            $sql .= "1=1"; // For manual CLI trigger
+        } else {
+            $sql .= "status = 'retrying' AND (next_retry_at IS NULL OR next_retry_at <= NOW())";
+        }
+
         $params = [];
         if ($queue !== null && $queue !== '') {
-            $sql .= " WHERE queue = ?";
+            $sql .= " AND queue = ?";
             $params[] = $queue;
         }
         $sql .= " ORDER BY failed_at ASC LIMIT " . (int)$limit;
 
-        $rows = $this->db->fetchAll($sql, $params);
+        try {
+            $rows = $this->db->fetchAll($sql, $params);
+        } catch (\Throwable $e) {
+            // If the column doesn't exist yet (migration not run), fallback to simple query
+            $sql = "SELECT id, queue, payload, 0 as retry_count FROM failed_jobs";
+            if ($queue !== null && $queue !== '') {
+                $sql .= " WHERE queue = ?";
+                $params = [$queue];
+            } else {
+                $params = [];
+            }
+            $sql .= " ORDER BY failed_at ASC LIMIT " . (int)$limit;
+            $rows = $this->db->fetchAll($sql, $params);
+        }
+
         if (empty($rows)) {
             return $stats;
         }
@@ -745,14 +864,24 @@ LUA;
             $payload = json_decode((string)$row->payload, true);
             if (!is_array($payload) || empty($payload['job'])) {
                 $stats['skipped']++;
+                if (!$forceManual) {
+                    try {
+                        $this->db->execute("UPDATE failed_jobs SET status = 'dead_letter' WHERE id = ?", [(int)$row->id]);
+                    } catch (\Throwable $e) {}
+                }
                 continue;
             }
 
             try {
                 $this->db->beginTransaction();
+                
+                // Keep the retry_count memory in the job meta if needed, but not strictly required
+                $data = (array)($payload['data'] ?? []);
+                $data['_dlq_retry_count'] = ((int)($row->retry_count ?? 0)) + 1;
+
                 $ok = $this->push(
                     (string)$payload['job'],
-                    (array)($payload['data'] ?? []),
+                    $data,
                     (string)($row->queue ?? $this->defaultQueue)
                 );
                 if (!$ok) {
@@ -768,16 +897,66 @@ LUA;
                     $this->db->rollBack();
                 }
                 $stats['errors']++;
-                if (function_exists('logger')) {
-                    logger()->warning('queue.failed_retry.failed', [
+                if (isset($this->logger)) { $this->logger->warning('queue.failed_retry.failed', [
                         'failed_job_id' => (int)$row->id,
                         'queue'         => $row->queue ?? null,
                         'error'         => $e->getMessage(),
-                    ]);
-                }
+                    ]); }
             }
         }
         return $stats;
+    }
+
+    /**
+     * برداشتن جاب از DLQ (جدول failed_jobs) برای پردازش توسط DlqWorker
+     */
+    public function popDlq(): ?array
+    {
+        try {
+            $this->db->beginTransaction();
+
+            $job = $this->db->selectOne(
+                "SELECT * FROM failed_jobs ORDER BY failed_at ASC LIMIT 1 FOR UPDATE"
+            );
+
+            if (!$job) {
+                $this->db->commit();
+                return null;
+            }
+
+            // پاک کردن از DLQ چون در حال پردازش توسط ورکر است
+            $this->db->execute("DELETE FROM failed_jobs WHERE id = :id", ['id' => $job->id]);
+
+            $this->db->commit();
+
+            $payload = json_decode((string)$job->payload, true) ?? [];
+
+            return [
+                'id' => (int)$job->id,
+                'queue' => $job->queue,
+                'job' => $payload['job'] ?? '',
+                'data' => $payload['data'] ?? [],
+                'meta' => $payload['meta'] ?? [],
+                'exception' => $job->exception,
+                'failed_at' => $job->failed_at
+            ];
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * ذخیره جاب مرده در جدول آرشیو (در صورت وجود) یا صرفاً حذف قطعی آن
+     */
+    public function archiveDlqJob(array $job, string $reason): void
+    {
+        // در صورت نیاز به آرشیو، می‌توان اینجا در جدولی مثل poison_messages ثبت کرد
+        // فعلاً چون جاب در popDlq از failed_jobs حذف شده، فقط در لاگ می‌نویسیم.
+        if (isset($this->logger)) { $this->logger->warning('dlq.job_archived', [
+                'job' => $job['job'] ?? null,
+                'reason' => $reason
+            ]); }
     }
 
     /**
@@ -810,9 +989,7 @@ LUA;
                     $failedRow = $this->db->selectOne("SELECT COUNT(*) AS c FROM failed_jobs WHERE queue = :queue", ['queue' => $q]);
                     $failed = (int)($failedRow->c ?? 0);
                 } catch (\Throwable $e) {
-                    if (function_exists('logger')) {
-                        logger()->error('queue.redis.status_report_failed', ['queue' => $q, 'error' => $e->getMessage()]);
-                    }
+                    if (isset($this->logger)) { $this->logger->error('queue.redis.status_report_failed', ['queue' => $q, 'error' => $e->getMessage()]); }
                     $this->useRedis = false; // سوئیچ به دیتابیس به عنوان Fallback
                 }
             }

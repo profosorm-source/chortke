@@ -15,6 +15,7 @@ class Database
 {
     private static $instance = null;
     private $pdo;
+    private $pdoRead; // Read Replica Connection
 	private static int $queryDepth = 0;
     private static bool $fallbackLogging = false;
 	private static ?array $lastSqlErrorContext = null;
@@ -33,17 +34,27 @@ class Database
     private function __construct(?array $dbConfig = null)
     {
         $this->config = $dbConfig ?? config('database');
-        try {
-            $this->reconnect();
-        } catch (\PDOException $e) {
-            // M5 Fix: استفاده از RuntimeException به جای کلاس والد اکسپشن جهت رعایت تمیزی در سلسله مراتب خطاها
-            throw new \RuntimeException("Database connection failed: " . $e->getMessage(), (int)$e->getCode(), $e);
-        }
     }
 
     private function reconnect(): void
     {
-        $dsn = "mysql:host={$this->config['host']};port={$this->config['port']};dbname={$this->config['name']};charset={$this->config['charset']};connect_timeout=2";
+        $this->pdo = $this->createPdoConnection($this->config);
+        
+        // Setup Read Replica if configured (supports array of hosts for load balancing)
+        if (!empty($this->config['read'])) {
+            $readConfig = array_merge($this->config, $this->config['read']);
+            if (is_array($readConfig['host'])) {
+                $readConfig['host'] = $readConfig['host'][array_rand($readConfig['host'])];
+            }
+            $this->pdoRead = $this->createPdoConnection($readConfig);
+        } else {
+            $this->pdoRead = $this->pdo; // Fallback to master
+        }
+    }
+
+    private function createPdoConnection(array $config): \PDO
+    {
+        $dsn = "mysql:host={$config['host']};port={$config['port']};dbname={$config['name']};charset={$config['charset']};connect_timeout=2";
         
         $options = [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
@@ -54,7 +65,7 @@ class Database
         ];
 
         if (defined('\PDO::MYSQL_ATTR_INIT_COMMAND')) {
-            $options[\PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES {$this->config['charset']} COLLATE utf8mb4_unicode_ci";
+            $options[\PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES {$config['charset']} COLLATE utf8mb4_unicode_ci";
         }
         if (defined('\PDO::MYSQL_ATTR_READ_TIMEOUT')) {
             $options[\PDO::MYSQL_ATTR_READ_TIMEOUT] = 3; // ✅ Query Timeout Manager (Read)
@@ -63,12 +74,12 @@ class Database
             $options[\PDO::MYSQL_ATTR_WRITE_TIMEOUT] = 3; // ✅ Query Timeout Manager (Write)
         }
         
-        $this->pdo = new \PDO($dsn, $this->config['user'], $this->config['pass'], $options);
+        return new \PDO($dsn, $config['user'], $config['pass'], $options);
     }
 
     public function ensureConnected(): void
     {
-        if (time() - $this->lastPingTime > self::PING_INTERVAL) {
+        if ($this->pdo === null || time() - $this->lastPingTime > self::PING_INTERVAL) {
             try {
                 if ($this->pdo) {
                     $this->pdo->query('SELECT 1');
@@ -245,8 +256,12 @@ private static function recordSqlFailure(string $event, array $context): void
 	
 public function prepare(string $sql): \PDOStatement
 {
+    $this->ensureConnected();
     try {
-        return $this->pdo->prepare($sql);
+        $isRead = stripos(ltrim($sql), 'SELECT') === 0;
+        $useMaster = !$isRead || $this->inTransaction();
+        $pdo = $useMaster ? $this->pdo : ($this->pdoRead ?? $this->pdo);
+        return $pdo->prepare($sql);
     } catch (\Throwable $e) {
         self::recordSqlFailure('database.prepare.failed', $this->buildSqlErrorContext($sql, [], $e));
         throw $e;
@@ -258,6 +273,7 @@ public function prepare(string $sql): \PDOStatement
      */
     public function getPdo()
     {
+        $this->ensureConnected();
         return $this->pdo;
     }
 
@@ -266,6 +282,7 @@ public function prepare(string $sql): \PDOStatement
      */
     public function table(string $table): QueryBuilder
     {
+        $this->ensureConnected();
         return (new QueryBuilder($this->pdo))->table($table);
     }
 	
@@ -273,27 +290,27 @@ public function prepare(string $sql): \PDOStatement
 	
 public function fetch(string $sql, array $params = []): ?object
 {
-    $stmt = $this->executeStatement($sql, $params, 'database.fetch.failed');
+    $stmt = $this->executeStatement($sql, $params, 'database.fetch.failed', true);
     $row = $stmt->fetch(\PDO::FETCH_OBJ);
     return $row ?: null;
 }
 
 public function fetchAll(string $sql, array $params = []): array
 {
-    $stmt = $this->executeStatement($sql, $params, 'database.fetchAll.failed');
+    $stmt = $this->executeStatement($sql, $params, 'database.fetchAll.failed', true);
     return $stmt->fetchAll(\PDO::FETCH_OBJ) ?: [];
 }
 
 public function fetchColumn(string $sql, array $params = [], int $column = 0)
 {
-    $stmt = $this->executeStatement($sql, $params, 'database.fetchColumn.failed');
+    $stmt = $this->executeStatement($sql, $params, 'database.fetchColumn.failed', true);
     return $stmt->fetchColumn($column);
 }
 
     /**
      * اجرای مرکزی دستورات دیتابیس با مدیریت هوشمند ریکرژن، لاگ و استثناها
      */
-    private function executeStatement(string $sql, array $params, string $failureEvent): \PDOStatement
+    private function executeStatement(string $sql, array $params, string $failureEvent, bool $isRead = false): \PDOStatement
     {
         $this->ensureConnected();
 
@@ -307,7 +324,10 @@ public function fetchColumn(string $sql, array $params = [], int $column = 0)
         $startTime = microtime(true);
 
         try {
-            $stmt = $this->pdo->prepare($sql);
+            $useMaster = !$isRead || $this->inTransaction();
+            $pdo = $useMaster ? $this->pdo : ($this->pdoRead ?? $this->pdo);
+
+            $stmt = $pdo->prepare($sql);
 
             foreach ($params as $key => $value) {
                 $param = is_int($key) ? $key + 1 : ':' . ltrim((string)$key, ':');
@@ -347,7 +367,10 @@ public function fetchColumn(string $sql, array $params = [], int $column = 0)
                     $this->lastPingTime = time();
                     
                     // Retry once
-                    $stmt = $this->pdo->prepare($sql);
+                    $useMaster = !$isRead || $this->inTransaction();
+                    $pdo = $useMaster ? $this->pdo : ($this->pdoRead ?? $this->pdo);
+
+                    $stmt = $pdo->prepare($sql);
                     foreach ($params as $key => $value) {
                         $param = is_int($key) ? $key + 1 : ':' . ltrim((string)$key, ':');
                         $type = \PDO::PARAM_STR;
@@ -421,7 +444,8 @@ public function fetchColumn(string $sql, array $params = [], int $column = 0)
      */
     public function query(string $sql, array $params = []): \PDOStatement
     {
-        return $this->executeStatement($sql, $params, 'database.query.failed');
+        $isRead = stripos(ltrim($sql), 'SELECT') === 0;
+        return $this->executeStatement($sql, $params, 'database.query.failed', $isRead);
     }
 
 private function formatParamValue(mixed $value): string
@@ -562,7 +586,8 @@ public function select(string $sql, array $params = []): array
  */
 public function lastInsertId(): int
 {
-    return (int) $this->pdo->lastInsertId();
+    $this->ensureConnected();
+    return (int)$this->pdo->lastInsertId();
 }
     /**
      * INSERT
@@ -588,6 +613,7 @@ public function lastInsertId(): int
      */
     public function beginTransaction(): void
     {
+        $this->ensureConnected();
         if ($this->transactionLevel === 0) {
             try {
                 $this->pdo->beginTransaction();

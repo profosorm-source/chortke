@@ -43,11 +43,14 @@ class ExceptionHandler
      * M27 Fix: ذخیره‌سازی نهایی اطلاعات بحرانی درون صف اضطراری آفلاین سنتری شخصی (jsonl)
      * این فایل بعداً در اولین ورود مدیر توسط داشبورد همگام‌سازی و از دیسک حذف می‌شود
      */
-    private static function logToEmergencySentry(string $message, ?string $trace = null, string $level = 'ERROR'): void
+    private static function logToEmergencySentry(string $message, ?string $trace = null, string $level = 'ERROR', ?string $errorCode = null): void
     {
         try {
+            $traceId = $_SERVER['HTTP_X_REQUEST_ID'] ?? $_SERVER['REQUEST_ID'] ?? 'unknown';
             $emergencyData = [
                 'message'   => '🔴 ' . $level . ': ' . $message,
+                'error_code'=> $errorCode,
+                'trace_id'  => $traceId,
                 'ip'        => $_SERVER['REMOTE_ADDR'] ?? 'offline_cli',
                 'timestamp' => time(),
                 'trace'     => $trace ?? 'N/A'
@@ -131,7 +134,8 @@ private static function latestDbFailureContext(): ?array
         self::logToEmergencySentry(
             'Recursive Exception Limit Exceeded: ' . $exception->getMessage(),
             $exception->getTraceAsString(),
-            'CRITICAL_RECURSIVE_LIMIT'
+            'CRITICAL_RECURSIVE_LIMIT',
+            'RECURSION_ERROR'
         );
         
         http_response_code(500);
@@ -139,7 +143,15 @@ private static function latestDbFailureContext(): ?array
     }
 
     try {
-        // ✅ استفاده صحیح از Logger - بدون $this
+        if (!isset($_SERVER['REQUEST_ID']) && !isset($_SERVER['HTTP_X_REQUEST_ID'])) {
+            $_SERVER['REQUEST_ID'] = uniqid('req-');
+        }
+
+        $payload = self::getJsonPayloadForException($exception);
+        $errorCode = $payload['error']['code'] ?? 'UNKNOWN_ERROR';
+        $traceId = $payload['meta']['trace_id'] ?? $_SERVER['REQUEST_ID'];
+
+        // استفاده صحیح از Logger - بدون $this
         try {
             if (function_exists('logger')) {
     $context = [
@@ -162,7 +174,7 @@ private static function latestDbFailureContext(): ?array
 
         // لاگ پیشرفته موجود خود پروژه
         try {
-            self::logToAdvancedSystem($exception);
+            self::logToAdvancedSystem($exception, $errorCode, $traceId);
         } catch (\Throwable $e) {
             self::fallbackLog('exception.log_to_advanced_system.failed', [
                 'message' => $e->getMessage(),
@@ -172,6 +184,23 @@ private static function latestDbFailureContext(): ?array
         http_response_code(500);
 
         $isJsonRequest = self::isJsonRequest();
+
+        // Handle Business/Validation exceptions for Web Requests (Flash and Redirect)
+        if (!$isJsonRequest && ($exception instanceof \Core\Exceptions\BusinessException || $exception instanceof \Core\Exceptions\ValidationException || $exception instanceof \Core\Exceptions\InsufficientBalanceException)) {
+            try {
+                $session = \Core\Session::getInstance();
+                $session->setFlash('error', $exception->getMessage());
+                if ($exception instanceof \Core\Exceptions\ValidationException) {
+                    $session->setFlash('errors', $exception->getErrors());
+                }
+                $ref = $_SERVER['HTTP_REFERER'] ?? '/';
+                header("Location: $ref");
+                exit;
+            } catch (\Throwable $e) {
+                // Fallback to normal error page if session/redirect fails
+            }
+        }
+
         if ($isJsonRequest) {
             self::renderJsonError($exception);
             return;
@@ -193,7 +222,8 @@ private static function latestDbFailureContext(): ?array
         self::logToEmergencySentry(
             'Handler Collapse Catch: ' . $e->getMessage(),
             $e->getTraceAsString(),
-            'HANDLER_COLLAPSE'
+            'HANDLER_COLLAPSE',
+            'HANDLER_CRASH'
         );
         
         http_response_code(500);
@@ -327,7 +357,7 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
     /**
      * ثبت در سیستم لاگ پیشرفته
      */
-    private static function logToAdvancedSystem(\Throwable $exception): void
+    private static function logToAdvancedSystem(\Throwable $exception, string $errorCode = 'UNKNOWN', string $traceId = 'UNKNOWN'): void
     {
         try {
             // فقط اگر جداول وجود داشتن
@@ -359,7 +389,9 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 'user_id' => $userId,
                 'context' => json_encode([
                     'url' => $_SERVER['REQUEST_URI'] ?? '',
-                    'method' => $_SERVER['REQUEST_METHOD'] ?? ''
+                    'method' => $_SERVER['REQUEST_METHOD'] ?? '',
+                    'error_code' => $errorCode,
+                    'trace_id' => $traceId
                 ], JSON_UNESCAPED_UNICODE),
                 'created_at' => date('Y-m-d H:i:s'),
             ]);
@@ -431,13 +463,11 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
 
         // ✅ استفاده صحیح از Logger
         try {
-            if (function_exists('logger')) {
-                logger()->error('Fatal Error: ' . $error['message'], [
+            try { \Core\Container::getInstance()->make(\App\Contracts\LoggerInterface::class)->error('Fatal Error: ' . $error['message'], [
                     'file' => $error['file'],
                     'line' => $error['line'],
                     'type' => $error['type'],
-                ]);
-            }
+                ]); } catch(\Throwable $e) {}
         } catch (\Throwable $e) {
             self::fallbackLog('exception.fatal', [
                 'message' => $error['message'] ?? null,
@@ -489,10 +519,12 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
     {
         // M27 Fix: استفاده مستقیم از هلپر متمرکز و امن جهت ثبت خطا درون سیستم شخصی سنتری
         $traceInfo = '⚠️ File: ' . ($error['file'] ?? 'Unknown') . ' | Line: ' . ($error['line'] ?? '0') . ' | Type: ' . ($error['type'] ?? 'Fatal');
+        $traceId = $_SERVER['HTTP_X_REQUEST_ID'] ?? $_SERVER['REQUEST_ID'] ?? 'unknown';
         self::logToEmergencySentry(
             'FATAL SHUTDOWN: ' . ($error['message'] ?? 'Unknown fatal shutdown event'),
             $traceInfo,
-            'FATAL'
+            'FATAL',
+            'PHP_FATAL_ERROR'
         );
 
         // تلاش ثانویه برای درج بلادرنگ در دیتابیس (در صورت برقراری ارتباط)
@@ -513,6 +545,8 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                     'file' => $error['file'] ?? null,
                     'line' => $error['line'] ?? null,
                     'type' => $error['type'] ?? null,
+                    'error_code' => 'PHP_FATAL_ERROR',
+                    'trace_id' => $traceId
                 ], JSON_UNESCAPED_UNICODE),
                 'created_at' => date('Y-m-d H:i:s'),
             ]);
@@ -763,9 +797,21 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
     }
 
     /**
-     * رندر خطا به صورت JSON
+     * رندر خطا به صورت JSON (برای استفاده‌های Legacy)
      */
     private static function renderJsonError(\Throwable $exception): void
+    {
+        $payload = self::getJsonPayloadForException($exception);
+        http_response_code($payload['code'] ?? 500);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        exit;
+    }
+
+    /**
+     * دریافت ساختار استاندارد خطا بدون بستن پروسه (برای Middleware)
+     */
+    public static function getJsonPayloadForException(\Throwable $exception): array
     {
         // H26 Fix: پیاده‌سازی تور نجات سراسری برای جلوگیری از کرش‌های بازگشتی (Circular Crash Loop)
         try {
@@ -822,16 +868,24 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                 if ($exception instanceof \App\Exceptions\PaymentVerificationException && $exception->getDetails()) {
                     $contract = $contract->withDetails($exception->getDetails());
                 }
+            } elseif ($exception instanceof \DomainException) {
+                $contract = \App\Contracts\ErrorContract::internalError(
+                    $exception->getMessage() ?: 'خطای عملیاتی نامعتبر'
+                );
+                // In ErrorContract, internalError is 500. We need 400 for DomainException
+                // Since we might not have a helper for 400 badRequest, we can use a new instance
+                $contract = new \App\Contracts\ErrorContract(
+                    400,
+                    'DOMAIN_LOGIC_ERROR',
+                    $exception->getMessage() ?: 'خطای پردازش درخواست'
+                );
             } elseif ($exception instanceof \Core\Exceptions\BusinessException) {
                 $contract = \App\Contracts\ErrorContract::internalError(
                     $exception->getMessage() ?: 'خطای بیزینسی'
                 );
             }
 
-            http_response_code($contract->getStatusCode());
-            header('Content-Type: application/json; charset=utf-8');
-            echo json_encode($contract->toArray(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-            exit;
+            return $contract->toArray();
 
         } catch (\Throwable $fallbackException) {
             // تور نجات نهایی در صورتی که ErrorContract یا ماژول‌های خارجی دچار شکست شوند:
@@ -868,6 +922,9 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
             } elseif ($exception instanceof \App\Exceptions\PaymentGatewayException) {
                 $statusCode = $exception->getCode() ?: 500;
                 $message = $exception->getMessage() ?: 'خطا در ارتباط با درگاه پرداخت';
+            } elseif ($exception instanceof \DomainException) {
+                $statusCode = 400;
+                $message = $exception->getMessage() ?: 'خطای پردازش درخواست';
             } else {
                 $debug = (bool) config('app.debug', false);
                 $message = $debug 
@@ -875,19 +932,12 @@ private static function extractAppOriginFromTrace(\Throwable $exception): array
                     : 'خطای سیستمی در حین پردازش رخ داد';
             }
 
-            http_response_code($statusCode);
-            if (!headers_sent()) {
-                header('Content-Type: application/json; charset=utf-8');
-            }
-
-            echo json_encode([
+            return [
                 'success' => false,
                 'message' => $message,
                 'errors'  => $errors,
                 'code'    => $statusCode
-            ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-            
-            exit;
+            ];
         }
     }
 }

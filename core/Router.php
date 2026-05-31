@@ -43,6 +43,7 @@ class Router
 
     // CORE-027: Middleware Priority Registry
     protected array $middlewarePriority = [
+        \App\Middleware\GlobalExceptionMiddleware::class,
         \App\Middleware\SessionMiddleware::class,
         \App\Middleware\ConcurrentRequestMiddleware::class,
         \App\Middleware\HttpsMiddleware::class,
@@ -176,6 +177,7 @@ class Router
         // ── Global Middleware Stack ─────────────────────────────────────
         // این میدل‌ویرها برای تمامی درخواست‌ها (حتی صفحات ۴۰۴) اجرا می‌شوند
         $globalMiddlewares = [
+            \App\Middleware\GlobalExceptionMiddleware::class,
             \App\Middleware\SessionMiddleware::class,
             \App\Middleware\ConcurrentRequestMiddleware::class,
             \App\Middleware\LoggingMiddleware::class,         // رصد دقیق پرفورمنس و مدیریت آسنکرون لاگ

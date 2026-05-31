@@ -285,8 +285,21 @@ abstract class Model
             return $instance;
         }
 
-        $id = $this->create(array_merge($attributes, $values));
-        return $this->find((int)$id);
+        try {
+            $id = $this->create(array_merge($attributes, $values));
+            return $this->find((int)$id);
+        } catch (\PDOException $e) {
+            // 23000: Integrity constraint violation (Duplicate entry)
+            // Mitigates Race Conditions in high concurrency inserts
+            if ($e->getCode() === '23000' || $e->getCode() == 23000) {
+                $retryQuery = $this->db->table(static::$table);
+                foreach ($attributes as $key => $value) {
+                    $retryQuery->where($key, '=', $value);
+                }
+                return $retryQuery->first() ?: throw $e;
+            }
+            throw $e;
+        }
     }
 
     public function updateOrCreate(array $attributes, array $values = []): object
@@ -302,8 +315,21 @@ abstract class Model
             return $this->find((int)$instance->id);
         }
 
-        $id = $this->create(array_merge($attributes, $values));
-        return $this->find((int)$id);
+        try {
+            $id = $this->create(array_merge($attributes, $values));
+            return $this->find((int)$id);
+        } catch (\PDOException $e) {
+            if ($e->getCode() === '23000' || $e->getCode() == 23000) {
+                $retryQuery = $this->db->table(static::$table);
+                foreach ($attributes as $key => $value) {
+                    $retryQuery->where($key, '=', $value);
+                }
+                $newInstance = $retryQuery->first() ?: throw $e;
+                $this->update((int)$newInstance->id, $values);
+                return $this->find((int)$newInstance->id);
+            }
+            throw $e;
+        }
     }
 
     /**

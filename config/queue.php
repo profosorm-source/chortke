@@ -5,9 +5,9 @@ return [
     'visibility_timeout' => (int)env('QUEUE_VISIBILITY_TIMEOUT', 90),
 
     'allowed_jobs' => [
+        \App\Jobs\ProcessNotificationJob::class,
         \App\Jobs\ApplyWeeklyProfitLossJob::class,
         \App\Jobs\LogPerformanceJob::class,
-        \App\Jobs\SendBulkNotificationJob::class,
         \App\Jobs\PersistBulkInAppNotificationJob::class,
         \App\Jobs\SendEmailJob::class,
         \App\Jobs\UpdateFraudScoreJob::class,

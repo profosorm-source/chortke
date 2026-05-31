@@ -512,21 +512,19 @@ class Validator
     }
 
     /**
-     * Validate and throw BusinessException on failure
-     * 
+     * Validate and throw ValidationException on failure
+     *
      * @return array Validated data
-     * @throws \App\Exceptions\BusinessException If validation fails
+     * @throws \Core\Exceptions\ValidationException If validation fails
      */
     public function validateOrFail(): array
     {
         $result = $this->result();
         if (!$result['valid']) {
-            $errorMessage = $result['message'];
-            if (!empty($result['errors'])) {
-                $firstError = reset($result['errors']);
-                $errorMessage = is_string($firstError) ? $firstError : $result['message'];
-            }
-            throw new \App\Exceptions\BusinessException($errorMessage);
+            throw new \Core\Exceptions\ValidationException(
+                $result['errors'],
+                $result['message'] ?: 'اطلاعات ورودی نامعتبر است'
+            );
         }
         return $result['data'];
     }

@@ -115,31 +115,66 @@ class EventDispatcher
                 if (is_callable($listener)) {
                     $listener($event);
                 } elseif (is_string($listener) && class_exists($listener)) {
-                    $listenerInstance = new $listener();
+                    $container = Container::getInstance();
+                    $listenerInstance = $container->has($listener) ? $container->make($listener) : new $listener();
                     if (method_exists($listenerInstance, 'handle')) {
                         $listenerInstance->handle($event);
                     }
+                } elseif (is_array($listener) && isset($listener[0]) && is_string($listener[0]) && class_exists($listener[0])) {
+                    $container = Container::getInstance();
+                    $listenerInstance = $container->has($listener[0]) ? $container->make($listener[0]) : new $listener[0]();
+                    $methodName = $listener[1] ?? 'handle';
+                    if (method_exists($listenerInstance, $methodName)) {
+                        $listenerInstance->$methodName($event);
+                    }
                 }
             } catch (\Throwable $e) {
-                if (function_exists('logger')) {
-                    logger()->error('event.listener_failed', [
-                        'event' => $eventName,
-                        'listener' => is_string($listener) ? $listener : 'closure',
-                        'error' => $e->getMessage()
-                    ]);
+                $listenerName = is_string($listener) ? $listener : (is_array($listener) && isset($listener[0]) && is_string($listener[0]) ? $listener[0] : 'closure');
+                
+                // 1. لاگ کردن در سامانه لاگ اصلی (ایمن شده در برابر خطای خود لاگر)
+                try {
+                    if (isset($this->logger)) { $this->logger->error('event.listener_failed', [
+                            'event' => $eventName,
+                            'listener' => $listenerName,
+                            'error' => $e->getMessage()
+                        ]); }
+                } catch (\Throwable $logEx) {
+                    error_log("Failed to write to primary logger: " . $logEx->getMessage());
                 }
-                // Stop propagation on failure to prevent partial state corruption
-                $event->stopPropagation();
+
+                // 2. ثبت در Dead-Letter / Event Failure Log اختصاصی دیتابیس برای بازیابی و تحلیل
+                try {
+                    $container = Container::getInstance();
+                    if ($container->has(Database::class)) {
+                        $db = $container->make(Database::class);
+                        $db->execute("
+                            INSERT INTO event_failures (event_name, listener, payload, error_message, failed_at)
+                            VALUES (?, ?, ?, ?, NOW())
+                        ", [
+                            $eventName,
+                            $listenerName,
+                            json_encode($event->getData(), JSON_UNESCAPED_UNICODE),
+                            $e->getMessage() . "\n" . $e->getTraceAsString()
+                        ]);
+                    }
+                } catch (\Throwable $dbEx) {
+                    // در صورت خطای دیتابیس، مانع از انتشار بقیه لیسنرها نشود (ایزولاسیون کامل)
+                    error_log("Failed to write to event_failures table: " . $dbEx->getMessage());
+                }
             }
 
             $duration = microtime(true) - $startTime;
-            if ($duration > 5.0 && function_exists('logger')) {
-                logger()->warning('event.listener_timeout', [
-                    'event' => $eventName,
-                    'listener' => is_string($listener) ? $listener : 'closure',
-                    'duration' => round($duration, 2) . 's',
-                    'threshold' => '5.0s'
-                ]);
+            if ($duration > 5.0) {
+                try {
+                    if (isset($this->logger)) { $this->logger->warning('event.listener_timeout', [
+                            'event' => $eventName,
+                            'listener' => is_string($listener) ? $listener : 'closure',
+                            'duration' => round($duration, 2) . 's',
+                            'threshold' => '5.0s'
+                        ]); }
+                } catch (\Throwable $timeoutLogEx) {
+                    error_log("Failed to log listener timeout warning: " . $timeoutLogEx->getMessage());
+                }
             }
             
             // بررسی توقف انتشار
@@ -155,13 +190,15 @@ class EventDispatcher
         $encoded = json_encode($maskedPayload, JSON_UNESCAPED_UNICODE);
         $preview = $encoded !== false ? mb_substr($encoded, 0, 2000) : null;
         
-        if (function_exists('logger')) {
-            logger()->info('event.dispatched', [
-                'channel'      => 'event',
-                'event_name'   => $eventName,
-                'data_preview' => $preview,
-                'data_size'    => $encoded !== false ? strlen($encoded) : null,
-            ]);
+        try {
+            if (isset($this->logger)) { $this->logger->info('event.dispatched', [
+                    'channel'      => 'event',
+                    'event_name'   => $eventName,
+                    'data_preview' => $preview,
+                    'data_size'    => $encoded !== false ? strlen($encoded) : null,
+                ]); }
+        } catch (\Throwable $infoLogEx) {
+            error_log("Failed to log event dispatched info: " . $infoLogEx->getMessage());
         }
 
         $this->auditDispatchedEvent($eventName, $event);
@@ -202,12 +239,10 @@ class EventDispatcher
                 is_int($actorId) ? $actorId : null
             );
         } catch (\Throwable $e) {
-            if (function_exists('logger')) {
-                logger()->warning('event.audit.record_failed', [
+            if (isset($this->logger)) { $this->logger->warning('event.audit.record_failed', [
                     'event_name' => $eventName,
                     'error' => $e->getMessage(),
-                ]);
-            }
+                ]); }
         }
     }
 
@@ -257,17 +292,16 @@ class EventDispatcher
         $this->queue->push('dispatch_event', [
             'event_name' => $eventName,
             'event_data' => $event->getData(),
-            'event_class' => get_class($event)
+            'event_class' => get_class($event),
+            'serialized_event' => serialize($event)
         ], $queue);
 
         // لاگ
-        if (function_exists('logger')) {
-            logger()->info('event.queued', [
+        if (isset($this->logger)) { $this->logger->info('event.queued', [
                 'channel' => 'event',
                 'event_name' => $eventName,
                 'queue' => $queue
-            ]);
-        }
+            ]); }
     }
 
     /**
@@ -281,24 +315,81 @@ class EventDispatcher
         $eventClass = $payload['event_class'] ?? null;
 
         if ($eventName === null) {
-            if (function_exists('logger')) {
-                logger()->warning('event.queue.missing_payload', [
-                    'job_id' => $job['id'] ?? null,
-                    'payload' => $payload,
-                ]);
+            try {
+                if (isset($this->logger)) { $this->logger->warning('event.queue.missing_payload', [
+                        'job_id' => $job['id'] ?? null,
+                        'payload' => $payload,
+                    ]); }
+            } catch (\Throwable $logEx) {
+                error_log("Failed to log missing payload warning: " . $logEx->getMessage());
             }
             return;
         }
 
-        // بازسازی Event object
-        if ($eventClass && class_exists($eventClass)) {
-            $event = new $eventClass($eventData);
-        } else {
-            $event = new GenericEvent($eventData);
-        }
+        try {
+            $serializedEvent = $payload['serialized_event'] ?? null;
+            $event = null;
 
-        // dispatch عادی
-        $this->dispatch($eventName, $event);
+            // بازسازی Event object با اولویت استفاده از دیتای سریالایز شده
+            if ($serializedEvent !== null) {
+                $event = unserialize($serializedEvent);
+            } elseif ($eventClass && class_exists($eventClass)) {
+                // برای سازگاری با جاب‌های قدیمی در صف که سریالایز کامل نشدند
+                // اگر Event Typed است ولی متد بازسازی اختصاصی ندارد، ممکن است با ارور مواجه شود
+                if (method_exists($eventClass, 'fromPayload')) {
+                    $event = $eventClass::fromPayload($eventData);
+                } else {
+                    try {
+                        $event = new $eventClass($eventData);
+                    } catch (\TypeError $e) {
+                        // Fallback اگر Typed Event بود و آرایه را به عنوان آرگومان اول قبول نکرد
+                        $event = new GenericEvent($eventData);
+                    }
+                }
+            } else {
+                $event = new GenericEvent($eventData);
+            }
+
+            if (!$event instanceof Event) {
+                throw new \Exception("Reconstructed object is not an instance of Core\\Event");
+            }
+
+            // dispatch عادی
+            $this->dispatch($eventName, $event);
+
+        } catch (\Throwable $e) {
+            $listenerName = 'queue_worker_reconstruction';
+
+            // 1. لاگ کردن در سامانه لاگ اصلی (ایمن شده در برابر خطای خود لاگر)
+            try {
+                if (isset($this->logger)) { $this->logger->error('event.queue.reconstruction_failed', [
+                        'event' => $eventName,
+                        'job_id' => $job['id'] ?? null,
+                        'error' => $e->getMessage()
+                    ]); }
+            } catch (\Throwable $logEx) {
+                error_log("Failed to write queue reconstruction failure to primary logger: " . $logEx->getMessage());
+            }
+
+            // 2. ثبت در Dead-Letter / Event Failure Log اختصاصی دیتابیس
+            try {
+                $container = Container::getInstance();
+                if ($container->has(Database::class)) {
+                    $db = $container->make(Database::class);
+                    $db->execute("
+                        INSERT INTO event_failures (event_name, listener, payload, error_message, failed_at)
+                        VALUES (?, ?, ?, ?, NOW())
+                    ", [
+                        $eventName,
+                        $listenerName,
+                        json_encode($eventData ?? $payload, JSON_UNESCAPED_UNICODE),
+                        $e->getMessage() . "\n" . $e->getTraceAsString()
+                    ]);
+                }
+            } catch (\Throwable $dbEx) {
+                error_log("Failed to write queue reconstruction failure to event_failures table: " . $dbEx->getMessage());
+            }
+        }
     }
 
     /**

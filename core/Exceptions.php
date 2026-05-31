@@ -175,3 +175,23 @@ class HttpResponseException extends AppException
         return $this->response;
     }
 }
+
+/**
+ * Exception thrown when a CircuitBreaker rejects an operation because the circuit is OPEN.
+ */
+class CircuitBreakerOpenException extends ExternalServiceException
+{
+    private string $serviceName;
+
+    public function __construct(string $serviceName, string $message = "", int $code = 503, ?\Throwable $previous = null)
+    {
+        $this->serviceName = $serviceName;
+        $message = $message ?: "Circuit breaker for {$serviceName} is OPEN. Request aborted.";
+        parent::__construct($message, $code, $previous);
+    }
+
+    public function getServiceName(): string
+    {
+        return $this->serviceName;
+    }
+}

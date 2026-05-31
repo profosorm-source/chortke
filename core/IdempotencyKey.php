@@ -27,11 +27,10 @@ class IdempotencyKey
     private const CLEANUP_DAYS = 7;
     private const MAX_RETRIES = 3;
 
-    public function __construct(?Database $db = null, ?Cache $cache = null)
+    public function __construct(Database $db, Cache $cache)
     {
-        // H19 Fix: استفاده از Dependency Injection
-        $this->db = $db ?? Container::getInstance()->make(Database::class);
-        $this->cache = $cache ?? Container::getInstance()->make(Cache::class);
+        $this->db = $db;
+        $this->cache = $cache;
     }
 
     private function redactSensitiveData(array $data): array
@@ -437,6 +436,23 @@ class IdempotencyKey
         }
     }
 
+    public function abort(string $key, int $userId): bool
+    {
+        try {
+            $sql = "DELETE FROM {$this->table} WHERE `key` = :key AND `user_id` = :user_id";
+            $stmt = $this->db->prepare($sql);
+            $success = $stmt->execute(['key' => $key, 'user_id' => $userId]);
+            
+            if ($success) {
+                $this->logEvent('idempotency.key.aborted', ['key' => $key], 'warning');
+            }
+            return $success;
+        } catch (\PDOException $e) {
+            $this->logEvent('idempotency.abort.failed', ['key' => $key, 'error' => $e->getMessage()], 'error');
+            return false;
+        }
+    }
+
 
     /**
      * Scope-aware idempotency wrapper for general application use-cases.
@@ -556,12 +572,7 @@ class IdempotencyKey
             return $result;
             
         } catch (\Exception $e) {
-            $service->fail($key, [
-                'error' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine()
-            ], $userId);
+            $service->abort($key, $userId);
 
             logger()->error('callback.failed', [
                 'channel' => 'payment_callback',
@@ -622,12 +633,7 @@ class IdempotencyKey
             return $result;
             
         } catch (\Exception $e) {
-            $this->fail($key, [
-                'error' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine()
-            ], $userId);
+            $this->abort($key, $userId);
 
             logger()->error('callback.failed', [
                 'channel' => 'payment_callback',

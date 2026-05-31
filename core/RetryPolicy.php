@@ -26,19 +26,35 @@ class RetryPolicy
     /**
      * اجرای یک عملیات با retry و exponential backoff.
      *
+     * @param string $context
      * @param callable $operation
      * @param array|null $retryOnExceptions
      * @return mixed
      * @throws Throwable
      */
-    public function execute(callable $operation, ?array $retryOnExceptions = null)
+    public function executeWithContext(string $context, callable $operation, ?array $retryOnExceptions = null)
     {
         $attempt = 0;
         $delayMs = $this->initialDelayMs;
 
-        self::recordAttempt(); // Record the primary call in the budget
+        self::recordAttempt($context); // Record the primary call in the budget
+
+        $circuitBreaker = null;
+        try {
+            if (class_exists(Container::class)) {
+                $circuitBreaker = Container::getInstance()->make(CircuitBreaker::class);
+            }
+        } catch (\Throwable $e) {}
 
         while (true) {
+            // Fail-fast if circuit breaker is open (for services that use it)
+            if ($circuitBreaker && $circuitBreaker->isOpen($context)) {
+                throw new \RuntimeException(
+                    "Fail-fast: Circuit Breaker is OPEN for context {$context}.",
+                    503
+                );
+            }
+
             try {
                 return $operation();
             } catch (Throwable $exception) {
@@ -49,10 +65,14 @@ class RetryPolicy
                 }
 
                 // Enforce the cascading failure system-wide Retry Budget
-                if (!self::acquireRetryBudget()) {
+                if (!self::acquireRetryBudget($context)) {
+                    if (isset($this->logger)) { $this->logger->alert("retry_budget_exhausted", [
+                            'context' => $context,
+                            'error' => $exception->getMessage()
+                        ]); }
                     // Refuse to execute retry and fail-fast to prevent retry storm
                     throw new \RuntimeException(
-                        "Cascading failure protection: system-wide retry budget exhausted. " . $exception->getMessage(),
+                        "Cascading failure protection: system-wide retry budget exhausted for context {$context}. " . $exception->getMessage(),
                         503,
                         $exception
                     );
@@ -70,59 +90,70 @@ class RetryPolicy
     }
 
     /**
-     * Check and update the system-wide retry budget.
-     * Allows retries only if retries are < 10% of total calls,
-     * with a minimum allowance of 5 retries for cold start.
+     * Backward compatibility. Use executeWithContext instead.
      */
-    public static function acquireRetryBudget(): bool
+    public function execute(callable $operation, ?array $retryOnExceptions = null)
+    {
+        return $this->executeWithContext('global', $operation, $retryOnExceptions);
+    }
+
+    /**
+     * Check and update the system-wide retry budget.
+     */
+    public static function acquireRetryBudget(string $context = 'global'): bool
     {
         $cache = Cache::getInstance();
+        $resilienceConfig = config('resilience.retry_budget', []);
+        
+        $allowedPercentage = (int)($resilienceConfig['contexts'][$context]['allowed_percentage'] 
+                             ?? $resilienceConfig['global']['allowed_percentage'] 
+                             ?? 10);
+                             
+        $minAllowance = (int)($resilienceConfig['contexts'][$context]['min_allowance'] 
+                             ?? $resilienceConfig['global']['min_allowance'] 
+                             ?? 5);
         
         try {
             $currentTime = time();
             $totalCalls = 0;
             $retries = 0;
             
-            // جمع کل مقادیر تمامی ۱۰ سطل مربوط به ۱۰ ثانیه گذشته (پنجره لغزان)
+            // Sliding window 10 seconds
             for ($i = 0; $i < 10; $i++) {
                 $bucket = ($currentTime - $i) % 10;
-                $totalCalls += (int)$cache->get("retry_budget:total_calls:{$bucket}", 0);
-                $retries += (int)$cache->get("retry_budget:retries:{$bucket}", 0);
+                $totalCalls += (int)$cache->get("retry_budget:{$context}:total_calls:{$bucket}", 0);
+                $retries += (int)$cache->get("retry_budget:{$context}:retries:{$bucket}", 0);
             }
             
-            // Cold start allowance: اگر درخواست‌ها کم است، تا ۵ تلاش مجدد را مجاز کن
-            if ($totalCalls < 50 && $retries < 5) {
+            // Cold start allowance
+            if ($totalCalls < 50 && $retries < $minAllowance) {
                 $currentBucket = $currentTime % 10;
-                $cache->increment("retry_budget:retries:{$currentBucket}", 1, 10);
+                $cache->increment("retry_budget:{$context}:retries:{$currentBucket}", 1, 10);
                 return true;
             }
             
-            // اعمال محدودیت سخت‌گیرانه ۱۰٪ بودجه تلاش مجدد
-            if ($retries >= (int)($totalCalls * 0.10)) {
-                return false; // بودجه به اتمام رسیده است
+            // Percentage limit
+            if ($retries >= (int)($totalCalls * ($allowedPercentage / 100))) {
+                return false; 
             }
             
-            // مصرف بودجه در سطل ثانیه جاری
             $currentBucket = $currentTime % 10;
-            $cache->increment("retry_budget:retries:{$currentBucket}", 1, 10);
+            $cache->increment("retry_budget:{$context}:retries:{$currentBucket}", 1, 10);
             return true;
         } catch (\Throwable) {
-            // Fail-safe degradation (Probabilistic Load Shedding):
-            // If Redis is down and budget tracking fails, fallback to a stateless
-            // random check allowing only 10% of retries. This mathematically guarantees
-            // the budget without ANY network/file IO and prevents a Retry Storm.
-            return mt_rand(1, 100) <= 10;
+            // Probabilistic Load Shedding fallback
+            return mt_rand(1, 100) <= $allowedPercentage;
         }
     }
 
     /**
      * Record a non-retry attempt in the system-wide budget
      */
-    public static function recordAttempt(): void
+    public static function recordAttempt(string $context = 'global'): void
     {
         try {
             $currentBucket = time() % 10;
-            Cache::getInstance()->increment("retry_budget:total_calls:{$currentBucket}", 1, 10);
+            Cache::getInstance()->increment("retry_budget:{$context}:total_calls:{$currentBucket}", 1, 10);
         } catch (\Throwable) {
             // Safe ignore
         }
@@ -130,7 +161,6 @@ class RetryPolicy
 
     private function shouldRetry(Throwable $exception, ?array $retryOnExceptions): bool
     {
-        // CORE-050: Hard exclusions — Never retry unrecoverable logic/engine errors
         if ($exception instanceof \Error || 
             $exception instanceof \TypeError || 
             $exception instanceof \ParseError || 
@@ -139,7 +169,6 @@ class RetryPolicy
         }
 
         if ($retryOnExceptions === null) {
-            // Allow retrying generic user-level Exceptions but not internal fatal faults
             return $exception instanceof \Exception;
         }
 

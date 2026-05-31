@@ -105,4 +105,30 @@ class TransactionWrapper
 
         return false;
     }
+
+    /**
+     * CORE-NEW: ترکیب قدرتمند Idempotency و Transaction با قابلیت Retry
+     *
+     * @param \Core\IdempotencyKey $idempotency اینستنس آیدمپوتنسی
+     * @param string $key کلید منحصر به فرد تراکنش
+     * @param int $userId شناسه کاربر
+     * @param string $action نام اکشن بیزینسی
+     * @param callable $operation عملیات اصلی برای اجرا
+     * @param int $maxRetries تعداد تلاش مجدد برای خطاهای دیتابیس
+     * @return mixed خروجی عملیات
+     */
+    public function runIdempotentWithRetry(
+        IdempotencyKey $idempotency,
+        string $key,
+        int $userId,
+        string $action,
+        callable $operation,
+        int $maxRetries = 3
+    ) {
+        // اجرای Idempotency Wrap. خود این متد یکبار عملیات را تضمین می‌کند
+        return $idempotency->wrapInstance($key, $userId, $action, function () use ($operation, $maxRetries) {
+            // عملیات واقعی داخل Transaction با قابلیت Retry اجرا می‌شود
+            return $this->runWithRetry($operation, $maxRetries);
+        });
+    }
 }
