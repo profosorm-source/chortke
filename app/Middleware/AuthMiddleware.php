@@ -23,7 +23,7 @@ class AuthMiddleware extends BaseMiddleware
 {
     private Session $session;
     private Redis $redis;
-    private \App\Services\SettingService $settingService;
+    private \App\Services\Settings\AppSettings $appSettings;
     private \App\Models\User $userModel;
 
     // LOW-04 Fix: Reduced fallback timeout from 300 (5 min) to 180 (3 min)
@@ -33,12 +33,12 @@ class AuthMiddleware extends BaseMiddleware
     public function __construct(
         Session $session, 
         Redis $redis, 
-        \App\Services\SettingService $settingService,
+        \App\Services\Settings\AppSettings $appSettings,
         \App\Models\User $userModel
     ) {
         $this->session = $session;
         $this->redis = $redis;
-        $this->settingService = $settingService;
+        $this->appSettings = $appSettings;
         $this->userModel = $userModel;
     }
 
@@ -60,7 +60,7 @@ class AuthMiddleware extends BaseMiddleware
         // MEDIUM-M2 Fix: Reduce timeout when Redis is down for conservative security posture
         // LOW-04 Fix: Further reduced from 300 (5min) to 180 (3min) when Redis is down
         $defaultTimeout = $redisAvailable ? 900 : self::FALLBACK_TIMEOUT_WHEN_REDIS_DOWN; // 15 min vs 3 min
-        $timeout = (int)$this->settingService->get('session_idle_timeout_seconds', $defaultTimeout);
+        $timeout = (int)$this->appSettings->get('session_idle_timeout_seconds', $defaultTimeout);
         
         // If Redis was available but then fails during this request, use conservative timeout
         // This ensures we don't trust stale activity data from Redis

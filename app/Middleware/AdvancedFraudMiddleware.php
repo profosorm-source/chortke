@@ -90,7 +90,7 @@ class AdvancedFraudMiddleware extends BaseMiddleware
         $ipCheck = $this->ipQualityService->check($ip);
         if ($ipCheck['is_suspicious']) {
             $this->ipQualityService->logIPCheck($userId, $ip, $ipCheck);
-            $this->scoreService->incrementFraudRawScore($userId, (float) $ipCheck['score'] / 4, 'ip_quality', [
+            $this->scoreService->applyDelta('user', $userId, \App\Enums\ScoreDomain::Fraud->value, (float) $ipCheck['score'] / 4, 'ip_quality', [
                 'ip' => $ip,
                 'reasons' => $ipCheck['reasons'],
             ]);
@@ -105,7 +105,7 @@ class AdvancedFraudMiddleware extends BaseMiddleware
         $sessionCheck = $this->sessionService->analyzeAnomaly($userId, $sessionId);
         if ($sessionCheck['is_anomaly']) {
             $this->sessionService->logAnomaly($userId, $sessionId, $sessionCheck);
-            $this->scoreService->incrementFraudRawScore($userId, (float) $sessionCheck['score'] / 2, 'session_anomaly', [
+            $this->scoreService->applyDelta('user', $userId, \App\Enums\ScoreDomain::Fraud->value, (float) $sessionCheck['score'] / 2, 'session_anomaly', [
                 'anomalies' => $sessionCheck['anomalies'],
                 'session_id' => $sessionId,
             ]);
@@ -120,7 +120,7 @@ class AdvancedFraudMiddleware extends BaseMiddleware
         $takeoverCheck = $this->accountTakeoverService->detect($userId, $ip, $userAgent, $currentFingerprint);
         if ($takeoverCheck['is_takeover']) {
             $this->accountTakeoverService->logDetection($userId, $ip, $userAgent, $takeoverCheck);
-            $this->scoreService->incrementFraudRawScore($userId, (float) $takeoverCheck['risk_score'] / 2, 'account_takeover', [
+            $this->scoreService->applyDelta('user', $userId, \App\Enums\ScoreDomain::Fraud->value, (float) $takeoverCheck['risk_score'] / 2, 'account_takeover', [
                 'signals' => $takeoverCheck['signals'],
             ]);
 
