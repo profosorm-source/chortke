@@ -9,7 +9,7 @@ use App\Services\Search\SearchOrchestrator;
 use App\Services\CustomTaskService;
 use App\Services\Analytics\AnalyticsService;
 use App\Services\Shared\DisputeService;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Controllers\Admin\BaseAdminController;
 
 class CustomTaskController extends BaseAdminController
@@ -17,7 +17,7 @@ class CustomTaskController extends BaseAdminController
     private SearchOrchestrator $searchService;
     private CustomTaskService $customTaskService;
     private AnalyticsService $analyticsService;
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private Ads $adsModel;
     private CustomTaskSubmissionModel $submissionModel;
     private DisputeService $disputeService;
@@ -27,7 +27,7 @@ class CustomTaskController extends BaseAdminController
         SearchOrchestrator $searchService,
         CustomTaskService $customTaskService,
         AnalyticsService $analyticsService,
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         Ads $adsModel,
         CustomTaskSubmissionModel $submissionModel,
         DisputeService $disputeService,

@@ -3,16 +3,16 @@
 namespace App\Controllers\Admin;
 use App\Services\User\UserService;
 
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Controllers\Admin\BaseAdminController;
 
 class TransactionController extends BaseAdminController
 {
     private UserService $userService;
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
 
     public function __construct(UserService $userService,
-        WalletService $walletService)
+        WalletServiceInterface $walletService)
     {
         parent::__construct();
         $this->userService = $userService;

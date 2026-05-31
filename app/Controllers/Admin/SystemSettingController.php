@@ -4,22 +4,24 @@ declare(strict_types=1);
 
 namespace App\Controllers\Admin;
 
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
+use App\Services\Settings\SettingsManager;
 use App\Services\UploadService;
 use Core\PathResolver;
 
 class SystemSettingController extends BaseAdminController
 {
-    private SettingService $settingService;
+    private AppSettings $appSettings, SettingsManager $settingsManager;
     private UploadService $uploadService;
     private PathResolver $pathResolver;
     
     public function __construct(
-        SettingService $settingService,
+        AppSettings $appSettings, SettingsManager $settingsManager,
         UploadService $uploadService
     ) {
         parent::__construct();
-        $this->settingService = $settingService;
+        $this->appSettings = $appSettings;
+        $this->settingsManager = $settingsManager;
         $this->uploadService  = $uploadService;
         $this->pathResolver   = PathResolver::getInstance();
     }
@@ -30,7 +32,7 @@ class SystemSettingController extends BaseAdminController
     public function index()
     {
         $category = (string)$this->request->get('category', 'general');
-        $settings = $this->settingService->getByCategory($category);
+        $settings = $this->appSettings->getByCategory($category);
         
         $categories = [
             'general' => 'عمومی',
@@ -64,10 +66,10 @@ class SystemSettingController extends BaseAdminController
             $this->jsonError('درخواست نامعتبر است');
         }
 
-        $oldSetting = $this->settingService->find($id);
+        $oldSetting = $this->appSettings->find($id);
         $oldValue = $oldSetting->value ?? null;
 
-        $ok = $this->settingService->updateById($id, $key, $value);
+        $ok = $this->settingsManager->updateById($id, $key, $value);
 
         if (!$ok) {
             $this->jsonError('تنظیمات یافت نشد یا کلید معتبر نیست');
@@ -82,7 +84,7 @@ class SystemSettingController extends BaseAdminController
             ['key' => $key, 'value' => $value]
         );
 
-        $this->settingService->clearCache();
+        $this->appSettings->clearCache();
 
         if (function_exists('settings')) {
             settings(true);
@@ -101,7 +103,7 @@ class SystemSettingController extends BaseAdminController
         }
         
         $settingId = (int)$this->request->post('setting_id', 0);
-        $setting = $this->settingService->find($settingId);
+        $setting = $this->appSettings->find($settingId);
         
         if (!$setting || (($setting->group ?? '') !== 'images' && $setting->type !== 'image')) {
             $this->jsonError('تنظیم یافت نشد یا نوع آن تصویر نیست', [], 404);
@@ -129,7 +131,7 @@ class SystemSettingController extends BaseAdminController
             $imagePath = $result['path'];
             
             // بروزرسانی در دیتابیس
-            $updated = $this->settingService->updateValueById($settingId, $imagePath);
+            $updated = $this->settingsManager->updateValueById($settingId, $imagePath);
             
             if (!$updated) {
                 throw new \Exception('خطا در ذخیره اطلاعات در دیتابیس');
@@ -144,7 +146,7 @@ class SystemSettingController extends BaseAdminController
                 ['key' => $setting->key ?? null, 'value' => $imagePath]
             );
             
-            $this->settingService->clearCache();
+            $this->appSettings->clearCache();
             
             $this->jsonSuccess('تصویر با موفقیت آپلود شد', [
                 'url' => url($imagePath),
@@ -165,7 +167,7 @@ class SystemSettingController extends BaseAdminController
         $data = $this->request->body();
         $settingId = (int)($data['setting_id'] ?? 0);
         
-        $setting = $this->settingService->find($settingId);
+        $setting = $this->appSettings->find($settingId);
         if (!$setting) {
             $this->jsonError('تنظیم یافت نشد', [], 404);
         }
@@ -178,7 +180,7 @@ class SystemSettingController extends BaseAdminController
                 }
             }
             
-            $this->settingService->updateValueById($settingId, '');
+            $this->settingsManager->updateValueById($settingId, '');
 
             // Log the change using robust Audit Trail
             $this->auditLog(
@@ -189,7 +191,7 @@ class SystemSettingController extends BaseAdminController
                 ['key' => $setting->key ?? null, 'value' => '']
             );
 
-            $this->settingService->clearCache();
+            $this->appSettings->clearCache();
             
             $this->jsonSuccess('تصویر با موفقیت حذف شد');
             

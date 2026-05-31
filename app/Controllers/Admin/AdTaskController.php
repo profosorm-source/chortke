@@ -5,7 +5,7 @@ namespace App\Controllers\Admin;
 use App\Models\Ads;
 use App\Services\CustomTask\AdminCustomTaskService;
 use App\Services\Analytics\AnalyticsService;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\Search\SearchOrchestrator;
 use App\Controllers\Admin\BaseAdminController;
 
@@ -13,14 +13,14 @@ class AdTaskController extends BaseAdminController
 {
     private AdminCustomTaskService $customTaskService;
     private AnalyticsService $analyticsService;
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private Ads $adsModel;
     private SearchOrchestrator $searchService;
 
     public function __construct(
         AdminCustomTaskService $customTaskService,
         AnalyticsService $analyticsService,
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         Ads $adsModel,
         SearchOrchestrator $searchService
     ) {

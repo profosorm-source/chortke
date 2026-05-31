@@ -3,7 +3,7 @@
 namespace App\Controllers\Admin;
 
 use App\Services\AntiFraud\FraudManagementService;
-use App\Services\Shared\ScoreService;
+use App\Services\ScoreService;
 use Core\Request;
 use Core\Response;
 use InvalidArgumentException;

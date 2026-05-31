@@ -12,13 +12,13 @@ class SeoAdController extends BaseAdminController
     private Ads $model;
     private SeoExecution $executionModel;
     private DashboardStatsService $analytics;
-    private \App\Services\SeoService $seoService;
+    private \App\Services\Seo\AdsSeoService $seoService;
 
     public function __construct(
         Ads $m, 
         SeoExecution $e,
         DashboardStatsService $a,
-        \App\Services\SeoService $s
+        \App\Services\Seo\AdsSeoService $s
     ) {
         parent::__construct();
         $this->model = $m;
@@ -52,7 +52,7 @@ class SeoAdController extends BaseAdminController
 
     public function approve(): void
     {
-        $ok = $this->seoService->approveAd((int)$this->request->param('id'));
+        $ok = $this->adsSeoService->approveAd((int)$this->request->param('id'));
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }
@@ -60,14 +60,14 @@ class SeoAdController extends BaseAdminController
     public function reject(): void
     {
         $reason = trim($this->request->post('reason') ?? '');
-        $ok = $this->seoService->rejectAd((int)$this->request->param('id'), $reason);
+        $ok = $this->adsSeoService->rejectAd((int)$this->request->param('id'), $reason);
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }
 
     public function pause(): void
     {
-        $ok = $this->seoService->pauseAd((int)$this->request->param('id'));
+        $ok = $this->adsSeoService->pauseAd((int)$this->request->param('id'));
         if (is_ajax()) { $this->response->json(['success' => $ok]); return; }
         redirect(url('/admin/seo-ad'));
     }

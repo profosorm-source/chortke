@@ -10,7 +10,7 @@ use App\Controllers\Admin\BaseAdminController;
 
 class ReferralController extends BaseAdminController
 {
-    private \App\Services\Wallet\WalletService $walletService;
+    private \App\Services\Wallet\WalletServiceInterface $walletService;
     private ReferralService $referralService;
     private \App\Models\ReferralCommission $referralCommissionModel;
     private UserService $userService;
@@ -19,7 +19,7 @@ class ReferralController extends BaseAdminController
         \App\Models\ReferralCommission $referralCommissionModel,
         UserService $userService,
         ReferralService $referralService,
-        \App\Services\Wallet\WalletService $walletService){
+        \App\Services\Wallet\WalletServiceInterface $walletService){
         parent::__construct();
         $this->db = $db;
         $this->referralCommissionModel = $referralCommissionModel;

@@ -2,7 +2,7 @@
 
 namespace App\Controllers\Admin;
 
-use App\Services\Shared\ScoreService;
+use App\Services\ScoreService;
 
 class ScoreManagementController
 {

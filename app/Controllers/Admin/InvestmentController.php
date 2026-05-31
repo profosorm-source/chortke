@@ -56,7 +56,8 @@ class InvestmentController extends BaseAdminController
 
         // استفاده از SearchOrchestrator برای جستجو
         if (!empty($search)) {
-            $result = $this->searchService->searchInvestments($search, $filters, $perPage, $offset);
+            $query = \App\Services\Search\SearchQuery::fromArray(['q' => $search, 'filters' => $filters, 'limit' => $perPage, 'offset' => $offset]);
+            $result = $this->searchService->searchAdminModule('investment', $query);
             $investments = $result['items'] ?? [];
             $total = $result['total'] ?? 0;
         } else {

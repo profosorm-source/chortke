@@ -8,7 +8,7 @@ use App\Models\VitrineListing;
 use App\Models\VitrineRequest;
 use App\Services\VitrineService;
 use App\Services\VitrineSettingsService;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\AuditTrail;
 
 /**
@@ -18,13 +18,13 @@ class VitrineController extends BaseAdminController
 {
     private VitrineService $service;
     private VitrineSettingsService $settingsService;
-    private WalletService  $wallet;
+    private WalletServiceInterface $wallet;
     private AuditTrail $auditTrail;
 
     public function __construct(
         VitrineService $service,
         VitrineSettingsService $settingsService,
-        WalletService  $wallet,
+        WalletServiceInterface $wallet,
         AuditTrail $auditTrail
     ) {
         parent::__construct();

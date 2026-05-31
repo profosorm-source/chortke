@@ -7,7 +7,7 @@ use App\Models\LotteryRound;
 use App\Models\LotteryParticipation;
 use App\Models\LotteryDailyNumber;
 use App\Models\LotteryChanceLog;
-use App\Services\LotteryService;
+use App\Services\Lottery\LotteryService;
 use App\Validators\Requests\LotteryRoundRequest;
 use App\Controllers\Admin\BaseAdminController;
 
@@ -22,7 +22,7 @@ class LotteryController extends BaseAdminController
         \App\Models\LotteryDailyNumber $lotteryDailyNumberModel,
         \App\Models\LotteryParticipation $lotteryParticipationModel,
         \App\Models\LotteryRound $lotteryRoundModel,
-        \App\Services\LotteryService $lotteryService)
+        \App\Services\Lottery\LotteryService $lotteryService)
     {
         parent::__construct();
         $this->lotteryService = $lotteryService;

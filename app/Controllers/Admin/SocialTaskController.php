@@ -9,7 +9,7 @@ use App\Enums\ModuleContext;
 use App\Services\User\UserService;
 use App\Services\SocialTask\RatingService;
 use App\Services\SocialTask\SilentAntiFraudService;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\AuditTrail;
 use Core\Database;
 
@@ -22,7 +22,7 @@ class SocialTaskController extends BaseAdminController
     private UserService            $userService;
     private RatingService          $ratingService;
     private SilentAntiFraudService $antiFraud;
-    private WalletService          $wallet;
+    private WalletServiceInterface $wallet;
     private Database               $db;
     private AuditTrail $auditTrail;
 
@@ -33,7 +33,7 @@ class SocialTaskController extends BaseAdminController
         UserService            $userService,
         RatingService          $ratingService,
         SilentAntiFraudService $antiFraud,
-        WalletService          $wallet,
+        WalletServiceInterface $wallet,
         Database               $db,
         AuditTrail             $auditTrail
     ) {
