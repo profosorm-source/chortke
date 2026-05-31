@@ -6,7 +6,7 @@ namespace App\Jobs;
 
 use App\Contracts\LoggerInterface;
 use App\Services\InvestmentService;
-use App\Services\SettingService;
+use App\Services\Settings\AppSettings;
 use Core\Database;
 
 /**
@@ -23,7 +23,7 @@ class InvestmentProfitDistributionJob
     public function __construct(
         private InvestmentService $investmentService,
         private Database $db,
-        private SettingService $settingService,
+        private AppSettings $appSettings,
         private LoggerInterface $logger
     ) {}
 
@@ -39,7 +39,7 @@ class InvestmentProfitDistributionJob
         }
 
         if ($profitLossPercent === null) {
-            $profitLossPercent = (float) $this->settingService->get('investment_default_profit_loss_percent', 0.0);
+            $profitLossPercent = (float) $this->appSettings->get('investment_default_profit_loss_percent', 0.0);
         }
 
         if ($tradingRecordId <= 0 || $profitLossPercent === 0.0) {

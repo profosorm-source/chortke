@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Contracts\LoggerInterface;
-use App\Services\FinancialEscrowService;
+use App\Domain\Financial\Services\FinancialEscrowService;
 
 /**
  * EscrowTimeoutJob

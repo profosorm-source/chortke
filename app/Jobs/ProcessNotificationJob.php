@@ -7,6 +7,7 @@ namespace App\Jobs;
 use Core\Job;
 use App\Services\Notification\NotificationDispatcher;
 use App\Services\Notification\SmsNotificationService;
+use App\Contracts\LoggerInterface;
 
 /**
  * ProcessNotificationJob
@@ -18,6 +19,7 @@ class ProcessNotificationJob extends Job
 {
     public function __construct(
         private NotificationDispatcher $dispatcher,
+        private LoggerInterface $logger,
         private ?SmsNotificationService $smsService = null
     ) {}
 
@@ -28,6 +30,15 @@ class ProcessNotificationJob extends Job
         
         if (empty($userIds) || !$channel) {
             return;
+        }
+
+        $cache = \Core\Cache::getInstance();
+        $cbKey = "circuit_breaker:notif_{$channel}";
+        
+        if ($cache->get("{$cbKey}:open")) {
+            $this->logger->warning('notif.circuit_breaker_open', ['channel' => $channel]);
+            // Throw exception to let the queue worker release/delay the job
+            throw new \RuntimeException("Circuit breaker is OPEN for {$channel}. Deferring execution.");
         }
 
         try {
@@ -59,13 +70,25 @@ class ProcessNotificationJob extends Job
                     }
                     break;
             }
+            
+            // Success -> Reset errors
+            $cache->forget("{$cbKey}:errors");
+
         } catch (\Throwable $e) {
-            if (function_exists('logger')) {
-                logger()->error('job.process_notification_failed', [
-                    'channel' => $channel,
-                    'error' => $e->getMessage()
-                ]);
+            // Failure -> Increment errors
+            $errors = $cache->increment("{$cbKey}:errors", 1, 60);
+            if ($errors >= 30) {
+                // Trip the breaker for 5 minutes
+                $cache->put("{$cbKey}:open", true, 300);
             }
+
+            $this->logger->error('job.process_notification_failed', [
+                'channel' => $channel,
+                'error' => $e->getMessage(),
+                'consecutive_errors' => $errors
+            ]);
+            
+            throw $e;
         }
     }
 }
