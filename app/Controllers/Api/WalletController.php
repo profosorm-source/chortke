@@ -2,7 +2,7 @@
 
 namespace App\Controllers\Api;
 
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\ApiRateLimiter;
 
 /**
@@ -13,10 +13,10 @@ use App\Services\ApiRateLimiter;
  */
 class WalletController extends BaseApiController
 {
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
 
     public function __construct(
-        WalletService $walletService
+        WalletServiceInterface $walletService
     )
     {
         parent::__construct();

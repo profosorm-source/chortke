@@ -3,7 +3,7 @@
 namespace App\Controllers;
 
 use App\Services\Payment\PaymentService;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\ReconciliationService;
 use App\Controllers\BaseController;
 use Core\Exceptions\ValidationException;
@@ -12,13 +12,13 @@ use Core\Exceptions\BusinessException;
 
 class PaymentController extends BaseController
 {
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private PaymentService $paymentService;
     private ReconciliationService $reconciliationService;
     private \Core\Cache $cache;
 
     public function __construct(
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         PaymentService $paymentService,
         ReconciliationService $reconciliationService,
         \Core\Cache $cache
@@ -73,13 +73,18 @@ class PaymentController extends BaseController
             $bankCardId = (int)($this->request->input('bank_card_id') ?? 0);
             $idempotencyKey = (string)$validated['idempotency_key'];
 
-    $result = $this->paymentService->create(
-        $userId,
-        (string)$data['gateway'],
-        $amount,
-        $bankCardId,
-        $idempotencyKey
-    );
+        $clientIp = function_exists('get_client_ip') ? get_client_ip() : (string)($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
+        $userAgent = function_exists('get_user_agent') ? get_user_agent() : (string)($_SERVER['HTTP_USER_AGENT'] ?? 'Unknown');
+
+        $result = $this->paymentService->create(
+            $userId,
+            (string)$data['gateway'],
+            $amount,
+            $bankCardId,
+            $idempotencyKey,
+            $clientIp,
+            $userAgent
+        );
 
     $this->response->redirect($result['payment_url']);
 } catch (ValidationException $e) {
@@ -138,10 +143,15 @@ class PaymentController extends BaseController
         }
 
         try {
+            $clientIp = function_exists('get_client_ip') ? get_client_ip() : (string)($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
+            $userAgent = function_exists('get_user_agent') ? get_user_agent() : (string)($_SERVER['HTTP_USER_AGENT'] ?? 'Unknown');
+
             $result = $this->paymentService->callback(
                 $gateway,
                 $this->request->all(),
-                $this->userId()
+                $this->userId(),
+                $clientIp,
+                $userAgent
             );
 
             if (!empty($result['success'])) {

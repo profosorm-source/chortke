@@ -2,14 +2,14 @@
 
 namespace App\Controllers\User;
 
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Controllers\User\BaseUserController;
 
 class WalletController extends BaseUserController
 {
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
 
-    public function __construct(\App\Services\Wallet\WalletService $walletService)
+    public function __construct(\App\Services\Wallet\WalletServiceInterface $walletService)
     {
         parent::__construct();
         $this->walletService = $walletService;

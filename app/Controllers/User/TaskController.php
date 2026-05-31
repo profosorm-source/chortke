@@ -7,11 +7,11 @@ use App\Services\TaskDisputeService;
 use App\Services\AdTaskService;
 use App\Services\SocialAccountService;
 use App\Services\UploadService;
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 
 class TaskController extends BaseUserController
 {
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private SocialAccountService $socialAccountService;
     private TaskDisputeService $taskDisputeService;
     private TaskExecutionService $taskExecutionService;
@@ -24,7 +24,7 @@ class TaskController extends BaseUserController
         TaskExecutionService $taskExecutionService,
         TaskDisputeService $taskDisputeService,
         SocialAccountService $socialAccountService,
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         AdTaskService $adTaskService,
         UploadService $uploadService)
     {

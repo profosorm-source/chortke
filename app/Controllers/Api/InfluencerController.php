@@ -7,7 +7,7 @@ use App\Models\StoryOrder;
 use App\Models\Dispute;
 use App\Services\InfluencerService;
 use App\Services\Shared\DisputeService;
-use App\Services\Shared\ScoreService;
+use App\Services\ScoreService;
 use App\Services\UploadService;
 use App\Services\VerificationService;
 

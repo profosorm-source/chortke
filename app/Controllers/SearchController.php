@@ -64,7 +64,7 @@ class SearchController extends BaseController
         $limit = max(1, min(50, (int)$this->request->get('limit', 5)));
         $offset = ($page - 1) * $limit;
 
-        $results = $this->searchService->searchAdmin($query, $limit, $offset);
+        $results = $this->searchService->searchAdmin(\App\Services\Search\SearchQuery::fromArray(['q' => $query, 'limit' => $limit, 'offset' => $offset]));
 
         // محاسبه تعداد کل نتایج
         $total = array_sum(array_map(fn($v) => is_array($v) ? count($v) : 0, $results));
@@ -115,7 +115,7 @@ class SearchController extends BaseController
         $limit = max(1, min(50, (int)$this->request->get('limit', 5)));
         $offset = ($page - 1) * $limit;
 
-        $results = $this->searchService->searchUser($query, $userId, $limit, $offset);
+        $results = $this->searchService->searchUser(\App\Services\Search\SearchQuery::fromArray(['q' => $query, 'limit' => $limit, 'offset' => $offset]), $userId);
         $total   = array_sum(array_map(fn($v) => is_array($v) ? count($v) : 0, $results));
         $results['total'] = $total;
 

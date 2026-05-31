@@ -20,7 +20,7 @@ class SeoAdController extends BaseUserController
     private DashboardStatsService $analytics;
     private SeoPayoutService $payoutService;
     private AdSystemManager $adManager;
-    private \App\Services\SeoService $seoService;
+    private \App\Services\Seo\AdsSeoService $adsSeoService;
 
     public function __construct(
         Ads $m,
@@ -29,7 +29,7 @@ class SeoAdController extends BaseUserController
         DashboardStatsService $a,
         SeoPayoutService $p,
         AdSystemManager $adManager,
-        \App\Services\SeoService $seoService
+        \App\Services\Seo\AdsSeoService $seoService,
     ) {
         parent::__construct();
         $this->model = $m;
@@ -38,7 +38,7 @@ class SeoAdController extends BaseUserController
         $this->analytics = $a;
         $this->payoutService = $p;
         $this->adManager = $adManager;
-        $this->seoService = $seoService;
+        $this->adsSeoService = $seoService;
     }
 
     /** لیست آگهی‌های من */
@@ -128,7 +128,7 @@ class SeoAdController extends BaseUserController
         }
 
         // کسر از کیف پول از طریق API رسمی و ثبت آگهی در تراکنش واحد
-        $createResult = $this->seoService->createAd($uid, $data, $budget, $minPayout, $maxPayout);
+        $createResult = $this->adsSeoService->createAd($uid, $data, $budget, $minPayout, $maxPayout);
         
         if (!empty($createResult['success'])) {
             $this->session->setFlash('success', 'آگهی SEO ثبت شد و پس از تایید مدیر فعال می‌شود.');

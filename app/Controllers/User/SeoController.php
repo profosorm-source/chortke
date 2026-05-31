@@ -5,7 +5,7 @@ namespace App\Controllers\User;
 use App\Models\Ads;
 use App\Models\SeoExecution;
 use App\Services\Search\SearchOrchestrator;
-use App\Services\SeoService;
+use App\Services\Seo\SeoService;
 use App\Services\Shared\DashboardStatsService;
 
 /**

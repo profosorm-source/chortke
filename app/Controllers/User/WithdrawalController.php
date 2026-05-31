@@ -2,7 +2,7 @@
 
 namespace App\Controllers\User;
 
-use App\Services\Wallet\WalletService;
+use App\Contracts\WalletServiceInterface;
 use App\Services\Withdrawal\WithdrawalUserService;
 use App\Services\Withdrawal\WithdrawalQueryService;
 use App\Services\BankCardService;
@@ -15,7 +15,7 @@ use App\Controllers\User\BaseUserController;
 class WithdrawalController extends BaseUserController
 {
     private BankCardService $bankCardService;
-    private WalletService $walletService;
+    private WalletServiceInterface $walletService;
     private RiskDecisionService $riskDecisionService;
     private WithdrawalUserService $withdrawalUserService;
     private WithdrawalQueryService $withdrawalQueryService;
@@ -24,7 +24,7 @@ class WithdrawalController extends BaseUserController
 
     public function __construct(
         BankCardService $bankCardService,
-        WalletService $walletService,
+        WalletServiceInterface $walletService,
         RiskDecisionService $riskDecisionService,
         WithdrawalUserService $withdrawalUserService,
         WithdrawalQueryService $withdrawalQueryService,

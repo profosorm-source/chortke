@@ -6,7 +6,7 @@ use App\Controllers\User\BaseUserController;
 use App\Models\Ads;
 use App\Services\CustomTask\CustomTaskService as CustomTaskCoreService;
 use App\Services\CustomTask\CustomTaskModerationService;
-use App\Validators\CustomTaskValidator;
+use App\Validators\Requests\CreateCustomTaskRequest;
 use App\Services\AntiFraud\GeoIPService;
 use App\Services\AntiFraud\BrowserFingerprintService;
 use App\Services\AdSystemManager;
@@ -79,12 +79,18 @@ class CustomTaskAdController extends BaseUserController
             'daily_limit_per_user' => (int) ($this->request->post('daily_limit_per_user') ?? 1),
         ];
 
-        // Validation
-        $errors = CustomTaskValidator::validateCreate($payload);
-        if (!empty($errors)) {
-            $this->session->setFlash('error', $errors[array_key_first($errors)][0] ?? 'داده‌ها نامعتبر است.');
+        // Validation با استفاده از FormRequest استاندارد
+        $request = new CreateCustomTaskRequest($payload);
+        if (!$request->validate()) {
+            $firstError = '';
+            foreach ($request->errors() as $fieldErrors) {
+                $firstError = is_array($fieldErrors) ? ($fieldErrors[0] ?? '') : (string)$fieldErrors;
+                if ($firstError) break;
+            }
+            $this->session->setFlash('error', $firstError ?: 'داده‌ها نامعتبر است.');
             return redirect('/custom-tasks/ad/create');
         }
+        $payload = $request->validated();
 
         // ایجاد تسک
         $result = $this->coreService->createTask($userId, $payload);

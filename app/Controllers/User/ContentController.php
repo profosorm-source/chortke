@@ -131,43 +131,32 @@ class ContentController extends BaseUserController
      */
     public function store(): array
     {
-        try {
-            // خواندن و sanitize داده‌ها
-            $input = $this->getJsonInput();
-            
-            // Validate CSRF Token
-            if (!$this->validateCsrfToken()) {
-                return $this->jsonError('توکن امنیتی نامعتبر است.', 403);
-            }
-
-            // اعتبارسنجی
-            $validator = $this->validateStoreInput($input);
-
-            if ($validator->fails()) {
-                return $this->jsonError(
-                    'اطلاعات ورودی نامعتبر است.',
-                    422,
-                    $validator->errors()
-                );
-            }
-
-            $data = $validator->data();
-            
-            // Sanitize input fields to prevent HTML Injection / Stored XSS (H-04)
-            $data['title'] = strip_tags((string)$data['title']);
-            $data['description'] = strip_tags((string)($data['description'] ?? ''), '<br><p><strong><em>');
-            $data['video_url'] = trim((string)$data['video_url']);
-            
-            // Submit content
-            $result = $this->contentService->submitContent(user_id(), $data);
-
-            $statusCode = $result['success'] ? 200 : 422;
-            return $this->response->json($result, $statusCode);
-            
-        } catch (\Throwable $e) {
-            $this->logError('Error in content store', $e);
-            return $this->jsonError('خطا در ثبت محتوا. لطفاً دوباره تلاش کنید.', 500);
+        // خواندن و sanitize داده‌ها
+        $input = $this->getJsonInput();
+        
+        // Validate CSRF Token
+        if (!$this->validateCsrfToken()) {
+            throw new \Core\Exceptions\SecurityException('توکن امنیتی نامعتبر است.');
         }
+
+        // اعتبارسنجی
+        $validator = $this->validateStoreInput($input);
+
+        if ($validator->fails()) {
+            throw new \Core\Exceptions\ValidationException($validator->errors());
+        }
+
+        $data = $validator->data();
+        
+        // Sanitize input fields to prevent HTML Injection / Stored XSS (H-04)
+        $data['title'] = strip_tags((string)$data['title']);
+        $data['description'] = strip_tags((string)($data['description'] ?? ''), '<br><p><strong><em>');
+        $data['video_url'] = trim((string)$data['video_url']);
+        
+        // Submit content (Throws BusinessException on failure)
+        $result = $this->contentService->submitContent(user_id(), $data);
+
+        return $this->response->json($result, 200);
     }
 
     /**

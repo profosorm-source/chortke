@@ -7,7 +7,8 @@ use App\Models\LotteryRound;
 use App\Models\LotteryParticipation;
 use App\Models\LotteryDailyNumber;
 use App\Models\LotteryVote;
-use App\Services\LotteryService;
+use App\Services\Lottery\LotteryService;
+use App\Services\Lottery\LotteryParticipationService;
 use App\Services\ApiRateLimiter;
 use App\Controllers\User\BaseUserController;
 
@@ -18,20 +19,24 @@ class LotteryController extends BaseUserController
     private \App\Models\LotteryParticipation $lotteryParticipationModel;
     private \App\Models\LotteryDailyNumber $lotteryDailyNumberModel;
     private LotteryService $lotteryService;
+    private LotteryParticipationService $participationService;
 
     public function __construct(
         \App\Models\LotteryDailyNumber $lotteryDailyNumberModel,
         \App\Models\LotteryParticipation $lotteryParticipationModel,
         \App\Models\LotteryRound $lotteryRoundModel,
         \App\Models\LotteryVote $lotteryVoteModel,
-        \App\Services\LotteryService $lotteryService)
+        \App\Services\Lottery\LotteryService $lotteryService,
+        \App\Services\Lottery\LotteryParticipationService $participationService)
     {
         parent::__construct();
-        $this->lotteryService = $lotteryService;
+
         $this->lotteryDailyNumberModel = $lotteryDailyNumberModel;
         $this->lotteryParticipationModel = $lotteryParticipationModel;
         $this->lotteryRoundModel = $lotteryRoundModel;
         $this->lotteryVoteModel = $lotteryVoteModel;
+        $this->lotteryService = $lotteryService;
+        $this->participationService = $participationService;
     }
 
     public function index()
@@ -99,7 +104,7 @@ class LotteryController extends BaseUserController
         $roundId = (int)($data['round_id'] ?? 0);
         $idempotencyKey = trim((string)($data['idempotency_key'] ?? '')) ?: null;
 
-        $result = $this->lotteryService->participate(user_id(), $roundId, $idempotencyKey);
+        $result = $this->participationService->participate(user_id(), $roundId, $idempotencyKey);
         ApiRateLimiter::enforce('lottery_participate', (int)user_id(), true);
 
         return $this->response->json($result, $result['success'] ? 200 : 422);
@@ -126,7 +131,7 @@ class LotteryController extends BaseUserController
         $roundId = (int)($data['round_id'] ?? 0);
         $votedNumber = (int)($data['voted_number'] ?? -1);
 
-        $result = $this->lotteryService->vote(user_id(), $roundId, $votedNumber);
+        $result = $this->participationService->vote(user_id(), $roundId, $votedNumber);
         ApiRateLimiter::enforce('lottery_vote', (int)user_id(), true);
 
         return $this->response->json($result, $result['success'] ? 200 : 422);

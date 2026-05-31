@@ -8,7 +8,7 @@ use App\Services\User\UserService;
 use App\Services\Auth\AuthService;
 use App\Controllers\BaseController;
 use App\Services\Auth\LoginRiskService;
-use App\Validators\UserValidator;
+use App\Validators\LoginRequest;
 
 /**
  * AuthController
@@ -88,12 +88,14 @@ class AuthController extends BaseController
             }
         }
 
-        $errors = UserValidator::validateLogin($data);
-        if (!empty($errors)) {
+        // اعتبارسنجی ورودی با استفاده از FormRequest
+        $loginReq = new LoginRequest($data);
+        if ($loginReq->fails() || !$loginReq->validate()) {
             $this->session->setFlash('error', 'لطفاً اطلاعات را به درستی وارد کنید.');
             $this->response->redirect(url('login'));
             return;
         }
+        $data = $loginReq->validated();
 
         // 🛡️ گیت ضدتقلب و امنیت هوشمند
         $user = $this->userService->findByCredentials($email);
@@ -265,7 +267,7 @@ class AuthController extends BaseController
         // CRITICAL-01 Fix: regenerate(true) was moved to register() and resendVerification()
         // to ensure it only happens when the verification state is initialized.
 
-        $this->view('user/verify-email-code', [
+        $this->view('user/verify-email', [
             'title' => 'تأیید ایمیل',
             'email' => $email
         ]);
