@@ -18,10 +18,14 @@ class QueueWorker
 {
     private bool $shouldQuit = false;
 
+    private \App\Contracts\LoggerInterface $logger;
+    private Queue $queue;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private Queue $queue
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        Queue $queue
+    ) {        $this->logger = $logger;
+        $this->queue = $queue;
+
                 $this->registerGracefulShutdownHandler();
     }
 

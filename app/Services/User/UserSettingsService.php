@@ -67,13 +67,17 @@ class UserSettingsService
     private \Core\RateLimiter $rateLimiter;
     private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         User $userModel,
         \Core\RateLimiter $rateLimiter,
         ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
-    ) {
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->userModel = $userModel;
         $this->rateLimiter = $rateLimiter;

@@ -18,11 +18,15 @@ class OutboxService implements \App\Contracts\OutboxServiceInterface
 {
     private AuditTrail $auditTrail;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         AuditTrail $auditTrail
-    ) {
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->auditTrail = $auditTrail;
     }

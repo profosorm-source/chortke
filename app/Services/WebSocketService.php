@@ -38,12 +38,18 @@ class WebSocketService
     private const DELIVERY_DELAY = 30;            // 30 seconds delay before delivery
     private const POLL_INTERVAL = 2000000;        // 2 seconds (increased from 0.5s)
 
+    private \Core\Redis $redis;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Redis $redis,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger
+        \Core\Redis $redis,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger
     )
-    {
+    {        $this->redis = $redis;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         }
 

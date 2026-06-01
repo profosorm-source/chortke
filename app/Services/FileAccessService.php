@@ -13,11 +13,13 @@ class FileAccessService
     /** پوشه‌های حساس که دسترسی باید لاگ شود */
     private const SENSITIVE_FOLDERS = ['kyc', 'receipts', 'dispute-evidence'];
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         FileAccess $fileModel
     )
-    {
+    {        $this->logger = $logger;
+
                 $this->fileModel = $fileModel;
     }
 

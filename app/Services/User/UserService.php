@@ -19,12 +19,16 @@ class UserService
     private User $model;
     private ?GeoIPService $geoService;
 
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\TransactionWrapper $transactionWrapper,
+        \App\Contracts\LoggerInterface $logger,
         User $model,
         ?GeoIPService $geoService = null
-    ) {
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->logger = $logger;
+
                 $this->model = $model;
         $this->geoService = $geoService;
     }

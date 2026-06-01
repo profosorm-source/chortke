@@ -22,13 +22,23 @@ class CameraVerificationService
     public const STATUS_SKIPPED   = 'skipped';
     public const STATUS_EXPIRED   = 'expired';
 
+    private \App\Contracts\LoggerInterface $logger;
+    private SocialTaskExecutionModel $model;
+    private BehaviorAnalysisService $behavior;
+    private SocialTaskScoringService $scoring;
+    private AppSettings $appSettings;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private SocialTaskExecutionModel $model,
-        private BehaviorAnalysisService $behavior,
-        private SocialTaskScoringService $scoring,
-        private AppSettings $appSettings
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        SocialTaskExecutionModel $model,
+        BehaviorAnalysisService $behavior,
+        SocialTaskScoringService $scoring,
+        AppSettings $appSettings
+    ) {        $this->logger = $logger;
+        $this->model = $model;
+        $this->behavior = $behavior;
+        $this->scoring = $scoring;
+        $this->appSettings = $appSettings;
+
             }
 
     /**

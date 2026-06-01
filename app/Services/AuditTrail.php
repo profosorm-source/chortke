@@ -11,7 +11,9 @@ use App\Models\AuditTrail as AuditTrailModel;
 class AuditTrail
 {
     use \App\Traits\ClientInfoTrait;
-private AuditTrailModel $auditTrailModel;
+
+    private LoggerInterface $logger;
+    private AuditTrailModel $auditTrailModel;
 
     public function __construct(LoggerInterface $logger, AuditTrailModel $auditTrailModel)
     {

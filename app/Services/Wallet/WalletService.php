@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\Wallet;
 
-use App\Services\BaseService;
 use App\Contracts\LoggerInterface;
 use Core\Database;
 use App\Contracts\WalletServiceInterface;
@@ -19,19 +18,23 @@ use App\Services\OutboxService;
 class WalletService implements WalletServiceInterface
 {
 
+    private EventDispatcher $eventDispatcher;
+    private Database $db;
+    private LoggerInterface $logger;
     private DistributedLockService $lockService;
     private WalletQueryService $queryService;
     private WalletMutationService $mutationService;
     private AppSettings $appSettings;
     private EventDispatcher $events;
     private ?OutboxService $outbox;
+    private IdempotencyKey $idempotencyKey;
 
     private array $supportedCurrencies;
 
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        EventDispatcher $eventDispatcher,
+        Database $db,
+        LoggerInterface $logger,
         IdempotencyKey $idempotencyKey,
         DistributedLockService $lockService,
         WalletQueryService $queryService,
@@ -39,12 +42,15 @@ class WalletService implements WalletServiceInterface
         AppSettings $appSettings,
         ?OutboxService $outbox = null
     ) {
-        
+        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
         $this->lockService = $lockService;
         $this->queryService = $queryService;
         $this->mutationService = $mutationService;
         $this->appSettings = $appSettings;
-        $this->events = $this->eventDispatcher;
+        $this->events = $eventDispatcher;
+        $this->idempotencyKey = $idempotencyKey;
         $this->outbox = $outbox;
 
         $this->supportedCurrencies = ['irt', 'usdt'];
@@ -85,73 +91,64 @@ class WalletService implements WalletServiceInterface
         
         $idempotencyKeyStr = $metadata['idempotency_key'] ?? hash('sha256', implode('|', $uniqueParts));
 
-        $idempotencyService = $this->idempotencyKey;
-        $check = $idempotencyService->check($idempotencyKeyStr, $userId, "wallet_{$action}", [
-            'amount' => $amount, 'currency' => $currency, 'ip' => $ipAddress,
-        ]);
-
-        if ($check['is_duplicate']) {
-            return $this->standardizeResponse($check['result'] ?? []);
-        }
-
         try {
-            return $this->lockService->synchronized("wallet:mut:{$userId}", function() use (
+            return $this->idempotencyKey->wrapInstance($idempotencyKeyStr, $userId, "wallet_{$action}", function() use (
                 $userId, $amount, $currency, $metadata, $idempotencyKeyStr,
-                $requestId, $ipAddress, $deviceFingerprint, $logId, $logic, $idempotencyService, $action
+                $requestId, $ipAddress, $deviceFingerprint, $logId, $logic, $action
             ) {
-                $startedTransaction = !$this->db->inTransaction();
+                return $this->lockService->synchronized("wallet:mut:{$userId}", function () use (
+                    $userId, $amount, $currency, $metadata, $idempotencyKeyStr,
+                    $requestId, $ipAddress, $deviceFingerprint, $logId, $logic, $action
+                ) {
+                    $startedTransaction = !$this->db->inTransaction();
 
-                try {
-                    if ($startedTransaction) {
-                        $this->db->beginTransaction();
-                    }
+                    try {
+                        if ($startedTransaction) {
+                            $this->db->beginTransaction();
+                        }
 
-                    // Execute core business logic from Mutation Service
-                    $result = $logic($requestId, $ipAddress, $deviceFingerprint, $idempotencyKeyStr);
+                        $result = $logic($requestId, $ipAddress, $deviceFingerprint, $idempotencyKeyStr);
 
-                    if ($this->outbox && is_array($result) && !empty($result['success'])) {
-                        $this->outbox->record('wallet_transaction', (string)$userId, "wallet.{$action}.completed", [
-                            'user_id' => $userId,
-                            'transaction_id' => $result['transaction_id'] ?? null,
-                            'result' => $result
+                        if ($this->outbox && is_array($result) && !empty($result['success'])) {
+                            $this->outbox->record('wallet_transaction', (string)$userId, "wallet.{$action}.completed", [
+                                'user_id' => $userId,
+                                'transaction_id' => $result['transaction_id'] ?? null,
+                                'result' => $result
+                            ]);
+                        }
+
+                        if ($startedTransaction) {
+                            $this->db->commit();
+                        }
+
+                        $this->logger->info("wallet.{$action}.success", [
+                            'channel' => 'wallet', 'log_id' => $logId, 'user_id' => $userId,
+                            'amount' => $amount, 'currency' => $currency
                         ]);
-                    }
 
-                    if ($startedTransaction) {
-                        $this->db->commit();
-                    }
+                        return is_array($result) ? $this->standardizeResponse($result) : $result;
 
-                    if (is_array($result)) {
-                        $idempotencyService->complete($idempotencyKeyStr, $result, $userId);
+                    } catch (\Throwable $e) {
+                        if ($startedTransaction && $this->db->inTransaction()) {
+                            $this->db->rollBack();
+                        }
+                        throw $e;
                     }
-
-                    $this->logger->info("wallet.{$action}.success", [
-                        'channel' => 'wallet', 'log_id' => $logId, 'user_id' => $userId,
-                        'amount' => $amount, 'currency' => $currency
-                    ]);
-
-                    return is_array($result) ? $this->standardizeResponse($result) : $result;
-
-                } catch (\InvalidArgumentException $e) {
-                    if ($startedTransaction && $this->db->inTransaction()) {
-                        $this->db->rollBack();
-                    }
-                    $failResult = $this->standardizeResponse(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
-                    $idempotencyService->fail($idempotencyKeyStr, $failResult, $userId);
-                    throw $e;
-                } catch (\Throwable $e) {
-                    if ($startedTransaction && $this->db->inTransaction()) {
-                        $this->db->rollBack();
-                    }
-                    $failResult = $this->standardizeResponse(['success' => false, 'error' => $e->getMessage(), 'message' => 'خطای سیستمی']);
-                    $idempotencyService->fail($idempotencyKeyStr, $failResult, $userId);
-                    throw $e;
-                }
-            }, 15, 10);
+                }, 15, 10);
+            }, [
+                'amount' => $amount,
+                'currency' => $currency,
+                'ip' => $ipAddress,
+            ]);
         } catch (\RuntimeException $e) {
             if (str_contains($e->getMessage(), 'Failed to acquire lock')) {
                 $this->logger->warning('wallet.lock_timeout', ['user_id' => $userId, 'action' => $action, 'error' => $e->getMessage()]);
-                return ['success' => false, 'message' => 'سیستم در حال حاضر شلوغ است، لطفاً لحظاتی بعد تلاش کنید'];
+                // ✅ تبدیل lock timeout به TransientException — IdempotencyKey این را retryable می‌داند
+                throw new \Core\Exceptions\TransientException(
+                    'سیستم در حال حاضر شلوغ است، لطفاً لحظاتی بعد تلاش کنید',
+                    503,  // Service Unavailable
+                    $e
+                );
             }
             throw $e;
         }
@@ -237,18 +234,25 @@ class WalletService implements WalletServiceInterface
     // Backward compatibility for escrows, cancels, completions
     public function completeWithdrawal(int $userId, string $amount, string $currency, ?string $transactionId): bool
     {
-        // Delegation logic simplified for refactor
-        return true;
+        if (!$transactionId) {
+            return false;
+        }
+
+        return $this->mutationService->completeWithdrawal($transactionId, $userId);
     }
 
     public function cancelWithdrawal(int $userId, string $amount, string $currency, ?string $transactionId): bool
     {
-        return true;
+        if (!$transactionId) {
+            return false;
+        }
+
+        return $this->mutationService->cancelWithdrawal($transactionId, $userId);
     }
 
-    public function reverseTransaction(string $transactionId, string $reason = '', ?int $adminId = null): bool
+    public function reverseTransaction(string $transactionId, ?int $adminId = null, string $reason = ''): bool
     {
-        return true;
+        return $this->mutationService->reverseTransaction($transactionId, $adminId, $reason);
     }
 
     // =========================================================================

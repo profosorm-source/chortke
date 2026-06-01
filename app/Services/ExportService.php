@@ -11,12 +11,20 @@ use Core\RateLimiter;
 
 class ExportService
 {
+    private ExportData $exportData;
+    private Session $session;
+    private PolicyService $policyService;
+    private RateLimiter $rateLimiter;
     public function __construct(
-        private ExportData $exportData,
-        private Session $session,
-        private PolicyService $policyService,
-        private RateLimiter $rateLimiter
-    ) {
+        ExportData $exportData,
+        Session $session,
+        PolicyService $policyService,
+        RateLimiter $rateLimiter
+    ) {        $this->exportData = $exportData;
+        $this->session = $session;
+        $this->policyService = $policyService;
+        $this->rateLimiter = $rateLimiter;
+
             }
     /**
      * خروجی CSV (Streaming version)

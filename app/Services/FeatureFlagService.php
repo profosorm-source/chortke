@@ -35,15 +35,23 @@ private FeatureFlag $featureModel;
         'environments', 'priority', 'tags',
     ];
     
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         FeatureFlag $featureModel,
         User $userModel,
         KYCVerification $kycModel,
-        private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
-    ) {
+        ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->cacheInvalidation = $cacheInvalidation;
+
         
         $this->featureModel = $featureModel;
         $this->userModel = $userModel;

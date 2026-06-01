@@ -44,15 +44,17 @@ class EmailService implements EmailServiceInterface
     private string $fromEmail;
     private string $fromName;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         EmailQueue             $emailQueue,
         NotificationPreference $prefModel,
         AppSettings         $settingService,
         User                   $userModel,
         Queue                  $queue,
         RedisEmailQueueService $redisQueue
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->emailQueue   = $emailQueue;
         $this->prefModel    = $prefModel;
         $this->settingService = $settingService;

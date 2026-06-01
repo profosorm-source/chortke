@@ -11,7 +11,12 @@ use App\Models\SentryModel;
  */
 class TrendAnalyzer
 {
-    public function __construct(private SentryModel $model) {}
+    private SentryModel $model;
+
+    public function __construct(SentryModel $model)
+    {
+        $this->model = $model;
+    }
 
     /**
      * 📊 Analyze Trends

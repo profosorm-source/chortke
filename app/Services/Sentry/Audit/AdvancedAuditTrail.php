@@ -20,13 +20,21 @@ class AdvancedAuditTrail
         'enable_compression' => true,
     ];
 
+    private SentryModel $model;
+    private Logger $logger;
+    private AuditTrail $auditTrail;
+    private Session $session;
     public function __construct(
-        private SentryModel $model,
-        private Logger $logger,
-        private AuditTrail $auditTrail,
-        private Session $session,
+        SentryModel $model,
+        Logger $logger,
+        AuditTrail $auditTrail,
+        Session $session,
         array $config = []
-    ) {
+    ) {        $this->model = $model;
+        $this->logger = $logger;
+        $this->auditTrail = $auditTrail;
+        $this->session = $session;
+
         $this->config = array_merge($this->config, $config);
     }
 

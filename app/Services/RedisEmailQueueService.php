@@ -23,13 +23,19 @@ class RedisEmailQueueService
     private string $metaPrefix = 'email:meta:';
 private MetricsCollectorInterface $metrics;
 
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Cache $cache,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         MetricsCollectorInterface $metrics
     )
-    {
+    {        $this->cache = $cache;
+        $this->db = $db;
+        $this->logger = $logger;
+
                 $this->metrics = $metrics;
         $this->redisClient = $this->cache->redis();
         $this->useRedis = $this->cache->driver() === 'redis';
@@ -188,7 +194,15 @@ LUA;
     public function claim(string $emailId): bool
     {
         if (str_starts_with($emailId, 'file_')) {
-            return true;
+            $realId = str_replace('file_', '', $emailId);
+            $basePath = defined('BASE_PATH') ? BASE_PATH : dirname(dirname(__DIR__));
+            $file = $basePath . '/storage/logs/email_fallback_queue/' . $realId . '.json';
+            if (file_exists($file)) {
+                return true;
+            }
+
+            $this->logger->warning('email.file.claim_missing', ['email_id' => $emailId, 'file' => $file]);
+            return false;
         }
 
         if (!$this->useRedis) {
@@ -247,10 +261,14 @@ LUA;
             $file = $basePath . '/storage/logs/email_fallback_queue/' . $realId . '.json';
             if (file_exists($file)) {
                 @unlink($file);
+                $this->metrics->increment('email.send.success');
+                $this->trackQueueDepth();
+                return true;
             }
-            $this->metrics->increment('email.send.success');
+
+            $this->logger->warning('email.file.mark_sent_missing', ['email_id' => $emailId, 'file' => $file]);
             $this->trackQueueDepth();
-            return true;
+            return false;
         }
 
         if ($this->useRedis) {
@@ -332,10 +350,15 @@ LUA;
                         $email['scheduled_at'] = time() + $delay;
                         @file_put_contents($file, json_encode($email, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
                     }
+                    $this->trackQueueDepth();
+                    return true;
                 }
+                $this->logger->warning('email.file.mark_failed_invalid', ['email_id' => $emailId, 'file' => $file]);
+            } else {
+                $this->logger->warning('email.file.mark_failed_missing', ['email_id' => $emailId, 'file' => $file]);
             }
             $this->trackQueueDepth();
-            return true;
+            return false;
         }
 
         if ($this->useRedis) {

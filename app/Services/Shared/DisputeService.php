@@ -24,16 +24,30 @@ class DisputeService
     ];
     private ?\App\Services\OutboxService $outboxService = null;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private Dispute $disputeModel;
+    private WalletServiceInterface $walletService;
+    private ReconciliationService $reconciliationService;
+    private \App\Models\Transaction $transactionModel;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private Dispute $disputeModel,
-        private WalletServiceInterface $walletService,
-        private ReconciliationService $reconciliationService,
-        private \App\Models\Transaction $transactionModel,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        Dispute $disputeModel,
+        WalletServiceInterface $walletService,
+        ReconciliationService $reconciliationService,
+        \App\Models\Transaction $transactionModel,
         ?\App\Services\OutboxService $outboxService = null
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->disputeModel = $disputeModel;
+        $this->walletService = $walletService;
+        $this->reconciliationService = $reconciliationService;
+        $this->transactionModel = $transactionModel;
+
         
         $this->outboxService = $outboxService;
     }

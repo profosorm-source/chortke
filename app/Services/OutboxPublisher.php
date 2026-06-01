@@ -24,15 +24,25 @@ class OutboxPublisher
     private const DLQ_THRESHOLD = 3;
     private const MAX_RETRY_DELAY_SECONDS = 3600;
 
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\Database $db;
+    private Queue $queue;
+    private EventDispatcher $events;
+    private \App\Contracts\NotificationServiceInterface $notificationService;
+
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\Database $db,
-        private Queue $queue,
-        private \App\Contracts\NotificationServiceInterface $notificationService
+        \Core\Database $db,
+        Queue $queue,
+        EventDispatcher $events,
+        \App\Contracts\NotificationServiceInterface $notificationService,
+        \App\Contracts\LoggerInterface $logger
     ) {
-        // Ensure BaseService receives common dependencies so it doesn't overwrite
-        // promoted properties (Logger first, then idempotencyKey, db, transactionWrapper, validatorFactory, cache, redis, eventDispatcher)
-            }
+        $this->db = $db;
+        $this->queue = $queue;
+        $this->events = $events;
+        $this->notificationService = $notificationService;
+        $this->logger = $logger;
+    }
 
     public function publishPending(int $limit = 50): array
     {

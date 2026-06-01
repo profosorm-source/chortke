@@ -44,13 +44,19 @@ class InvestmentService
 با تأیید، اعلام می‌کنید که این ریسک‌ها را درک کرده و می‌پذیرید.
 EOT;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         \App\Models\Investment $investmentModel,
         \App\Services\Settings\AppSettings $appSettings
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+
         $this->investmentModel = $investmentModel;
         $this->appSettings = $appSettings;
     }

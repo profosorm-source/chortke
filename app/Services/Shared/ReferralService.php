@@ -23,17 +23,33 @@ class ReferralService
 {
     private ?\App\Contracts\OutboxServiceInterface $outboxService = null;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private WalletServiceInterface $walletService;
+    private AuditTrail $auditTrail;
+    private ReferralCommission $commissionModel;
+    private User $userModel;
+    private AppSettings $appSettings;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private WalletServiceInterface $walletService,
-        private AuditTrail $auditTrail,
-        private ReferralCommission $commissionModel,
-        private User $userModel,
-        private AppSettings $appSettings,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        WalletServiceInterface $walletService,
+        AuditTrail $auditTrail,
+        ReferralCommission $commissionModel,
+        User $userModel,
+        AppSettings $appSettings,
         ?\App\Contracts\OutboxServiceInterface $outboxService = null
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->walletService = $walletService;
+        $this->auditTrail = $auditTrail;
+        $this->commissionModel = $commissionModel;
+        $this->userModel = $userModel;
+        $this->appSettings = $appSettings;
+
         
         $this->outboxService = $outboxService;
     }

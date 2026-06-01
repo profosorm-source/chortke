@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Withdrawal;
 
-class WithdrawalUserService extends \App\Services\BaseService
+class WithdrawalUserService
 {
     public function __construct() {}
 

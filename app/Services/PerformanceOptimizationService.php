@@ -27,11 +27,15 @@ class PerformanceOptimizationService
     private float $slowQueryThreshold = 1.0; // seconds
     private bool $logSlowQueries = true;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger
     )
-    {
+    {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->slowQueryThreshold = (float)config('logging.performance.slow_query_threshold', 1.0);
         $this->logSlowQueries = (bool)config('logging.performance.log_slow_queries', true);

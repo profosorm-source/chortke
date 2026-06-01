@@ -14,11 +14,17 @@ class AlertRulesEngine
 {
     private array $cache = [];
 
+    private SentryModel $model;
+    private Logger $logger;
+    private AlertDispatcher $dispatcher;
     public function __construct(
-        private SentryModel $model,
-        private Logger $logger,
-        private AlertDispatcher $dispatcher
-    ) {}
+        SentryModel $model,
+        Logger $logger,
+        AlertDispatcher $dispatcher
+    ) {        $this->model = $model;
+        $this->logger = $logger;
+        $this->dispatcher = $dispatcher;
+}
 
     /**
      * ✅ Evaluate All Rules

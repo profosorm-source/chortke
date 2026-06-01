@@ -17,16 +17,26 @@ class ScheduledPaymentService
     private ?\App\Domain\Financial\Services\FinancialEscrowService $escrowService = null;
 private \App\Services\Shared\IdempotencyService $idempotencyService;
 
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \App\Contracts\LoggerInterface $logger;
+    private ScheduledPayment $scheduledPaymentModel;
+    private WalletServiceInterface $walletService;
+    private ReconciliationService $reconciliationService;
     public function __construct(
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \App\Contracts\LoggerInterface $logger,
-        private ScheduledPayment $scheduledPaymentModel,
-        private WalletServiceInterface $walletService,
-        private ReconciliationService $reconciliationService,
+        \Core\TransactionWrapper $transactionWrapper,
+        \App\Contracts\LoggerInterface $logger,
+        ScheduledPayment $scheduledPaymentModel,
+        WalletServiceInterface $walletService,
+        ReconciliationService $reconciliationService,
         ?\App\Domain\Financial\Services\FinancialEscrowService $escrowService = null,
         ?\App\Contracts\ValidatorFactoryInterface $validatorFactory = null,
         ?\App\Services\Shared\IdempotencyService $idempotencyService = null
-    ) {
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->logger = $logger;
+        $this->scheduledPaymentModel = $scheduledPaymentModel;
+        $this->walletService = $walletService;
+        $this->reconciliationService = $reconciliationService;
+
         
         $this->escrowService = $escrowService;
         $this->validatorFactory = $validatorFactory ?? \Core\Container::getInstance()->make(\App\Contracts\ValidatorFactoryInterface::class);
@@ -48,11 +58,7 @@ private \App\Services\Shared\IdempotencyService $idempotencyService;
         $userId = (int)$data['user_id'];
         
         // Ensure idempotency for creating schedules
-        $idempotencyKey = $data['idempotency_key'] ?? \Core\IdempotencyKey::generateFromPayload('sched_create', [
-            'user_id' => $userId,
-            'amount' => $data['amount'],
-            'next_run_at' => $data['next_run_at'],
-        ]);
+        $explicitKey = $data['idempotency_key'] ?? null;
 
         return $this->idempotencyService->executeWithTransaction(
             'scheduled_payment.create',
@@ -61,7 +67,7 @@ private \App\Services\Shared\IdempotencyService $idempotencyService;
             function() use ($data) {
                 return $this->scheduledPaymentModel->createSchedule($data);
             },
-            $idempotencyKey
+            $explicitKey
         );
     }
 

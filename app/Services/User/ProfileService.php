@@ -18,12 +18,20 @@ class ProfileService
 {
     private const SETTINGS_CACHE_PREFIX = 'user_settings:';
 
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \App\Contracts\LoggerInterface $logger;
+    private User $model;
+    private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
     public function __construct(
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \App\Contracts\LoggerInterface $logger,
-        private User $model,
-        private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
-    ) {
+        \Core\TransactionWrapper $transactionWrapper,
+        \App\Contracts\LoggerInterface $logger,
+        User $model,
+        ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->logger = $logger;
+        $this->model = $model;
+        $this->cacheInvalidation = $cacheInvalidation;
+
         
     }
 

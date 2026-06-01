@@ -22,13 +22,17 @@ class AdSystemManager
     private AdsRepositoryInterface $adsRepository;
 
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         array $adapters,
         AdsRepositoryInterface $adsRepository
     )
-    {
+    {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->adapters = $adapters;
         $this->adsRepository = $adsRepository;

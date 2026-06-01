@@ -26,11 +26,15 @@ class KYCService
     private \App\Adapters\KycFaceVerificationAdapter $aiAdapter;
     private \Core\Encryption $encryption;
 
+        private \Core\Database $db;
+        private \App\Contracts\LoggerInterface $logger;
         public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         \App\Models\KYC $model
-    ) {
+    ) {            $this->db = $db;
+            $this->logger = $logger;
+
         $this->model = $model;
     }
 

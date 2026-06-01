@@ -19,12 +19,16 @@ class DatabaseService
     private BackupLog $backupLogModel;
     private string $backupDir;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         BackupLog $backupLogModel
     )
-    {
+    {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->backupLogModel = $backupLogModel;
         
@@ -114,7 +118,7 @@ class DatabaseService
             file_put_contents($cnfFile, sprintf("[client]\npassword=%s\n", $dbConfig['pass'] ?? ''));
             chmod($cnfFile, 0600);
 
-            $mysqlDumpPath = file_exists('C:\\xampp\\mysql\\bin\\mysqldump.exe') ? 'C:\\xampp\\mysql\\bin\\mysqldump.exe' : 'mysqldump';
+            $mysqlDumpPath = config('database.mysqldump_path', 'mysqldump');
             
             $command = sprintf(
                 '%s --defaults-extra-file=%s --host=%s --user=%s %s > %s 2>&1',
@@ -199,8 +203,10 @@ class DatabaseService
             file_put_contents($cnfFile, sprintf("[client]\npassword=%s\n", $dbConfig['pass'] ?? ''));
             chmod($cnfFile, 0600);
 
+            $mysqlPath = config('database.mysql_path', 'mysql');
             $command = sprintf(
-                'mysql --defaults-extra-file=%s --host=%s --user=%s %s < %s 2>&1',
+                '%s --defaults-extra-file=%s --host=%s --user=%s %s < %s 2>&1',
+                escapeshellcmd($mysqlPath),
                 escapeshellarg($cnfFile),
                 escapeshellarg($dbConfig['host'] ?? 'localhost'),
                 escapeshellarg($dbConfig['user'] ?? 'root'),

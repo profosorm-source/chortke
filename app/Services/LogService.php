@@ -21,11 +21,18 @@ class LogService
     private SystemLog $systemLog;
     private SecurityLog $securityLog;
     private PerformanceLog $performanceLog;
+    private Database $db;
+    private ?\Core\Redis $redis;
     private \Core\Session $session;
-private ?AuditTrail $auditTrail;
+    private ?AuditTrail $auditTrail;
     private string $requestId;
     private array $logBuffer = [];
     private const MAX_BUFFER_SIZE = 100;
+
+    public const TYPE_ACTIVITY = 'activity';
+    public const TYPE_SYSTEM = 'system';
+    public const TYPE_SECURITY = 'security';
+    public const TYPE_PERFORMANCE = 'performance';
     
     private const LEVEL_MAP = [
         'emergency' => 'EMERGENCY',
@@ -56,7 +63,6 @@ private ?AuditTrail $auditTrail;
         ?\Core\Redis $redis = null,
         ?AuditTrail $auditTrail = null
     ) {
-        // LogService no longer extends BaseService so no parent constructor call needed
         $this->db = $db;
         $this->activityLog = $activityLog;
         $this->systemLog = $systemLog;
@@ -75,6 +81,61 @@ private ?AuditTrail $auditTrail;
         }
 
         register_shutdown_function([$this, 'flush']);
+    }
+
+    public function query(array $filters = [], int $page = 1, int $perPage = 50): array
+    {
+        $type = $filters['type'] ?? self::TYPE_ACTIVITY;
+
+        switch ($type) {
+            case self::TYPE_SYSTEM:
+                return $this->systemLog->getPaginated(
+                    $page,
+                    $perPage,
+                    $filters['level'] ?? null,
+                    $filters['user_id'] ?? null,
+                    $filters['search'] ?? null,
+                    $filters['date_from'] ?? null,
+                    $filters['date_to'] ?? null
+                );
+            case self::TYPE_SECURITY:
+                return $this->securityLog->getPaginated(
+                    $filters,
+                    $page,
+                    $perPage
+                );
+            case self::TYPE_PERFORMANCE:
+                return $this->performanceLog->getPaginated(
+                    $page,
+                    $perPage,
+                    $filters['metric'] ?? null,
+                    $filters['date_from'] ?? null,
+                    $filters['date_to'] ?? null
+                );
+            case self::TYPE_ACTIVITY:
+            default:
+                return $this->activityLog->getPaginated(
+                    $page,
+                    $perPage,
+                    $filters['user_id'] ?? null,
+                    $filters['action'] ?? null,
+                    $filters['search'] ?? null,
+                    $filters['date_from'] ?? null,
+                    $filters['date_to'] ?? null,
+                    $filters['channel'] ?? null
+                );
+        }
+    }
+
+    public function findById(int $id, string $type = self::TYPE_ACTIVITY): array|object|null
+    {
+        return match ($type) {
+            self::TYPE_SYSTEM => $this->systemLog->findById($id),
+            self::TYPE_SECURITY => $this->securityLog->findById($id),
+            self::TYPE_PERFORMANCE => $this->performanceLog->findById($id),
+            self::TYPE_ACTIVITY => $this->activityLog->findById($id),
+            default => $this->activityLog->findById($id),
+        };
     }
 
     private function sanitizeContext(array $context): array

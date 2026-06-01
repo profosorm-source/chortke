@@ -12,11 +12,17 @@ use App\Contracts\CacheInterface;
  */
 class DashboardService
 {
+    private SentryModel $model;
+    private CacheInterface $cache;
+    private \Core\Database $db;
     public function __construct(
-        private SentryModel $model,
-        private CacheInterface $cache,
-        private \Core\Database $db
-    ) {}
+        SentryModel $model,
+        CacheInterface $cache,
+        \Core\Database $db
+    ) {        $this->model = $model;
+        $this->cache = $cache;
+        $this->db = $db;
+}
 
     /**
      * 📊 Get Dashboard Overview

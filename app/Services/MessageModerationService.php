@@ -17,17 +17,25 @@ class MessageModerationService
     private NotificationServiceInterface $notificationService;
     private ?\App\Services\User\UserService $userService;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Cache $cache,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         InteractionModel $interactionModel,
         MessageModerationModel $moderationModel,
         NotificationServiceInterface $notificationService,
         ?\App\Services\Settings\AppSettings $appSettings = null,
         ?\App\Services\User\UserService $userService = null
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->cache = $cache;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->interactionModel = $interactionModel;
         $this->moderationModel = $moderationModel;

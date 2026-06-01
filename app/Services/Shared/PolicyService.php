@@ -20,12 +20,20 @@ class PolicyService
 {
     private array $permissionCache = [];
 
+    private \App\Contracts\LoggerInterface $logger;
+    private User $userModel;
+    private Role $roleModel;
+    private AuditTrail $auditTrail;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private User $userModel,
-        private Role $roleModel,
-        private AuditTrail $auditTrail
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        User $userModel,
+        Role $roleModel,
+        AuditTrail $auditTrail
+    ) {        $this->logger = $logger;
+        $this->userModel = $userModel;
+        $this->roleModel = $roleModel;
+        $this->auditTrail = $auditTrail;
+
         
     }
 

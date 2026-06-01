@@ -14,12 +14,14 @@ class ContactService
     private \Core\RateLimiter $rateLimiter;
     private \App\Services\CaptchaService $captchaService;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         ContactMessage $contactMessageModel,
         \Core\RateLimiter $rateLimiter,
         \App\Services\CaptchaService $captchaService
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->contactMessageModel = $contactMessageModel;
         $this->rateLimiter = $rateLimiter;
         $this->captchaService = $captchaService;

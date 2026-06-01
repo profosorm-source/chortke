@@ -56,17 +56,23 @@ class ContentService
 با تأیید این تعهدنامه، تمام شرایط فوق را می‌پذیرم.
 EOT;
 
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
         ContentSubmission $submissionModel,
         ContentRevenue $revenueModel,
         ContentAgreement $agreementModel,
         TransactionWrapper $transactionWrapper,
         AppSettings $appSettings,
         ?\App\Contracts\OutboxServiceInterface $outboxService = null
-    ) {
+    ) {        $this->logger = $logger;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+
                 $this->submissionModel = $submissionModel;
         $this->revenueModel = $revenueModel;
         $this->agreementModel = $agreementModel;
@@ -451,9 +457,7 @@ $this->logger->info('content_revenue', ['message' => "Admin {$adminId} added rev
                 'total_revenue' => $totalRevenue,
             ];
 
-            $explicitKey = $idempotencyKey !== null && $idempotencyKey !== ''
-                ? $idempotencyKey
-                : \Core\IdempotencyKey::generateFromPayload('content_revenue_creation', $payload);
+            $explicitKey = $idempotencyKey !== null && $idempotencyKey !== '' ? $idempotencyKey : null;
 
             return $this->idempotencyService->execute('content.createRevenue', $adminId, $payload, function () use (
                 $submissionId,
@@ -960,7 +964,5 @@ $this->logger->info('content_suspended', ['message' => "Admin {$adminId} suspend
                                      ->limit($limit)->offset($offset)->get() ?? []
         ];
     }
-
-    // successResponse/errorResponse دریافت شده‌اند از BaseService
 }
 

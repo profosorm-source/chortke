@@ -19,11 +19,15 @@ class DatabaseAnalyzerService
     private float $slowQueryThreshold = 1.0;
     private bool $logSlowQueries = true;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger
     )
-    {
+    {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->slowQueryThreshold = (float)config('logging.performance.slow_query_threshold', 1.0);
         $this->logSlowQueries = (bool)config('logging.performance.log_slow_queries', true);
@@ -185,7 +189,47 @@ class DatabaseAnalyzerService
 
     public function suggestIndexes(string $table): array
     {
-        return []; // Simple stub to prevent errors
+        try {
+            $columns = $this->db->query(
+                "SELECT COLUMN_NAME, COLUMN_KEY, DATA_TYPE
+                 FROM INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+                [$table]
+            )->fetchAll() ?? [];
+
+            $suggestions = [];
+            foreach ($columns as $col) {
+                $name = $col->COLUMN_NAME;
+                if (in_array($name, ['created_at', 'updated_at', 'deleted_at', 'last_seen'], true)) {
+                    $suggestions[] = [
+                        'column' => $name,
+                        'reason' => 'Timestamp/indexed audit field',
+                        'suggestion' => "ALTER TABLE `{$table}` ADD INDEX idx_{$name} (`{$name}`);",
+                    ];
+                }
+
+                if (strpos($name, '_id') !== false || $name === 'user_id' || $name === 'account_id') {
+                    $suggestions[] = [
+                        'column' => $name,
+                        'reason' => 'Foreign key or lookup field',
+                        'suggestion' => "ALTER TABLE `{$table}` ADD INDEX idx_{$name} (`{$name}`);",
+                    ];
+                }
+
+                if (in_array($name, ['status', 'state', 'active'], true)) {
+                    $suggestions[] = [
+                        'column' => $name,
+                        'reason' => 'Frequently filtered status field',
+                        'suggestion' => "ALTER TABLE `{$table}` ADD INDEX idx_{$name} (`{$name}`);",
+                    ];
+                }
+            }
+
+            return array_values($suggestions);
+        } catch (\Throwable $e) {
+            $this->logger->error('performance.suggest_indexes.failed', ['table' => $table, 'error' => $e->getMessage()]);
+            return [];
+        }
     }
 
     public function healthCheck(): array

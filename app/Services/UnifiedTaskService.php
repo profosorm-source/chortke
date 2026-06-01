@@ -14,10 +14,12 @@ class UnifiedTaskService
 {
 
 
+    private \Core\Database $db;
     public function __construct(
-        private \Core\Database $db
+        \Core\Database $db
     )
-    {
+    {        $this->db = $db;
+
         
         }
 

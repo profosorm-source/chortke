@@ -4,44 +4,66 @@ declare(strict_types=1);
 
 namespace App\Services\Seo;
 
-class SeoService extends \App\Services\BaseService
+use App\Jobs\Seo\StartSeoTaskJob;
+use App\Jobs\Seo\CompleteSeoTaskJob;
+use App\Jobs\Seo\ProcessSeoTaskAsyncJob;
+use App\Jobs\Seo\CancelSeoTaskJob;
+use App\Jobs\Seo\ReportSeoTaskJob;
+use App\Jobs\Seo\RateSeoTaskJob;
+
+class SeoService
 {
-    public function __construct() {}
+    private StartSeoTaskJob $startJob;
+    private CompleteSeoTaskJob $completeJob;
+    private ProcessSeoTaskAsyncJob $processAsyncJob;
+    private CancelSeoTaskJob $cancelJob;
+    private ReportSeoTaskJob $reportJob;
+    private RateSeoTaskJob $rateJob;
+
+    public function __construct(
+        StartSeoTaskJob $startJob,
+        CompleteSeoTaskJob $completeJob,
+        ProcessSeoTaskAsyncJob $processAsyncJob,
+        CancelSeoTaskJob $cancelJob,
+        ReportSeoTaskJob $reportJob,
+        RateSeoTaskJob $rateJob
+    ) {
+        $this->startJob = $startJob;
+        $this->completeJob = $completeJob;
+        $this->processAsyncJob = $processAsyncJob;
+        $this->cancelJob = $cancelJob;
+        $this->reportJob = $reportJob;
+        $this->rateJob = $rateJob;
+    }
 
     public function startTask(int $adId, int $userId): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Seo\StartSeoTaskJob::class);
-        return $job->handle($adId, $userId);
+        return $this->startJob->handle($adId, $userId);
     }
 
     public function completeTask(int $executionId, int $userId, array $engagementData): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Seo\CompleteSeoTaskJob::class);
-        return $job->handle($executionId, $userId, $engagementData);
+        return $this->completeJob->handle($executionId, $userId, $engagementData);
     }
 
     public function processTaskAsync(int $executionId, int $userId, int $adId, array $engagementData): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Seo\ProcessSeoTaskAsyncJob::class);
-        return $job->handle($executionId, $userId, $adId, $engagementData);
+        return $this->processAsyncJob->handle($executionId, $userId, $adId, $engagementData);
     }
 
     public function cancelTask(int $executionId, int $userId): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Seo\CancelSeoTaskJob::class);
-        return $job->handle($executionId, $userId);
+        return $this->cancelJob->handle($executionId, $userId);
     }
 
     public function reportTask(int $reporterId, int $adId, string $reason, string $description = ''): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Seo\ReportSeoTaskJob::class);
-        return $job->handle($reporterId, $adId, $reason, $description);
+        return $this->reportJob->handle($reporterId, $adId, $reason, $description);
     }
 
     public function rateTask(int $raterId, int $adId, int $stars, string $comment = ''): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Seo\RateSeoTaskJob::class);
-        return $job->handle($raterId, $adId, $stars, $comment);
+        return $this->rateJob->handle($raterId, $adId, $stars, $comment);
     }
 
 }

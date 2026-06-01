@@ -16,13 +16,23 @@ use Core\Database;
  */
 class CouponService
 {
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private Coupon $couponModel;
+    private CouponRedemption $redemptionModel;
     public function __construct(
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private Coupon $couponModel,
-        private CouponRedemption $redemptionModel
-    ) {
+        \Core\TransactionWrapper $transactionWrapper,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        Coupon $couponModel,
+        CouponRedemption $redemptionModel
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->couponModel = $couponModel;
+        $this->redemptionModel = $redemptionModel;
+
         
     }
 

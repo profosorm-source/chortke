@@ -12,13 +12,23 @@ use App\Contracts\CacheInterface;
  */
 class AdNotificationDispatcher
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private NotificationService $notificationService;
+    private PerformanceOptimizationService $performanceService;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private NotificationService $notificationService,
-        private PerformanceOptimizationService $performanceService
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        \Core\Cache $cache,
+        \Core\Database $db,
+        NotificationService $notificationService,
+        PerformanceOptimizationService $performanceService
+    ) {        $this->logger = $logger;
+        $this->cache = $cache;
+        $this->db = $db;
+        $this->notificationService = $notificationService;
+        $this->performanceService = $performanceService;
+
         
     }
 

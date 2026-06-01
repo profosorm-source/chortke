@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\Withdrawal;
 
-use App\Services\BaseService;
 use Core\Database;
 use App\Models\Withdrawal;
 use App\Contracts\LoggerInterface;
@@ -14,11 +13,13 @@ class WithdrawalQueryService
 
     private Withdrawal $model;
 
+    private \Core\Database $db;
     public function __construct(
-        private \Core\Database $db,
+        \Core\Database $db,
         Withdrawal $model
     )
-    {
+    {        $this->db = $db;
+
         
         $this->model = $model;
     }

@@ -14,11 +14,15 @@ class UserDashboardService
 
 
 
+    private \Core\Cache $cache;
+    private \Core\Database $db;
     public function __construct(
-        private \Core\Cache $cache,
-        private \Core\Database $db
+        \Core\Cache $cache,
+        \Core\Database $db
     )
-    {
+    {        $this->cache = $cache;
+        $this->db = $db;
+
         
         }
 

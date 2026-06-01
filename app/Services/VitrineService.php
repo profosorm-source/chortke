@@ -18,14 +18,26 @@ use App\Contracts\LoggerInterface;
 
 class VitrineService
 {
+    private \Core\EventDispatcher $eventDispatcher;
+    private VitrineListing $listing;
+    private VitrineRequest $request;
+    private FeatureFlagService $flags;
+    private AppSettings $settings;
+    private UserService $userService;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private readonly VitrineListing $listing,
-        private readonly VitrineRequest $request,
-        private readonly FeatureFlagService $flags,
-        private readonly AppSettings $settings,
-        private readonly UserService $userService
-    ) {}
+        \Core\EventDispatcher $eventDispatcher,
+        VitrineListing $listing,
+        VitrineRequest $request,
+        FeatureFlagService $flags,
+        AppSettings $settings,
+        UserService $userService
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->listing = $listing;
+        $this->request = $request;
+        $this->flags = $flags;
+        $this->settings = $settings;
+        $this->userService = $userService;
+}
 
     public function isEnabled(): bool
     {

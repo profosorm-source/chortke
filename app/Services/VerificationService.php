@@ -28,13 +28,17 @@ class VerificationService
 
     private AppSettings $appSettings;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         InfluencerModel $profileModel,
         InfluencerVerification $verificationModel,
         AppSettings $appSettings
-    ) {
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->appSettings = $appSettings;
         $this->profileModel = $profileModel;
@@ -71,7 +75,7 @@ class VerificationService
 
             $hours = (int)$this->appSettings->get('verification_otp_validity_hours', 24);
             $expiresAt = date('Y-m-d H:i:s', strtotime('+' . $hours . ' hours'));
-            $this->verificationModel->create($profileId, $code, $expiresAt);
+            $this->verificationModel->createVerification($profileId, $code, $expiresAt);
 
             $this->logger->info('verification.code.generated', [
                 'profile_id' => $profileId,

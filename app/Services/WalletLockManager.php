@@ -28,10 +28,14 @@ class WalletLockManager
     // Lock hold time (should be < LOCK_TIMEOUT)
     private const LOCK_HOLD_TIME = 10;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger
-    ) {
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+
         
     }
 

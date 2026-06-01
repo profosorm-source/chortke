@@ -16,12 +16,14 @@ class CaptchaService
     /** مسیر پوشه captcha نسبت به root پروژه */
     private const CAPTCHA_DIR = '/storage/captcha/';
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         CaptchaLog $captchaLogModel,
         AppSettings $appSettings,
         Session $session
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->captchaLogModel = $captchaLogModel;
         $this->appSettings = $appSettings;
         $this->session      = $session;

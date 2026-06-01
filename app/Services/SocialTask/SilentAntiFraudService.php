@@ -31,14 +31,26 @@ class SilentAntiFraudService
         'clean'  => ['task_ratio' => 1.00, 'reward_ratio' => 1.00],
     ];
 
+    private SocialTaskExecutionModel $model;
+    private IPQualityService $ipService;
+    private SessionAnomalyService $sessionService;
+    private TrustService $trustService;
+    private UserService $userService;
+    private AppSettings $appSettings;
     public function __construct(
-        private SocialTaskExecutionModel $model,
-        private IPQualityService $ipService,
-        private SessionAnomalyService $sessionService,
-        private TrustService $trustService,
-        private UserService $userService,
-        private AppSettings $appSettings
-    ) {}
+        SocialTaskExecutionModel $model,
+        IPQualityService $ipService,
+        SessionAnomalyService $sessionService,
+        TrustService $trustService,
+        UserService $userService,
+        AppSettings $appSettings
+    ) {        $this->model = $model;
+        $this->ipService = $ipService;
+        $this->sessionService = $sessionService;
+        $this->trustService = $trustService;
+        $this->userService = $userService;
+        $this->appSettings = $appSettings;
+}
 
     /**
      * Risk Score ترکیبی

@@ -15,7 +15,8 @@ use Core\ValueObjects\Money;
 
 class WalletMutationService
 {
-private Wallet $walletModel;
+    private Database $db;
+    private Wallet $walletModel;
     private Transaction $transactionModel;
     private LedgerService $ledgerService;
     private FraudGuardService $fraudGuard;
@@ -394,6 +395,223 @@ private Wallet $walletModel;
         }
 
         return $fromTransaction;
+    }
+
+    public function completeWithdrawal(string $transactionId, int $userId): bool
+    {
+        $transaction = $this->transactionModel->findByTransactionId($transactionId);
+        if (!$transaction || (int)$transaction->user_id !== $userId) {
+            return false;
+        }
+
+        if ($transaction->status === 'completed') {
+            return true;
+        }
+
+        if (!in_array($transaction->status, ['pending', 'processing'], true) || $transaction->type !== 'withdraw') {
+            return false;
+        }
+
+        $currency = strtolower((string)($transaction->currency ?? 'irt'));
+        $amount = (string)($transaction->amount ?? '0');
+
+        if (bccomp($amount, '0', 8) <= 0) {
+            return false;
+        }
+
+        $startedTransaction = !$this->db->inTransaction();
+        try {
+            if ($startedTransaction) {
+                $this->db->beginTransaction();
+            }
+
+            $this->walletModel->deductLocked($userId, $amount, $currency);
+
+            if (!$this->transactionModel->updateStatusByTransactionId($transactionId, $userId, 'completed')) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                return false;
+            }
+
+            $this->ledgerService->recordDoubleEntry(
+                $transactionId,
+                'withdrawal_payout',
+                "wallet:{$userId}",
+                $amount,
+                $currency,
+                'تسویه برداشت',
+                [
+                    'withdrawal_transaction' => $transactionId,
+                ]
+            );
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public function cancelWithdrawal(string $transactionId, int $userId): bool
+    {
+        $transaction = $this->transactionModel->findByTransactionId($transactionId);
+        if (!$transaction || (int)$transaction->user_id !== $userId) {
+            return false;
+        }
+
+        if (in_array($transaction->status, ['cancelled', 'failed'], true)) {
+            return true;
+        }
+
+        if (!in_array($transaction->status, ['pending', 'processing'], true) || $transaction->type !== 'withdraw') {
+            return false;
+        }
+
+        $currency = strtolower((string)($transaction->currency ?? 'irt'));
+        $amount = (string)($transaction->amount ?? '0');
+
+        if (bccomp($amount, '0', 8) <= 0) {
+            return false;
+        }
+
+        $startedTransaction = !$this->db->inTransaction();
+        try {
+            if ($startedTransaction) {
+                $this->db->beginTransaction();
+            }
+
+            $this->walletModel->unlockBalance($userId, $amount, $currency);
+
+            if (!$this->transactionModel->updateStatusByTransactionId($transactionId, $userId, 'cancelled')) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                return false;
+            }
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public function reverseTransaction(string $transactionId, ?int $adminId = null, string $reason = ''): bool
+    {
+        $transaction = $this->transactionModel->findByTransactionId($transactionId);
+        if (!$transaction) {
+            return false;
+        }
+
+        if (in_array($transaction->status, ['cancelled', 'failed', 'reversed'], true)) {
+            return true;
+        }
+
+        if ($transaction->status !== 'completed') {
+            return false;
+        }
+
+        $userId = (int)$transaction->user_id;
+        $currency = strtolower((string)($transaction->currency ?? 'irt'));
+        $amount = (string)($transaction->amount ?? '0');
+        if (bccomp($amount, '0', 8) === 0) {
+            return false;
+        }
+
+        $absoluteAmount = bccomp($amount, '0', 8) < 0 ? bcmul($amount, '-1', 8) : $amount;
+        $shouldCreditUser = bccomp($amount, '0', 8) < 0 || $transaction->type === 'withdraw';
+        $balanceBefore = $this->walletModel->getBalanceForUpdate($userId, $currency);
+        $balanceBeforeMoney = \Core\ValueObjects\Money::fromString($balanceBefore, $currency);
+        $amountMoney = \Core\ValueObjects\Money::fromString($absoluteAmount, $currency);
+
+        $startedTransaction = !$this->db->inTransaction();
+        try {
+            if ($startedTransaction) {
+                $this->db->beginTransaction();
+            }
+
+            if ($shouldCreditUser) {
+                $this->walletModel->updateBalance($userId, $absoluteAmount, $currency);
+                $balanceAfter = $balanceBeforeMoney->add($amountMoney)->getAmount();
+                $debitAccount = 'reversal_settlement';
+                $creditAccount = "wallet:{$userId}";
+            } else {
+                $negativeAmount = $amountMoney->multiply('-1')->getAmount();
+                $this->walletModel->updateBalance($userId, $negativeAmount, $currency);
+                $balanceAfter = $balanceBeforeMoney->subtract($amountMoney)->getAmount();
+                $debitAccount = "wallet:{$userId}";
+                $creditAccount = 'reversal_settlement';
+            }
+
+            $reversalTransaction = $this->transactionModel->create([
+                'user_id'            => $userId,
+                'type'               => 'reversal',
+                'currency'           => $currency,
+                'amount'             => $shouldCreditUser ? $absoluteAmount : $negativeAmount,
+                'balance_before'     => $balanceBefore,
+                'balance_after'      => $balanceAfter,
+                'status'             => 'completed',
+                'description'        => $reason ?: "بازگشت تراکنش {$transactionId}",
+                'ref_id'             => $transactionId,
+                'ref_type'           => 'transaction_reversal',
+                'metadata'           => json_encode([
+                    'original_transaction_id' => $transactionId,
+                    'admin_id' => $adminId,
+                    'reason' => $reason,
+                ], JSON_UNESCAPED_UNICODE),
+            ]);
+
+            if (!$reversalTransaction) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                return false;
+            }
+
+            $this->ledgerService->recordDoubleEntry(
+                $reversalTransaction->transaction_id,
+                $debitAccount,
+                $creditAccount,
+                $absoluteAmount,
+                $currency,
+                $reason ?: "بازگشت تراکنش {$transactionId}",
+                [
+                    'original_transaction_id' => $transactionId,
+                    'admin_id' => $adminId,
+                ]
+            );
+
+            if (!$this->transactionModel->updateStatusByTransactionId($transactionId, $userId, 'reversed')) {
+                if ($startedTransaction && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                return false;
+            }
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 }
 

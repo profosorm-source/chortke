@@ -16,11 +16,13 @@ class CacheAdminService
 
     private CacheInterface $cacheAdmin;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         CacheInterface $cache
     )
-    {
+    {        $this->logger = $logger;
+
         
         $this->cacheAdmin = $cache;
     }

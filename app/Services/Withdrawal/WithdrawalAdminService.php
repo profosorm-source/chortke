@@ -12,8 +12,10 @@ use App\Models\Withdrawal;
 use App\Contracts\WalletServiceInterface;
 use App\Services\ReconciliationService;
 use App\Services\AuditTrail;
+use App\Services\SagaOrchestrator;
+use App\Services\Shared\IdempotencyService;
 use App\Events\WithdrawalApprovedEvent;
-use Core\IdempotencyKey;
+use App\Events\WithdrawalEvent;
 use Core\EventDispatcher;
 
 /**
@@ -27,6 +29,9 @@ class WithdrawalAdminService
     private ReconciliationService $reconciliation;
     private AuditTrail $auditTrail;
     private Withdrawal $model;
+    private IdempotencyService $idempotencyService;
+    private SagaOrchestrator $saga;
+
     protected function validateAmount(float $amount): array
     {
         $errors = [];
@@ -64,14 +69,15 @@ class WithdrawalAdminService
         $this->logger->info("payment.{$operation}.started", $context);
     }
 
-        public function __construct(
+    public function __construct(
         Database $db,
         WalletServiceInterface $wallet,
         ReconciliationService $reconciliation,
         AuditTrail $auditTrail,
         Withdrawal $model,
         LoggerInterface $logger,
-        IdempotencyKey $idempotencyKey
+        IdempotencyService $idempotencyService,
+        SagaOrchestrator $saga
     ) {
         $this->logger = $logger;
         $this->db = $db;
@@ -79,13 +85,23 @@ class WithdrawalAdminService
         $this->reconciliation = $reconciliation;
         $this->auditTrail = $auditTrail;
         $this->model = $model;
+        $this->idempotencyService = $idempotencyService;
+        $this->saga = $saga;
     }
 
-    public function adminApprove(int $withdrawalId, int $adminId, ?string $paymentReference = null): array
+    public function adminApprove(int $withdrawalId, int $adminId, ?string $paymentReference = null, ?string $idempotencyKey = null): array
     {
-        $result = $this->db->transaction(function() use ($withdrawalId, $adminId, $paymentReference) {
+        $result = $this->idempotencyService->executeWithTransaction(
+            'withdrawal.adminApprove',
+            $adminId,
+            [
+                'withdrawal_id' => $withdrawalId,
+                'admin_id' => $adminId,
+                'payment_reference' => $paymentReference,
+            ],
+            function () use ($withdrawalId, $adminId, $paymentReference) {
             
-            $saga = $this->context->getContainer()->make(\App\Services\SagaOrchestrator::class);
+            $saga = $this->saga;
             $withdrawalSnapshot = null;
             $skipEvent = false;
 
@@ -148,7 +164,9 @@ class WithdrawalAdminService
                 'message' => 'تأیید شد',
                 '_withdrawal_snapshot' => $withdrawalSnapshot,
             ];
-        });
+        },
+            $idempotencyKey
+        );
 
         // 🚀 رویداد را بعد از commit تراکنش به صورت async ارسال می‌کنیم
         if (!empty($result['success']) && empty($result['_skip_event'])) {
@@ -163,60 +181,106 @@ class WithdrawalAdminService
                     $adminId
                 )
             );
+            EventDispatcher::getInstance()->dispatchAsync(
+                WithdrawalEvent::class,
+                new WithdrawalEvent([
+                    'action' => 'approved',
+                    'user_id' => $snap['user_id'],
+                    'withdrawal_id' => $withdrawalId,
+                    'amount' => $snap['amount'],
+                    'currency' => $snap['currency'],
+                    'admin_id' => $adminId,
+                ])
+            );
         }
         unset($result['_withdrawal_snapshot'], $result['_skip_event']);
 
         return $result;
     }
 
-    public function adminReject(int $withdrawalId, int $adminId, ?string $reason = null): array
+    public function adminReject(int $withdrawalId, int $adminId, ?string $reason = null, ?string $idempotencyKey = null): array
     {
-        return $this->db->transaction(function() use ($withdrawalId, $adminId, $reason) {
-            
-            $saga = $this->context->getContainer()->make(\App\Services\SagaOrchestrator::class);
-            $skip = false;
+        $result = $this->idempotencyService->executeWithTransaction(
+            'withdrawal.adminReject',
+            $adminId,
+            [
+                'withdrawal_id' => $withdrawalId,
+                'admin_id' => $adminId,
+                'reason' => $reason,
+            ],
+            function () use ($withdrawalId, $adminId, $reason) {
+                $saga = $this->saga;
+                $skip = false;
 
-            $saga->addStep(
-                'validate_and_refund',
-                function () use ($withdrawalId, &$skip) {
-                    $withdrawal = $this->model->lockForUpdate($withdrawalId);
-                    
-                    if (!$withdrawal || $withdrawal->status === 'rejected') {
-                        $skip = true;
-                        return ['success' => true, 'message' => 'قبلاً رد شده است'];
+                $saga->addStep(
+                    'validate_and_refund',
+                    function () use ($withdrawalId, &$skip) {
+                        $withdrawal = $this->model->lockForUpdate($withdrawalId);
+
+                        if (!$withdrawal || $withdrawal->status === 'rejected') {
+                            $skip = true;
+                            return ['success' => true, 'message' => 'قبلاً رد شده است', '_skip_event' => true];
+                        }
+
+                        if (!$this->wallet->cancelWithdrawal((int)$withdrawal->user_id, (string)$withdrawal->amount, (string)$withdrawal->currency, (string)$withdrawal->transaction_id)) {
+                            throw new \RuntimeException('خطا در بازگشت وجه');
+                        }
+
+                        return true;
+                    },
+                    function (\Throwable $e) use ($withdrawalId) {
+                        $this->logger->warning('saga.compensating.withdrawal_admin_refund', ['withdrawal_id' => $withdrawalId]);
                     }
+                )->addStep(
+                    'update_status',
+                    function () use ($withdrawalId, $adminId, $reason, &$skip) {
+                        if ($skip) return true;
 
-                    if (!$this->wallet->cancelWithdrawal((int)$withdrawal->user_id, (string)$withdrawal->amount, (string)$withdrawal->currency, (string)$withdrawal->transaction_id)) {
-                        throw new \RuntimeException('خطا در بازگشت وجه');
+                        $this->model->updateStatus($withdrawalId, 'rejected', $reason, $adminId);
+                        return true;
+                    },
+                    function (\Throwable $e) use ($withdrawalId) {
+                        $this->logger->warning('saga.compensating.withdrawal_admin_status', ['withdrawal_id' => $withdrawalId]);
                     }
+                );
 
-                    return true;
-                },
-                function (\Throwable $e) use ($withdrawalId) {
-                    $this->logger->warning('saga.compensating.withdrawal_admin_refund', ['withdrawal_id' => $withdrawalId]);
-                }
-            )->addStep(
-                'update_status',
-                function () use ($withdrawalId, $adminId, $reason, &$skip) {
-                    if ($skip) return true;
+                $saga->execute();
 
-                    $this->model->updateStatus($withdrawalId, 'rejected', $reason, $adminId);
-                    
-                    return true;
-                },
-                function (\Throwable $e) use ($withdrawalId) {
-                    $this->logger->warning('saga.compensating.withdrawal_admin_status', ['withdrawal_id' => $withdrawalId]);
+                if ($skip) {
+                    return ['success' => true, 'message' => 'قبلاً رد شده است', '_skip_event' => true];
                 }
+
+                $stmt = $this->db->prepare('SELECT user_id, amount, currency FROM withdrawals WHERE id = ? LIMIT 1');
+                $stmt->execute([$withdrawalId]);
+                $withdrawal = $stmt->fetch(\PDO::FETCH_OBJ);
+
+                $eventPayload = null;
+                if ($withdrawal) {
+                    $eventPayload = [
+                        'action' => 'cancelled',
+                        'user_id' => (int)$withdrawal->user_id,
+                        'withdrawal_id' => $withdrawalId,
+                        'amount' => (float)$withdrawal->amount,
+                        'currency' => $withdrawal->currency,
+                        'reason' => $reason,
+                        'admin_id' => $adminId,
+                    ];
+                }
+
+                return ['success' => true, 'message' => 'رد شد', '_event_payload' => $eventPayload];
+            },
+            $idempotencyKey
+        );
+
+        if (!empty($result['success']) && empty($result['_skip_event']) && !empty($result['_event_payload'])) {
+            EventDispatcher::getInstance()->dispatchAsync(
+                WithdrawalEvent::class,
+                new WithdrawalEvent($result['_event_payload'])
             );
+        }
 
-            $saga->execute();
-
-            if ($skip) {
-                return ['success' => true, 'message' => 'قبلاً رد شده است'];
-            }
-
-            return ['success' => true, 'message' => 'رد شد'];
-        });
+        unset($result['_event_payload'], $result['_skip_event']);
+        return $result;
     }
 
     public function autoResolveStuck(int $adminBotId = 0, int $stableMinutes = 30, int $limit = 50): array

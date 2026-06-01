@@ -26,12 +26,18 @@ class SentryPerformanceMonitor
         'memory_threshold' => 50 * 1024 * 1024, // 50MB
     ];
 
+    private SentryModel $model;
+    private Logger $logger;
+    private AlertDispatcher $alertDispatcher;
     public function __construct(
-        private SentryModel $model,
-        private Logger $logger,
-        private AlertDispatcher $alertDispatcher,
+        SentryModel $model,
+        Logger $logger,
+        AlertDispatcher $alertDispatcher,
         array $config = []
-    ) {
+    ) {        $this->model = $model;
+        $this->logger = $logger;
+        $this->alertDispatcher = $alertDispatcher;
+
         $this->config = array_merge($this->config, $config);
         
         // PM1: Calibrate timing back to application bootstrap entry bounds to fully capture request boot cost

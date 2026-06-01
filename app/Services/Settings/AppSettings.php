@@ -17,11 +17,15 @@ class AppSettings
     private const CACHE_KEY = 'system:settings:v2';
     private const CACHE_TTL = 60; // minutes
 
+    private \Core\Cache $cache;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Cache $cache,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Cache $cache,
+        \App\Contracts\LoggerInterface $logger,
         Setting $model
-    ) {
+    ) {        $this->cache = $cache;
+        $this->logger = $logger;
+
                 $this->model = $model;
         }
 

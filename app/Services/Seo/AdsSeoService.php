@@ -4,20 +4,42 @@ declare(strict_types=1);
 
 namespace App\Services\Seo;
 
-use App\Repositories\SeoRepository;
+use App\Models\Ads;
+use App\Models\SeoExecution;
+use App\Models\User;
 use App\Contracts\LoggerInterface;
 use App\Contracts\WalletServiceInterface;
 use Core\TransactionWrapper;
+use Core\Database;
 
 class AdsSeoService
 {
+    private TransactionWrapper $transactionWrapper;
+    private WalletServiceInterface $walletService;
+    private Ads $adModel;
+    private SeoExecution $executionModel;
+    private User $userModel;
+    private Database $db;
+    private LoggerInterface $logger;
+    private \Core\EventDispatcher $eventDispatcher;
     public function __construct(
-        private TransactionWrapper $transactionWrapper,
-        private WalletServiceInterface $walletService,
-        private SeoRepository $repository,
-        private LoggerInterface $logger,
-        private \Core\EventDispatcher $eventDispatcher
-    ) {}
+        TransactionWrapper $transactionWrapper,
+        WalletServiceInterface $walletService,
+        Ads $adModel,
+        SeoExecution $executionModel,
+        User $userModel,
+        Database $db,
+        LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->walletService = $walletService;
+        $this->adModel = $adModel;
+        $this->executionModel = $executionModel;
+        $this->userModel = $userModel;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->eventDispatcher = $eventDispatcher;
+}
 
     public function createAd(int $userId, array $data, float $budget, float $minPayout, float $maxPayout): array
     {
@@ -38,7 +60,7 @@ class AdsSeoService
                     throw new \RuntimeException($debit['message'] ?? '?????? ???? ????.');
                 }
         
-                $adId = $this->repository->createAd([
+                $adId = $this->adModel->create([
                     'user_id' => $userId,
                     'type' => 'seo',
                     'site_url' => $data['site_url'],
@@ -66,6 +88,67 @@ class AdsSeoService
             $this->logger->error('seo_ad.create_failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
             return ['success' => false, 'message' => $e->getMessage()];
         }
+    }
+
+    // Data access helpers (replacing the old SeoRepository)
+    public function getAd(int $adId): ?object
+    {
+        return $this->adModel->find($adId);
+    }
+
+    public function getAdForUpdate(int $adId): ?object
+    {
+        return $this->adModel->findByIdForUpdate($adId);
+    }
+
+    public function createExecution(array $data): int|false
+    {
+        return $this->executionModel->create($data);
+    }
+
+    public function executionExistsToday(int $adId, int $userId): bool
+    {
+        return $this->executionModel->existsByAdAndUserToday($adId, $userId);
+    }
+
+    public function countUserExecutionsToday(int $userId): int
+    {
+        return $this->executionModel->countByUserToday($userId);
+    }
+
+    public function countUserExecutionsLastHour(int $userId): int
+    {
+        return $this->executionModel->countByUserLastHour($userId);
+    }
+
+    public function countIpExecutionsLastHour(string $ip): int
+    {
+        return $this->executionModel->countByIPLastHour($ip);
+    }
+
+    public function updateExecutionStatus(int $executionId, string $status): bool
+    {
+        return (bool)$this->db->query('UPDATE seo_executions SET status = ?, updated_at = ? WHERE id = ?', [$status, date('Y-m-d H:i:s'), $executionId]);
+    }
+
+    public function rejectExecution(int $executionId, string $reason): bool
+    {
+        return (bool)$this->db->query('UPDATE seo_executions SET status = ?, rejection_reason = ?, updated_at = ? WHERE id = ?', ['rejected', $reason, date('Y-m-d H:i:s'), $executionId]);
+    }
+
+    public function completeExecution(int $executionId, array $scores, float $payout): bool
+    {
+        return $this->executionModel->complete($executionId, $scores, $payout);
+    }
+
+    public function markExecutionAsFraud(int $executionId, array $flags): bool
+    {
+        return $this->executionModel->markAsFraud($executionId, $flags);
+    }
+
+    public function getUser(int $userId): ?object
+    {
+        return $this->userModel->findById($userId);
     }
 
     public function approveAd(int $adId): bool

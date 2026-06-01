@@ -20,17 +20,25 @@ class BannerService
     private UploadService $uploadService;
     private ?\App\Contracts\OutboxServiceInterface $outboxService = null;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Cache $cache,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         Ads $bannerModel,
         BannerPlacement $placementModel,
         WalletServiceInterface $walletService,
         UploadService $uploadService,
         ?\App\Contracts\OutboxServiceInterface $outboxService = null
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->cache = $cache;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->bannerModel = $bannerModel;
         $this->placementModel = $placementModel;

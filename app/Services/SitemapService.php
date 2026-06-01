@@ -14,11 +14,13 @@ class SitemapService
     private AppSettings $appSettings;
     private const CACHE_KEY = 'sitemap_xml_content';
 
+    private \Core\Cache $cache;
     public function __construct(
-        private \Core\Cache $cache,
+        \Core\Cache $cache,
         \App\Models\Page $pageModel,
         AppSettings $appSettings
-    ) {
+    ) {        $this->cache = $cache;
+
         
         $this->pageModel = $pageModel;
         $this->appSettings = $appSettings;

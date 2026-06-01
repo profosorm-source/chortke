@@ -17,12 +17,20 @@ class SentryExceptionHandler
     private static ?self $instance = null;
     private bool $registered = false;
 
+    private SentryErrorMonitor $errorMonitor;
+    private SentryPerformanceMonitor $performanceMonitor;
+    private Logger $logger;
+    private Session $session;
     public function __construct(
-        private SentryErrorMonitor $errorMonitor,
-        private SentryPerformanceMonitor $performanceMonitor,
-        private Logger $logger,
-        private Session $session
-    ) {}
+        SentryErrorMonitor $errorMonitor,
+        SentryPerformanceMonitor $performanceMonitor,
+        Logger $logger,
+        Session $session
+    ) {        $this->errorMonitor = $errorMonitor;
+        $this->performanceMonitor = $performanceMonitor;
+        $this->logger = $logger;
+        $this->session = $session;
+}
 
     public static function setInstance(self $instance): void
     {

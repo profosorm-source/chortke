@@ -26,15 +26,17 @@ class DataExportService
     private UserSetting $userSettingModel;
 
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         DataExport $exportModel,
         User $userModel,
         Transaction $transactionModel,
         Wallet $walletModel,
         KYCVerification $kycVerificationModel,
         UserSetting $userSettingModel
-    ) {
+    ) {        $this->logger = $logger;
+
         
         $this->exportModel = $exportModel;
         $this->userModel = $userModel;

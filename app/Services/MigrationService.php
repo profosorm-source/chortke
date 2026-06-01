@@ -18,12 +18,18 @@ class MigrationService
     private string $migrationsDir;
 
 
+    private \Core\Redis $redis;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Redis $redis,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger
+        \Core\Redis $redis,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger
     )
-    {
+    {        $this->redis = $redis;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->migrationsDir = realpath(__DIR__ . '/../../database/migrations') ?: (__DIR__ . '/../../database/migrations');
     }

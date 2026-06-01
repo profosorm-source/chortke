@@ -15,10 +15,14 @@ use App\Services\Score\ScoreQueryService;
  */
 class ScoreService
 {
+    private ScoreCommandService $commandService;
+    private ScoreQueryService $queryService;
     public function __construct(
-        private ScoreCommandService $commandService,
-        private ScoreQueryService $queryService
-    ) {
+        ScoreCommandService $commandService,
+        ScoreQueryService $queryService
+    ) {        $this->commandService = $commandService;
+        $this->queryService = $queryService;
+
             }
 
     /**

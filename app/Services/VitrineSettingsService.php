@@ -19,12 +19,14 @@ class VitrineSettingsService
     private FeatureFlag $featureFlag;
     private AppSettings $appSettings;
 
+    private \Core\Database $db;
     public function __construct(
-        private \Core\Database $db,
+        \Core\Database $db,
         FeatureFlag $featureFlag,
         AppSettings $appSettings
     )
-    {
+    {        $this->db = $db;
+
         
         $this->featureFlag = $featureFlag;
         $this->appSettings = $appSettings;

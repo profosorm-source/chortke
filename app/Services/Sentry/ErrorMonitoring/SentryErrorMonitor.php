@@ -31,14 +31,24 @@ class SentryErrorMonitor
         'before_send' => null,
     ];
 
+    private SentryModel $model;
+    private Logger $logger;
+    private AlertDispatcher $alertDispatcher;
+    private AuditTrail $auditTrail;
+    private CacheInterface $cache;
     public function __construct(
-        private SentryModel $model,
-        private Logger $logger,
-        private AlertDispatcher $alertDispatcher,
-        private AuditTrail $auditTrail,
-        private CacheInterface $cache,
+        SentryModel $model,
+        Logger $logger,
+        AlertDispatcher $alertDispatcher,
+        AuditTrail $auditTrail,
+        CacheInterface $cache,
         array $config = []
-    ) {
+    ) {        $this->model = $model;
+        $this->logger = $logger;
+        $this->alertDispatcher = $alertDispatcher;
+        $this->auditTrail = $auditTrail;
+        $this->cache = $cache;
+
         $this->config = array_merge($this->config, $config);
 
         $this->stackAnalyzer = new StackTraceAnalyzer();

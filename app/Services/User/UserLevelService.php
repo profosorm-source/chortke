@@ -26,14 +26,20 @@ class UserLevelService
     private ScoreService $scoreService;
     private UserService $userService;
 
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\TransactionWrapper $transactionWrapper,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         UserLevel $levelModel,
         AppSettings $appSettings,
         ScoreService $scoreService
-    ) {
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->db = $db;
+        $this->logger = $logger;
+
         $this->levelModel = $levelModel;
         
         

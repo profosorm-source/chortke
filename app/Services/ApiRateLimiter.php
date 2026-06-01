@@ -20,11 +20,13 @@ class ApiRateLimiter
 {
     private RateLimitPolicy $policy;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         RateLimitPolicy $policy
     )
-    {
+    {        $this->logger = $logger;
+
                 $this->policy = $policy;
         
         // M28 Fix: تولید اخطار رسمی و ثبت در لاگ به منظور آگاهی‌رسانی به توسعه‌دهندگان جهت مهاجرت به کلاس جدید

@@ -36,13 +36,15 @@ class ApiTokenService
         '*' => 4,
     ];
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         ApiToken $apiTokenModel,
         User $userModel,
         RateLimiter $rateLimiter,
         \App\Services\Auth\TwoFactorService $twoFactorService
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->apiTokenModel = $apiTokenModel;
         $this->userModel = $userModel;
         $this->rateLimiter = $rateLimiter;

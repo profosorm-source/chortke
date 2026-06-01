@@ -18,12 +18,16 @@ class MaintenanceService
 
     private MigrationService $migrationService;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         MigrationService $migrationService
     )
-    {
+    {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->migrationService = $migrationService;
     }

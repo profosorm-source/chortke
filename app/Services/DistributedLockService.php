@@ -17,10 +17,12 @@ class DistributedLockService
     private ?bool $useRedis = null;
     private int $defaultTTL = 30; // ثانیه
     
+    private \Core\Cache $cache;
     public function __construct(
-        private \Core\Cache $cache
+        \Core\Cache $cache
     )
-    {
+    {        $this->cache = $cache;
+
         
         }
     

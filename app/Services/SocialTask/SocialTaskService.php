@@ -45,15 +45,29 @@ class SocialTaskService
         'join_group'   => 30,
     ];
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Contracts\LoggerInterface $logger;
+    private SocialTaskModel $model;
+    private TrustService $trust;
+    private SilentAntiFraudService $antiFraud;
+    private UserService $userService;
+    private ?CameraVerificationService $cameraVerification;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Contracts\LoggerInterface $logger,
-        private SocialTaskModel $model,
-        private TrustService $trust,
-        private SilentAntiFraudService $antiFraud,
-        private UserService $userService,
-        private ?CameraVerificationService $cameraVerification = null
-    ) {}
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Contracts\LoggerInterface $logger,
+        SocialTaskModel $model,
+        TrustService $trust,
+        SilentAntiFraudService $antiFraud,
+        UserService $userService,
+        ?CameraVerificationService $cameraVerification = null
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->logger = $logger;
+        $this->model = $model;
+        $this->trust = $trust;
+        $this->antiFraud = $antiFraud;
+        $this->userService = $userService;
+        $this->cameraVerification = $cameraVerification;
+}
 
     /**
      * لیست تسک‌های فعال برای کاربر با اعمال فیلتر نامحسوس
@@ -710,10 +724,13 @@ class SocialTaskService
     public function getAdvertiserSummary(int $userId): array
     {
         $stats = $this->model->getWeeklyExecutionStats($userId); // Simplification for dashboard
+        $rating = $this->model->getAvgRating($userId, 'executor');
+
         return [
             'total_executions' => $stats->total ?? 0,
             'approved_count' => $stats->good_tasks ?? 0,
-            'avg_rating' => 4.5 // Placeholder/Simulated for this summary level
+            'avg_rating' => round((float) ($rating->avg_stars ?? 0), 2),
+            'rating_count' => (int) ($rating->total_ratings ?? 0),
         ];
     }
 

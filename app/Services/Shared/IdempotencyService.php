@@ -10,11 +10,17 @@ use Core\TransactionWrapper;
 
 class IdempotencyService
 {
+    private IdempotencyKey $idempotencyKey;
+    private TransactionWrapper $transactionWrapper;
+    private LoggerInterface $logger;
     public function __construct(
-        private IdempotencyKey $idempotencyKey,
-        private TransactionWrapper $transactionWrapper,
-        private LoggerInterface $logger
-    ) {
+        IdempotencyKey $idempotencyKey,
+        TransactionWrapper $transactionWrapper,
+        LoggerInterface $logger
+    ) {        $this->idempotencyKey = $idempotencyKey;
+        $this->transactionWrapper = $transactionWrapper;
+        $this->logger = $logger;
+
     }
 
     /**

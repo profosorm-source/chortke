@@ -13,12 +13,18 @@ class SettingsManager
 {
     private Setting $model;
 
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\TransactionWrapper $transactionWrapper,
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Contracts\LoggerInterface $logger,
         Setting $model
-    ) {
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->logger = $logger;
+
                 $this->model = $model;
         }
 

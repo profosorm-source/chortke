@@ -15,10 +15,14 @@ use App\Services\Settings\AppSettings;
  */
 class BehaviorAnalysisService
 {
+    private SocialTaskScoringService $scoring;
+    private AppSettings $appSettings;
     public function __construct(
-        private SocialTaskScoringService $scoring,
-        private AppSettings $appSettings
-    ) {
+        SocialTaskScoringService $scoring,
+        AppSettings $appSettings
+    ) {        $this->scoring = $scoring;
+        $this->appSettings = $appSettings;
+
             }
 
     /**

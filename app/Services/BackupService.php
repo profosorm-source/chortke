@@ -21,11 +21,13 @@ class BackupService
     private BackupLog $backupLogModel;
     private string $backupDir;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         BackupLog $backupLogModel
     )
-    {
+    {        $this->logger = $logger;
+
                 $this->backupLogModel = $backupLogModel;
         $this->backupDir = realpath(__DIR__ . '/../../storage') ?: (__DIR__ . '/../../storage');
         $this->backupDir .= '/backups';
@@ -43,7 +45,8 @@ class BackupService
         $cnfFile = null;
         try {
             // Check required tools
-            exec('mysqldump --version 2>&1', $outDump, $retDump);
+            $mysqldump = config('database.mysqldump_path', 'mysqldump');
+            exec(escapeshellcmd($mysqldump) . ' --version 2>&1', $outDump, $retDump);
             if ($retDump !== 0) {
                 throw new \Exception('ابزار mysqldump در سرور یافت نشد. لطفاً نصب کنید.');
             }
@@ -75,7 +78,8 @@ class BackupService
 
             // دستور mysqldump با استفاده از --defaults-extra-file
             $command = sprintf(
-                'mysqldump --defaults-extra-file=%s --host=%s --user=%s %s > %s 2>&1',
+                '%s --defaults-extra-file=%s --host=%s --user=%s %s > %s 2>&1',
+                escapeshellcmd($mysqldump),
                 escapeshellarg($cnfFile),
                 escapeshellarg($dbHost),
                 escapeshellarg($dbUser),
@@ -361,8 +365,10 @@ class BackupService
             chmod($cnfFile, 0600);
 
             // دستور mysql import با استفاده از --defaults-extra-file
+            $mysqlPath = config('database.mysql_path', 'mysql');
             $command = sprintf(
-                'mysql --defaults-extra-file=%s --host=%s --user=%s %s < %s 2>&1',
+                '%s --defaults-extra-file=%s --host=%s --user=%s %s < %s 2>&1',
+                escapeshellcmd($mysqlPath),
                 escapeshellarg($cnfFile),
                 escapeshellarg($dbHost),
                 escapeshellarg($dbUser),

@@ -22,16 +22,22 @@ class InfluencerService
     private ?\App\Contracts\OutboxServiceInterface $outboxService = null;
     private ?\App\Domain\Financial\Services\FinancialEscrowService $escrowService = null;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         InfluencerModel $profileModel,
         StoryOrder      $orderModel,
         WalletServiceInterface $walletService,
         ?\App\Contracts\OutboxServiceInterface $outboxService = null,
         ?\App\Domain\Financial\Services\FinancialEscrowService $escrowService = null
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+
         // انتقال زیرساخت به والد
                 $this->profileModel = $profileModel;
         $this->orderModel   = $orderModel;

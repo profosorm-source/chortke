@@ -24,14 +24,26 @@ use App\Contracts\LoggerInterface;
  */
 class DashboardStatsService
 {
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private NotificationServiceInterface $notificationService;
+    private AdvancedAnalytics $advancedAnalytics;
+    private \App\Services\Analytics\AnalyticsService $customTaskAnalytics;
     public function __construct(
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private NotificationServiceInterface $notificationService,
-        private AdvancedAnalytics $advancedAnalytics,
-        private \App\Services\Analytics\AnalyticsService $customTaskAnalytics
-    ) {
+        \Core\Cache $cache,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        NotificationServiceInterface $notificationService,
+        AdvancedAnalytics $advancedAnalytics,
+        \App\Services\Analytics\AnalyticsService $customTaskAnalytics
+    ) {        $this->cache = $cache;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->notificationService = $notificationService;
+        $this->advancedAnalytics = $advancedAnalytics;
+        $this->customTaskAnalytics = $customTaskAnalytics;
+
         // انتقال زیرساخت‌های مشترک به کلاس والد
                 $this->notificationService = $notificationService;
         $this->advancedAnalytics = $advancedAnalytics;

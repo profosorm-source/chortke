@@ -22,17 +22,35 @@ class ReconciliationService
     public const DEFAULT_STUCK_MINUTES = 120;
     public const STUCK_SCAN_BATCH      = 200;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private Transaction $transactionModel;
+    private LedgerEntry $ledgerModel;
+    private Wallet $walletModel;
+    private WalletServiceInterface $walletService;
+    private LedgerService $ledgerService;
+    private AuditTrail $auditTrail;
+    private ?OutboxService $outbox;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private Transaction $transactionModel,
-        private LedgerEntry $ledgerModel,
-        private Wallet $walletModel,
-        private WalletServiceInterface $walletService,
-        private LedgerService $ledgerService,
-        private AuditTrail $auditTrail,
-        private ?OutboxService $outbox = null
-    ) {
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        Transaction $transactionModel,
+        LedgerEntry $ledgerModel,
+        Wallet $walletModel,
+        WalletServiceInterface $walletService,
+        LedgerService $ledgerService,
+        AuditTrail $auditTrail,
+        ?OutboxService $outbox = null
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+        $this->transactionModel = $transactionModel;
+        $this->ledgerModel = $ledgerModel;
+        $this->walletModel = $walletModel;
+        $this->walletService = $walletService;
+        $this->ledgerService = $ledgerService;
+        $this->auditTrail = $auditTrail;
+        $this->outbox = $outbox;
+
         
     }
 

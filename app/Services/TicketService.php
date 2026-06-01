@@ -19,17 +19,27 @@ class TicketService
     private \Core\RateLimiter $rateLimiter;
     private \App\Services\Shared\IdempotencyService $idempotencyService;
     
+    private \App\Contracts\ValidatorFactoryInterface $validatorFactory;
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\ValidatorFactoryInterface $validatorFactory,
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\ValidatorFactoryInterface $validatorFactory,
+        \Core\TransactionWrapper $transactionWrapper,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         Ticket $ticketModel,
         TicketMessage $messageModel,
         \Core\RateLimiter $rateLimiter,
         ?\App\Services\Shared\IdempotencyService $idempotencyService = null
-    ) {
+    ) {        $this->validatorFactory = $validatorFactory;
+        $this->transactionWrapper = $transactionWrapper;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->ticketModel = $ticketModel;
         $this->messageModel = $messageModel;
@@ -180,11 +190,7 @@ class TicketService
         }
 
         // 🛡️ Item 6: Pessimistic Locking inside Transaction
-        $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('ticket_reply', [
-            'ticket_id' => $ticketId,
-            'user_id' => $userId,
-            'message' => $message
-        ]);
+        $explicitKey = null; // Let IdempotencyService compute key from payload
 
         try {
             return $this->idempotencyService->executeWithTransaction(
@@ -238,7 +244,7 @@ class TicketService
                     'success' => true,
                     'message' => 'پاسخ با موفقیت ثبت شد.'
                 ];
-            }, $idempotencyKey);
+            }, $explicitKey);
             
         } catch (\Exception $e) {
             $this->logger->error('ticket.reply.failed', [

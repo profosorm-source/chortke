@@ -21,11 +21,17 @@ class AlertDispatcher
         'low' => 3600,
     ];
 
+    private SentryModel $model;
+    private Logger $logger;
+    private EventDispatcher $eventDispatcher;
     public function __construct(
-        private SentryModel $model,
-        private Logger $logger,
-        private EventDispatcher $eventDispatcher
-    ) {}
+        SentryModel $model,
+        Logger $logger,
+        EventDispatcher $eventDispatcher
+    ) {        $this->model = $model;
+        $this->logger = $logger;
+        $this->eventDispatcher = $eventDispatcher;
+}
 
     /**
      * 🤖 Process Rules - بررسی خودکار تمام قوانین هشدار

@@ -29,14 +29,20 @@ class BulkOperationsService
     private const MAX_BULK_ITEMS = 1000;
     private const BATCH_SIZE = 100;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         BulkOperation $bulkOperationModel,
         CacheInterface $cache,
         ?NotificationServiceInterface $notificationService = null
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->bulkOperationModel = $bulkOperationModel;
         $this->notificationService = $notificationService;
@@ -595,8 +601,6 @@ class BulkOperationsService
         'details' => $details,
     ]);
 }
-
-    // successResponse/errorResponse دریافت شده‌اند از BaseService
 
     /**
      * پاک‌سازی Cache

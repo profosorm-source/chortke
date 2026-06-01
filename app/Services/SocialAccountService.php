@@ -14,12 +14,14 @@ class SocialAccountService
     private $socialAccountModel;
     private $userModel;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         \App\Models\SocialAccount $socialAccountModel,
         \App\Models\User $userModel,
         \App\Models\Notification $notificationModel
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->socialAccountModel = $socialAccountModel;
         $this->userModel = $userModel;
         $this->notificationModel = $notificationModel;

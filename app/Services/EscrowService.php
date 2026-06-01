@@ -6,7 +6,6 @@ namespace App\Services;
 
 use App\Models\Escrow;
 use Core\Database;
-use Core\IdempotencyKey;
 use App\Contracts\LoggerInterface;
 use App\Domain\Financial\Services\LedgerService;
 use App\Services\StateMachineService;
@@ -29,16 +28,24 @@ class EscrowService
     private LedgerService $ledgerService;
     private StateMachineService $stateMachine;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\Shared\IdempotencyService $idempotencyService;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         Escrow $escrowModel,
-        private \App\Services\Shared\IdempotencyService $idempotencyService,
+        \App\Services\Shared\IdempotencyService $idempotencyService,
         LedgerService $ledgerService,
         ?StateMachineService $stateMachine = null,
         ?\App\Services\DistributedLockService $lockService = null
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->idempotencyService = $idempotencyService;
+
         
         $this->escrowModel = $escrowModel;
         $this->ledgerService = $ledgerService;
@@ -57,17 +64,9 @@ class EscrowService
         int    $buyerId,
         int    $sellerId,
         string $amount,
-        string $currency = 'USDT'
+        string $currency = 'USDT',
+        ?string $idempotencyKey = null
     ): array {
-        $idempotencyKey = hash('sha256', implode('|', [
-            $orderId,
-            $orderType,
-            $buyerId,
-            $sellerId,
-            $amount,
-            $currency,
-        ]));
-
         return $this->idempotencyService->execute(
             'escrow.holdFunds',
             $buyerId,
@@ -152,48 +151,60 @@ class EscrowService
      * تایید و نگهداری funds (pending → in_escrow)
      * ✅ With database locking
      */
-    public function confirmHold(int $orderId, string $orderType, int $sellerId): array
+    public function confirmHold(int $orderId, string $orderType, int $sellerId, ?string $idempotencyKey = null): array
     {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException('confirmHold must be called inside an active transaction');
-        }
+        return $this->idempotencyService->execute(
+            'escrow.confirmHold',
+            $sellerId,
+            [
+                'order_id' => $orderId,
+                'order_type' => $orderType,
+                'seller_id' => $sellerId,
+            ],
+            function () use ($orderId, $orderType, $sellerId) {
+                if (!$this->db->inTransaction()) {
+                    throw new \RuntimeException('confirmHold must be called inside an active transaction');
+                }
 
-        // ✅ Acquire write lock
-        $escrow = $this->escrowModel->findPendingForConfirm($orderId, $orderType, $sellerId);
+                // ✅ Acquire write lock
+                $escrow = $this->escrowModel->findPendingForConfirm($orderId, $orderType, $sellerId);
 
-        if (!$escrow) {
-            return ['ok' => false, 'error' => 'Escrow not found or already confirmed'];
-        }
+                if (!$escrow) {
+                    return ['ok' => false, 'error' => 'Escrow not found or already confirmed'];
+                }
 
-        // Validate state transition
-        if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'in_escrow')) {
-            return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to in_escrow"];
-        }
+                // Validate state transition
+                if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'in_escrow')) {
+                    return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to in_escrow"];
+                }
 
-        // ✅ Update status
-        $result = $this->escrowModel->confirmHold((int)$escrow->id);
+                // ✅ Update status
+                $result = $this->escrowModel->confirmHold((int)$escrow->id);
 
-        if (!$result) {
-            throw new \Exception('Failed to confirm escrow');
-        }
+                if (!$result) {
+                    throw new \Exception('Failed to confirm escrow');
+                }
 
-        $this->logger->info('escrow.confirmed', [
-            'escrow_id' => $escrow->id,
-            'order_id' => $orderId,
-            'amount' => $escrow->amount,
-        ]);
+                $this->logger->info('escrow.confirmed', [
+                    'escrow_id' => $escrow->id,
+                    'order_id' => $orderId,
+                    'amount' => $escrow->amount,
+                ]);
 
-        $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
-            'escrow_id' => (int)$escrow->id,
-            'order_id' => (int)$escrow->order_id,
-            'order_type' => $escrow->order_type,
-            'old_status' => $escrow->status,
-            'new_status' => 'in_escrow',
-            'amount' => $escrow->amount,
-            'currency' => $escrow->currency
-        ]);
+                $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
+                    'escrow_id' => (int)$escrow->id,
+                    'order_id' => (int)$escrow->order_id,
+                    'order_type' => $escrow->order_type,
+                    'old_status' => $escrow->status,
+                    'new_status' => 'in_escrow',
+                    'amount' => $escrow->amount,
+                    'currency' => $escrow->currency
+                ]);
 
-        return ['ok' => true, 'escrow_id' => (int)$escrow->id];
+                return ['ok' => true, 'escrow_id' => (int)$escrow->id];
+            },
+            $idempotencyKey
+        );
     }
 
     /**
@@ -204,71 +215,76 @@ class EscrowService
      * ⚠️ NOTE: This method only updates the escrow state and performs ledger records.
      * The caller is responsible for depositing the released funds into the seller's wallet.
      */
-    public function releaseFunds(int $escrowId, int $sellerId, string $releasedBy): array
+    public function releaseFunds(int $escrowId, int $sellerId, string $releasedBy, ?string $idempotencyKey = null): array
     {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException('releaseFunds must be called inside an active transaction');
-        }
+        return $this->idempotencyService->execute(
+            'escrow.releaseFunds',
+            $sellerId,
+            [
+                'escrow_id' => $escrowId,
+                'seller_id' => $sellerId,
+                'released_by' => $releasedBy,
+            ],
+            function () use ($escrowId, $sellerId, $releasedBy) {
+                if (!$this->db->inTransaction()) {
+                    throw new \RuntimeException('releaseFunds must be called inside an active transaction');
+                }
 
-        // ✅ Escrow already released check (idempotency key check)
-        $ledgerKey = "escrow_release_{$escrowId}";
-        $existing = $this->ledgerService->findByTransactionId($ledgerKey);
-        if (!empty($existing)) {
-            throw new \RuntimeException('Escrow already released - ledger entry exists');
-        }
+                // ✅ Acquire lock & validate state
+                $escrow = $this->escrowModel->findReleasable($escrowId, $sellerId);
 
-        // ✅ Acquire lock & validate state
-        $escrow = $this->escrowModel->findReleasable($escrowId, $sellerId);
+                if (!$escrow) {
+                    return ['ok' => false, 'error' => 'Escrow not found or cannot be released'];
+                }
 
-        if (!$escrow) {
-            return ['ok' => false, 'error' => 'Escrow not found or cannot be released'];
-        }
+                // Validate state transition
+                if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'released')) {
+                    return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to released"];
+                }
 
-        // Validate state transition
-        if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'released')) {
-            return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to released"];
-        }
+                // ✅ Update escrow status
+                $result = $this->escrowModel->releaseFunds($escrowId, $releasedBy);
 
-        // ✅ Update escrow status
-        $result = $this->escrowModel->releaseFunds($escrowId, $releasedBy);
+                if (!$result) {
+                    throw new \Exception('Failed to release funds');
+                }
 
-        if (!$result) {
-            throw new \Exception('Failed to release funds');
-        }
+                // ✅ Log audit trail
+                $this->escrowModel->logEscrowAction($escrowId, 'released', $escrow->amount, $releasedBy);
 
-        // ✅ Log audit trail
-        $this->escrowModel->logEscrowAction($escrowId, 'released', $escrow->amount, $releasedBy);
+                // ✅ BUG-03 Fix: Record double-entry bookkeeping ledger records for auditing
+                $this->ledgerService->recordDoubleEntry(
+                    "escrow_release_{$escrowId}",
+                    "escrow:{$escrowId}",          // debit from escrow
+                    "wallet:user:{$sellerId}",      // credit to seller
+                    $escrow->amount,
+                    strtolower($escrow->currency),
+                    "Escrow release for order {$escrow->order_id}",
+                    ['escrow_id' => $escrowId, 'released_by' => $releasedBy]
+                );
 
-        // ✅ BUG-03 Fix: Record double-entry bookkeeping ledger records for auditing
-        $this->ledgerService->recordDoubleEntry(
-            "escrow_release_{$escrowId}",
-            "escrow:{$escrowId}",          // debit from escrow
-            "wallet:user:{$sellerId}",      // credit to seller
-            $escrow->amount,
-            strtolower($escrow->currency),
-            "Escrow release for order {$escrow->order_id}",
-            ['escrow_id' => $escrowId, 'released_by' => $releasedBy]
+                $this->logger->info('escrow.released', [
+                    'escrow_id' => $escrowId,
+                    'order_id' => $escrow->order_id,
+                    'amount' => $escrow->amount,
+                    'seller_id' => $sellerId,
+                ]);
+
+                // Dispatch a typed event for released state to decouple downstream side-effects
+                $this->eventDispatcher->dispatchAsync(
+                    EscrowReleasedEvent::class,
+                    new EscrowReleasedEvent(
+                        $escrowId,
+                        $sellerId,
+                        (float)$escrow->amount,
+                        $escrow->currency
+                    )
+                );
+
+                return ['ok' => true, 'amount' => $escrow->amount];
+            },
+            $idempotencyKey
         );
-
-        $this->logger->info('escrow.released', [
-            'escrow_id' => $escrowId,
-            'order_id' => $escrow->order_id,
-            'amount' => $escrow->amount,
-            'seller_id' => $sellerId,
-        ]);
-
-        // Dispatch a typed event for released state to decouple downstream side-effects
-        $this->eventDispatcher->dispatchAsync(
-            EscrowReleasedEvent::class,
-            new EscrowReleasedEvent(
-                $escrowId,
-                $sellerId,
-                (float)$escrow->amount,
-                $escrow->currency
-            )
-        );
-
-        return ['ok' => true, 'amount' => $escrow->amount];
     }
 
     /**
@@ -353,135 +369,160 @@ class EscrowService
         int    $escrowId,
         int    $buyerId,
         string $reason,
-        string $initiatedBy
+        string $initiatedBy,
+        ?string $idempotencyKey = null
     ): array {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException('refundFunds must be called inside an active transaction');
-        }
+        return $this->idempotencyService->execute(
+            'escrow.refundFunds',
+            $buyerId,
+            [
+                'escrow_id' => $escrowId,
+                'buyer_id' => $buyerId,
+                'reason' => $reason,
+                'initiated_by' => $initiatedBy,
+            ],
+            function () use ($escrowId, $buyerId, $reason, $initiatedBy) {
+                if (!$this->db->inTransaction()) {
+                    throw new \RuntimeException('refundFunds must be called inside an active transaction');
+                }
 
-        // ✅ Acquire lock
-        $escrow = $this->escrowModel->findRefundable($escrowId, $buyerId);
+                // ✅ Acquire lock
+                $escrow = $this->escrowModel->findRefundable($escrowId, $buyerId);
 
-        if (!$escrow) {
-            return ['ok' => false, 'error' => 'Escrow not found or cannot be refunded'];
-        }
+                if (!$escrow) {
+                    return ['ok' => false, 'error' => 'Escrow not found or cannot be refunded'];
+                }
 
-        // Validate state transition
-        if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'refunded')) {
-            return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to refunded"];
-        }
+                // Validate state transition
+                if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'refunded')) {
+                    return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to refunded"];
+                }
 
-        // ✅ Prevent double refund
-        if ($escrow->status === 'refunded') {
-            return ['ok' => false, 'error' => 'Already refunded'];
-        }
+                // ✅ Prevent double refund
+                if ($escrow->status === 'refunded') {
+                    return ['ok' => false, 'error' => 'Already refunded'];
+                }
 
-        // ✅ Update status
-        $result = $this->escrowModel->refundFunds($escrowId, $reason, $initiatedBy);
+                // ✅ Update status
+                $result = $this->escrowModel->refundFunds($escrowId, $reason, $initiatedBy);
 
-        if (!$result) {
-            throw new \Exception('Failed to refund');
-        }
+                if (!$result) {
+                    throw new \Exception('Failed to refund');
+                }
 
-        // ✅ Log refund
-        $this->escrowModel->logEscrowAction($escrowId, 'refunded', $escrow->amount, $initiatedBy, $reason);
+                // ✅ Log refund
+                $this->escrowModel->logEscrowAction($escrowId, 'refunded', $escrow->amount, $initiatedBy, $reason);
 
-        // ✅ BUG-04 Fix: Record double-entry bookkeeping ledger records for auditing refunds
-        $this->ledgerService->recordDoubleEntry(
-            "escrow_refund_{$escrowId}",
-            "escrow:{$escrowId}",          // debit from escrow
-            "wallet:user:{$escrow->buyer_id}",      // credit to buyer
-            $escrow->amount,
-            strtolower($escrow->currency),
-            "Escrow refund for order {$escrow->order_id}: {$reason}",
-            ['escrow_id' => $escrowId, 'initiated_by' => $initiatedBy, 'reason' => $reason]
+                // ✅ BUG-04 Fix: Record double-entry bookkeeping ledger records for auditing refunds
+                $this->ledgerService->recordDoubleEntry(
+                    "escrow_refund_{$escrowId}",
+                    "escrow:{$escrowId}",          // debit from escrow
+                    "wallet:user:{$escrow->buyer_id}",      // credit to buyer
+                    $escrow->amount,
+                    strtolower($escrow->currency),
+                    "Escrow refund for order {$escrow->order_id}: {$reason}",
+                    ['escrow_id' => $escrowId, 'initiated_by' => $initiatedBy, 'reason' => $reason]
+                );
+
+                $this->logger->info('escrow.refunded', [
+                    'escrow_id' => $escrowId,
+                    'order_id' => $escrow->order_id,
+                    'amount' => $escrow->amount,
+                    'reason' => $reason,
+                ]);
+
+                $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
+                    'escrow_id' => $escrowId,
+                    'order_id' => (int)$escrow->order_id,
+                    'order_type' => $escrow->order_type,
+                    'old_status' => $escrow->status,
+                    'new_status' => 'refunded',
+                    'amount' => $escrow->amount,
+                    'currency' => $escrow->currency,
+                    'initiated_by' => $initiatedBy,
+                    'reason' => $reason
+                ]);
+
+                return ['ok' => true, 'amount' => $escrow->amount, 'refund_id' => $escrowId];
+            },
+            $idempotencyKey
         );
-
-        $this->logger->info('escrow.refunded', [
-            'escrow_id' => $escrowId,
-            'order_id' => $escrow->order_id,
-            'amount' => $escrow->amount,
-            'reason' => $reason,
-        ]);
-
-        $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
-            'escrow_id' => $escrowId,
-            'order_id' => (int)$escrow->order_id,
-            'order_type' => $escrow->order_type,
-            'old_status' => $escrow->status,
-            'new_status' => 'refunded',
-            'amount' => $escrow->amount,
-            'currency' => $escrow->currency,
-            'initiated_by' => $initiatedBy,
-            'reason' => $reason
-        ]);
-
-        return ['ok' => true, 'amount' => $escrow->amount, 'refund_id' => $escrowId];
     }
 
     /**
      * وضعیت را به disputed تغییر بده (در صورت اختلاف)
      * ✅ Prevents release/refund during dispute
      */
-    public function markAsDisputed(int $escrowId, string $reason): array
+    public function markAsDisputed(int $escrowId, string $reason, ?string $idempotencyKey = null): array
     {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException('markAsDisputed must be called inside an active transaction');
-        }
+        return $this->idempotencyService->execute(
+            'escrow.markAsDisputed',
+            0,
+            [
+                'escrow_id' => $escrowId,
+                'reason' => $reason,
+            ],
+            function () use ($escrowId, $reason) {
+                if (!$this->db->inTransaction()) {
+                    throw new \RuntimeException('markAsDisputed must be called inside an active transaction');
+                }
 
-        $escrow = $this->getStatus($escrowId);
-        if (!$escrow) {
-            return ['ok' => false, 'error' => 'Escrow not found'];
-        }
+                $escrow = $this->getStatus($escrowId);
+                if (!$escrow) {
+                    return ['ok' => false, 'error' => 'Escrow not found'];
+                }
 
-        // Validate state transition
-        if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'disputed')) {
-            return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to disputed"];
-        }
+                // Validate state transition
+                if (!$this->stateMachine->canTransition('escrow', $escrow->status, 'disputed')) {
+                    return ['ok' => false, 'error' => "Invalid transition from {$escrow->status} to disputed"];
+                }
 
-        $result = $this->escrowModel->markDisputed($escrowId, $reason);
+                $result = $this->escrowModel->markDisputed($escrowId, $reason);
 
-        if (!$result) {
-            return ['ok' => false, 'error' => 'Failed to mark as disputed'];
-        }
+                if (!$result) {
+                    return ['ok' => false, 'error' => 'Failed to mark as disputed'];
+                }
 
-        $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
-            'escrow_id' => $escrowId,
-            'order_id' => (int)$escrow->order_id,
-            'order_type' => $escrow->order_type,
-            'old_status' => $escrow->status,
-            'new_status' => 'disputed',
-            'amount' => $escrow->amount,
-            'currency' => $escrow->currency,
-            'reason' => $reason
-        ]);
+                $this->eventDispatcher->dispatchAsync('escrow.state_changed', [
+                    'escrow_id' => $escrowId,
+                    'order_id' => (int)$escrow->order_id,
+                    'order_type' => $escrow->order_type,
+                    'old_status' => $escrow->status,
+                    'new_status' => 'disputed',
+                    'amount' => $escrow->amount,
+                    'currency' => $escrow->currency,
+                    'reason' => $reason
+                ]);
 
-        $this->eventDispatcher->dispatchAsync('dispute.created', [
-            'escrow_id' => $escrowId,
-            'order_id' => (int)$escrow->order_id,
-            'order_type' => $escrow->order_type,
-            'buyer_id' => (int)$escrow->buyer_id,
-            'seller_id' => (int)$escrow->seller_id,
-            'amount' => $escrow->amount,
-            'currency' => $escrow->currency,
-            'reason' => $reason,
-            'created_at' => date('Y-m-d H:i:s')
-        ]);
+                $this->eventDispatcher->dispatchAsync('dispute.created', [
+                    'escrow_id' => $escrowId,
+                    'order_id' => (int)$escrow->order_id,
+                    'order_type' => $escrow->order_type,
+                    'buyer_id' => (int)$escrow->buyer_id,
+                    'seller_id' => (int)$escrow->seller_id,
+                    'amount' => $escrow->amount,
+                    'currency' => $escrow->currency,
+                    'reason' => $reason,
+                    'created_at' => date('Y-m-d H:i:s')
+                ]);
 
-        // Dispatch class-based event for new listeners
-        $this->eventDispatcher->dispatchAsync(
-            DisputeOpenedEvent::class,
-            new DisputeOpenedEvent(
-                (int)$escrow->buyer_id,
-                $escrowId,
-                (int)$escrow->order_id,
-                $escrow->order_type,
-                $reason
-            )
+                // Dispatch class-based event for new listeners
+                $this->eventDispatcher->dispatchAsync(
+                    DisputeOpenedEvent::class,
+                    new DisputeOpenedEvent(
+                        (int)$escrow->buyer_id,
+                        $escrowId,
+                        (int)$escrow->order_id,
+                        $escrow->order_type,
+                        $reason
+                    )
+                );
+
+                $this->logger->info('escrow.disputed', ['escrow_id' => $escrowId, 'reason' => $reason]);
+                return ['ok' => true];
+            },
+            $idempotencyKey
         );
-
-        $this->logger->info('escrow.disputed', ['escrow_id' => $escrowId, 'reason' => $reason]);
-        return ['ok' => true];
     }
 
     /**
@@ -494,17 +535,39 @@ class EscrowService
         string $refundAmount,
         string $releaseAmount,
         string $initiatedBy,
-        string $verdict
+        string $verdict,
+        ?string $idempotencyKey = null
     ): array {
-        if (!$this->db->inTransaction()) {
-            throw new \RuntimeException('resolveDisputePartial must be called inside an active transaction');
-        }
+        return $this->idempotencyService->execute(
+            'escrow.resolveDisputePartial',
+            0,
+            [
+                'escrow_id' => $escrowId,
+                'buyer_id' => $buyerId,
+                'seller_id' => $sellerId,
+                'refund_amount' => $refundAmount,
+                'release_amount' => $releaseAmount,
+                'initiated_by' => $initiatedBy,
+                'verdict' => $verdict,
+            ],
+            function () use (
+                $escrowId,
+                $buyerId,
+                $sellerId,
+                $refundAmount,
+                $releaseAmount,
+                $initiatedBy,
+                $verdict
+            ) {
+                if (!$this->db->inTransaction()) {
+                    throw new \RuntimeException('resolveDisputePartial must be called inside an active transaction');
+                }
 
-        // Lock & get escrow
-        $escrow = $this->escrowModel->findRefundable($escrowId, $buyerId);
-        if (!$escrow) {
-            return ['ok' => false, 'error' => 'Escrow not found or not in refundable/disputed state'];
-        }
+                // Lock & get escrow
+                $escrow = $this->escrowModel->findRefundable($escrowId, $buyerId);
+                if (!$escrow) {
+                    return ['ok' => false, 'error' => 'Escrow not found or not in refundable/disputed state'];
+                }
 
         // Update status to released or refunded based on verdict
         $status = $verdict === 'favor_seller' ? 'released' : (($releaseAmount === '0' || \Core\ValueObjects\Money::fromString((string)($releaseAmount))->getAmount() === \Core\ValueObjects\Money::fromString((string)('0'))->getAmount()) ? 'refunded' : 'released');
@@ -553,7 +616,10 @@ class EscrowService
             'resolved_by' => $initiatedBy
         ]);
 
-        return ['ok' => true];
+                return ['ok' => true];
+            },
+            $idempotencyKey
+        );
     }
 
     /**

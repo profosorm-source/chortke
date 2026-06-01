@@ -13,24 +13,29 @@ class BankCardService
     private \App\Adapters\BankInquiryAdapter $inquiryAdapter;
     private \Core\Encryption $encryption;
 private \App\Contracts\ValidatorFactoryInterface $validatorFactory;
+private \App\Services\Shared\IdempotencyService $idempotencyService;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         \App\Models\BankCard $model,
         \App\Models\User $userModel,
         \App\Adapters\BankInquiryAdapter $inquiryAdapter,
         \Core\Encryption $encryption,
-        \Core\IdempotencyKey $idempotencyKey,
-        \App\Contracts\ValidatorFactoryInterface $validatorFactory
-    ) {
+        \App\Contracts\ValidatorFactoryInterface $validatorFactory,
+        ?\App\Services\Shared\IdempotencyService $idempotencyService = null
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->model          = $model;
         $this->userModel      = $userModel;
         $this->inquiryAdapter = $inquiryAdapter;
         $this->encryption     = $encryption;
-        $this->idempotencyKey = $idempotencyKey;
         $this->validatorFactory = $validatorFactory;
+        $this->idempotencyService = $idempotencyService ?? \Core\Container::getInstance()->make(\App\Services\Shared\IdempotencyService::class);
     }
 
     public function create(int $userId, array $data): array
@@ -71,12 +76,9 @@ private \App\Contracts\ValidatorFactoryInterface $validatorFactory;
             return ['success' => false, 'message' => 'نام دارنده کارت با نام کاربری شما مطابقت ندارد'];
         }
 
-        $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('bank_card_creation', [
-            'user_id' => $userId,
-            'card_number' => $cardNumber,
-        ]);
+        $explicitKey = $data['idempotency_key'] ?? null;
 
-        return $this->idempotencyKey->wrapInstance($idempotencyKey, $userId, 'bank_card_creation', function() use ($userId, $cardNumber, $holder, $iban) {
+        return $this->idempotencyService->executeWithTransaction('bank_card.create', $userId, $data, function() use ($userId, $cardNumber, $holder, $iban) {
             $startedTransaction = !$this->db->inTransaction();
             if ($startedTransaction) {
                 $this->db->beginTransaction();
@@ -144,7 +146,7 @@ private \App\Contracts\ValidatorFactoryInterface $validatorFactory;
                 }
                 throw $e;
             }
-        });
+        }, $explicitKey);
     }
 
     public function updateByUser(int $userId, int $cardId, array $data): array

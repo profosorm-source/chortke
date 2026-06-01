@@ -27,17 +27,23 @@ class AccountDeletionService
     private DistributedLockService $lockService;
     private \App\Services\EmailService $emailService;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         User $userModel,
         AccountDeletionLog $deletionLogModel,
         AdminCustomTaskService $customTaskService,
         Wallet $walletModel,
         DistributedLockService $lockService,
         \App\Services\EmailService $emailService
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->userModel = $userModel;
         $this->deletionLogModel = $deletionLogModel;

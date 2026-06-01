@@ -10,12 +10,20 @@ use Core\Database;
 use App\Contracts\LoggerInterface;
 class ReferralManagementService
 {
+        private \Core\Database $db;
+        private ReferralService $referralService;
+        private ReferralCommission $commissionModel;
+        private UserService $userService;
         public function __construct(
-        private \Core\Database $db,
-        private ReferralService $referralService,
-        private ReferralCommission $commissionModel,
-        private UserService $userService
-    ) {
+        \Core\Database $db,
+        ReferralService $referralService,
+        ReferralCommission $commissionModel,
+        UserService $userService
+    ) {            $this->db = $db;
+            $this->referralService = $referralService;
+            $this->commissionModel = $commissionModel;
+            $this->userService = $userService;
+
         
     }
 
