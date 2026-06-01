@@ -13,13 +13,23 @@ use Core\Event;
  */
 class CriticalFeatureChangedEvent extends Event
 {
+    public string $featureName;
+    public string $action;
+    public ?\DateTime $changedAt;
+    public ?int $changedBy;
+    public array $changes;
     public function __construct(
-        public readonly string $featureName,
-        public readonly string $action,
-        public readonly ?\DateTime $changedAt = null,
-        public readonly ?int $changedBy = null,
-        public readonly array $changes = []
-    ) {
+        string $featureName,
+        string $action,
+        ?\DateTime $changedAt = null,
+        ?int $changedBy = null,
+        array $changes = []
+    ) {        $this->featureName = $featureName;
+        $this->action = $action;
+        $this->changedAt = $changedAt;
+        $this->changedBy = $changedBy;
+        $this->changes = $changes;
+
         // MED-16 Fix: پاس‌دادن دیتاها به سازنده والد برای فعال شدن عملکرد $event->getData() در پردازش‌های جانبی
         parent::__construct([
             'feature_name' => $this->featureName,

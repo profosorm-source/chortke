@@ -14,14 +14,26 @@ class FeatureFlagChanged extends Event
 {
     private const VALID_ACTIONS = ['toggled', 'updated', 'created', 'deleted'];
 
+    public string $featureName;
+    public string $action;
+    public array $oldValues;
+    public array $newValues;
+    public ?int $changedBy;
+    public \DateTime $changedAt;
     public function __construct(
-        public readonly string $featureName,
-        public readonly string $action,
-        public readonly array $oldValues = [],
-        public readonly array $newValues = [],
-        public readonly ?int $changedBy = null,
-        public readonly \DateTime $changedAt = new \DateTime()
-    ) {
+        string $featureName,
+        string $action,
+        array $oldValues = [],
+        array $newValues = [],
+        ?int $changedBy = null,
+        \DateTime $changedAt = new \DateTime()
+    ) {        $this->featureName = $featureName;
+        $this->action = $action;
+        $this->oldValues = $oldValues;
+        $this->newValues = $newValues;
+        $this->changedBy = $changedBy;
+        $this->changedAt = $changedAt;
+
         if (!in_array($this->action, self::VALID_ACTIONS, true)) {
             throw new \InvalidArgumentException("Invalid action: {$this->action}");
         }

@@ -8,11 +8,17 @@ use Core\Event;
 
 class KYCApprovedEvent extends Event
 {
+    public int $userId;
+    public int $kycId;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly int $kycId,
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        int $kycId,
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->kycId = $kycId;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id' => $userId,
             'kyc_id' => $kycId,

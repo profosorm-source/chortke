@@ -8,12 +8,20 @@ use Core\Event;
 
 class UserLoggedInEvent extends Event
 {
+    public int $userId;
+    public string $ipAddress;
+    public string $userAgent;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly string $ipAddress,
-        public readonly string $userAgent,
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        string $ipAddress,
+        string $userAgent,
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->ipAddress = $ipAddress;
+        $this->userAgent = $userAgent;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id' => $userId,
             'ip' => $ipAddress,

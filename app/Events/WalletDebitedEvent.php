@@ -8,13 +8,23 @@ use Core\Event;
 
 class WalletDebitedEvent extends Event
 {
+    public int $userId;
+    public string $amount;
+    public string $currency;
+    public string $reason;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly string $amount,
-        public readonly string $currency,
-        public readonly string $reason,
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        string $amount,
+        string $currency,
+        string $reason,
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->amount = $amount;
+        $this->currency = $currency;
+        $this->reason = $reason;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id' => $userId,
             'amount' => $amount,

@@ -8,13 +8,23 @@ use Core\Event;
 
 class TaskCompletedEvent extends Event
 {
+    public int $userId;
+    public int $taskId;
+    public float $xp;
+    public string $context;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly int $taskId,
-        public readonly float $xp = 0.0,
-        public readonly string $context = '',
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        int $taskId,
+        float $xp = 0.0,
+        string $context = '',
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->taskId = $taskId;
+        $this->xp = $xp;
+        $this->context = $context;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id' => $userId,
             'task_id' => $taskId,

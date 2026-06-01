@@ -8,13 +8,23 @@ use Core\Event;
 
 class LevelUpgradedEvent extends Event
 {
+    public int $userId;
+    public string $oldLevel;
+    public string $newLevel;
+    public string $reason;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly string $oldLevel, // Changed to string (slug) to match service layer
-        public readonly string $newLevel, // Changed to string (slug)
-        public readonly string $reason = 'automatic',
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        string $oldLevel, // Changed to string (slug) to match service layer
+        string $newLevel, // Changed to string (slug)
+        string $reason = 'automatic',
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->oldLevel = $oldLevel;
+        $this->newLevel = $newLevel;
+        $this->reason = $reason;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id' => $userId,
             'old_level' => $oldLevel,

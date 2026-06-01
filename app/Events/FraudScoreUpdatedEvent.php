@@ -11,11 +11,17 @@ use Core\Event;
  */
 class FraudScoreUpdatedEvent extends Event
 {
+    public int $userId;
+    public int $score;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly int $score,
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        int $score,
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->score = $score;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id'     => $userId,
             'score'       => $score,

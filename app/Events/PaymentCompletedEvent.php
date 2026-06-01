@@ -8,14 +8,26 @@ use Core\Event;
 
 class PaymentCompletedEvent extends Event
 {
+    public int $userId;
+    public string $transactionId;
+    public float $amount;
+    public string $currency;
+    public string $gateway;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly string $transactionId,
-        public readonly float $amount,
-        public readonly string $currency,
-        public readonly string $gateway,
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        string $transactionId,
+        float $amount,
+        string $currency,
+        string $gateway,
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->transactionId = $transactionId;
+        $this->amount = $amount;
+        $this->currency = $currency;
+        $this->gateway = $gateway;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id' => $userId,
             'transaction_id' => $transactionId,

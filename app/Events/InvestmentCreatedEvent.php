@@ -8,13 +8,23 @@ use Core\Event;
 
 class InvestmentCreatedEvent extends Event
 {
+    public int $userId;
+    public int $investmentId;
+    public float $amount;
+    public string $currency;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly int $investmentId,
-        public readonly float $amount,
-        public readonly string $currency = 'usdt',
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        int $investmentId,
+        float $amount,
+        string $currency = 'usdt',
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->investmentId = $investmentId;
+        $this->amount = $amount;
+        $this->currency = $currency;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id' => $userId,
             'investment_id' => $investmentId,

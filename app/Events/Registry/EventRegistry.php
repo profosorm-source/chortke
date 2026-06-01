@@ -47,6 +47,11 @@ class EventRegistry
 
     /**
      * Get all financial events that might trigger a wallet deposit.
+     *
+     * Note: This returns specific event names for strict mappings.
+     * For forward-compatibility, also provide wildcard patterns via
+     * `getDepositTriggerPatterns()` so newly added names under
+     * common namespaces are handled without editing this Registry.
      */
     public static function getDepositTriggerEvents(): array
     {
@@ -70,4 +75,28 @@ class EventRegistry
             self::WALLET_DEPOSIT_REQUESTED,
         ];
     }
+
+    /**
+     * Get wildcard patterns for deposit-triggering events.
+     * Patterns use shell-style wildcards compatible with `fnmatch()`.
+     * Add broad namespace patterns so new events under these namespaces
+     * are captured automatically without editing the registry.
+     */
+    public static function getDepositTriggerPatterns(): array
+    {
+        return [
+            'wallet.*',               // any wallet-related event
+            'crypto.*',               // crypto deposit/confirm events
+            'gateway.*',              // payment gateways
+            '*.revenue.*',            // content/banner revenue events
+            'influencer_order.*',     // influencer order lifecycle
+            'custom_task.*',          // custom task rewards/refunds
+            'investment.*',
+            'escrow.*',
+            'lottery_*',              // lottery namespace variations
+            'prediction_*',
+            'referral.*',
+        ];
+    }
 }
+

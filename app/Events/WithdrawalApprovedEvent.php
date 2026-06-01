@@ -8,14 +8,26 @@ use Core\Event;
 
 class WithdrawalApprovedEvent extends Event
 {
+    public int $userId;
+    public int $withdrawalId;
+    public float $amount;
+    public string $currency;
+    public int $approvedBy;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $userId,
-        public readonly int $withdrawalId,
-        public readonly float $amount,
-        public readonly string $currency = 'irt',
-        public readonly int $approvedBy = 0,
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $userId,
+        int $withdrawalId,
+        float $amount,
+        string $currency = 'irt',
+        int $approvedBy = 0,
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->userId = $userId;
+        $this->withdrawalId = $withdrawalId;
+        $this->amount = $amount;
+        $this->currency = $currency;
+        $this->approvedBy = $approvedBy;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'user_id' => $userId,
             'withdrawal_id' => $withdrawalId,

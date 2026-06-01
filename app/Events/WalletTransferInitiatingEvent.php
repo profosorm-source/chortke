@@ -8,13 +8,23 @@ use Core\Event;
 
 class WalletTransferInitiatingEvent extends Event
 {
+    public int $fromUserId;
+    public int $toUserId;
+    public string $amount;
+    public string $currency;
+    public \DateTimeInterface $occurredAt;
     public function __construct(
-        public readonly int $fromUserId,
-        public readonly int $toUserId,
-        public readonly string $amount,
-        public readonly string $currency,
-        public readonly \DateTimeInterface $occurredAt = new \DateTimeImmutable()
-    ) {
+        int $fromUserId,
+        int $toUserId,
+        string $amount,
+        string $currency,
+        \DateTimeInterface $occurredAt = new \DateTimeImmutable()
+    ) {        $this->fromUserId = $fromUserId;
+        $this->toUserId = $toUserId;
+        $this->amount = $amount;
+        $this->currency = $currency;
+        $this->occurredAt = $occurredAt;
+
         parent::__construct([
             'from_user_id' => $fromUserId,
             'to_user_id' => $toUserId,

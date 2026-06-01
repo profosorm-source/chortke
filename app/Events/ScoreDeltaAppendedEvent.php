@@ -6,11 +6,21 @@ namespace App\Events;
 
 class ScoreDeltaAppendedEvent
 {
+    public string $entityType;
+    public int $entityId;
+    public string $domain;
+    public float $delta;
+    public string $source;
     public function __construct(
-        public readonly string $entityType,
-        public readonly int $entityId,
-        public readonly string $domain,
-        public readonly float $delta,
-        public readonly string $source
-    ) {}
+        string $entityType,
+        int $entityId,
+        string $domain,
+        float $delta,
+        string $source
+    ) {        $this->entityType = $entityType;
+        $this->entityId = $entityId;
+        $this->domain = $domain;
+        $this->delta = $delta;
+        $this->source = $source;
+}
 }
