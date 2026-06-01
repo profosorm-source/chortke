@@ -46,7 +46,7 @@ class InfluencerVerification extends Model
     /**
      * ثبت رکورد جدید احراز هویت به همراه کد تایید و زمان انقضا
      */
-    public function create(int $profileId, string $code, string $expiresAt): bool
+    public function createVerification(int $profileId, string $code, string $expiresAt): bool
     {
         $stmt = $this->db->prepare(
             "INSERT INTO influencer_verifications

@@ -664,34 +664,266 @@ class SentryModel extends Model
         );
     }
 
-    // --- Audit Trail Missing Placeholders ---
+    // --- Audit Trail helpers (DB-backed implementations) ---
 
-    public function getAuditCount(string $where, array $params): int { return 0; }
-    public function searchAuditRecords(string $where, array $params, int $limit, int $offset): array { return []; }
-    public function getAuditEventsByCategory(string $start, string $end): array { return []; }
-    public function getAuditUserActivity(string $start, string $end): array { return []; }
-    public function getAuditAccessPatterns(string $start, string $end): array { return []; }
-    public function getAuditFailedOperations(string $start, string $end): array { return []; }
-    public function deleteOldAuditRecords(string $cutoff): int { return 0; }
-    public function getOldAuditRecords(string $cutoff): array { return []; }
-    public function getAuditRecordById(int $id): ?object { return null; }
-    public function getActivityTimeline(?int $userId, int $days): array { return []; }
-    public function getAuditReportSummary(string $start, string $end): ?object { return null; }
-    public function getAuditCriticalEvents(array $critical, string $start, string $end): array { return []; }
+    public function getAuditCount(string $where, array $params): int
+    {
+        $where = trim($where) === '' ? '1=1' : $where;
+        $sql = "SELECT COUNT(*) FROM audit_trail WHERE {$where}";
+        return (int)$this->db->fetchColumn($sql, $params);
+    }
+
+    public function searchAuditRecords(string $where, array $params, int $limit, int $offset): array
+    {
+        $where = trim($where) === '' ? '1=1' : $where;
+        $limit = max(1, min(1000, (int)$limit));
+        $offset = max(0, (int)$offset);
+
+        $sql = "SELECT at.*, u.full_name AS user_name, u.email AS user_email
+                FROM audit_trail at
+                LEFT JOIN users u ON u.id = at.user_id
+                WHERE {$where}
+                ORDER BY at.created_at DESC
+                LIMIT ? OFFSET ?";
+
+        $finalParams = array_values($params);
+        $finalParams[] = $limit;
+        $finalParams[] = $offset;
+
+        return $this->db->fetchAll($sql, $finalParams) ?: [];
+    }
+
+    public function getAuditEventsByCategory(string $start, string $end): array
+    {
+        $sql = "SELECT event, COUNT(*) as total FROM audit_trail WHERE created_at >= ? AND created_at <= ? GROUP BY event ORDER BY total DESC";
+        return $this->db->fetchAll($sql, [$start . ' 00:00:00', $end . ' 23:59:59']) ?: [];
+    }
+
+    public function getAuditUserActivity(string $start, string $end): array
+    {
+        $sql = "SELECT user_id, COUNT(*) as total FROM audit_trail WHERE created_at >= ? AND created_at <= ? AND user_id IS NOT NULL GROUP BY user_id ORDER BY total DESC LIMIT 100";
+        return $this->db->fetchAll($sql, [$start . ' 00:00:00', $end . ' 23:59:59']) ?: [];
+    }
+
+    public function getAuditAccessPatterns(string $start, string $end): array
+    {
+        $sql = "SELECT ip_address, COUNT(*) as total FROM audit_trail WHERE created_at >= ? AND created_at <= ? GROUP BY ip_address ORDER BY total DESC LIMIT 100";
+        return $this->db->fetchAll($sql, [$start . ' 00:00:00', $end . ' 23:59:59']) ?: [];
+    }
+
+    public function getAuditFailedOperations(string $start, string $end): array
+    {
+        $sql = "SELECT * FROM audit_trail WHERE created_at >= ? AND created_at <= ? AND (event LIKE '%failed%' OR event LIKE '%error%' OR event LIKE '%reject%') ORDER BY created_at DESC LIMIT 200";
+        return $this->db->fetchAll($sql, [$start . ' 00:00:00', $end . ' 23:59:59']) ?: [];
+    }
+
+    public function deleteOldAuditRecords(string $cutoff): int
+    {
+        // Physical deletion is restricted; return 0 and log a warning.
+        $this->logger->warning('sentry.audit.delete_attempt', ['cutoff' => $cutoff]);
+        return 0;
+    }
+
+    public function getOldAuditRecords(string $cutoff): array
+    {
+        $sql = "SELECT * FROM audit_trail WHERE created_at < ? ORDER BY created_at ASC LIMIT 1000";
+        return $this->db->fetchAll($sql, [$cutoff]) ?: [];
+    }
+
+    public function getAuditRecordById(int $id): ?object
+    {
+        return $this->db->fetch("SELECT * FROM audit_trail WHERE id = ?", [$id]);
+    }
+
+    public function getActivityTimeline(?int $userId, int $days): array
+    {
+        $days = max(1, min(365, $days));
+        $params = [];
+        $where = '';
+        if ($userId !== null) {
+            $where = 'AND user_id = ?';
+            $params[] = $userId;
+        }
+
+        $sql = "SELECT DATE(created_at) as day, COUNT(*) as total FROM audit_trail WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) {$where} GROUP BY day ORDER BY day ASC";
+        array_unshift($params, $days);
+        return $this->db->fetchAll($sql, $params) ?: [];
+    }
+
+    public function getAuditReportSummary(string $start, string $end): ?object
+    {
+        $sql = "SELECT COUNT(*) as total_events, COUNT(DISTINCT user_id) as unique_users FROM audit_trail WHERE created_at >= ? AND created_at <= ?";
+        return $this->db->fetch($sql, [$start . ' 00:00:00', $end . ' 23:59:59']) ?: null;
+    }
+
+    public function getAuditCriticalEvents(array $critical, string $start, string $end): array
+    {
+        if (empty($critical)) return [];
+        $placeholders = implode(',', array_fill(0, count($critical), '?'));
+        $params = array_merge([$start . ' 00:00:00', $end . ' 23:59:59'], $critical);
+        $sql = "SELECT * FROM audit_trail WHERE created_at >= ? AND created_at <= ? AND event IN ({$placeholders}) ORDER BY created_at DESC LIMIT 500";
+        return $this->db->fetchAll($sql, $params) ?: [];
+    }
 
     // --- Trend Analyzer Missing Placeholders ---
 
-    public function getErrorHistoricalData(int $days): array { return []; }
-    public function getPerformanceHistoricalData(int $days): array { return []; }
-    public function getErrorHotspots(int $days): array { return []; }
-    public function getWeeklyPerformanceAvg(int $offset): float { return 0.0; }
+    public function getErrorHistoricalData(int $days): array
+    {
+        $days = max(1, min(365, $days));
+        return $this->db->fetchAll(
+            "SELECT DATE(created_at) as day, COUNT(DISTINCT issue_id) as issues, COUNT(*) as events
+             FROM sentry_events
+             WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+             GROUP BY day
+             ORDER BY day ASC",
+            [$days]
+        ) ?: [];
+    }
 
-    // --- Escalation Manager Missing Placeholders ---
+    public function getPerformanceHistoricalData(int $days): array
+    {
+        $days = max(1, min(365, $days));
+        return $this->db->fetchAll(
+            "SELECT DATE(created_at) as day, COALESCE(AVG(duration),0) as avg_duration, COUNT(*) as samples
+             FROM performance_transactions
+             WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+             GROUP BY day
+             ORDER BY day ASC",
+            [$days]
+        ) ?: [];
+    }
 
-    public function getPendingEscalations(): array { return []; }
-    public function escalateAlert(int $id, string $new, string $old): void {}
-    public function acknowledgeAlert(int $id, ?int $userId, ?string $note): bool { return true; }
-    public function autoResolveErrorAlerts(): int { return 0; }
-    public function getEscalationStatistics(): array { return []; }
+    public function getErrorHotspots(int $days): array
+    {
+        $days = max(1, min(365, $days));
+        return $this->db->fetchAll(
+            "SELECT culprit AS hotspot, COUNT(DISTINCT issue_id) as issues, COUNT(*) as events
+             FROM sentry_events
+             WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+             GROUP BY hotspot
+             ORDER BY events DESC
+             LIMIT 50",
+            [$days]
+        ) ?: [];
+    }
+
+    public function getWeeklyPerformanceAvg(int $offset): float
+    {
+        $offset = max(0, (int)$offset);
+        $start = date('Y-m-d H:i:s', strtotime("-" . (($offset + 1) * 7) . " days"));
+        $end = date('Y-m-d H:i:s', strtotime("-" . ($offset * 7) . " days"));
+        $row = $this->db->fetch(
+            "SELECT COALESCE(AVG(duration), 0) as avg_duration FROM performance_transactions WHERE created_at >= ? AND created_at < ?",
+            [$start, $end]
+        );
+        return $row ? (float)($row->avg_duration ?? 0.0) : 0.0;
+    }
+
+    // --- Escalation Manager helpers ---
+
+    public function getPendingEscalations(): array
+    {
+        return $this->db->fetchAll(
+            "SELECT * FROM sentry_issues WHERE status IN ('unresolved', 'escalated') ORDER BY last_seen DESC LIMIT 200"
+        ) ?: [];
+    }
+
+    public function escalateAlert(int $id, string $new, string $old): void
+    {
+        try {
+            $this->db->query("UPDATE sentry_issues SET status = ?, updated_at = NOW() WHERE id = ?", [$new, $id]);
+            $this->db->execute("INSERT INTO sentry_issue_events (issue_id, event_type, details, created_at) VALUES (?, ?, ?, NOW())", [$id, 'escalation', json_encode(['from' => $old, 'to' => $new])]);
+        } catch (\Throwable $e) {
+            $this->logger->error('sentry.escalation.failed', ['issue_id' => $id, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function acknowledgeAlert(int $id, ?int $userId, ?string $note): bool
+    {
+        if (!$id) {
+            return false;
+        }
+
+        try {
+            // read existing metadata (if any) and attach acknowledgement note
+            $issue = $this->db->fetch("SELECT metadata FROM sentry_issues WHERE id = ?", [$id]);
+            $metadata = [];
+            if ($issue && !empty($issue->metadata)) {
+                $decoded = json_decode($issue->metadata, true);
+                if (is_array($decoded)) {
+                    $metadata = $decoded;
+                }
+            }
+
+            if ($note !== null) {
+                $metadata['acknowledgement_note'] = $note;
+            }
+
+            // Update the issue: set acknowledged_at and acknowledged_by (if provided) and mark acknowledged
+            if ($userId !== null) {
+                $this->db->query(
+                    "UPDATE sentry_issues SET metadata = ?, acknowledged_at = NOW(), acknowledged_by = ?, status = 'acknowledged' WHERE id = ?",
+                    [json_encode($metadata, JSON_UNESCAPED_UNICODE), $userId, $id]
+                );
+            } else {
+                $this->db->query(
+                    "UPDATE sentry_issues SET metadata = ?, acknowledged_at = NOW(), status = 'acknowledged' WHERE id = ?",
+                    [json_encode($metadata, JSON_UNESCAPED_UNICODE), $id]
+                );
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            // do not throw here; caller handles logging and user feedback
+            return false;
+        }
+    }
+    public function autoResolveErrorAlerts(): int
+    {
+        // Disabled by default to avoid accidental mass-resolution.
+        $enabled = (bool) $this->appSettings->get('sentry.auto_resolve_enabled', false);
+        if (!$enabled) {
+            $this->logger->info('sentry.auto_resolve.disabled');
+            return 0;
+        }
+
+        $days = (int) $this->appSettings->get('sentry.auto_resolve_days', 90);
+        $maxCount = (int) $this->appSettings->get('sentry.auto_resolve_max_count', 5);
+
+        try {
+            $sql = "UPDATE sentry_issues SET status = 'resolved', updated_at = NOW() WHERE status != 'resolved' AND last_seen < DATE_SUB(NOW(), INTERVAL ? DAY) AND count <= ?";
+            $this->db->execute($sql, [$days, $maxCount]);
+            return $this->db->affectedRows();
+        } catch (\Throwable $e) {
+            $this->logger->error('sentry.auto_resolve.failed', ['error' => $e->getMessage()]);
+            return 0;
+        }
+    }
+
+    public function getEscalationStatistics(): array
+    {
+        $stats = [];
+        try {
+            $total = (int)$this->db->fetchColumn("SELECT COUNT(*) FROM sentry_issues WHERE 1=1");
+            $byStatus = $this->db->fetchAll("SELECT status, COUNT(*) as cnt FROM sentry_issues GROUP BY status") ?: [];
+            $byLevel = $this->db->fetchAll("SELECT level, COUNT(DISTINCT issue_id) as issues FROM sentry_events GROUP BY level") ?: [];
+
+            $stats['total'] = $total;
+            $stats['by_status'] = [];
+            foreach ($byStatus as $r) {
+                $stats['by_status'][$r->status ?? 'unknown'] = (int)($r->cnt ?? 0);
+            }
+            $stats['by_level'] = [];
+            foreach ($byLevel as $r) {
+                $stats['by_level'][$r->level ?? 'unknown'] = (int)($r->issues ?? 0);
+            }
+
+            $stats['pending_escalations'] = (int)$this->db->fetchColumn("SELECT COUNT(*) FROM sentry_issues WHERE status = 'escalated'");
+        } catch (\Throwable $e) {
+            $this->logger->error('sentry.escalation_stats.failed', ['error' => $e->getMessage()]);
+        }
+
+        return $stats;
+    }
 }
 
