@@ -26,13 +26,23 @@ class HandlePaymentCompleted
     private const XP_PER_UNIT = 10_000;
     private const MAX_XP_PER_PAYMENT = 500.0;
 
+    private XpService $xpService;
+    private ReferralService $referralService;
+    private NotificationServiceInterface $notificationService;
+    private LoggerInterface $logger;
+    private Database $db;
     public function __construct(
-        private XpService $xpService,
-        private ReferralService $referralService,
-        private NotificationServiceInterface $notificationService,
-        private LoggerInterface $logger,
-        private Database $db
-    ) {}
+        XpService $xpService,
+        ReferralService $referralService,
+        NotificationServiceInterface $notificationService,
+        LoggerInterface $logger,
+        Database $db
+    ) {        $this->xpService = $xpService;
+        $this->referralService = $referralService;
+        $this->notificationService = $notificationService;
+        $this->logger = $logger;
+        $this->db = $db;
+}
 
     public function handle(PaymentCompletedEvent $event): void
     {

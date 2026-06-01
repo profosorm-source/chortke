@@ -11,6 +11,7 @@ use App\Services\Gamification\XpService;
 use App\Services\Shared\ReferralService;
 use App\Contracts\WalletServiceInterface;
 use App\Services\Notification\NotificationService;
+use App\Services\Shared\IdempotencyService;
 use App\Services\Cache\CacheInvalidationService;
 use App\Enums\ModuleContext;
 
@@ -26,15 +27,32 @@ use App\Enums\ModuleContext;
  */
 class ContentEventListeners
 {
+    protected LoggerInterface $logger;
+    protected XpService $xpService;
+    protected ReferralService $referralService;
+    protected NotificationService $notificationService;
+    protected CacheInvalidationService $cacheInvalidationService;
+    protected WalletServiceInterface $walletService;
+    protected ?\App\Services\OutboxService $outbox;
+    protected IdempotencyService $idempotencyService;
     public function __construct(
-        protected LoggerInterface $logger,
-        protected XpService $xpService,
-        protected ReferralService $referralService,
-        protected NotificationService $notificationService,
-        protected CacheInvalidationService $cacheInvalidationService,
-        protected WalletServiceInterface $walletService,
-        protected ?\App\Services\OutboxService $outbox = null
-    ) {
+        LoggerInterface $logger,
+        XpService $xpService,
+        ReferralService $referralService,
+        NotificationService $notificationService,
+        CacheInvalidationService $cacheInvalidationService,
+        WalletServiceInterface $walletService,
+        ?\App\Services\OutboxService $outbox = null,
+        IdempotencyService $idempotencyService
+    ) {        $this->logger = $logger;
+        $this->xpService = $xpService;
+        $this->referralService = $referralService;
+        $this->notificationService = $notificationService;
+        $this->cacheInvalidationService = $cacheInvalidationService;
+        $this->walletService = $walletService;
+        $this->outbox = $outbox;
+        $this->idempotencyService = $idempotencyService;
+
     }
 
     /**
@@ -486,6 +504,7 @@ class ContentEventListeners
             $walletService = $this->walletService;
             $outbox = $this->outbox;
 
+            $idemKey = $type . ':' . $referenceId;
             $payload = [
                 'user_id' => (int)$userId,
                 'amount' => (string)$amount,
@@ -494,6 +513,7 @@ class ContentEventListeners
                     'type' => $type,
                     'reference_id' => $referenceId,
                     'description' => "درآمد محتوا (ID: {$referenceId})",
+                    'idempotency_key' => $idemKey,
                 ],
             ];
 
@@ -515,11 +535,14 @@ class ContentEventListeners
                 return;
             }
 
-            $result = $walletService->deposit(
+            $result = $this->idempotencyService->executeWithTransaction(
+                'wallet.deposit',
                 $userId,
-                (string)$amount,
-                'irt',
-                ['type' => $type, 'reference_id' => $referenceId, 'description' => "درآمد محتوا (ID: {$referenceId})"]
+                $payload,
+                function () use ($walletService, $userId, $amount, $payload) {
+                    return $walletService->deposit($userId, (string)$amount, $payload['currency'] ?? 'irt', $payload['metadata']);
+                },
+                $idemKey
             );
 
             if ($result) {

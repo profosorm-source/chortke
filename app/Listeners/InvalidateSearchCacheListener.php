@@ -15,10 +15,14 @@ use App\Contracts\LoggerInterface;
  */
 class InvalidateSearchCacheListener
 {
+    private CacheInvalidationService $cacheInvalidationService;
+    private LoggerInterface $logger;
     public function __construct(
-        private CacheInvalidationService $cacheInvalidationService,
-        private LoggerInterface $logger
-    ) {
+        CacheInvalidationService $cacheInvalidationService,
+        LoggerInterface $logger
+    ) {        $this->cacheInvalidationService = $cacheInvalidationService;
+        $this->logger = $logger;
+
     }
 
     public function handle($event): void

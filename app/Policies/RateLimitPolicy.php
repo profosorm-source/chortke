@@ -74,8 +74,32 @@ class RateLimitPolicy
 
     private function isWhitelisted(string|int $identifier): bool
     {
-        // در آینده می‌توان از کش برای Whitelist استفاده کرد
-        // فعلاً به صورت stub پیاده‌سازی شده تا جایگزین منطق AntiFraud شود.
+        $candidate = (string)$identifier;
+
+        $whitelist = config('rate_limits.whitelist', []);
+        if (is_array($whitelist) && in_array($candidate, array_map('strval', $whitelist), true)) {
+            return true;
+        }
+
+        if ($this->featureFlagModel) {
+            try {
+                $flag = $this->featureFlagModel->findByName('rate_limit_whitelist');
+                if ($flag && !empty($flag->metadata)) {
+                    $metadata = json_decode($flag->metadata, true);
+                    if (is_array($metadata) && isset($metadata['whitelist']) && is_array($metadata['whitelist'])) {
+                        if (in_array($candidate, array_map('strval', $metadata['whitelist']), true)) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('rate_limit.whitelist_lookup_failed', [
+                    'identifier' => $candidate,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         return false;
     }
 

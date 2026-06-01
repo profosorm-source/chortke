@@ -7,6 +7,7 @@ namespace App\Listeners;
 use App\Contracts\LoggerInterface;
 use App\Enums\ModuleContext;
 use Core\Container;
+use App\Services\Shared\IdempotencyService;
 
 /**
  * InfluencerEventListeners - Centralized event handling for influencer domain
@@ -20,11 +21,13 @@ class InfluencerEventListeners
 {
     private Container $container;
     private LoggerInterface $logger;
+    private IdempotencyService $idempotencyService;
 
-    public function __construct(Container $container, LoggerInterface $logger)
+    public function __construct(Container $container, LoggerInterface $logger, IdempotencyService $idempotencyService)
     {
         $this->container = $container;
         $this->logger = $logger;
+        $this->idempotencyService = $idempotencyService;
     }
 
     /**
@@ -355,14 +358,16 @@ class InfluencerEventListeners
                 // no outbox available
             }
 
+            $aggId = $metadata['order_id'] ?? $userId;
+            $idemKey = ($metadata['order_id'] ?? $userId) . ':influencer_deposit';
+            $payload = [
+                'user_id' => $userId,
+                'amount' => (string)$amount,
+                'currency' => $currency,
+                'metadata' => array_merge($metadata, ['idempotency_key' => $idemKey]),
+            ];
+
             if ($outbox) {
-                $aggId = $metadata['order_id'] ?? $userId;
-                $payload = [
-                    'user_id' => $userId,
-                    'amount' => (string)$amount,
-                    'currency' => $currency,
-                    'metadata' => $metadata,
-                ];
                 $ok = $outbox->record('influencer', $aggId, 'wallet.deposit.requested', $payload);
                 if (empty($ok)) {
                     $this->logger->error('influencer.deposit outbox record failed', ['user_id' => $userId, 'amount' => $amount]);
@@ -370,11 +375,14 @@ class InfluencerEventListeners
                 return;
             }
 
-            $result = $walletService->deposit(
+            $result = $this->idempotencyService->executeWithTransaction(
+                'wallet.deposit',
                 $userId,
-                (string)$amount,
-                $currency,
-                $metadata
+                $payload,
+                function () use ($walletService, $userId, $amount, $currency, $payload) {
+                    return $walletService->deposit($userId, (string)$amount, $currency, $payload['metadata']);
+                },
+                $payload['metadata']['idempotency_key']
             );
 
             if (empty($result['success'])) {

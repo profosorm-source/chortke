@@ -7,6 +7,7 @@ namespace App\Listeners;
 use Core\Event;
 use App\Contracts\LoggerInterface;
 use App\Contracts\WalletServiceInterface;
+use App\Services\Shared\IdempotencyService;
 use App\Services\Gamification\TrustService;
 use App\Enums\ModuleContext;
 use App\Services\User\UserService;
@@ -17,13 +18,26 @@ use App\Contracts\OutboxServiceInterface;
  */
 class SocialTaskEventListeners
 {
+    protected LoggerInterface $logger;
+    protected WalletServiceInterface $walletService;
+    protected TrustService $trustService;
+    protected UserService $userService;
+    protected ?OutboxServiceInterface $outbox;
+    protected IdempotencyService $idempotencyService;
     public function __construct(
-        protected LoggerInterface $logger,
-        protected WalletServiceInterface $walletService,
-        protected TrustService $trustService,
-        protected UserService $userService,
-        protected ?OutboxServiceInterface $outbox = null
-    ) {
+        LoggerInterface $logger,
+        WalletServiceInterface $walletService,
+        TrustService $trustService,
+        UserService $userService,
+        ?OutboxServiceInterface $outbox = null,
+        IdempotencyService $idempotencyService
+    ) {        $this->logger = $logger;
+        $this->walletService = $walletService;
+        $this->trustService = $trustService;
+        $this->userService = $userService;
+        $this->outbox = $outbox;
+        $this->idempotencyService = $idempotencyService;
+
     }
 
     /**
@@ -45,14 +59,30 @@ class SocialTaskEventListeners
                 return;
             }
 
-            $pay = $this->walletService->depositInTransaction($userId, (string)$amount, $currency, [
-                'type' => 'social_task_reward',
-                'execution_id' => $executionId,
-                'ad_id' => $adId,
-                'decision' => $decision,
-                'risk_score' => $riskScore,
-                'idempotency_key' => "task_reward_{$executionId}"
-            ]);
+            $idemKey = "task_reward_{$executionId}";
+            $payload = [
+                'user_id' => $userId,
+                'amount' => (string)$amount,
+                'currency' => $currency,
+                'metadata' => [
+                    'type' => 'social_task_reward',
+                    'execution_id' => $executionId,
+                    'ad_id' => $adId,
+                    'decision' => $decision,
+                    'risk_score' => $riskScore,
+                    'idempotency_key' => $idemKey,
+                ],
+            ];
+
+            $pay = $this->idempotencyService->executeWithTransaction(
+                'wallet.deposit',
+                $userId,
+                $payload,
+                function () use ($userId, $amount, $currency, $payload) {
+                    return $this->walletService->deposit($userId, (string)$amount, $currency, $payload['metadata']);
+                },
+                $idemKey
+            );
 
             if (empty($pay['success'])) {
                 throw new \RuntimeException($pay['message'] ?? 'خطا در پرداخت پاداش');
@@ -135,7 +165,15 @@ class SocialTaskEventListeners
                     throw new \RuntimeException('خطا در ثبت رکورد خروجی برای بازگشت وجه');
                 }
             } else {
-                $walletResult = $this->walletService->deposit($userId, (string)$refund, $currency, $payload['metadata']);
+                $walletResult = $this->idempotencyService->executeWithTransaction(
+                    'wallet.deposit',
+                    $userId,
+                    $payload,
+                    function () use ($userId, $refund, $currency, $payload) {
+                        return $this->walletService->deposit($userId, (string)$refund, $currency, $payload['metadata']);
+                    },
+                    $payload['metadata']['idempotency_key'] ?? null
+                );
                 if (empty($walletResult['success'])) {
                     throw new \RuntimeException($walletResult['message'] ?? 'خطا در بازگشت وجه');
                 }

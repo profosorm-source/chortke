@@ -10,10 +10,14 @@ use App\Contracts\LoggerInterface;
 
 class LogUserLoggedInActivity
 {
+    private LoggerInterface $logger;
+    private AuditTrail $auditTrail;
     public function __construct(
-        private LoggerInterface $logger,
-        private AuditTrail $auditTrail
-    ) {}
+        LoggerInterface $logger,
+        AuditTrail $auditTrail
+    ) {        $this->logger = $logger;
+        $this->auditTrail = $auditTrail;
+}
 
     public function handle(UserLoggedInEvent $event): void
     {

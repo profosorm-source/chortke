@@ -10,10 +10,14 @@ use App\Contracts\LoggerInterface;
 
 class NotificationChannelDispatchListener
 {
+    private NotificationDispatcher $dispatcher;
+    private LoggerInterface $logger;
     public function __construct(
-        private NotificationDispatcher $dispatcher,
-        private LoggerInterface $logger
-    ) {}
+        NotificationDispatcher $dispatcher,
+        LoggerInterface $logger
+    ) {        $this->dispatcher = $dispatcher;
+        $this->logger = $logger;
+}
 
     public function handle(NotificationChannelRequestedEvent $event): void
     {

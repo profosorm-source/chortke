@@ -10,7 +10,12 @@ use App\Services\AntiFraud\FraudGuardService;
 
 class FraudGuardListener implements EventListenerInterface
 {
-    public function __construct(private FraudGuardService $fraudGuard) {}
+    private FraudGuardService $fraudGuard;
+
+    public function __construct(FraudGuardService $fraudGuard)
+    {
+        $this->fraudGuard = $fraudGuard;
+    }
 
     public function handle($event): void
     {

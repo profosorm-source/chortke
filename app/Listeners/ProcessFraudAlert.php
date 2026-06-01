@@ -10,10 +10,14 @@ use Core\Database;
 
 class ProcessFraudAlert
 {
+    private LoggerInterface $logger;
+    private Database $db;
     public function __construct(
-        private LoggerInterface $logger,
-        private Database $db
-    ) {}
+        LoggerInterface $logger,
+        Database $db
+    ) {        $this->logger = $logger;
+        $this->db = $db;
+}
 
     public function handle(FraudScoreUpdatedEvent $event): void
     {

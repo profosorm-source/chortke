@@ -16,10 +16,14 @@ use App\Contracts\LoggerInterface;
  */
 class TaskFraudGuardMiddleware
 {
+    private FraudGuardService $fraudGuard;
+    private LoggerInterface $logger;
     public function __construct(
-        private FraudGuardService $fraudGuard,
-        private LoggerInterface $logger
-    ) {}
+        FraudGuardService $fraudGuard,
+        LoggerInterface $logger
+    ) {        $this->fraudGuard = $fraudGuard;
+        $this->logger = $logger;
+}
 
     /**
      * @param array $payload آرایه شامل user_id, action, context

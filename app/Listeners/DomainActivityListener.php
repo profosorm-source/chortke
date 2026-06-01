@@ -15,6 +15,7 @@ use App\Services\Notification\NotificationAnalyticsService;
 use App\Services\AuditTrail;
 use App\Services\User\UserService;
 use App\Services\OutboxService;
+use App\Services\Shared\IdempotencyService;
 
 /**
  * DomainActivityListener
@@ -22,19 +23,44 @@ use App\Services\OutboxService;
  */
 class DomainActivityListener
 {
+    private XpService $xpService;
+    private WalletServiceInterface $walletService;
+    private ReferralService $referralService;
+    private NotificationServiceInterface $notificationService;
+    private CacheInvalidationService $cacheInvalidation;
+    private NotificationTracker $tracker;
+    private NotificationAnalyticsService $analytics;
+    private AuditTrail $auditTrail;
+    private LoggerInterface $logger;
+    private UserService $userService;
+    private ?OutboxService $outbox;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private XpService $xpService,
-        private WalletServiceInterface $walletService,
-        private ReferralService $referralService,
-        private NotificationServiceInterface $notificationService,
-        private CacheInvalidationService $cacheInvalidation,
-        private NotificationTracker $tracker,
-        private NotificationAnalyticsService $analytics,
-        private AuditTrail $auditTrail,
-        private LoggerInterface $logger,
-        private UserService $userService,
-        private ?OutboxService $outbox = null
-    ) {}
+        XpService $xpService,
+        WalletServiceInterface $walletService,
+        ReferralService $referralService,
+        NotificationServiceInterface $notificationService,
+        CacheInvalidationService $cacheInvalidation,
+        NotificationTracker $tracker,
+        NotificationAnalyticsService $analytics,
+        AuditTrail $auditTrail,
+        LoggerInterface $logger,
+        UserService $userService,
+        ?OutboxService $outbox = null,
+        IdempotencyService $idempotencyService
+    ) {        $this->xpService = $xpService;
+        $this->walletService = $walletService;
+        $this->referralService = $referralService;
+        $this->notificationService = $notificationService;
+        $this->cacheInvalidation = $cacheInvalidation;
+        $this->tracker = $tracker;
+        $this->analytics = $analytics;
+        $this->auditTrail = $auditTrail;
+        $this->logger = $logger;
+        $this->userService = $userService;
+        $this->outbox = $outbox;
+        $this->idempotencyService = $idempotencyService;
+}
 
     public function handle(string|object $event, array $data = []): void
     {
@@ -112,6 +138,9 @@ class DomainActivityListener
     {
         $this->xpService->award($data['user_id'], $data['context'], 10.0, 'محتوا تایید شد');
 
+        $contentId = (int)($data['content_id'] ?? 0);
+        $idemKey = 'content_reward:' . $contentId;
+
         if ($this->outbox) {
             $payload = [
                 'user_id' => (int)$data['user_id'],
@@ -119,13 +148,23 @@ class DomainActivityListener
                 'currency' => $data['currency'] ?? 'irt',
                 'metadata' => [
                     'type' => 'content_reward',
-                    'content_id' => $data['content_id'] ?? null,
-                    'description' => 'پاداش تأیید محتوا'
+                    'content_id' => $contentId,
+                    'description' => 'پاداش تأیید محتوا',
+                    'idempotency_key' => $idemKey,
                 ],
             ];
-            $this->outbox->record('content', (int)($data['content_id'] ?? 0), 'wallet.deposit.requested', $payload);
+            $this->outbox->record('content', $contentId, 'wallet.deposit.requested', $payload);
         } else {
-            $this->walletService->deposit($data['user_id'], $data['amount'], 'irt', ['type' => 'content_reward']);
+            $payload = ['user_id' => (int)$data['user_id'], 'amount' => (float)$data['amount'], 'currency' => 'irt', 'metadata' => ['type' => 'content_reward', 'content_id' => $contentId]];
+            $this->idempotencyService->executeWithTransaction(
+                'wallet.deposit',
+                (int)$data['user_id'],
+                $payload,
+                function () use ($payload) {
+                    return $this->walletService->deposit($payload['user_id'], (string)$payload['amount'], $payload['currency'], $payload['metadata']);
+                },
+                $idemKey
+            );
         }
 
         $this->referralService->processCommission($data['user_id'], $data['amount'], 'content_approval');

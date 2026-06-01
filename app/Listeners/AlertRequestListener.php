@@ -10,10 +10,14 @@ use App\Contracts\LoggerInterface;
 
 class AlertRequestListener
 {
+    private AlertDispatcher $dispatcher;
+    private LoggerInterface $logger;
     public function __construct(
-        private AlertDispatcher $dispatcher,
-        private LoggerInterface $logger
-    ) {}
+        AlertDispatcher $dispatcher,
+        LoggerInterface $logger
+    ) {        $this->dispatcher = $dispatcher;
+        $this->logger = $logger;
+}
 
     public function handle(AlertRequestedEvent $event): void
     {

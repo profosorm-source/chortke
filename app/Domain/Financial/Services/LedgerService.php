@@ -8,20 +8,27 @@ use App\Models\LedgerEntry;
 use Core\Database;
 use App\Contracts\LoggerInterface;
 
-class LedgerService 
+class LedgerService
 {
     private LedgerEntry $ledgerEntry;
-    protected ?Database $db;
+    protected Database $db;
+    private LoggerInterface $logger;
 
-    public function __construct(LedgerEntry $ledgerEntry)
+    public function __construct(LedgerEntry $ledgerEntry, Database $db, LoggerInterface $logger)
     {
-        parent::__construct();
-$this->ledgerEntry = $ledgerEntry;
-        }
+        $this->ledgerEntry = $ledgerEntry;
+        $this->db = $db;
+        $this->logger = $logger;
+    }
 
     public function recordEntry(array $data): ?object
     {
         return $this->ledgerEntry->create($data);
+    }
+
+    private function logError(string $operation, array $context = []): void
+    {
+        $this->logger->error($operation, $context);
     }
 
     public function recordDoubleEntry(
@@ -80,27 +87,48 @@ $this->ledgerEntry = $ledgerEntry;
 
     public function verifyTransactionBalance(string $transactionId): bool
     {
-        $stmt = $this->db->prepare("SELECT SUM(debit) as total_debit, SUM(credit) as total_credit FROM ledger_entries WHERE transaction_id = ?");
-        $stmt->execute([$transactionId]);
-        $row = $stmt->fetch(\PDO::FETCH_OBJ);
-        if (!$row) return true;
+        try {
+            $stmt = $this->db->prepare("SELECT SUM(debit) as total_debit, SUM(credit) as total_credit FROM ledger_entries WHERE transaction_id = ?");
+            $stmt->execute([$transactionId]);
+            $row = $stmt->fetch(\PDO::FETCH_OBJ);
+        } catch (\Throwable $e) {
+            $this->logError('ledger.verify_transaction_balance.failed', [
+                'transaction_id' => $transactionId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+
+        if ($row === false) {
+            $this->logError('ledger.verify_transaction_balance.no_rows', ['transaction_id' => $transactionId]);
+            return false;
+        }
 
         $debit = (string) ($row->total_debit ?? '0');
         $credit = (string) ($row->total_credit ?? '0');
 
-        return \Core\ValueObjects\Money::fromString((string)($debit))->getAmount() === \Core\ValueObjects\Money::fromString((string)($credit))->getAmount();
+        return \Core\ValueObjects\Money::fromString($debit)->getAmount() === \Core\ValueObjects\Money::fromString($credit)->getAmount();
     }
 
     public function isLedgerBalanced(): bool
     {
-        $stmt = $this->db->query("SELECT SUM(debit) as total_debit, SUM(credit) as total_credit FROM ledger_entries");
-        $row = $stmt->fetch(\PDO::FETCH_OBJ);
-        if (!$row) return true;
+        try {
+            $stmt = $this->db->query("SELECT SUM(debit) as total_debit, SUM(credit) as total_credit FROM ledger_entries");
+            $row = $stmt->fetch(\PDO::FETCH_OBJ);
+        } catch (\Throwable $e) {
+            $this->logError('ledger.is_ledger_balanced.failed', ['error' => $e->getMessage()]);
+            return false;
+        }
+
+        if ($row === false) {
+            $this->logError('ledger.is_ledger_balanced.no_rows');
+            return false;
+        }
 
         $debit = (string) ($row->total_debit ?? '0');
         $credit = (string) ($row->total_credit ?? '0');
 
-        return \Core\ValueObjects\Money::fromString((string)($debit))->getAmount() === \Core\ValueObjects\Money::fromString((string)($credit))->getAmount();
+        return \Core\ValueObjects\Money::fromString($debit)->getAmount() === \Core\ValueObjects\Money::fromString($credit)->getAmount();
     }
 
     public function getAccountBalance(string $account, string $currency = 'irt'): string

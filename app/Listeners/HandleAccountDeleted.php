@@ -24,12 +24,20 @@ class HandleAccountDeleted
     // آستانه موجودی‌ای که alert به ادمین ارسال می‌شود (تومان)
     private const BALANCE_ALERT_THRESHOLD = 1000.0;
 
+    private WalletServiceInterface $walletService;
+    private NotificationServiceInterface $notificationService;
+    private LoggerInterface $logger;
+    private Database $db;
     public function __construct(
-        private WalletServiceInterface $walletService,
-        private NotificationServiceInterface $notificationService,
-        private LoggerInterface $logger,
-        private Database $db
-    ) {}
+        WalletServiceInterface $walletService,
+        NotificationServiceInterface $notificationService,
+        LoggerInterface $logger,
+        Database $db
+    ) {        $this->walletService = $walletService;
+        $this->notificationService = $notificationService;
+        $this->logger = $logger;
+        $this->db = $db;
+}
 
     public function handle(AccountDeletedEvent $event): void
     {

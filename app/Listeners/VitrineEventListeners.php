@@ -16,13 +16,23 @@ use App\Services\Shared\ReferralService;
  */
 class VitrineEventListeners
 {
+    protected LoggerInterface $logger;
+    protected WalletServiceInterface $walletService;
+    protected NotificationService $notificationService;
+    protected WebSocketService $webSocket;
+    protected ReferralService $referralService;
     public function __construct(
-        protected LoggerInterface $logger,
-        protected WalletServiceInterface $walletService,
-        protected NotificationService $notificationService,
-        protected WebSocketService $webSocket,
-        protected ReferralService $referralService
-    ) {
+        LoggerInterface $logger,
+        WalletServiceInterface $walletService,
+        NotificationService $notificationService,
+        WebSocketService $webSocket,
+        ReferralService $referralService
+    ) {        $this->logger = $logger;
+        $this->walletService = $walletService;
+        $this->notificationService = $notificationService;
+        $this->webSocket = $webSocket;
+        $this->referralService = $referralService;
+
     }
 
     /**

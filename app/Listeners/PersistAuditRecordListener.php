@@ -10,10 +10,14 @@ use App\Contracts\LoggerInterface;
 
 class PersistAuditRecordListener
 {
+    private AuditTrailModel $model;
+    private LoggerInterface $logger;
     public function __construct(
-        private AuditTrailModel $model,
-        private LoggerInterface $logger
-    ) {}
+        AuditTrailModel $model,
+        LoggerInterface $logger
+    ) {        $this->model = $model;
+        $this->logger = $logger;
+}
 
     public function handle(AuditRecordedEvent $event): void
     {

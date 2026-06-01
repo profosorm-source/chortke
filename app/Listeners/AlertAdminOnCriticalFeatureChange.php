@@ -19,10 +19,14 @@ use App\Contracts\LoggerInterface;
  */
 class AlertAdminOnCriticalFeatureChange
 {
+    private NotificationServiceInterface $notificationService;
+    private LoggerInterface $logger;
     public function __construct(
-        private NotificationServiceInterface $notificationService,
-        private LoggerInterface $logger
-    ) {}
+        NotificationServiceInterface $notificationService,
+        LoggerInterface $logger
+    ) {        $this->notificationService = $notificationService;
+        $this->logger = $logger;
+}
 
     public function handle(CriticalFeatureChangedEvent $event): void
     {

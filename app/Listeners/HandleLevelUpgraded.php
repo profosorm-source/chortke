@@ -29,11 +29,17 @@ class HandleLevelUpgraded
         'diamond'  => ['badge_elite',   'النخبة'],
     ];
 
+    private NotificationServiceInterface $notificationService;
+    private LoggerInterface $logger;
+    private Database $db;
     public function __construct(
-        private NotificationServiceInterface $notificationService,
-        private LoggerInterface $logger,
-        private Database $db
-    ) {}
+        NotificationServiceInterface $notificationService,
+        LoggerInterface $logger,
+        Database $db
+    ) {        $this->notificationService = $notificationService;
+        $this->logger = $logger;
+        $this->db = $db;
+}
 
     public function handle(LevelUpgradedEvent $event): void
     {

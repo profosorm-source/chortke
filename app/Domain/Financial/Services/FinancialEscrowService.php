@@ -7,7 +7,11 @@ namespace App\Domain\Financial\Services;
 use App\Contracts\WalletServiceInterface;
 use App\Models\User;
 use App\Contracts\LoggerInterface;
+use App\Services\EscrowService;
+use App\Services\Settings\AppSettings;
+use App\Services\SagaOrchestrator;
 use Core\Database;
+use Core\IdempotencyKey;
 use Core\ValueObjects\Money;
 
 /**
@@ -16,44 +20,52 @@ use Core\ValueObjects\Money;
  * Uses EscrowService as foundation + module-specific business logic
  * Modules: SocialTask (advertiser→executor), Influencer (buyer→seller), Vitrine (buyer→seller)
  */
-class FinancialEscrowService 
+class FinancialEscrowService
 {
     private EscrowService $escrow;
-    private User         $userModel;
+    private User $userModel;
     private WalletServiceInterface $wallet;
-    protected ?Database $db;
+    protected Database $db;
+    private LoggerInterface $logger;
     private AppSettings $appSettings;
     private SagaOrchestrator $saga;
+    private ?IdempotencyKey $idempotencyKey;
 
-    public function __construct(EscrowService $escrow, User         $userModel, WalletServiceInterface $wallet, AppSettings $appSettings, SagaOrchestrator $saga) {
-        parent::__construct();
-$this->escrow = $escrow;
+    public function __construct(
+        EscrowService $escrow,
+        User $userModel,
+        WalletServiceInterface $wallet,
+        AppSettings $appSettings,
+        SagaOrchestrator $saga,
+        Database $db,
+        LoggerInterface $logger,
+        ?IdempotencyKey $idempotencyKey = null
+    ) {
+        $this->escrow = $escrow;
         $this->userModel = $userModel;
         $this->wallet = $wallet;
         $this->appSettings = $appSettings;
         $this->saga = $saga;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->idempotencyKey = $idempotencyKey;
     }
 
-    private function executeWithIdempotency(?string $key, int $userId, string $action, callable $logic): array
+    private function executeWithIdempotency(?string $key, int $userId, string $action, callable $logic, ?array $requestData = null): array
     {
         if ($key && $this->idempotencyKey) {
-            $check = $this->idempotencyKey->check($key, $userId, $action);
-            if ($check['is_duplicate']) {
-                return $check['result'];
-            }
+            // Delegate to core wrapper which handles check/complete/fail atomically and logs
+            return (array)$this->idempotencyKey->wrapInstance($key, $userId, $action, $logic, $requestData);
         }
 
-        $result = $logic();
-
-        if ($key && $this->idempotencyKey) {
-            if (!empty($result['ok'])) {
-                $this->idempotencyKey->complete($key, $result, $userId);
-            } else {
-                $this->idempotencyKey->fail($key, $result, $userId);
-            }
+        // Fallback when idempotency service isn't available
+        try {
+            $result = $logic();
+            return is_array($result) ? $result : ['ok' => (bool)$result];
+        } catch (\Throwable $e) {
+            $this->logger->error('financial_escrow.operation_failed', ['error' => $e->getMessage()]);
+            return ['ok' => false, 'error' => $e->getMessage()];
         }
-
-        return $result;
     }
 
     /**
@@ -67,6 +79,7 @@ $this->escrow = $escrow;
         string $reward,
         ?string $idempotencyKey = null
     ): array {
+        $payload = ['execution_id' => $executionId, 'executor_id' => $executorId, 'advertiser_id' => $advertiserId, 'amount' => $reward];
         return $this->executeWithIdempotency($idempotencyKey, $advertiserId, "hold_social_task_{$executionId}", function() use ($executionId, $executorId, $advertiserId, $reward) {
         try {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
@@ -146,7 +159,7 @@ $this->escrow = $escrow;
             $this->logger->error('social_task.escrow_hold.failed', ['error' => $e->getMessage()]);
             return ['ok' => false, 'error' => $e->getMessage()];
         }
-        });
+        }, $payload);
     }
 
     /**
@@ -155,6 +168,7 @@ $this->escrow = $escrow;
      */
     public function confirmSocialTaskEscrow(int $executionId, int $adviserId, ?string $idempotencyKey = null): array
     {
+        $payload = ['execution_id' => $executionId, 'adviser_id' => $adviserId];
         return $this->executeWithIdempotency($idempotencyKey, $adviserId, "confirm_social_task_{$executionId}", function() use ($executionId, $adviserId) {
         try {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
@@ -177,7 +191,7 @@ $this->escrow = $escrow;
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => $e->getMessage()];
         }
-        });
+        }, $payload);
     }
 
     /**
@@ -191,6 +205,7 @@ $this->escrow = $escrow;
         string $amount,
         ?string $idempotencyKey = null
     ): array {
+        $payload = ['execution_id' => $executionId, 'executor_id' => $executorId, 'advertiser_id' => $advertiserId, 'amount' => $amount];
         return $this->executeWithIdempotency($idempotencyKey, $executorId, "release_social_task_{$executionId}", function() use ($executionId, $executorId, $advertiserId, $amount) {
         try {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
@@ -263,7 +278,7 @@ $this->escrow = $escrow;
             $this->logger->error('social_task.escrow_release.failed', ['error' => $e->getMessage()]);
             return ['ok' => false, 'error' => $e->getMessage()];
         }
-        });
+        }, $payload);
     }
 
     /**
@@ -275,6 +290,7 @@ $this->escrow = $escrow;
         string $reason,
         ?string $idempotencyKey = null
     ): array {
+        $payload = ['execution_id' => $executionId, 'advertiser_id' => $advertiserId, 'reason' => $reason];
         return $this->executeWithIdempotency($idempotencyKey, $advertiserId, "refund_social_task_{$executionId}", function() use ($executionId, $advertiserId, $reason) {
         try {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
@@ -363,7 +379,7 @@ $this->escrow = $escrow;
             $this->logger->error('social_task.escrow_refund.failed', ['error' => $e->getMessage()]);
             return ['ok' => false, 'error' => $e->getMessage()];
         }
-        });
+        }, $payload);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -377,9 +393,11 @@ $this->escrow = $escrow;
         int    $orderId,
         int    $buyerId,
         int    $sellerId,
-        string $amount
+        string $amount,
+        ?string $idempotencyKey = null
     ): array {
-        try {
+        $payload = ['order_id' => $orderId, 'buyer_id' => $buyerId, 'seller_id' => $sellerId, 'amount' => $amount];
+        return $this->executeWithIdempotency($idempotencyKey, $buyerId, "hold_influencer_order_{$orderId}", function() use ($orderId, $buyerId, $sellerId, $amount) {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
 
             $result = $this->saga
@@ -447,10 +465,7 @@ $this->escrow = $escrow;
                 ->execute();
 
             return ['ok' => true, 'escrow_id' => $result];
-
-        } catch (\Throwable $e) {
-            return ['ok' => false, 'error' => $e->getMessage()];
-        }
+        }, $payload);
     }
 
     /**
@@ -458,6 +473,7 @@ $this->escrow = $escrow;
      */
     public function releaseInfluencerOrderFunds(int $orderId, int $sellerId, string $amount, ?string $idempotencyKey = null): array
     {
+        $payload = ['order_id' => $orderId, 'seller_id' => $sellerId, 'amount' => $amount];
         return $this->executeWithIdempotency($idempotencyKey, $sellerId, "release_influencer_order_{$orderId}", function() use ($orderId, $sellerId, $amount) {
             try {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
@@ -466,7 +482,11 @@ $this->escrow = $escrow;
                 ->addStep(
                     'verify_and_lock_escrow',
                     function () use ($orderId) {
-                        $escrow = $this->escrow->getByOrder($orderId, 'influencer_order');
+                        $escrow = $this->db->query(
+                            "SELECT * FROM escrow_transactions WHERE order_id = ? AND order_type = ? FOR UPDATE",
+                            [$orderId, 'influencer_order']
+                        )->fetch(\PDO::FETCH_OBJ);
+
                         if (!$escrow || $escrow->status !== 'in_escrow') {
                             throw new \Exception('Invalid escrow state');
                         }
@@ -514,7 +534,7 @@ $this->escrow = $escrow;
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => $e->getMessage()];
         }
-        });
+        }, $payload);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -528,9 +548,11 @@ $this->escrow = $escrow;
         int    $listingId,
         int    $buyerId,
         int    $sellerId,
-        string $amount
+        string $amount,
+        ?string $idempotencyKey = null
     ): array {
-        try {
+        $payload = ['listing_id' => $listingId, 'buyer_id' => $buyerId, 'seller_id' => $sellerId, 'amount' => $amount];
+        return $this->executeWithIdempotency($idempotencyKey, $buyerId, "hold_vitrine_{$listingId}", function() use ($listingId, $buyerId, $sellerId, $amount) {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
 
             $result = $this->saga
@@ -598,10 +620,7 @@ $this->escrow = $escrow;
                 ->execute();
 
             return ['ok' => true, 'escrow_id' => $result];
-
-        } catch (\Throwable $e) {
-            return ['ok' => false, 'error' => $e->getMessage()];
-        }
+        }, $payload);
     }
 
     /**
@@ -609,6 +628,7 @@ $this->escrow = $escrow;
      */
     public function releaseVitrineFunds(int $listingId, int $sellerId, string $amount, ?string $idempotencyKey = null): array
     {
+        $payload = ['listing_id' => $listingId, 'seller_id' => $sellerId, 'amount' => $amount];
         return $this->executeWithIdempotency($idempotencyKey, $sellerId, "release_vitrine_{$listingId}", function() use ($listingId, $sellerId, $amount) {
             try {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
@@ -617,7 +637,11 @@ $this->escrow = $escrow;
                 ->addStep(
                     'verify_and_lock_escrow',
                     function () use ($listingId) {
-                        $escrow = $this->escrow->getByOrder($listingId, 'vitrine_listing');
+                        $escrow = $this->db->query(
+                            "SELECT * FROM escrow_transactions WHERE order_id = ? AND order_type = ? FOR UPDATE",
+                            [$listingId, 'vitrine_listing']
+                        )->fetch(\PDO::FETCH_OBJ);
+
                         if (!$escrow || $escrow->status !== 'in_escrow') {
                             throw new \Exception('Invalid escrow state');
                         }
@@ -675,7 +699,7 @@ $this->escrow = $escrow;
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => $e->getMessage()];
         }
-        });
+        }, $payload);
     }
 
     /**
@@ -687,6 +711,7 @@ $this->escrow = $escrow;
         string $reason,
         ?string $idempotencyKey = null
     ): array {
+        $payload = ['listing_id' => $listingId, 'buyer_id' => $buyerId, 'reason' => $reason];
         return $this->executeWithIdempotency($idempotencyKey, $buyerId, "refund_vitrine_{$listingId}", function() use ($listingId, $buyerId, $reason) {
         try {
             // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
@@ -752,7 +777,7 @@ $this->escrow = $escrow;
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => $e->getMessage()];
         }
-        });
+        }, $payload);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -762,34 +787,37 @@ $this->escrow = $escrow;
     /**
      * Mark escrow as disputed (freezes funds)
      */
-    public function markEscrowDisputed(int $orderId, string $orderType, string $reason): array
+    public function markEscrowDisputed(int $orderId, string $orderType, string $reason, ?string $idempotencyKey = null): array
     {
-        try {
-            // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
+        $payload = ['order_id' => $orderId, 'order_type' => $orderType, 'reason' => $reason];
+        return $this->executeWithIdempotency($idempotencyKey, 0, "mark_disputed_{$orderType}_{$orderId}", function() use ($orderId, $orderType, $reason) {
+            try {
+                // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
 
-            $result = null;
+                $result = null;
 
-            $this->saga->addStep(
-                'mark_escrow_disputed',
-                function () use ($orderId, $orderType, $reason, &$result) {
-                    $escrow = $this->escrow->getByOrder($orderId, $orderType);
-                    if (!$escrow) {
-                        throw new \Exception('Escrow not found');
-                    }
+                $this->saga->addStep(
+                    'mark_escrow_disputed',
+                    function () use ($orderId, $orderType, $reason, &$result) {
+                        $escrow = $this->escrow->getByOrder($orderId, $orderType);
+                        if (!$escrow) {
+                            throw new \Exception('Escrow not found');
+                        }
 
-                    $result = $this->escrow->markAsDisputed((int)$escrow->id, $reason);
-                    if (!$result['ok']) {
-                        throw new \Exception($result['error'] ?? 'Mark disputed failed');
-                    }
-                    return true;
-                },
-                function () {}
-            )->execute();
+                        $result = $this->escrow->markAsDisputed((int)$escrow->id, $reason);
+                        if (!$result['ok']) {
+                            throw new \Exception($result['error'] ?? 'Mark disputed failed');
+                        }
+                        return true;
+                    },
+                    function () {}
+                )->execute();
 
-            return $result;
-        } catch (\Throwable $e) {
-            return ['ok' => false, 'error' => $e->getMessage()];
-        }
+                return $result;
+            } catch (\Throwable $e) {
+                return ['ok' => false, 'error' => $e->getMessage()];
+            }
+        }, $payload);
     }
 
     /**
@@ -799,78 +827,82 @@ $this->escrow = $escrow;
         int    $orderId,
         string $orderType,
         string $verdict,
-        float  $refundPercent
+        float  $refundPercent,
+        ?string $idempotencyKey = null
     ): array {
-        try {
-            // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
+        $payload = ['order_id' => $orderId, 'order_type' => $orderType, 'verdict' => $verdict, 'refund_percent' => $refundPercent];
+        return $this->executeWithIdempotency($idempotencyKey, 0, "resolve_disputed_{$orderType}_{$orderId}", function() use ($orderId, $orderType, $verdict, $refundPercent) {
+            try {
+                // [SAGA REFACTOR] Tractions (beginTransaction) removed to allow true distributed Sagas
 
-            $releaseAmount = null;
-            $refundAmount = null;
+                $releaseAmount = null;
+                $refundAmount = null;
 
-            $this->saga->addStep(
-                'verify_and_resolve_dispute',
-                function () use ($orderId, $orderType, $verdict, $refundPercent, &$releaseAmount, &$refundAmount) {
-                    $escrow = $this->escrow->getByOrder($orderId, $orderType);
-                    if (!$escrow || $escrow->status !== 'disputed') {
-                        throw new \Exception('Not in disputed state');
+                $this->saga->addStep(
+                    'verify_and_resolve_dispute',
+                    function () use ($orderId, $orderType, $verdict, $refundPercent, &$releaseAmount, &$refundAmount) {
+                        $escrow = $this->escrow->getByOrder($orderId, $orderType);
+                        if (!$escrow || $escrow->status !== 'disputed') {
+                            throw new \Exception('Not in disputed state');
+                        }
+
+                        $scale = strtolower((string)$escrow->currency) === 'usdt' ? 8 : 4;
+                        $percent = bcdiv((string)$refundPercent, '100', 8);
+                        $refundAmount = \Core\ValueObjects\Money::fromString((string)((string)$escrow->amount))->multiply((string)($percent))->getAmount();
+                        $releaseAmount = \Core\ValueObjects\Money::fromString((string)((string)$escrow->amount))->subtract(\Core\ValueObjects\Money::fromString((string)($refundAmount)))->getAmount();
+
+                        $result = $this->escrow->resolveDisputePartial(
+                            (int)$escrow->id,
+                            (int)$escrow->buyer_id,
+                            (int)$escrow->seller_id,
+                            $refundAmount,
+                            $releaseAmount,
+                            'admin_dispute_resolution',
+                            $verdict
+                        );
+
+                        if (!$result['ok']) {
+                            throw new \Exception($result['error'] ?? 'Dispute resolution failed');
+                        }
+                        return $escrow;
+                    },
+                    function ($error) use ($orderId, $orderType) {
+                        $this->logger->warning('saga_compensate: reverting dispute resolution', ['order_id' => $orderId, 'order_type' => $orderType]);
+                        $this->db->prepare("UPDATE escrow_transactions SET status = 'disputed', released_at = NULL, released_by = NULL WHERE order_id = ? AND order_type = ?")
+                                 ->execute([$orderId, $orderType]);
                     }
+                )->addStep(
+                    'deposit_resolved_funds',
+                    function ($escrow) use ($orderId, &$releaseAmount, &$refundAmount) {
+                        $scale = strtolower((string)$escrow->currency) === 'usdt' ? 8 : 4;
+                        $currency = $escrow->currency === 'USDT' ? 'usdt' : 'irt';
 
-                    $scale = strtolower((string)$escrow->currency) === 'usdt' ? 8 : 4;
-                    $percent = bcdiv((string)$refundPercent, '100', 8);
-                    $refundAmount = \Core\ValueObjects\Money::fromString((string)((string)$escrow->amount))->multiply((string)($percent))->getAmount();
-                    $releaseAmount = \Core\ValueObjects\Money::fromString((string)((string)$escrow->amount))->subtract(\Core\ValueObjects\Money::fromString((string)($refundAmount)))->getAmount();
+                        if (\Core\ValueObjects\Money::fromString((string)($refundAmount))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)('0')))) {
+                            $this->wallet->deposit($escrow->buyer_id, $refundAmount, $currency, [
+                                'type' => 'dispute_refund',
+                                'order_id' => $orderId
+                            ]);
+                        }
 
-                    $result = $this->escrow->resolveDisputePartial(
-                        (int)$escrow->id,
-                        (int)$escrow->buyer_id,
-                        (int)$escrow->seller_id,
-                        $refundAmount,
-                        $releaseAmount,
-                        'admin_dispute_resolution',
-                        $verdict
-                    );
-
-                    if (!$result['ok']) {
-                        throw new \Exception($result['error'] ?? 'Dispute resolution failed');
+                        if (\Core\ValueObjects\Money::fromString((string)($releaseAmount))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)('0')))) {
+                            $this->wallet->deposit($escrow->seller_id, $releaseAmount, $currency, [
+                                'type' => 'dispute_release',
+                                'order_id' => $orderId
+                            ]);
+                        }
+                        return true;
+                    },
+                    function (\Throwable $e) use ($orderId) {
+                        $this->logger->warning('saga_compensate: reverting dispute resolution deposits', ['order_id' => $orderId]);
                     }
-                    return $escrow;
-                },
-                function ($error) use ($orderId, $orderType) {
-                    $this->logger->warning('saga_compensate: reverting dispute resolution', ['order_id' => $orderId, 'order_type' => $orderType]);
-                    $this->db->prepare("UPDATE escrow_transactions SET status = 'disputed', released_at = NULL, released_by = NULL WHERE order_id = ? AND order_type = ?")
-                             ->execute([$orderId, $orderType]);
-                }
-            )->addStep(
-                'deposit_resolved_funds',
-                function ($escrow) use ($orderId, &$releaseAmount, &$refundAmount) {
-                    $scale = strtolower((string)$escrow->currency) === 'usdt' ? 8 : 4;
-                    $currency = $escrow->currency === 'USDT' ? 'usdt' : 'irt';
+                )->execute();
 
-                    if (\Core\ValueObjects\Money::fromString((string)($refundAmount))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)('0')))) {
-                        $this->wallet->deposit($escrow->buyer_id, $refundAmount, $currency, [
-                            'type' => 'dispute_refund',
-                            'order_id' => $orderId
-                        ]);
-                    }
+                return ['ok' => true, 'released' => $releaseAmount, 'refunded' => $refundAmount];
 
-                    if (\Core\ValueObjects\Money::fromString((string)($releaseAmount))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)('0')))) {
-                        $this->wallet->deposit($escrow->seller_id, $releaseAmount, $currency, [
-                            'type' => 'dispute_release',
-                            'order_id' => $orderId
-                        ]);
-                    }
-                    return true;
-                },
-                function (\Throwable $e) use ($orderId) {
-                    $this->logger->warning('saga_compensate: reverting dispute resolution deposits', ['order_id' => $orderId]);
-                }
-            )->execute();
-
-            return ['ok' => true, 'released' => $releaseAmount, 'refunded' => $refundAmount];
-
-        } catch (\Exception $e) {
-            return ['ok' => false, 'error' => $e->getMessage()];
-        }
+            } catch (\Exception $e) {
+                return ['ok' => false, 'error' => $e->getMessage()];
+            }
+        }, $payload);
     }
 
     /**

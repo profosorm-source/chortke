@@ -19,12 +19,20 @@ use App\Services\Cache\CacheInvalidationService;
  */
 class ScoreProjectionListener
 {
+    private Database $db;
+    private Cache $cache;
+    private EventDispatcher $eventDispatcher;
+    private CacheInvalidationService $cacheInvalidation;
     public function __construct(
-        private Database $db,
-        private Cache $cache,
-        private EventDispatcher $eventDispatcher,
-        private CacheInvalidationService $cacheInvalidation
-    ) {}
+        Database $db,
+        Cache $cache,
+        EventDispatcher $eventDispatcher,
+        CacheInvalidationService $cacheInvalidation
+    ) {        $this->db = $db;
+        $this->cache = $cache;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->cacheInvalidation = $cacheInvalidation;
+}
 
     public function handle(ScoreDeltaAppendedEvent $event): void
     {

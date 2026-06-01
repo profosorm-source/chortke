@@ -11,11 +11,17 @@ use App\Contracts\LoggerInterface;
 
 class LogUserRegisteredActivity
 {
+    private LoggerInterface $logger;
+    private UserService $userService;
+    private ?EmailService $emailService;
     public function __construct(
-        private LoggerInterface $logger,
-        private UserService $userService,
-        private ?EmailService $emailService = null
-    ) {}
+        LoggerInterface $logger,
+        UserService $userService,
+        ?EmailService $emailService = null
+    ) {        $this->logger = $logger;
+        $this->userService = $userService;
+        $this->emailService = $emailService;
+}
 
     public function handle(UserRegisteredEvent $event): void
     {

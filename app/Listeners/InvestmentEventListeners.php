@@ -6,6 +6,7 @@ namespace App\Listeners;
 
 use App\Contracts\LoggerInterface;
 use Core\Container;
+use App\Services\Shared\IdempotencyService;
 
 /**
  * InvestmentEventListeners - Centralized event handling for investment domain
@@ -19,11 +20,13 @@ class InvestmentEventListeners
 {
     private Container $container;
     private LoggerInterface $logger;
+    private IdempotencyService $idempotencyService;
 
-    public function __construct(Container $container, LoggerInterface $logger)
+    public function __construct(Container $container, LoggerInterface $logger, IdempotencyService $idempotencyService)
     {
         $this->container = $container;
         $this->logger = $logger;
+        $this->idempotencyService = $idempotencyService;
     }
 
     /**
@@ -162,6 +165,7 @@ class InvestmentEventListeners
                     'type' => 'investment_withdrawal',
                     'description' => 'برداشت سرمایه‌گذاری',
                     'investment_id' => $investmentId,
+                    'idempotency_key' => 'investment_withdrawal:' . $investmentId,
                 ],
             ];
 
@@ -176,15 +180,14 @@ class InvestmentEventListeners
                     return;
                 }
             } else {
-                $depositResult = $walletService->deposit(
+                $depositResult = $this->idempotencyService->executeWithTransaction(
+                    'wallet.deposit',
                     $userId,
-                    (string)$amount,
-                    'usdt',
-                    [
-                        'type' => 'investment_withdrawal',
-                        'description' => 'برداشت سرمایه‌گذاری',
-                        'investment_id' => $investmentId,
-                    ]
+                    $payload,
+                    function () use ($walletService, $userId, $amount, $payload) {
+                        return $walletService->deposit($userId, (string)$amount, 'usdt', $payload['metadata']);
+                    },
+                    $payload['metadata']['idempotency_key']
                 );
 
                 if (empty($depositResult['success'])) {

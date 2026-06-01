@@ -7,6 +7,7 @@ namespace App\Listeners;
 use App\Contracts\LoggerInterface;
 use App\Contracts\WalletServiceInterface;
 use App\Services\OutboxService;
+use App\Services\Shared\IdempotencyService;
 use Core\EventDispatcher;
 
 class WalletDepositRequestListener
@@ -15,17 +16,20 @@ class WalletDepositRequestListener
     private LoggerInterface $logger;
     private OutboxService $outbox;
     private EventDispatcher $dispatcher;
+    private IdempotencyService $idempotencyService;
 
     public function __construct(
         WalletServiceInterface $walletService,
         LoggerInterface $logger,
         OutboxService $outbox,
-        EventDispatcher $dispatcher
+        EventDispatcher $dispatcher,
+        IdempotencyService $idempotencyService
     ) {
         $this->walletService = $walletService;
         $this->logger = $logger;
         $this->outbox = $outbox;
         $this->dispatcher = $dispatcher;
+        $this->idempotencyService = $idempotencyService;
     }
 
     public function handle($event): void
@@ -53,7 +57,22 @@ class WalletDepositRequestListener
         }
 
         try {
-            $depositResult = $this->walletService->deposit($userId, $amount, $currency, $metadata);
+            $depositPayload = [
+                'user_id' => $userId,
+                'amount' => $amount,
+                'currency' => $currency,
+                'metadata' => $metadata,
+            ];
+
+            $depositResult = $this->idempotencyService->executeWithTransaction(
+                'wallet.deposit',
+                $userId,
+                $depositPayload,
+                function () use ($userId, $amount, $currency, $metadata) {
+                    return $this->walletService->deposit($userId, $amount, $currency, $metadata);
+                },
+                $metadata['idempotency_key'] ?? null
+            );
             if (empty($depositResult['success'])) {
                 $this->logger->warning('wallet.deposit.async.failed', [
                     'user_id' => $userId,

@@ -27,12 +27,20 @@ class HandleRateLimitExceeded
     private const FLAG_THRESHOLD = 5;
     private const FLAG_WINDOW_SECONDS = 3600;
 
+    private NotificationServiceInterface $notificationService;
+    private LoggerInterface $logger;
+    private Cache $cache;
+    private Database $db;
     public function __construct(
-        private NotificationServiceInterface $notificationService,
-        private LoggerInterface $logger,
-        private Cache $cache,
-        private Database $db
-    ) {}
+        NotificationServiceInterface $notificationService,
+        LoggerInterface $logger,
+        Cache $cache,
+        Database $db
+    ) {        $this->notificationService = $notificationService;
+        $this->logger = $logger;
+        $this->cache = $cache;
+        $this->db = $db;
+}
 
     public function handle(RateLimitExceededEvent $event): void
     {

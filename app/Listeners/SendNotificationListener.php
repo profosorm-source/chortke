@@ -10,10 +10,14 @@ use App\Contracts\LoggerInterface;
 
 class SendNotificationListener
 {
+    private OutboxService $outboxService;
+    private LoggerInterface $logger;
     public function __construct(
-        private OutboxService $outboxService,
-        private LoggerInterface $logger
-    ) {}
+        OutboxService $outboxService,
+        LoggerInterface $logger
+    ) {        $this->outboxService = $outboxService;
+        $this->logger = $logger;
+}
 
     public function handle(NotificationRequestedEvent $event): void
     {

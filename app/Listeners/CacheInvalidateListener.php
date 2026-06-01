@@ -10,10 +10,14 @@ use App\Contracts\LoggerInterface;
 
 class CacheInvalidateListener
 {
+    private Cache $cache;
+    private LoggerInterface $logger;
     public function __construct(
-        private Cache $cache,
-        private LoggerInterface $logger
-    ) {
+        Cache $cache,
+        LoggerInterface $logger
+    ) {        $this->cache = $cache;
+        $this->logger = $logger;
+
     }
 
     public function handle($event)

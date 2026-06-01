@@ -6,6 +6,7 @@ namespace App\Listeners;
 
 use App\Events\EscrowReleasedEvent;
 use App\Contracts\WalletServiceInterface;
+use App\Services\Shared\IdempotencyService;
 use App\Services\Notification\NotificationService;
 use App\Services\AuditTrail;
 use App\Contracts\LoggerInterface;
@@ -24,11 +25,13 @@ class EscrowListener
 {
     private Container $container;
     private LoggerInterface $logger;
+    private IdempotencyService $idempotencyService;
 
-    public function __construct(Container $container, LoggerInterface $logger)
+    public function __construct(Container $container, LoggerInterface $logger, IdempotencyService $idempotencyService)
     {
         $this->container = $container;
         $this->logger = $logger;
+        $this->idempotencyService = $idempotencyService;
     }
 
     /**
@@ -53,13 +56,15 @@ class EscrowListener
             }
 
             // Credit wallet (prefer async Outbox)
-            $walletService = $this->container->make(WalletService::class);
+            $walletService = $this->container->make(WalletServiceInterface::class);
             $outbox = null;
             try {
                 $outbox = $this->container->make(\App\Services\OutboxService::class);
             } catch (\Throwable $e) {
                 // no outbox available
             }
+
+            $idemKey = 'escrow_rel:' . $escrowId;
 
             if ($outbox) {
                 $payload = [
@@ -69,7 +74,7 @@ class EscrowListener
                     'metadata' => [
                         'type' => 'escrow_release',
                         'escrow_id' => $escrowId,
-                        'idempotency_key' => "escrow_rel_{$escrowId}"
+                        'idempotency_key' => $idemKey,
                     ],
                 ];
                 $ok = $outbox->record('escrow', $escrowId, 'wallet.deposit.requested', $payload);
@@ -77,21 +82,39 @@ class EscrowListener
                     $this->logger->error('escrow.outbox_record_failed', ['escrow_id' => $escrowId]);
                     return;
                 }
+                $result = ['transaction_id' => null];
             } else {
-                $result = $walletService->deposit($recipientId, $amount, $currency, [
-                    'type' => 'escrow_release',
-                    'escrow_id' => $escrowId,
-                    'idempotency_key' => "escrow_rel_$escrowId"
-                ]);
+                $payload = [
+                    'user_id' => (int)$recipientId,
+                    'amount' => (string)$amount,
+                    'currency' => $currency,
+                    'metadata' => [
+                        'type' => 'escrow_release',
+                        'escrow_id' => $escrowId,
+                    ],
+                ];
 
-                if (!$result || !$result['success']) {
+                $depositResult = $this->idempotencyService->executeWithTransaction(
+                    'wallet.deposit',
+                    (int)$recipientId,
+                    $payload,
+                    function () use ($walletService, $recipientId, $amount, $currency, $payload) {
+                        return $walletService->deposit($recipientId, $amount, $currency, $payload['metadata']);
+                    },
+                    $idemKey
+                );
+
+                if (empty($depositResult['success'])) {
                     $this->logger->error('Failed to deposit escrow release to wallet', [
                         'escrow_id' => $escrowId,
                         'recipient_id' => $recipientId,
-                        'amount' => $amount
+                        'amount' => $amount,
+                        'result' => $depositResult,
                     ]);
                     return;
                 }
+
+                $result = $depositResult;
             }
 
             // Log to audit trail
