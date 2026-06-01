@@ -17,8 +17,9 @@ class AccountTakeoverService
     private BrowserFingerprintService $fingerprintService;
     private Session $session;
     private GeoIPService $geoIPService;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         VelocityAndScoreModel $model,
         SessionAnomalyService $sessionAnomaly,
         IPQualityService $ipQuality,
@@ -26,7 +27,8 @@ class AccountTakeoverService
         BrowserFingerprintService $fingerprintService,
         Session $session,
         GeoIPService $geoIPService
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->model = $model;
         $this->sessionAnomaly = $sessionAnomaly;
         $this->ipQuality = $ipQuality;

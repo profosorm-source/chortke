@@ -9,7 +9,12 @@ use App\Adapters\Notification\FcmNotificationAdapter;
 
 class FcmChannel implements NotificationChannelInterface
 {
-    public function __construct(private FcmNotificationAdapter $fcmAdapter) {}
+    private FcmNotificationAdapter $fcmAdapter;
+
+    public function __construct(FcmNotificationAdapter $fcmAdapter)
+    {
+        $this->fcmAdapter = $fcmAdapter;
+    }
 
     public function getName(): string
     {

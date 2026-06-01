@@ -7,37 +7,57 @@ namespace App\Services\Lottery;
 
 use App\Contracts\LoggerInterface;
 use App\Contracts\WalletServiceInterface;
-use App\Contracts\NotificationServiceInterface;
-use App\Services\FeatureFlagService;
-
-
-
-
-
+use App\Events\ScoreUpdatedEvent;
 use Core\Database;
 use Core\Cache;
-use App\Services\Cache\CacheInvalidationService;
+use Core\EventDispatcher;
 
 class LotteryService
 {
     private WalletServiceInterface $walletService;
     private \App\Services\Shared\IdempotencyService $idempotencyService;
     private ?\App\Contracts\OutboxServiceInterface $outboxService = null;
-    
-    
-    
-    
-    
-    
-    
-    private FeatureFlagService $featureFlagService;
-    
-    
-
+    private LoggerInterface $logger;
+    private Cache $cache;
+    private EventDispatcher $eventDispatcher;
     private const MATCH_TYPES = ['value', 'position', 'value_position', 'signal'];
     private const MAX_CODE_GENERATION_ATTEMPTS = 100;
     private const MAX_DAILY_VOTES_PER_USER = 1;
     private int $cacheTTL = 300;
+    private \Core\Database $db;
+    private \App\Models\LotteryRound $roundModel;
+    private \App\Models\LotteryParticipation $participationModel;
+    private \App\Models\LotteryDailyNumber $dailyModel;
+    private \App\Models\LotteryVote $voteModel;
+    private \App\Models\LotteryChanceLog $chanceLogModel;
+
+    public function __construct(
+        \Core\Database $db,
+        \App\Models\LotteryRound $roundModel,
+        \App\Models\LotteryParticipation $participationModel,
+        \App\Models\LotteryDailyNumber $dailyModel,
+        \App\Models\LotteryVote $voteModel,
+        \App\Models\LotteryChanceLog $chanceLogModel,
+        LoggerInterface $logger,
+        Cache $cache,
+        EventDispatcher $eventDispatcher,
+        WalletServiceInterface $walletService,
+        \App\Services\Shared\IdempotencyService $idempotencyService,
+        ?\App\Contracts\OutboxServiceInterface $outboxService = null
+    ) {
+        $this->db = $db;
+        $this->roundModel = $roundModel;
+        $this->participationModel = $participationModel;
+        $this->dailyModel = $dailyModel;
+        $this->voteModel = $voteModel;
+        $this->chanceLogModel = $chanceLogModel;
+        $this->logger = $logger;
+        $this->cache = $cache;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->walletService = $walletService;
+        $this->idempotencyService = $idempotencyService;
+        $this->outboxService = $outboxService;
+    }
 
     
 
@@ -120,11 +140,14 @@ class LotteryService
             $scoreAfter = LotteryParticipation::MIN_CHANCE;
         }
 
-        $this->repository->updateParticipation($participation->id, ['chance_score' => $scoreAfter]);
-        
-        if ($this->scoreService) {
-            $this->scoreService->applyDelta('user', $participation->user_id, 'lottery_chance', $scoreAfter - $scoreBefore, 'lottery_no_vote_decay');
-        }
+        $this->participationModel->update($participation->id, ['chance_score' => $scoreAfter]);
+
+        $this->eventDispatcher->dispatchAsync(ScoreUpdatedEvent::class, new ScoreUpdatedEvent(
+            $participation->user_id,
+            $scoreBefore,
+            $scoreAfter,
+            'lottery_no_vote_decay'
+        ));
 
         $this->chanceLogModel->create([
             'participation_id' => $participation->id,
@@ -142,7 +165,8 @@ class LotteryService
     {
         try {
             $this->db->beginTransaction();
-            $saga = $this->context->getContainer()->make(\App\Services\SagaOrchestrator::class);
+            // ✅ Use app() helper instead of service locator injection
+            $saga = app(\App\Services\SagaOrchestrator::class);
 
             $winner = null;
             $finalSeed = null;
@@ -167,18 +191,18 @@ class LotteryService
                         throw new \Exception('برنده قبلاً انتخاب شده.');
                     }
 
-                    $participants = $this->repository->getAllActiveParticipationsByRound($roundId);
+                    $participants = $this->participationModel->getAllActiveByRound($roundId);
 
                     if (empty($participants)) {
                         throw new \Exception('شرکت‌کننده‌ای وجود ندارد.');
                     }
 
-                    $totalScore = $this->repository->getTotalChanceScore($roundId);
+                    $totalScore = $this->participationModel->getTotalChanceScore($roundId);
 
                     // L-3: If all scores have decayed to near-zero, reset everyone to DEFAULT_CHANCE
                     if ($totalScore < 1.0) {
                         foreach ($participants as $p) {
-                            $this->repository->updateParticipation($p->id, [
+                            $this->participationModel->update($p->id, [
                                 'chance_score' => LotteryParticipation::DEFAULT_CHANCE
                             ]);
                         }
@@ -220,7 +244,7 @@ class LotteryService
                     $finalSeed = hash('sha256', $finalSeedData);
 
                     // L-4 Fix: Update round status FIRST (within the lock), THEN pay.
-                    $this->repository->updateRound($roundId, [
+                    $this->roundModel->update($roundId, [
                         'status' => \App\Models\LotteryRound::STATUS_COMPLETED,
                         'winner_user_id' => $winner->user_id,
                         'winner_chance_score' => $winner->chance_score,
@@ -228,11 +252,11 @@ class LotteryService
                     ]);
 
                     // Mark participants inside the transaction (still within the lock)
-                    $this->repository->updateParticipation($winner->id, ['status' => 'winner']);
+                    $this->participationModel->update($winner->id, ['status' => 'winner']);
 
                     foreach ($participants as $p) {
                         if ($p->id !== $winner->id) {
-                            $this->repository->updateParticipation($p->id, ['status' => 'completed']);
+                            $this->participationModel->update($p->id, ['status' => 'completed']);
                         }
                     }
 
@@ -261,9 +285,6 @@ class LotteryService
                                 throw new \Exception('خطا در ثبت رکورد خروجی پرداخت جایزه.');
                             }
                         } else {
-                            if ($this->walletLockManager) {
-                                $this->walletLockManager->lockWallet((int)$winner->user_id);
-                            }
                             $depositResult = $this->walletService->deposit(
                                 $winner->user_id,
                                 (float)$round->prize_amount,
@@ -274,6 +295,8 @@ class LotteryService
                             if (!$depositResult['success']) {
                                 throw new \Exception('خطا در واریز جایزه: ' . ($depositResult['message'] ?? ''));
                             }
+
+                            $this->eventDispatcher->dispatchAsync('wallet.updated', ['user_id' => $winner->user_id]);
                         }
                     }
                     return true;
@@ -316,7 +339,7 @@ class LotteryService
 
     public function cancelRound(int $roundId, int $adminId, string $reason = ''): array
     {
-        $round = $this->repository->findRound($roundId);
+        $round = $this->roundModel->find($roundId);
         
         if (!$round) {
             return ['success' => false, 'message' => 'دوره یافت نشد.'];
@@ -328,13 +351,13 @@ class LotteryService
 
         try {
             $this->db->beginTransaction();
-            $saga = $this->context->getContainer()->make(\App\Services\SagaOrchestrator::class);
+            $saga = app(\App\Services\SagaOrchestrator::class);
             $participants = [];
 
             $saga->addStep(
                 'load_participants_and_refund',
                 function () use ($roundId, $round, &$participants) {
-                    $participants = $this->repository->getAllActiveParticipationsByRound($roundId);
+                    $participants = $this->participationModel->getAllActiveByRound($roundId);
                     
                     foreach ($participants as $p) {
                         // 🛡️ H10 Fix: Use participation->price_paid instead of round->entry_fee
@@ -366,13 +389,15 @@ class LotteryService
                                 if (empty($res['success'])) {
                                     throw new \Exception('خطا در بازگشت وجه به کیف پول');
                                 }
+
+                                $this->eventDispatcher->dispatchAsync('wallet.updated', ['user_id' => $p->user_id]);
                             }
                         }
 
-                        $this->repository->updateParticipation($p->id, ['status' => 'cancelled']);
+                        $this->participationModel->update($p->id, ['status' => 'cancelled']);
                     }
 
-                    $this->repository->updateRound($roundId, ['status' => LotteryRound::STATUS_CANCELLED]);
+                    $this->roundModel->update($roundId, ['status' => LotteryRound::STATUS_CANCELLED]);
                     return true;
                 },
                 function (\Throwable $e) use ($roundId) {
@@ -383,11 +408,6 @@ class LotteryService
             $saga->execute();
             $this->db->commit();
 
-            foreach ($participants as $p) {
-                if ($p && isset($p->user_id)) {
-                    $this->cacheInvalidation->invalidateWallet((int)$p->user_id);
-                }
-            }
             $this->clearCache('active_round');
 
             $this->logger->info('lottery_cancelled', ['message' => "Round {$roundId} by admin {$adminId}"]);
@@ -410,16 +430,16 @@ class LotteryService
             return $cached;
         }
 
-        $round = $this->repository->findRound($roundId);
+        $round = $this->roundModel->find($roundId);
         
         if (!$round) {
             return ['success' => false, 'message' => 'دوره یافت نشد.'];
         }
 
-        $participants = $this->repository->getAllActiveParticipationsByRound($roundId);
-        $totalScore = $this->repository->getTotalChanceScore($roundId);
-        $distribution = $this->repository->getChanceDistribution($roundId);
-        $dailyNumbers = $this->repository->getDailyNumbersByRound($roundId);
+        $participants = $this->participationModel->getAllActiveByRound($roundId);
+        $totalScore = $this->participationModel->getTotalChanceScore($roundId);
+        $distribution = $this->participationModel->getChanceDistribution($roundId);
+        $dailyNumbers = $this->dailyModel->getByRound($roundId);
 
         $stats = [
             'success' => true,

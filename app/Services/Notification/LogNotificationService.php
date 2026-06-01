@@ -9,9 +9,11 @@ use App\Contracts\LoggerInterface;
 
 class LogNotificationService
 {
+    private LogNotificationAdapter $adapter;
     public function __construct(
-        private LogNotificationAdapter $adapter
-    ) {
+        LogNotificationAdapter $adapter
+    ) {        $this->adapter = $adapter;
+
             }
 
     public function sendAlert(string $title, string $message, string $severity = 'medium'): void

@@ -26,11 +26,17 @@ class NotificationRetryPolicy
         'log' => ['attempts' => 1, 'sleep_ms' => 0, 'circuit_failures' => 1000, 'circuit_seconds' => 1],
     ];
 
+    private Cache $cache;
+    private LoggerInterface $logger;
+    private ?CircuitBreaker $circuit;
     public function __construct(
-        private Cache $cache,
-        private LoggerInterface $logger,
-        private ?CircuitBreaker $circuit = null
-    ) {}
+        Cache $cache,
+        LoggerInterface $logger,
+        ?CircuitBreaker $circuit = null
+    ) {        $this->cache = $cache;
+        $this->logger = $logger;
+        $this->circuit = $circuit;
+}
 
     public function execute(string $channel, callable $operation): bool
     {

@@ -10,7 +10,7 @@ use App\Services\AuthService;
 use Core\Database;
 use Core\SessionKeys;
 
-class OAuthService extends \App\Services\BaseService
+class OAuthService
 {
     private string $googleClientId;
     private string $googleClientSecret;
@@ -19,15 +19,29 @@ class OAuthService extends \App\Services\BaseService
     private string $facebookClientSecret;
     private string $facebookRedirectUri;
 
+    private Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private SecurityModel $model;
+    private User $userModel;
+    private AuthService $authService;
+    private \Core\Session $session;
+    private array $oAuthConfig;
     public function __construct(
-        private Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private SecurityModel $model,
-        private User $userModel,
-        private AuthService $authService,
-        private \Core\Session $session,
-        private array $oAuthConfig = []
-    ) {
+        Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        SecurityModel $model,
+        User $userModel,
+        AuthService $authService,
+        \Core\Session $session,
+        array $oAuthConfig = []
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+        $this->model = $model;
+        $this->userModel = $userModel;
+        $this->authService = $authService;
+        $this->session = $session;
+        $this->oAuthConfig = $oAuthConfig;
+
         $this->googleClientId = (string)($this->oAuthConfig['google_client_id'] ?? '');
         $this->googleClientSecret = (string)($this->oAuthConfig['google_client_secret'] ?? '');
         $this->googleRedirectUri = (string)($this->oAuthConfig['google_redirect_uri'] ?? '');
@@ -126,7 +140,7 @@ class OAuthService extends \App\Services\BaseService
         ]);
 
         return "https://www.facebook.com/v18.0/dialog/oauth?" . http_build_query([
-            'client_id'    => $this->facebookAppId,
+            'client_id'    => $this->facebookClientId,
             'redirect_uri' => $redirectUri,
             'scope'        => 'email,public_profile',
             'state'        => $state,
@@ -154,6 +168,31 @@ class OAuthService extends \App\Services\BaseService
         }
         
         throw new \InvalidArgumentException("Unsupported provider: {$provider}");
+    }
+
+    private function clientIp(): string
+    {
+        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+    }
+
+    private function userAgent(): string
+    {
+        return $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+    }
+
+    private function buildRedirectUri(string $path): string
+    {
+        if ($path === '/auth/callback/google' && $this->googleRedirectUri !== '') {
+            return $this->googleRedirectUri;
+        }
+
+        if ($path === '/auth/callback/facebook' && $this->facebookRedirectUri !== '') {
+            return $this->facebookRedirectUri;
+        }
+
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        return sprintf('%s://%s%s', $scheme, $host, $path);
     }
 
 

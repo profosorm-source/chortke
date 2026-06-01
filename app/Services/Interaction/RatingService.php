@@ -15,12 +15,20 @@ use Core\Database;
  */
 class RatingService
 {
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\RateLimiter $rateLimiter;
     public function __construct(
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\RateLimiter $rateLimiter
-    ) {
+        \Core\TransactionWrapper $transactionWrapper,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        \Core\RateLimiter $rateLimiter
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->rateLimiter = $rateLimiter;
+
         
     }
 

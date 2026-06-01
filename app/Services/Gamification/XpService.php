@@ -20,15 +20,29 @@ use Core\Cache;
  */
 class XpService
 {
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private Score $scoreModel;
+    private UserVacation $vacationModel;
+    private DailySynergyStrategy $synergyStrategy;
+    private InactivityDecayStrategy $decayStrategy;
     public function __construct(
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private Score $scoreModel,
-        private UserVacation $vacationModel,
-        private DailySynergyStrategy $synergyStrategy,
-        private InactivityDecayStrategy $decayStrategy
-    ) {
+        \Core\Cache $cache,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        Score $scoreModel,
+        UserVacation $vacationModel,
+        DailySynergyStrategy $synergyStrategy,
+        InactivityDecayStrategy $decayStrategy
+    ) {        $this->cache = $cache;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->scoreModel = $scoreModel;
+        $this->vacationModel = $vacationModel;
+        $this->synergyStrategy = $synergyStrategy;
+        $this->decayStrategy = $decayStrategy;
+
         
     }
 

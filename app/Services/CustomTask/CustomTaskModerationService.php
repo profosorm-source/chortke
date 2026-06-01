@@ -4,17 +4,11 @@ declare(strict_types=1);
 
 namespace App\Services\CustomTask;
 
-use App\Services\BaseService;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
 use App\Models\User;
-use App\Contracts\WalletServiceInterface;
-use App\Services\Shared\ReferralService;
-use App\Services\Notification\NotificationService;
 use App\Services\Settings\AppSettings;
-
 use Core\Database;
-use Core\Logger;
 use Core\EventDispatcher;
 use App\Exceptions\BusinessException;
 use App\Validators\Requests\RateCustomTaskRequest;
@@ -29,29 +23,28 @@ class CustomTaskModerationService
 
     private Ads $taskModel;
     private CustomTaskSubmissionModel $submissionModel;
-    private \App\Services\Interaction\RatingService $ratingService;
-    private User $userModel;
-    private WalletServiceInterface $walletService;
-    private ReferralService $referralService;
     private AppSettings $appSettings;
     private StateMachineService $stateMachine;
+    private ?\App\Services\OutboxService $outbox;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         Ads $taskModel,
-        CustomTaskSubmissionModel $submissionModel,        AppSettings $appSettings,
+        CustomTaskSubmissionModel $submissionModel,
+        AppSettings $appSettings,
         ?StateMachineService $stateMachine = null,
         ?\App\Services\OutboxService $outbox = null
-    ) {
-        
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+
         $this->taskModel = $taskModel;
         $this->submissionModel = $submissionModel;
-        $this->ratingService = $ratingService;
-        $this->userModel = $userModel;
-        $this->walletService = $walletService;
-        $this->referralService = $referralService;
         $this->appSettings = $appSettings;
         $this->outbox = $outbox;
         $this->stateMachine = $stateMachine ?? new StateMachineService($this->logger, $this->db);

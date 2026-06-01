@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\CustomTask;
 
-use App\Services\BaseService;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
 use App\Contracts\WalletServiceInterface;
@@ -23,31 +22,41 @@ class CustomTaskService
 
     private Ads $taskModel;
     private CustomTaskSubmissionModel $submissionModel;
-    private WalletServiceInterface $walletService;
-    private AppSettings $appSettings;
-    private \Core\RateLimiter $rateLimiter;
     private \App\Models\CustomTaskAnalyticsModel $analyticsModel;
     private \App\Contracts\SearchServiceInterface $searchOrchestrator;
     private \App\Services\EscrowService $escrowService;
     private \App\Services\Interaction\RatingService $ratingService;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private LoggerInterface $logger;
+    private WalletServiceInterface $walletService;
+    private AppSettings $appSettings;
+    private \Core\RateLimiter $rateLimiter;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,        AppSettings $appSettings,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        LoggerInterface $logger,
+        WalletServiceInterface $walletService,
+        AppSettings $appSettings,
         Ads $taskModel,
-        CustomTaskSubmissionModel $submissionModel,        \App\Models\CustomTaskAnalyticsModel $analyticsModel,
-        \App\Contracts\SearchServiceInterface $searchOrchestrator,        ?\App\Services\Interaction\RatingService $ratingService = null
-    ) {
-        
+        CustomTaskSubmissionModel $submissionModel,
+        \App\Models\CustomTaskAnalyticsModel $analyticsModel,
+        \App\Contracts\SearchServiceInterface $searchOrchestrator,
+        \Core\RateLimiter $rateLimiter,
+        \App\Services\EscrowService $escrowService,
+        ?\App\Services\Interaction\RatingService $ratingService = null
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
         $this->walletService = $walletService;
         $this->appSettings = $appSettings;
+        $this->rateLimiter = $rateLimiter;
+
         $this->taskModel = $taskModel;
         $this->submissionModel = $submissionModel;
-        $this->rateLimiter = $rateLimiter;
         $this->analyticsModel = $analyticsModel;
         $this->searchOrchestrator = $searchOrchestrator;
-        
         $this->escrowService = $escrowService;
         $this->ratingService = $ratingService;
     }

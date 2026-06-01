@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services\AntiFraud\Strategies;
 
 use App\Contracts\AntiFraud\FraudCheckStrategyInterface;
-use App\Services\BaseService;
 use App\Contracts\LoggerInterface;
 use App\Services\AntiFraud\VelocityCheckService;
 use App\Services\AntiFraud\RateLimitingService;
@@ -16,15 +15,29 @@ use App\Services\FeatureFlagService;
 
 final class TransactionFraudStrategy implements FraudCheckStrategyInterface
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private VelocityCheckService $velocity;
+    private RateLimitingService $rateLimiting;
+    private GeolocationIntelligenceService $geoIntel;
+    private AccountTakeoverService $ato;
+    private DeviceIntelligenceService $deviceIntel;
+    private FeatureFlagService $featureFlag;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private VelocityCheckService $velocity,
-        private RateLimitingService $rateLimiting,
-        private GeolocationIntelligenceService $geoIntel,
-        private AccountTakeoverService $ato,
-        private DeviceIntelligenceService $deviceIntel,
-        private FeatureFlagService $featureFlag
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        VelocityCheckService $velocity,
+        RateLimitingService $rateLimiting,
+        GeolocationIntelligenceService $geoIntel,
+        AccountTakeoverService $ato,
+        DeviceIntelligenceService $deviceIntel,
+        FeatureFlagService $featureFlag
+    ) {        $this->logger = $logger;
+        $this->velocity = $velocity;
+        $this->rateLimiting = $rateLimiting;
+        $this->geoIntel = $geoIntel;
+        $this->ato = $ato;
+        $this->deviceIntel = $deviceIntel;
+        $this->featureFlag = $featureFlag;
+
             }
 
     /**
@@ -81,5 +94,15 @@ final class TransactionFraudStrategy implements FraudCheckStrategyInterface
             $this->logger->error("anti_fraud.ff_circuit_breaker.failed", ['error' => $e->getMessage()]);
             return false;
         }
+    }
+
+    private function clientIp(): string
+    {
+        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+    }
+
+    private function userAgent(): string
+    {
+        return $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
     }
 }

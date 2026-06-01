@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services\Score;
 
 use App\Models\Score as ScoreModel;
-use App\Services\BaseService;
 use Core\EventDispatcher;
 use App\Enums\ScoreDomain;
 use App\Events\ScoreDeltaAppendedEvent;
@@ -20,16 +19,32 @@ use App\Services\AntiFraud\FraudDetectionService;
  */
 class ScoreCommandService
 {
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Cache $cache;
+    private \App\Contracts\LoggerInterface $logger;
+    private ScoreModel $scoreModel;
+    private \Core\RateLimiter $rateLimiter;
+    private ?FraudDetectionService $fraudService;
+    private ?\Core\TransactionWrapper $transactionWrapper;
+    private ?\App\Services\OutboxService $outbox;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Cache $cache,
-        private \App\Contracts\LoggerInterface $logger,
-        private ScoreModel $scoreModel,
-        private \Core\RateLimiter $rateLimiter,
-        private ?FraudDetectionService $fraudService = null,
-        private ?\Core\TransactionWrapper $transactionWrapper = null,
-        private ?\App\Services\OutboxService $outbox = null
-    ) {
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Cache $cache,
+        \App\Contracts\LoggerInterface $logger,
+        ScoreModel $scoreModel,
+        \Core\RateLimiter $rateLimiter,
+        ?FraudDetectionService $fraudService = null,
+        ?\Core\TransactionWrapper $transactionWrapper = null,
+        ?\App\Services\OutboxService $outbox = null
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->cache = $cache;
+        $this->logger = $logger;
+        $this->scoreModel = $scoreModel;
+        $this->rateLimiter = $rateLimiter;
+        $this->fraudService = $fraudService;
+        $this->transactionWrapper = $transactionWrapper;
+        $this->outbox = $outbox;
+
             }
 
     /**

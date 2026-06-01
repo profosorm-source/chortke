@@ -16,13 +16,15 @@ class SeoFraudDetector
     private SessionAnomalyService $anomalyService;
     private SeoExecution $executionModel;
     private IpAndDeviceModel $model;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         BrowserFingerprintService $fingerprintService,
         SessionAnomalyService $anomalyService,
         SeoExecution $executionModel,
         IpAndDeviceModel $model
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->fingerprintService = $fingerprintService;
         $this->anomalyService = $anomalyService;
         $this->executionModel = $executionModel;

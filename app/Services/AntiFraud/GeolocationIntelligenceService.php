@@ -29,11 +29,13 @@ class GeolocationIntelligenceService
     
     private const MAX_TRAVEL_SPEED_KMH = 900;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         IpAndDeviceModel $model,
         RiskPolicyService $policy
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->model = $model;
         $this->policy = $policy;
     }

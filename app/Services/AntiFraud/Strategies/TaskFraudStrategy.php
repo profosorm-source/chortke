@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services\AntiFraud\Strategies;
 
 use App\Contracts\AntiFraud\FraudCheckStrategyInterface;
-use App\Services\BaseService;
 use App\Contracts\LoggerInterface;
 use App\Services\AntiFraud\IPQualityService;
 use App\Services\AntiFraud\SessionAnomalyService;
@@ -19,10 +18,14 @@ use App\Services\FeatureFlagService;
 
 final class TaskFraudStrategy implements FraudCheckStrategyInterface
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private FeatureFlagService $featureFlag;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private FeatureFlagService $featureFlag
-    ) {}
+        \App\Contracts\LoggerInterface $logger,
+        FeatureFlagService $featureFlag
+    ) {        $this->logger = $logger;
+        $this->featureFlag = $featureFlag;
+}
 
     /**
      * Web automation, bot, and engagement checks for all task types.

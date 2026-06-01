@@ -9,9 +9,11 @@ use App\Contracts\LoggerInterface;
 
 class FcmService
 {
+    private FcmNotificationAdapter $adapter;
     public function __construct(
-        private FcmNotificationAdapter $adapter
-    ) {
+        FcmNotificationAdapter $adapter
+    ) {        $this->adapter = $adapter;
+
             }
 
     public function sendToUser(int $userId, string $title, string $body, array $data = [], ?string $imageUrl = null, ?string $clickUrl = null): bool

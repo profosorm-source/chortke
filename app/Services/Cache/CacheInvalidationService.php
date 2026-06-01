@@ -12,10 +12,14 @@ use App\Contracts\LoggerInterface;
  */
 class CacheInvalidationService
 {
+    private CacheInterface $cache;
+    private LoggerInterface $logger;
     public function __construct(
-        private CacheInterface $cache,
-        private LoggerInterface $logger
-    ) {}
+        CacheInterface $cache,
+        LoggerInterface $logger
+    ) {        $this->cache = $cache;
+        $this->logger = $logger;
+}
 
     /**
      * ثبت متدهای باطل‌سازی به عنوان شنونده رویدادها (Event Subscriber)
@@ -53,6 +57,7 @@ class CacheInvalidationService
         if (!empty($data['user_id'])) {
             $this->invalidateUser((int)$data['user_id']);
         }
+    }
 
     public function onWalletUpdated($event): void
     {

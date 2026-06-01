@@ -13,10 +13,14 @@ class NotificationTracker
     private const UNREAD_CACHE_PREFIX = 'notif_unread:';
     private const UNREAD_CACHE_TTL = 5;
 
+    private Notification $notificationModel;
+    private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation;
     public function __construct(
-        private Notification $notificationModel,
-        private ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
-    ) {
+        Notification $notificationModel,
+        ?\App\Services\Cache\CacheInvalidationService $cacheInvalidation = null
+    ) {        $this->notificationModel = $notificationModel;
+        $this->cacheInvalidation = $cacheInvalidation;
+
         
     }
 

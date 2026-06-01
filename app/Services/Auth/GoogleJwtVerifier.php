@@ -13,8 +13,13 @@ class GoogleJwtVerifier
     private const JWKS_CACHE_MINUTES = 60;
     private const JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 
-    public function __construct(private Cache $cache, private LoggerInterface $logger)
+    private Cache $cache;
+    private LoggerInterface $logger;
+
+    public function __construct(Cache $cache, LoggerInterface $logger)
     {
+        $this->cache = $cache;
+        $this->logger = $logger;
     }
 
     public function verifyIdToken(string $idToken, string $expectedAudience, array $validIssuers): array

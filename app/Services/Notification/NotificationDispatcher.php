@@ -23,15 +23,29 @@ class NotificationDispatcher
      */
     private array $channels = [];
 
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\Notification\Channels\PushChannel $pushChannel;
+    private \App\Services\Notification\Channels\SmsChannel $smsChannel;
+    private \App\Services\Notification\Channels\FcmChannel $fcmChannel;
+    private \App\Services\Notification\Channels\LogChannel $logChannel;
+    private Queue $queue;
+    private NotificationRetryPolicy $retryPolicy;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Services\Notification\Channels\PushChannel $pushChannel,
-        private \App\Services\Notification\Channels\SmsChannel $smsChannel,
-        private \App\Services\Notification\Channels\FcmChannel $fcmChannel,
-        private \App\Services\Notification\Channels\LogChannel $logChannel,
-        private Queue $queue,
-        private NotificationRetryPolicy $retryPolicy
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        \App\Services\Notification\Channels\PushChannel $pushChannel,
+        \App\Services\Notification\Channels\SmsChannel $smsChannel,
+        \App\Services\Notification\Channels\FcmChannel $fcmChannel,
+        \App\Services\Notification\Channels\LogChannel $logChannel,
+        Queue $queue,
+        NotificationRetryPolicy $retryPolicy
+    ) {        $this->logger = $logger;
+        $this->pushChannel = $pushChannel;
+        $this->smsChannel = $smsChannel;
+        $this->fcmChannel = $fcmChannel;
+        $this->logChannel = $logChannel;
+        $this->queue = $queue;
+        $this->retryPolicy = $retryPolicy;
+
                 $this->registerChannel($this->pushChannel);
         $this->registerChannel($this->smsChannel);
         $this->registerChannel($this->fcmChannel);

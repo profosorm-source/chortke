@@ -49,16 +49,20 @@ class TwoFactorService
     private const RECOVERY_CODE_RATE_LIMIT_DECAY = 300;  // 5 minutes
     private const RECOVERY_CODE_RATE_LIMIT_WINDOW = 3;   // per 3 attempts
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         User $userModel,
         SecurityModel $securityModel,
         Session $session,
         NotificationService $notificationService,
         AuditTrail $auditTrail,
         ?RateLimiter $rateLimiter = null
-    ) {
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->userModel = $userModel;
         $this->securityModel = $securityModel;

@@ -66,12 +66,16 @@ class VelocityCheckService
     private \App\Services\DistributedLockService $lockService;
     private array $activeLocks = [];
 
+    private \Core\Cache $cache;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Cache $cache,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Cache $cache,
+        \App\Contracts\LoggerInterface $logger,
         VelocityAndScoreModel $model,
         \App\Services\DistributedLockService $lockService
-    ) {
+    ) {        $this->cache = $cache;
+        $this->logger = $logger;
+
         
         $this->model = $model;
         $this->lockService = $lockService;

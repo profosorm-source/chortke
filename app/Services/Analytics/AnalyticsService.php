@@ -16,11 +16,17 @@ class AnalyticsService
  * خدمات تحلیل و گزارش‌گیری
  * Consolidated from: AnalyticsService, KpiService, CustomTaskAnalyticsService, ReportService
  */
+    private \App\Contracts\LoggerInterface $logger;
+    private AnalyticsQueryService $repository;
+    private AnalyticsExporter $exporter;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private AnalyticsQueryService $repository,
-        private AnalyticsExporter $exporter
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        AnalyticsQueryService $repository,
+        AnalyticsExporter $exporter
+    ) {        $this->logger = $logger;
+        $this->repository = $repository;
+        $this->exporter = $exporter;
+
             }
 
     // ==========================================

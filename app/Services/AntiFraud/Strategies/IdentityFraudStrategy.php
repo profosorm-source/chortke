@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services\AntiFraud\Strategies;
 
 use App\Contracts\AntiFraud\FraudCheckStrategyInterface;
-use App\Services\BaseService;
 use App\Contracts\LoggerInterface;
 use App\Services\AntiFraud\AccountTakeoverService;
 use App\Services\AntiFraud\IPQualityService;
@@ -16,15 +15,29 @@ use App\Services\FeatureFlagService;
 
 final class IdentityFraudStrategy implements FraudCheckStrategyInterface
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private AccountTakeoverService $ato;
+    private IPQualityService $ipQuality;
+    private DeviceIntelligenceService $deviceIntel;
+    private EmailPhoneIntelligenceService $emailPhoneIntel;
+    private GeolocationIntelligenceService $geoIntel;
+    private FeatureFlagService $featureFlag;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private AccountTakeoverService $ato,
-        private IPQualityService $ipQuality,
-        private DeviceIntelligenceService $deviceIntel,
-        private EmailPhoneIntelligenceService $emailPhoneIntel,
-        private GeolocationIntelligenceService $geoIntel,
-        private FeatureFlagService $featureFlag
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        AccountTakeoverService $ato,
+        IPQualityService $ipQuality,
+        DeviceIntelligenceService $deviceIntel,
+        EmailPhoneIntelligenceService $emailPhoneIntel,
+        GeolocationIntelligenceService $geoIntel,
+        FeatureFlagService $featureFlag
+    ) {        $this->logger = $logger;
+        $this->ato = $ato;
+        $this->ipQuality = $ipQuality;
+        $this->deviceIntel = $deviceIntel;
+        $this->emailPhoneIntel = $emailPhoneIntel;
+        $this->geoIntel = $geoIntel;
+        $this->featureFlag = $featureFlag;
+
             }
 
     /**
@@ -75,5 +88,15 @@ final class IdentityFraudStrategy implements FraudCheckStrategyInterface
             $this->logger->error("anti_fraud.ff_circuit_breaker.failed", ['error' => $e->getMessage()]);
             return false;
         }
+    }
+
+    private function clientIp(): string
+    {
+        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+    }
+
+    private function userAgent(): string
+    {
+        return $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
     }
 }

@@ -29,12 +29,18 @@ class VideoFingerprintService
     private const METHOD_METADATA = 'metadata';
     private const METHOD_MANUAL = 'manual';
     
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger
+        \Core\Cache $cache,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger
     )
-    {
+    {        $this->cache = $cache;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         }
 

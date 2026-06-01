@@ -62,12 +62,16 @@ class FraudDetectionService
     private array $velocitySettings;
 // 🚀 UPG-05
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Contracts\LoggerInterface $logger,
         VelocityAndScoreModel $fraudModel,
         RiskPolicyService $policy
-    ) {
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->logger = $logger;
+
         
         $this->fraudModel = $fraudModel;
         // 🚀 UPG-05

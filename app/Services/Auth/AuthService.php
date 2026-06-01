@@ -11,28 +11,50 @@ use App\Validators\RegisterRequest;
 use Core\RateLimiter;
 use Core\EventDispatcher;
 use Core\Database;
+use Core\Container;
 use App\Contracts\LoggerInterface;
 use App\Events\UserLoggedInEvent;
 use App\Events\UserRegisteredEvent;
+use App\Jobs\Auth\Verify2FAJob;
+use App\Jobs\Auth\ProcessRegistrationJob;
+use App\Jobs\Auth\ResetPasswordJob;
 
 /**
  * AuthService
  *
- * ???????????? ???? ????? ????.
+ * سرویس احراز هویت کاربران و مدیریت جلسات.
  */
 class AuthService
 {
+    private EventDispatcher $eventDispatcher;
+    private Database $db;
+    private LoggerInterface $logger;
+    private UserService $userService;
+    private User $userModel;
+    private RateLimiter $rateLimiter;
+    private AuthSessionManager $sessionManager;
+    private PasswordRecoveryService $passwordService;
+    private ?EmailService $emailService;
     public function __construct(
-        private EventDispatcher $eventDispatcher,
-        private Database $db,
-        private LoggerInterface $logger,
-        private UserService $userService,
-        private User $userModel,
-        private RateLimiter $rateLimiter,
-        private AuthSessionManager $sessionManager,
-        private PasswordRecoveryService $passwordService,
-        private ?EmailService $emailService = null
-    ) {}
+        EventDispatcher $eventDispatcher,
+        Database $db,
+        LoggerInterface $logger,
+        UserService $userService,
+        User $userModel,
+        RateLimiter $rateLimiter,
+        AuthSessionManager $sessionManager,
+        PasswordRecoveryService $passwordService,
+        ?EmailService $emailService = null
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->userService = $userService;
+        $this->userModel = $userModel;
+        $this->rateLimiter = $rateLimiter;
+        $this->sessionManager = $sessionManager;
+        $this->passwordService = $passwordService;
+        $this->emailService = $emailService;
+}
 
     public function checkRateLimit(string $action, string $key): bool
     {
@@ -48,8 +70,7 @@ class AuthService
 
     public function login(string $identifier, string $password, bool $remember = false): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Auth\ProcessLoginJob::class);
-        return $job->handle($identifier, $password, $remember);
+        return $this->performLogin($identifier, $password, $remember, false);
     }
 
 
@@ -73,14 +94,14 @@ class AuthService
             !$this->rateLimiter->attempt($idKey, 5, 15, true)) {
             
             usleep(random_int(100000, 200000));
-            return ['success' => false, 'message' => '????? ???????? ??? ??? ?? ?? ???? ???. ????? ????? ???? ????.'];
+            return ['success' => false, 'message' => 'تعداد تلاش‌های ورود بیش از حد است. لطفاً بعداً تلاش کنید.'];
         }
 
         $user = $this->userModel->findByCredentials($identifier);
         
         if ($requireAdmin && $user && !in_array($user->role, ['admin', 'super_admin', 'support'], true)) {
             $this->passwordService->verifyPassword($password, $this->passwordService->getDummyHash());
-            return ['success' => false, 'message' => '??????? ???? ??????? ??? ?? ?????? ??? ????? ??? ???.'];
+            return ['success' => false, 'message' => 'شما دسترسی به پنل مدیریت ندارید.'];
         }
 
         $user = null;
@@ -92,19 +113,19 @@ class AuthService
                 if ($user->status === 'locked' || $user->status === 'locked_2fa') {
                     $this->passwordService->verifyPassword($password, $this->passwordService->getDummyHash());
                     $this->db->rollBack();
-                    return ['success' => false, 'message' => '??? ?????? ?? ??? ???? ?????? ???.'];
+                    return ['success' => false, 'message' => 'این حساب به طور موقتی قفل شده است.'];
                 }
 
                 if ($user->status === 'banned' || $user->status === 'suspended') {
                     $this->passwordService->verifyPassword($password, $this->passwordService->getDummyHash());
                     $this->db->rollBack();
-                    return ['success' => false, 'message' => '???? ?????? ??? ????? ?? ????? ??? ???.'];
+                    return ['success' => false, 'message' => 'این حساب کاربری غیرفعال شده است.'];
                 }
 
                 if (empty($user->email_verified_at)) {
                     $this->passwordService->verifyPassword($password, $this->passwordService->getDummyHash());
                     $this->db->rollBack();
-                    return ['success' => false, 'message' => '??? ?????? ?? ??? ???? ?????? ???.', 'email_unverified' => true, 'email' => $user->email];
+                    return ['success' => false, 'message' => 'ایمیل شما تأیید نشده است.', 'email_unverified' => true, 'email' => $user->email];
                 }
             }
         } catch (\Throwable $e) {
@@ -139,7 +160,7 @@ class AuthService
                 $this->db->commit();
             }
             
-            return ['success' => false, 'message' => '??? ?????? ?? ??? ???? ?????? ???.'];
+            return ['success' => false, 'message' => 'نام کاربری یا رمز عبور اشتباه است.'];
         }
 
         if ($this->db->inTransaction()) {
@@ -163,7 +184,7 @@ class AuthService
         
         return [
             'success'      => true,
-            'message'      => '???? ??????????? ???.',
+            'message'      => 'خوش آمدید.',
             'user'         => $user,
             'requires_2fa' => $requires2FA,
         ];
@@ -174,19 +195,19 @@ class AuthService
         $ip = client_ip();
         if (!$this->rateLimiter->attempt('login_direct:' . hash('sha256', $ip), 20, 1, true)) {
             $this->logger->warning('auth.login_directly.throttled', ['user_id' => $user->id, 'ip' => $ip]);
-            return ['success' => false, 'message' => '????? ???????? ??? ??? ?? ?? ???? ???.'];
+            return ['success' => false, 'message' => 'تعداد تلاش‌های ورود بیش از حد است.'];
         }
 
         if ($user->status === 'locked') {
-            return ['success' => false, 'message' => '???? ?????? ??? ??? ??? ???.', 'code' => 'ACCOUNT_LOCKED'];
+            return ['success' => false, 'message' => 'این حساب قفل شده است.', 'code' => 'ACCOUNT_LOCKED'];
         }
 
         if (in_array($user->status, ['banned', 'suspended', 'pending'], true)) {
-            return ['success' => false, 'message' => '???? ?????? ??? ?????? ????? ?? ?? ?????? ????? ???.', 'code' => 'ACCOUNT_DISABLED'];
+            return ['success' => false, 'message' => 'این حساب کاربری موجود نیست یا غیرفعال است.', 'code' => 'ACCOUNT_DISABLED'];
         }
 
         if (empty($user->email_verified_at)) {
-            return ['success' => false, 'message' => '????? ????? ????? ???? ???.'];
+            return ['success' => false, 'message' => 'ایمیل خود را تأیید کنید.'];
         }
 
         $requires2FA = (bool)($user->two_factor_enabled ?? false);
@@ -210,7 +231,7 @@ class AuthService
 
     public function verify2FA(string $code): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Auth\Verify2FAJob::class);
+        $job = Container::getInstance()->make(Verify2FAJob::class);
         return $job->handle($code);
     }
 
@@ -230,7 +251,7 @@ class AuthService
 
         $errors = [];
         if ($this->userService->emailExists($data['email'] ?? '')) {
-            $errors[] = '??? ????? ????? ??? ??? ???.';
+            $errors[] = 'این ایمیل قبلاً ثبت شده است.';
         }
 
         $policyErrors = \App\Validators\PasswordPolicy::validate($data['password'] ?? '', [
@@ -247,7 +268,7 @@ class AuthService
 
     public function register(array $data): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Auth\ProcessRegistrationJob::class);
+        $job = Container::getInstance()->make(ProcessRegistrationJob::class);
         return $job->handle($data);
     }
 
@@ -264,7 +285,7 @@ class AuthService
 
     public function resetPassword(string $token, string $newPassword, ?string $email = null): array
     {
-        $job = \Core\Container::getInstance()->make(\App\Jobs\Auth\ResetPasswordJob::class);
+        $job = Container::getInstance()->make(ResetPasswordJob::class);
         return $job->handle($token, $newPassword, $email);
     }
 

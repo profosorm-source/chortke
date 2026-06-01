@@ -13,11 +13,17 @@ use App\Contracts\LoggerInterface;
  */
 class CronService
 {
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\Gamification\XpService $xpService;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Services\Gamification\XpService $xpService
-    ) {
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Services\Gamification\XpService $xpService
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+        $this->xpService = $xpService;
+
     }
 
     public function applyInactivityScoreDecay(): array

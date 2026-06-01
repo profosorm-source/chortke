@@ -14,13 +14,15 @@ class BrowserFingerprintService
     private RiskPolicyService $policy;
     private ?\App\Services\User\UserService $userService;
     
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         IpAndDeviceModel $model,
         RiskPolicyService $policy,
         ?\App\Services\User\UserService $userService = null
     )
-    {
+    {        $this->logger = $logger;
+
                 $this->model = $model;
         $this->policy = $policy;
         $this->userService = $userService;

@@ -12,11 +12,13 @@ class RiskDecisionService
     private RiskPolicyService $policyService;
     private ScoreService $scoreService;
 
+    private \Core\Database $db;
     public function __construct(
-        private \Core\Database $db,
+        \Core\Database $db,
         RiskPolicyService $policyService,
         ScoreService $scoreService
-    ) {
+    ) {        $this->db = $db;
+
         
         $this->policyService = $policyService;
         $this->scoreService = $scoreService;

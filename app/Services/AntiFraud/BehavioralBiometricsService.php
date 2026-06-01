@@ -14,11 +14,13 @@ use App\Contracts\LoggerInterface;
 class BehavioralBiometricsService
 {
     private VelocityAndScoreModel $model;
+private \Core\Cache $cache;
 public function __construct(
-        private \Core\Cache $cache,
+        \Core\Cache $cache,
         VelocityAndScoreModel $model
     )
-    {
+    {    $this->cache = $cache;
+
         
         $this->model = $model;
         }

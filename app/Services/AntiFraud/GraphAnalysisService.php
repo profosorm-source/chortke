@@ -19,11 +19,13 @@ class GraphAnalysisService
     private const MAX_SHARED_IP_USERS = 5;
     private const CIRCULAR_TRANSACTION_THRESHOLD = 3;
     
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         VelocityAndScoreModel $model
     )
-    {
+    {        $this->logger = $logger;
+
                 $this->model = $model;
     }
     

@@ -16,15 +16,29 @@ class PasswordRecoveryService
 {
     private static ?string $cachedDummyHash = null;
 
+    private SecurityModel $securityModel;
+    private User $userModel;
+    private UserService $userService;
+    private RateLimiter $rateLimiter;
+    private LoggerInterface $logger;
+    private EventDispatcher $eventDispatcher;
+    private ?EmailService $emailService;
     public function __construct(
-        private SecurityModel $securityModel,
-        private User $userModel,
-        private UserService $userService,
-        private RateLimiter $rateLimiter,
-        private LoggerInterface $logger,
-        private EventDispatcher $eventDispatcher,
-        private ?EmailService $emailService = null
-    ) {}
+        SecurityModel $securityModel,
+        User $userModel,
+        UserService $userService,
+        RateLimiter $rateLimiter,
+        LoggerInterface $logger,
+        EventDispatcher $eventDispatcher,
+        ?EmailService $emailService = null
+    ) {        $this->securityModel = $securityModel;
+        $this->userModel = $userModel;
+        $this->userService = $userService;
+        $this->rateLimiter = $rateLimiter;
+        $this->logger = $logger;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->emailService = $emailService;
+}
 
     public function verifyPassword(string $password, string $hash, ?int $userId = null): bool
     {

@@ -25,11 +25,13 @@ class EmailPhoneIntelligenceService
         'icloud.com', 'mail.com', 'protonmail.com', 'gmx.com', 'zoho.com'
     ];
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         VelocityAndScoreModel $model
     )
-    {
+    {        $this->logger = $logger;
+
                 $this->model = $model;
     }
 

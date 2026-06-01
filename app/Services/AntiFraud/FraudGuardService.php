@@ -4,17 +4,24 @@ declare(strict_types=1);
 
 namespace App\Services\AntiFraud;
 
-use App\Services\BaseService;
 use App\Contracts\LoggerInterface;
 
 final class FraudGuardService
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private RiskDecisionService $riskDecision;
+    private FraudDetectionService $fraudDetection;
+    private FraudStrategyResolver $strategyResolver;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private RiskDecisionService $riskDecision,
-        private FraudDetectionService $fraudDetection,
-        private FraudStrategyResolver $strategyResolver
-    ) {
+        \App\Contracts\LoggerInterface $logger,
+        RiskDecisionService $riskDecision,
+        FraudDetectionService $fraudDetection,
+        FraudStrategyResolver $strategyResolver
+    ) {        $this->logger = $logger;
+        $this->riskDecision = $riskDecision;
+        $this->fraudDetection = $fraudDetection;
+        $this->strategyResolver = $strategyResolver;
+
             }
 
     /**

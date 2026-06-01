@@ -9,9 +9,11 @@ use App\Contracts\LoggerInterface;
 
 class SmsNotificationService
 {
+    private SmsNotificationAdapter $adapter;
     public function __construct(
-        private SmsNotificationAdapter $adapter
-    ) {
+        SmsNotificationAdapter $adapter
+    ) {        $this->adapter = $adapter;
+
             }
 
     public function send(string $mobile, string $message): bool

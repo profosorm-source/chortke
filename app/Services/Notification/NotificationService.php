@@ -21,14 +21,26 @@ use App\Contracts\OutboxServiceInterface;
  */
 class NotificationService implements NotificationServiceInterface
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private NotificationPolicyService $policyService;
+    private Notification $model;
+    private NotificationTracker $tracker;
+    private Queue $queue;
+    private ?OutboxServiceInterface $outbox;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private NotificationPolicyService $policyService,
-        private Notification $model,
-        private NotificationTracker $tracker,
-        private Queue $queue,
-        private ?OutboxServiceInterface $outbox = null
-    ) {}
+        \App\Contracts\LoggerInterface $logger,
+        NotificationPolicyService $policyService,
+        Notification $model,
+        NotificationTracker $tracker,
+        Queue $queue,
+        ?OutboxServiceInterface $outbox = null
+    ) {        $this->logger = $logger;
+        $this->policyService = $policyService;
+        $this->model = $model;
+        $this->tracker = $tracker;
+        $this->queue = $queue;
+        $this->outbox = $outbox;
+}
 
     /**
      * ارسال هوشمند نوتیفیکیشن با بررسی ترجیحات و ریت‌لیمیت

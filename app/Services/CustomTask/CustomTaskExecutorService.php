@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\CustomTask;
 
-use App\Services\BaseService;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
 use App\Models\CustomTaskAnalyticsModel;
@@ -32,16 +31,25 @@ class CustomTaskExecutorService
     private FraudGuardService $fraudGuard;
     private ?\App\Services\DistributedLockService $lockService;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        Logger $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         Ads $taskModel,
         CustomTaskSubmissionModel $submissionModel,
         CustomTaskAnalyticsModel $analyticsModel,
         AppSettings $appSettings,
-    ) {
-        
+        \Core\RateLimiter $rateLimiter,
+        NotificationService $notificationService,
+        FraudGuardService $fraudGuard,
+        ?\App\Services\DistributedLockService $lockService = null
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+
         $this->taskModel = $taskModel;
         $this->submissionModel = $submissionModel;
         $this->analyticsModel = $analyticsModel;
@@ -49,8 +57,7 @@ class CustomTaskExecutorService
         $this->rateLimiter = $rateLimiter;
         $this->notificationService = $notificationService;
         $this->fraudGuard = $fraudGuard;
-        $this->lockService = $lockService ?? $context->getContainer()->make(\App\Services\DistributedLockService::class);
-        $this->eventDispatcher = $eventDispatcher ?? \Core\EventDispatcher::getInstance();
+        $this->lockService = $lockService ?? \Core\Container::getInstance()->make(\App\Services\DistributedLockService::class);
     }
 
 
@@ -81,7 +88,7 @@ class CustomTaskExecutorService
             return ['success' => false, 'message' => "تعداد تلاش‌های شما برای شروع تسک بیش از حد مجاز است."];
         }
 
-        $task = $this->adModel->findByIdForUpdate($taskId);
+        $task = $this->taskModel->findByIdForUpdate($taskId);
 
         if (!$task || $task->status !== 'active') {
             $this->db->rollBack();

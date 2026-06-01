@@ -9,7 +9,12 @@ use App\Adapters\Notification\LogNotificationAdapter;
 
 class LogChannel implements NotificationChannelInterface
 {
-    public function __construct(private LogNotificationAdapter $logAdapter) {}
+    private LogNotificationAdapter $logAdapter;
+
+    public function __construct(LogNotificationAdapter $logAdapter)
+    {
+        $this->logAdapter = $logAdapter;
+    }
 
     public function getName(): string
     {

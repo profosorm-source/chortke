@@ -14,11 +14,13 @@ use App\Contracts\LoggerInterface;
 class DeviceIntelligenceService
 {
     private IpAndDeviceModel $model;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         IpAndDeviceModel $model
     )
-    {
+    {        $this->logger = $logger;
+
                 $this->model = $model;
     }
 

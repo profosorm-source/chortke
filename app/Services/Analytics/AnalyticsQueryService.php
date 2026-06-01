@@ -24,16 +24,32 @@ class AnalyticsQueryService
     private const CACHE_TTL_WARM = 3600;    // Daily: 1 ساعت (آمار روزانه)
     private const CACHE_TTL_COLD = 86400;   // Historical: 24 ساعت (آمار تاریخی)
 
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private KpiStatistics $kpiStats;
+    private CustomTaskAnalyticsModel $customTaskAnalyticsModel;
+    private User $userModel;
+    private KYCVerification $kycModel;
+    private TransactionQuery $transactionQuery;
     public function __construct(
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private KpiStatistics $kpiStats,
-        private CustomTaskAnalyticsModel $customTaskAnalyticsModel,
-        private User $userModel,
-        private KYCVerification $kycModel,
-        private TransactionQuery $transactionQuery
-    ) {
+        \Core\Cache $cache,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        KpiStatistics $kpiStats,
+        CustomTaskAnalyticsModel $customTaskAnalyticsModel,
+        User $userModel,
+        KYCVerification $kycModel,
+        TransactionQuery $transactionQuery
+    ) {        $this->cache = $cache;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->kpiStats = $kpiStats;
+        $this->customTaskAnalyticsModel = $customTaskAnalyticsModel;
+        $this->userModel = $userModel;
+        $this->kycModel = $kycModel;
+        $this->transactionQuery = $transactionQuery;
+
         
     }
 

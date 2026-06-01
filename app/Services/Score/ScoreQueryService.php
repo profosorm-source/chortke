@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services\Score;
 
 use App\Models\Score as ScoreModel;
-use App\Services\BaseService;
 use App\Enums\ScoreDomain;
 
 /**
@@ -16,11 +15,17 @@ use App\Enums\ScoreDomain;
  */
 class ScoreQueryService
 {
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private ScoreModel $scoreModel;
     public function __construct(
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private ScoreModel $scoreModel
-    ) {
+        \Core\Cache $cache,
+        \Core\Database $db,
+        ScoreModel $scoreModel
+    ) {        $this->cache = $cache;
+        $this->db = $db;
+        $this->scoreModel = $scoreModel;
+
             }
 
     /**

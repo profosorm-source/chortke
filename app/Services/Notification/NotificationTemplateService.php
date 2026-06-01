@@ -13,10 +13,14 @@ class NotificationTemplateService
     private const TEMPLATE_CACHE_PREFIX = 'notif_tpl:';
     private const TEMPLATE_CACHE_TTL = 30;
 
+    private \Core\Cache $cache;
+    private Notification $model;
     public function __construct(
-        private \Core\Cache $cache,
-        private Notification $model
-    ) {
+        \Core\Cache $cache,
+        Notification $model
+    ) {        $this->cache = $cache;
+        $this->model = $model;
+
         
     }
 

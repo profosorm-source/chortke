@@ -12,6 +12,8 @@ use Core\Container;
 
 class FraudStrategyResolver
 {
+    private Container $container;
+
     /**
      * Map of anti-fraud actions to their specialized strategy classes.
      */
@@ -27,7 +29,10 @@ class FraudStrategyResolver
         'task.seo'           => TaskFraudStrategy::class,
     ];
 
-    public function __construct(private Container $container) {}
+    public function __construct(Container $container)
+    {
+        $this->container = $container;
+    }
 
     /**
      * Lazily resolve strategy class from the DI container.

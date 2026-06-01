@@ -16,10 +16,14 @@ class CacheManager implements CacheInterface
 {
     private array $currentTags = [];
 
+    private Cache $cache;
+    private LoggerInterface $logger;
     public function __construct(
-        private Cache $cache,
-        private LoggerInterface $logger
-    ) {}
+        Cache $cache,
+        LoggerInterface $logger
+    ) {        $this->cache = $cache;
+        $this->logger = $logger;
+}
 
     private function getHandler()
     {

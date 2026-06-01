@@ -16,13 +16,19 @@ class DashboardQueryService
     private PerformanceOptimizationService $performance;
     private \App\Services\DistributedLockService $lockService;
     
+    private \Core\Cache $cache;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Cache $cache,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Cache $cache,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         PerformanceOptimizationService $performance,
         ?\App\Services\DistributedLockService $lockService = null
-    ) {
+    ) {        $this->cache = $cache;
+        $this->db = $db;
+        $this->logger = $logger;
+
         
         $this->performance = $performance;
         $this->lockService = $lockService;

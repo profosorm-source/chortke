@@ -15,9 +15,11 @@ use App\Services\Settings\AppSettings;
  */
 class TaskExecutionEvaluatorService
 {
+    private AppSettings $appSettings;
     public function __construct(
-        private AppSettings $appSettings
-    ) {
+        AppSettings $appSettings
+    ) {        $this->appSettings = $appSettings;
+
             }
 
     /**

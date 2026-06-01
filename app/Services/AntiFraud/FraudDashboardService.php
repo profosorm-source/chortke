@@ -14,11 +14,13 @@ use App\Contracts\LoggerInterface;
 class FraudDashboardService
 {
     private VelocityAndScoreModel $model;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         VelocityAndScoreModel $model
     )
-    {
+    {        $this->logger = $logger;
+
                 $this->model = $model;
     }
 

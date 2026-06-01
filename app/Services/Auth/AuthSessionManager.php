@@ -15,16 +15,32 @@ use Core\RateLimiter;
 
 class AuthSessionManager
 {
+    private Session $session;
+    private Redis $redis;
+    private SessionService $sessionService;
+    private AuditTrail $auditTrail;
+    private SecurityModel $securityModel;
+    private User $userModel;
+    private LoggerInterface $logger;
+    private RateLimiter $rateLimiter;
     public function __construct(
-        private Session $session,
-        private Redis $redis,
-        private SessionService $sessionService,
-        private AuditTrail $auditTrail,
-        private SecurityModel $securityModel,
-        private User $userModel,
-        private LoggerInterface $logger,
-        private RateLimiter $rateLimiter
-    ) {}
+        Session $session,
+        Redis $redis,
+        SessionService $sessionService,
+        AuditTrail $auditTrail,
+        SecurityModel $securityModel,
+        User $userModel,
+        LoggerInterface $logger,
+        RateLimiter $rateLimiter
+    ) {        $this->session = $session;
+        $this->redis = $redis;
+        $this->sessionService = $sessionService;
+        $this->auditTrail = $auditTrail;
+        $this->securityModel = $securityModel;
+        $this->userModel = $userModel;
+        $this->logger = $logger;
+        $this->rateLimiter = $rateLimiter;
+}
 
     public function createPending2FASession(object $user): void
     {

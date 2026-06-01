@@ -13,10 +13,14 @@ class NotificationAnalyticsService
     private const ANALYTICS_CACHE_PREFIX = 'notif_analytics:';
     private const ANALYTICS_CACHE_TTL = 15;
 
+    private \Core\Cache $cache;
+    private Notification $notificationModel;
     public function __construct(
-        private \Core\Cache $cache,
-        private Notification $notificationModel
-    ) {
+        \Core\Cache $cache,
+        Notification $notificationModel
+    ) {        $this->cache = $cache;
+        $this->notificationModel = $notificationModel;
+
         
     }
 

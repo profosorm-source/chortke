@@ -15,10 +15,14 @@ use App\Contracts\LoggerInterface;
  */
 class SessionAnomalyService
 {
+    private SecurityModel $model;
+    private RiskPolicyService $policy;
     public function __construct(
-        private SecurityModel $model,
-        private RiskPolicyService $policy
-    ) {
+        SecurityModel $model,
+        RiskPolicyService $policy
+    ) {        $this->model = $model;
+        $this->policy = $policy;
+
             }
 
     /**

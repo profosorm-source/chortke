@@ -9,7 +9,12 @@ use App\Adapters\Notification\PushNotificationAdapter;
 
 class PushChannel implements NotificationChannelInterface
 {
-    public function __construct(private PushNotificationAdapter $pushAdapter) {}
+    private PushNotificationAdapter $pushAdapter;
+
+    public function __construct(PushNotificationAdapter $pushAdapter)
+    {
+        $this->pushAdapter = $pushAdapter;
+    }
 
     public function getName(): string
     {

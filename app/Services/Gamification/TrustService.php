@@ -18,13 +18,23 @@ use Core\EventDispatcher;
  */
 class TrustService
 {
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private Score $scoreModel;
+    private TrustEvaluationStrategy $trustStrategy;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private Score $scoreModel,
-        private TrustEvaluationStrategy $trustStrategy
-    ) {
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        Score $scoreModel,
+        TrustEvaluationStrategy $trustStrategy
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->scoreModel = $scoreModel;
+        $this->trustStrategy = $trustStrategy;
+
         
     }
 

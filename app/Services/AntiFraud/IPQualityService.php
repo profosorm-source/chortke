@@ -9,9 +9,11 @@ use App\Models\IpAndDeviceModel;
 
 class IPQualityService
 {
+    private IpAndDeviceModel $model;
     public function __construct(
-        private IpAndDeviceModel $model
-    ) {
+        IpAndDeviceModel $model
+    ) {        $this->model = $model;
+
             }
 
     public function check(string $ip): array
@@ -61,7 +63,13 @@ class IPQualityService
 
     private function checkDatacenterIP(string $ip): bool
     {
-        // Extensible commercial datacenter/ASN validation placeholder
+        $ranges = config('anti_fraud.datacenter_ip_ranges', []);
+        foreach ((array)$ranges as $range) {
+            if ($this->ipInRange($ip, (string)$range)) {
+                return true;
+            }
+        }
+
         return false;
     }
 

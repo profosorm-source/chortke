@@ -31,14 +31,18 @@ class CryptoDepositService
     private ?OutboxService $outbox;
     private StateMachineService $stateMachine;
 
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         CryptoDeposit $depositModel,
         AppSettings $appSettings,
         ?StateMachineService $stateMachine = null,
         ?OutboxService $outbox = null
-    ) {
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+
         
         
         $this->depositModel = $depositModel;

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services\Payment;
 
 use App\Contracts\PaymentGatewayInterface;
-use App\Services\BaseService;
 use App\Contracts\LoggerInterface;
 use App\Exceptions\PaymentGatewayException;
 
@@ -13,10 +12,12 @@ class PaymentGatewayFactory
 {
     private array $gateways;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         array $gateways
-    ) {
+    ) {        $this->logger = $logger;
+
                 $this->gateways = $gateways;
     }
 

@@ -28,15 +28,29 @@ class SessionService
     public const UNUSUAL_HOUR_END = 6;
     public const MAX_ACTIONS_PER_MINUTE = 20;
 
+    private \Core\Redis $redis;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private SecurityModel $model;
+    private RiskPolicyService $policy;
+    private NotificationService $notificationService;
+    private DistributedLockService $lockService;
     public function __construct(
-        private \Core\Redis $redis,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private SecurityModel $model,
-        private RiskPolicyService $policy,
-        private NotificationService $notificationService,
-        private DistributedLockService $lockService
-    ) {
+        \Core\Redis $redis,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        SecurityModel $model,
+        RiskPolicyService $policy,
+        NotificationService $notificationService,
+        DistributedLockService $lockService
+    ) {        $this->redis = $redis;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->model = $model;
+        $this->policy = $policy;
+        $this->notificationService = $notificationService;
+        $this->lockService = $lockService;
+
         
     }
 

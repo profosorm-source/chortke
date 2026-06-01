@@ -4,14 +4,12 @@ declare(strict_types=1);
 
 namespace App\Services\CustomTask;
 
-use App\Services\BaseService;
 use App\Models\Ads;
 use App\Models\CustomTaskSubmissionModel;
 use App\Contracts\WalletServiceInterface;
 use App\Services\Notification\NotificationService;
 use App\Services\Settings\AppSettings;
 use Core\Database;
-use Core\Logger;
 use App\Services\StateMachineService;
 use App\Events\TaskCompletedEvent;
 
@@ -27,20 +25,28 @@ class AdminCustomTaskService
     private CustomTaskModerationService $moderationService;
     private AppSettings $appSettings;
     private StateMachineService $stateMachine;
+    private \App\Contracts\LoggerInterface $logger;
 
     private ?\App\Contracts\OutboxServiceInterface $outboxService = null;
 
+    private \Core\EventDispatcher $eventDispatcher;
+    private \Core\Database $db;
     public function __construct(
-        private \Core\EventDispatcher $eventDispatcher,
-        private \Core\Database $db,
-        Logger $logger,
+        \Core\EventDispatcher $eventDispatcher,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
         Ads $taskModel,
         CustomTaskSubmissionModel $submissionModel,
         WalletServiceInterface $walletService,
-        NotificationService $notificationService,        StateMachineService $stateMachine,
+        NotificationService $notificationService,
+        CustomTaskModerationService $moderationService,
+        AppSettings $appSettings,
+        StateMachineService $stateMachine,
         ?\App\Contracts\OutboxServiceInterface $outboxService = null
-    ) {
-        
+    ) {        $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
+
+        $this->logger = $logger;
         $this->taskModel = $taskModel;
         $this->submissionModel = $submissionModel;
         $this->walletService = $walletService;

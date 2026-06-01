@@ -20,12 +20,20 @@ class NotificationPolicyService
     private const RATE_MAX_PER_USER_PER_HOUR = 20;
     private const RATE_WINDOW_MINUTES        = 60;
 
+    private RateLimiter $rateLimiter;
+    private AppSettings $appSettings;
+    private NotificationPreferenceService $preferenceService;
+    private LoggerInterface $logger;
     public function __construct(
-        private RateLimiter $rateLimiter,
-        private AppSettings $appSettings,
-        private NotificationPreferenceService $preferenceService,
-        private LoggerInterface $logger
-    ) {}
+        RateLimiter $rateLimiter,
+        AppSettings $appSettings,
+        NotificationPreferenceService $preferenceService,
+        LoggerInterface $logger
+    ) {        $this->rateLimiter = $rateLimiter;
+        $this->appSettings = $appSettings;
+        $this->preferenceService = $preferenceService;
+        $this->logger = $logger;
+}
 
     /**
      * بررسی محدودیت نرخ ارسال برای کاربر

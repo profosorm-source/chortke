@@ -13,10 +13,14 @@ class NotificationPreferenceService
 {
     protected array $localCache = [];
 
+    private NotificationPreference $prefModel;
+    private ?CacheInvalidationService $cacheInvalidation;
     public function __construct(
-        private NotificationPreference $prefModel,
-        private ?CacheInvalidationService $cacheInvalidation = null
-    ) {
+        NotificationPreference $prefModel,
+        ?CacheInvalidationService $cacheInvalidation = null
+    ) {        $this->prefModel = $prefModel;
+        $this->cacheInvalidation = $cacheInvalidation;
+
         
     }
 

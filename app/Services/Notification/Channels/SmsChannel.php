@@ -9,7 +9,12 @@ use App\Adapters\Notification\SmsNotificationAdapter;
 
 class SmsChannel implements NotificationChannelInterface
 {
-    public function __construct(private SmsNotificationAdapter $smsAdapter) {}
+    private SmsNotificationAdapter $smsAdapter;
+
+    public function __construct(SmsNotificationAdapter $smsAdapter)
+    {
+        $this->smsAdapter = $smsAdapter;
+    }
 
     public function getName(): string
     {

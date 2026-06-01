@@ -4,13 +4,19 @@ declare(strict_types=1);
 
 namespace App\Services\Lottery;
 
-class LotteryParticipationService extends \App\Services\BaseService
+class LotteryParticipationService
 {
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Models\LotteryParticipation $model;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Models\LotteryParticipation $model
-    ) {}
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Models\LotteryParticipation $model
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+        $this->model = $model;
+}
 
     public function participate(int $userId, int $roundId, ?string $idempotencyKey = null): array
     {
@@ -32,13 +38,13 @@ class LotteryParticipationService extends \App\Services\BaseService
 
     public function getUserChanceHistory(int $userId, int $roundId): array
     {
-        $participation = $this->repository->findParticipationByUserAndRound($userId, $roundId);
+        $participation = $this->model->findParticipationByUserAndRound($userId, $roundId);
         
         if (!$participation) {
             return ['success' => false, 'message' => '??? ?? ??? ???? ???? ?????????.'];
         }
 
-        $logs = $this->repository->getChanceLogsByParticipation($participation->id, 50);
+        $logs = $this->model->getChanceLogsByParticipation($participation->id, 50);
 
         return [
             'success' => true,

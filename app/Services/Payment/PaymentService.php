@@ -10,7 +10,7 @@ use App\Contracts\PaymentGatewayInterface;
 use App\Contracts\LoggerInterface;
 use App\Services\Payment\PaymentGatewayFactory;
 use App\Services\ReconciliationService;
-use Core\IdempotencyKey;
+use App\Services\Shared\IdempotencyService;
 use Core\Exceptions\ValidationException;
 use Core\Exceptions\NotFoundException;
 use Core\Exceptions\BusinessException;
@@ -18,6 +18,7 @@ use App\Contracts\CurrencyServiceInterface;
 use App\Contracts\WalletServiceInterface;
 use App\Contracts\NotificationServiceInterface;
 use Core\EventDispatcher;
+use Core\Database;
 use App\Services\OutboxService;
 use App\Events\PaymentCompletedEvent;
 use Core\RateLimiter;
@@ -35,26 +36,35 @@ class PaymentService
     private ?CacheInvalidationService $cacheInvalidation;
     private ?OutboxService $outbox;
     private ?RateLimiter $rateLimiter;
+    private IdempotencyService $idempotencyService;
+    private Database $db;
+    private EventDispatcher $eventDispatcher;
+    private NotificationServiceInterface $notifier;
 
     public function __construct(
         LoggerInterface $logger,
         \App\Models\PaymentLog $log,
         PaymentGatewayFactory $gatewayFactory,
         ReconciliationService $reconciliationService,
+        IdempotencyService $idempotencyService,
+        Database $db,
+        EventDispatcher $eventDispatcher,
+        NotificationServiceInterface $notifier,
         ?CacheInvalidationService $cacheInvalidation = null,
         ?OutboxService $outbox = null,
         ?RateLimiter $rateLimiter = null
     ) {
-$this->logger = $logger;
+        $this->logger = $logger;
         $this->log = $log;
-        
         $this->gatewayFactory = $gatewayFactory;
-        
         $this->reconciliationService = $reconciliationService;
-        
+        $this->db = $db;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->notifier = $notifier;
         $this->cacheInvalidation = $cacheInvalidation;
         $this->outbox = $outbox;
         $this->rateLimiter = $rateLimiter;
+        $this->idempotencyService = $idempotencyService;
     }
     private function logStart(string $operation, array $context): void
     {
@@ -329,18 +339,27 @@ private function executePaymentSaga($pay, string $gatewayName, string $authority
                 ],
             ];
 
-            if ($this->outbox) {
-                $ok = $this->outbox->record('gateway_payment', (int)$pay->id, 'wallet.deposit.requested', $payload);
-            } else {
-                $eventDispatcher = \Core\EventDispatcher::getInstance();
-                $eventDispatcher->dispatchAsync('wallet.deposit.requested', $payload);
-                $ok = true;
-            }
+            // Execute deposit step idempotently using Shared\IdempotencyService
+            return $this->idempotencyService->execute(
+                'wallet.deposit',
+                (int)$pay->user_id,
+                $payload,
+                function () use ($payload, $pay) {
+                    if ($this->outbox) {
+                        $ok = $this->outbox->record('gateway_payment', (int)$pay->id, 'wallet.deposit.requested', $payload);
+                    } else {
+                        $eventDispatcher = \Core\EventDispatcher::getInstance();
+                        $eventDispatcher->dispatchAsync('wallet.deposit.requested', $payload);
+                        $ok = true;
+                    }
 
-            if (!$ok || (is_array($ok) && empty($ok['success']))) {
-                throw new \Exception('پرداخت تأیید شد اما شارژ کیف پول ناموفق بود، با پشتیبانی تماس بگیرید');
-            }
-            return $ok;
+                    if (!$ok || (is_array($ok) && empty($ok['success']))) {
+                        throw new \Exception('پرداخت تأیید شد اما شارژ کیف پول ناموفق بود، با پشتیبانی تماس بگیرید');
+                    }
+                    return $ok;
+                },
+                'wallet_deposit:' . $gatewayName . ':' . $authority
+            );
         },
         function (\Throwable $e) {}
     )->addStep(

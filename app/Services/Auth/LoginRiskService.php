@@ -30,13 +30,19 @@ class LoginRiskService
 
 
     private AppSettings $appSettings;
+private \Core\Redis $redis;
+private \Core\Cache $cache;
+private \App\Contracts\LoggerInterface $logger;
 public function __construct(
-        private \Core\Redis $redis,
-        private \Core\Cache $cache,
-        private \App\Contracts\LoggerInterface $logger,
+        \Core\Redis $redis,
+        \Core\Cache $cache,
+        \App\Contracts\LoggerInterface $logger,
         AppSettings $appSettings
     )
-    {
+    {    $this->redis = $redis;
+    $this->cache = $cache;
+    $this->logger = $logger;
+
         
         $this->appSettings = $appSettings;
         }

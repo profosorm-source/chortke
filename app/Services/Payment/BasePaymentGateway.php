@@ -7,7 +7,6 @@ namespace App\Services\Payment;
 use App\Contracts\PaymentGatewayInterface;
 use App\Contracts\LoggerInterface;
 use App\Exceptions\PaymentGatewayConnectionException;
-use App\Services\BaseService;
 use Core\RetryPolicy;
 use Core\CircuitBreaker;
 
@@ -65,11 +64,13 @@ abstract class BasePaymentGateway implements PaymentGatewayInterface
      */
     protected CircuitBreaker $circuitBreaker;
 
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
+        \App\Contracts\LoggerInterface $logger,
         CircuitBreaker $circuitBreaker
     )
-    {
+    {        $this->logger = $logger;
+
         
         $this->retryPolicy = new RetryPolicy();
         $this->circuitBreaker = $circuitBreaker;
