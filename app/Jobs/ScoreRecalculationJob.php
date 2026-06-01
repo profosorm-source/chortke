@@ -23,11 +23,17 @@ class ScoreRecalculationJob
     // آستانه اختلاف قابل قبول (مقادیر کمتر از این نادیده گرفته می‌شوند)
     private const DIFF_TOLERANCE = 0.001;
 
+    private ScoreService $scoreService;
+    private Database $db;
+    private LoggerInterface $logger;
     public function __construct(
-        private ScoreService $scoreService,
-        private Database $db,
-        private LoggerInterface $logger
-    ) {}
+        ScoreService $scoreService,
+        Database $db,
+        LoggerInterface $logger
+    ) {        $this->scoreService = $scoreService;
+        $this->db = $db;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {

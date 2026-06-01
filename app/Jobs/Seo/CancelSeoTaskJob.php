@@ -6,15 +6,17 @@ namespace App\Jobs\Seo;
 
 class CancelSeoTaskJob
 {
+    private \App\Services\Seo\AdsSeoService $adsService;
     public function __construct(
-        private \App\Repositories\SeoRepository $repository
-    ) {}
+        \App\Services\Seo\AdsSeoService $adsService
+    ) {        $this->adsService = $adsService;
+}
 
 public function handle(int $executionId, int $userId): array
     {
 
 
-        $this->repository->rejectExecution($executionId, 'لغو شده توسط کاربر');
+        $this->adsService->rejectExecution($executionId, 'لغو شده توسط کاربر');
 
         return ['success' => true, 'message' => 'تسک لغو شد'];
     }

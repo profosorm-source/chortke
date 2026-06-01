@@ -6,9 +6,11 @@ namespace App\Jobs\Vitrine;
 
 class SendVitrineRequestJob
 {
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->logger = $logger;
+}
 
     public function handle(int $requesterId, int $listingId, array $data): array
     {

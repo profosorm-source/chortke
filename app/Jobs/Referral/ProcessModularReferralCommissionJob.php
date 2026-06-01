@@ -6,15 +6,29 @@ namespace App\Jobs\Referral;
 
 class ProcessModularReferralCommissionJob
 {
+    private \App\Models\User $userModel;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Models\ReferralCommission $commissionModel;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \Core\TransactionWrapper $transactionWrapper;
     public function __construct(
-        private \App\Models\User $userModel,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Models\ReferralCommission $commissionModel,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \Core\TransactionWrapper $transactionWrapper
-    ) {}
+        \App\Models\User $userModel,
+        \App\Services\Settings\AppSettings $appSettings,
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Models\ReferralCommission $commissionModel,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \Core\TransactionWrapper $transactionWrapper
+    ) {        $this->userModel = $userModel;
+        $this->appSettings = $appSettings;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->commissionModel = $commissionModel;
+        $this->walletService = $walletService;
+        $this->transactionWrapper = $transactionWrapper;
+}
 
     public function handle(int $referredUserId, string $module, string $amount, string $currency, array $context = []): array
     {

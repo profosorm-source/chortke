@@ -6,14 +6,26 @@ namespace App\Jobs\User;
 
 class PurchaseUserLevelJob
 {
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Models\UserLevel $levelModel;
+    private \Core\Database $db;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\TransactionWrapper $transactionWrapper;
     public function __construct(
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Models\UserLevel $levelModel,
-        private \Core\Database $db,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\TransactionWrapper $transactionWrapper
-    ) {}
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Models\UserLevel $levelModel,
+        \Core\Database $db,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \App\Contracts\LoggerInterface $logger,
+        \Core\TransactionWrapper $transactionWrapper
+    ) {        $this->appSettings = $appSettings;
+        $this->levelModel = $levelModel;
+        $this->db = $db;
+        $this->walletService = $walletService;
+        $this->logger = $logger;
+        $this->transactionWrapper = $transactionWrapper;
+}
 
     public function handle(int $userId, string $levelSlug, string $currency = 'irt'): array
     {

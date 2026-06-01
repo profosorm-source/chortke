@@ -6,23 +6,39 @@ namespace App\Jobs\Seo;
 
 class ProcessSeoTaskAsyncJob
 {
+    private \App\Services\Seo\AdsSeoService $adsService;
+    private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
+    private \App\Services\AntiFraud\SeoFraudDetector $fraudDetector;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\SeoPayoutService $payoutService;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \Core\EventDispatcher $eventDispatcher;
     public function __construct(
-        private \App\Repositories\SeoRepository $repository,
-        private \App\Services\AntiFraud\FraudGuardService $fraudGuard,
-        private \App\Services\AntiFraud\SeoFraudDetector $fraudDetector,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Services\SeoPayoutService $payoutService,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \Core\EventDispatcher $eventDispatcher
-    ) {}
+        \App\Services\Seo\AdsSeoService $adsService,
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        \App\Services\AntiFraud\SeoFraudDetector $fraudDetector,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Services\SeoPayoutService $payoutService,
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \Core\EventDispatcher $eventDispatcher
+    ) {        $this->adsService = $adsService;
+        $this->fraudGuard = $fraudGuard;
+        $this->fraudDetector = $fraudDetector;
+        $this->logger = $logger;
+        $this->payoutService = $payoutService;
+        $this->appSettings = $appSettings;
+        $this->walletService = $walletService;
+        $this->eventDispatcher = $eventDispatcher;
+}
 
 public function handle(int $executionId, int $userId, int $adId, array $engagementData): array
     {
 
 
                 // قفل گذاری روی آگهی برای بررسی و کسر بودجه
-                $ad = $this->repository->getAdForUpdate($adId);
+                $ad = $this->adsService->getAdForUpdate($adId);
                 
                 if (!$ad) {
                     return ['success' => false, 'message' => 'آگهی یافت نشد'];
@@ -30,7 +46,7 @@ public function handle(int $executionId, int $userId, int $adId, array $engageme
     
                 // 1. اعتبارسنجی داده‌ها
                 if (!isset($engagementData['duration'], $engagementData['scroll_depth'], $engagementData['interactions'])) {
-                    $this->repository->rejectExecution($executionId, 'داده‌های تعامل ناقص است');
+                    $this->adsService->rejectExecution($executionId, 'داده‌های تعامل ناقص است');
                     return ['success' => false, 'message' => 'داده‌های تعامل ناقص است'];
                 }
     
@@ -50,7 +66,7 @@ public function handle(int $executionId, int $userId, int $adId, array $engageme
     
                 if (empty($risk['allowed']) || $isFraud) {
                     $flags = $seoFraud['flags'] ?? ['blocked_by_security_policy'];
-                    $this->repository->markExecutionAsFraud($executionId, $flags);
+                    $this->adsService->markExecutionAsFraud($executionId, $flags);
                     $this->fraudDetector->addToBlacklist($userId, implode(', ', $flags));
     
                     $this->logger->warning('seo_task.blocked_by_fraud_guard', [
@@ -68,7 +84,7 @@ public function handle(int $executionId, int $userId, int $adId, array $engageme
     
                 // 4. بررسی حداقل امتیاز
                 if ($scores['final_score'] < $ad->min_score) {
-                    $this->repository->rejectExecution($executionId, "امتیاز کمتر از حد مجاز ({$ad->min_score})");
+                    $this->adsService->rejectExecution($executionId, "امتیاز کمتر از حد مجاز ({$ad->min_score})");
                     return [
                         'success' => false,
                         'message' => "امتیاز شما ({$scores['final_score']}) کمتر از حداقل مجاز است",
@@ -88,7 +104,7 @@ public function handle(int $executionId, int $userId, int $adId, array $engageme
                 $payout = $payoutResult['payout'];
     
                 // 6. تکمیل Execution
-                if (!$this->repository->completeExecution($executionId, $scores, $payout)) {
+                if (!$this->adsService->completeExecution($executionId, $scores, $payout)) {
                     throw new \Exception('این تسک قبلاً تکمیل یا لغو شده است');
                 }
     
@@ -120,7 +136,7 @@ public function handle(int $executionId, int $userId, int $adId, array $engageme
                 }
     
                 // 9. پورسانت ریفرال (event-driven via async)
-                $userRecord = $this->repository->getUser($userId);
+                $userRecord = $this->adsService->getUser($userId);
                 if ($userRecord && !empty($userRecord->referred_by)) {
                     $this->eventDispatcher?->dispatchAsync('referral.commission.process', [
                         'referrer_id' => (int)$userRecord->referred_by,

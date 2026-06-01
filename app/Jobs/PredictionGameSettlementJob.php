@@ -20,11 +20,17 @@ class PredictionGameSettlementJob
     // شناسه سیستم (ادمین cron)
     private const SYSTEM_ADMIN_ID = 0;
 
+    private PredictionService $predictionService;
+    private Database $db;
+    private LoggerInterface $logger;
     public function __construct(
-        private PredictionService $predictionService,
-        private Database $db,
-        private LoggerInterface $logger
-    ) {}
+        PredictionService $predictionService,
+        Database $db,
+        LoggerInterface $logger
+    ) {        $this->predictionService = $predictionService;
+        $this->db = $db;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {

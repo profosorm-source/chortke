@@ -6,19 +6,27 @@ namespace App\Jobs\Seo;
 
 class StartSeoTaskJob
 {
+    private \Core\TransactionWrapper $transactionWrapper;
+    private \App\Services\Seo\AdsSeoService $adsService;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\TransactionWrapper $transactionWrapper,
-        private \App\Repositories\SeoRepository $repository,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\TransactionWrapper $transactionWrapper,
+        \App\Services\Seo\AdsSeoService $adsService,
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->transactionWrapper = $transactionWrapper;
+        $this->adsService = $adsService;
+        $this->appSettings = $appSettings;
+        $this->logger = $logger;
+}
 
     public function handle(int $adId, int $userId): array
     {
         try {
             return $this->transactionWrapper->runWithRetry(function() use ($adId, $userId) {
                 // قفل کردن آگهی برای جلوگیری از Race Condition
-                $ad = $this->repository->getAdForUpdate($adId);
+                $ad = $this->adsService->getAdForUpdate($adId);
                 
                 if (!$ad) {
                     return ['success' => false, 'message' => 'آگهی یافت نشد'];
@@ -33,19 +41,19 @@ class StartSeoTaskJob
                 }
         
                 // بررسی تکراری
-                if ($this->repository->executionExistsToday($adId, $userId)) {
+                if ($this->adsService->executionExistsToday($adId, $userId)) {
                     return ['success' => false, 'message' => 'شما امروز این تسک را قبلاً انجام داده‌اید'];
                 }
         
                 // بررسی محدودیت روزانه کاربر
-                $todayCount = $this->repository->countUserExecutionsToday($userId);
+                $todayCount = $this->adsService->countUserExecutionsToday($userId);
                 if ($todayCount >= $ad->max_per_day) {
                     return ['success' => false, 'message' => "حداکثر {$ad->max_per_day} تسک در روز مجاز است"];
                 }
         
                 // بررسی محدودیت ساعتی
                 $hourlyLimit = (int)$this->appSettings->get('seo_max_tasks_per_hour', 5);
-                $hourlyCount = $this->repository->countUserExecutionsLastHour($userId);
+                $hourlyCount = $this->adsService->countUserExecutionsLastHour($userId);
                 if ($hourlyCount >= $hourlyLimit) {
                     return ['success' => false, 'message' => "حداکثر {$hourlyLimit} تسک در ساعت مجاز است. لطفاً کمی صبر کنید"];
                 }
@@ -53,7 +61,7 @@ class StartSeoTaskJob
                 // بررسی IP
                 $ip = get_client_ip();
                 $ipLimit = (int)$this->appSettings->get('seo_max_ip_tasks_per_hour', 10);
-                $ipHourly = $this->repository->countIpExecutionsLastHour($ip);
+                $ipHourly = $this->adsService->countIpExecutionsLastHour($ip);
                 if ($ipHourly >= $ipLimit) {
                     return ['success' => false, 'message' => 'محدودیت IP. لطفاً بعداً تلاش کنید'];
                 }
@@ -64,7 +72,7 @@ class StartSeoTaskJob
     
                 $sessionId = bin2hex(random_bytes(16));
     
-                $this->repository->createExecution([
+                $this->adsService->createExecution([
                     'ad_id' => $adId,
                     'user_id' => $userId,
                     'session_id' => $sessionId,

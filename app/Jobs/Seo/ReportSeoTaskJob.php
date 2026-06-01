@@ -6,14 +6,18 @@ namespace App\Jobs\Seo;
 
 class ReportSeoTaskJob
 {
+    private \App\Services\Seo\AdsSeoService $adsService;
+    private \App\Services\Interaction\ReportService $reportService;
     public function __construct(
-        private \App\Repositories\SeoRepository $repository,
-        private \App\Services\Interaction\ReportService $reportService
-    ) {}
+        \App\Services\Seo\AdsSeoService $adsService,
+        \App\Services\Interaction\ReportService $reportService
+    ) {        $this->adsService = $adsService;
+        $this->reportService = $reportService;
+}
 
     public function handle(int $reporterId, int $adId, string $reason, string $description = ''): array
     {
-        $ad = $this->repository->getAd($adId);
+        $ad = $this->adsService->getAd($adId);
         if (!$ad) {
             return ['success' => false, 'message' => 'تسک یافت نشد'];
         }

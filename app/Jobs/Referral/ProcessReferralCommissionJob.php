@@ -6,14 +6,26 @@ namespace App\Jobs\Referral;
 
 class ProcessReferralCommissionJob
 {
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \Core\Database $db;
+    private \App\Models\ReferralCommission $commissionModel;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\TransactionWrapper $transactionWrapper;
     public function __construct(
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \Core\Database $db,
-        private \App\Models\ReferralCommission $commissionModel,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\TransactionWrapper $transactionWrapper
-    ) {}
+        \App\Services\Settings\AppSettings $appSettings,
+        \Core\Database $db,
+        \App\Models\ReferralCommission $commissionModel,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \App\Contracts\LoggerInterface $logger,
+        \Core\TransactionWrapper $transactionWrapper
+    ) {        $this->appSettings = $appSettings;
+        $this->db = $db;
+        $this->commissionModel = $commissionModel;
+        $this->walletService = $walletService;
+        $this->logger = $logger;
+        $this->transactionWrapper = $transactionWrapper;
+}
 
     public function handle(int $referrerId, string $amount, string $currency, array $context = []): array
     {

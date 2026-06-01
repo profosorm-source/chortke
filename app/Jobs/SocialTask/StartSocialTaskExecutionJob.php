@@ -6,11 +6,17 @@ namespace App\Jobs\SocialTask;
 
 class StartSocialTaskExecutionJob
 {
+    private \App\Models\CryptoDeposit $model;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Models\CryptoDeposit $model,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \App\Models\CryptoDeposit $model,
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->model = $model;
+        $this->appSettings = $appSettings;
+        $this->logger = $logger;
+}
 
     public function handle(int $userId, int $adId, array $context = []): array
     {

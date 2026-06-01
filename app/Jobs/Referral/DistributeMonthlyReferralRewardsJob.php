@@ -6,10 +6,14 @@ namespace App\Jobs\Referral;
 
 class DistributeMonthlyReferralRewardsJob
 {
+    private \App\Models\ReferralCommission $commissionModel;
+    private \App\Services\Settings\AppSettings $appSettings;
     public function __construct(
-        private \App\Models\ReferralCommission $commissionModel,
-        private \App\Services\Settings\AppSettings $appSettings
-    ) {}
+        \App\Models\ReferralCommission $commissionModel,
+        \App\Services\Settings\AppSettings $appSettings
+    ) {        $this->commissionModel = $commissionModel;
+        $this->appSettings = $appSettings;
+}
 
     public function handle(): array
     {

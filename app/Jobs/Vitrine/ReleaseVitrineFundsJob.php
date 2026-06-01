@@ -6,11 +6,17 @@ namespace App\Jobs\Vitrine;
 
 class ReleaseVitrineFundsJob
 {
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\ScoreService $scoreService;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Services\ScoreService $scoreService
-    ) {}
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Services\ScoreService $scoreService
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+        $this->scoreService = $scoreService;
+}
 
     public function handle(object $listing, string $reason = 'manual'): array
     {

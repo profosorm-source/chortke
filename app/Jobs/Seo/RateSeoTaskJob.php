@@ -6,14 +6,18 @@ namespace App\Jobs\Seo;
 
 class RateSeoTaskJob
 {
+    private \App\Services\Seo\AdsSeoService $adsService;
+    private \App\Services\Interaction\RatingService $ratingService;
     public function __construct(
-        private \App\Repositories\SeoRepository $repository,
-        private \App\Services\Interaction\RatingService $ratingService
-    ) {}
+        \App\Services\Seo\AdsSeoService $adsService,
+        \App\Services\Interaction\RatingService $ratingService
+    ) {        $this->adsService = $adsService;
+        $this->ratingService = $ratingService;
+}
 
     public function handle(int $raterId, int $adId, int $stars, string $comment = ''): array
     {
-        $ad = $this->repository->getAd($adId);
+        $ad = $this->adsService->getAd($adId);
         if (!$ad) {
             return ['success' => false, 'message' => 'تسک یافت نشد'];
         }

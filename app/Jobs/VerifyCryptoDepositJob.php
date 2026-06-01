@@ -21,18 +21,38 @@ class VerifyCryptoDepositJob
 {
     private array $allowedNetworks = ['TRC20', 'BNB20', 'ERC20', 'TON', 'SOL'];
 
+    private CryptoDeposit $depositModel;
+    private CryptoVerificationAdapter $verifier;
+    private ReconciliationService $reconciliationService;
+    private WalletServiceInterface $wallet;
+    private StateMachineService $stateMachine;
+    private IdempotencyService $idempotencyService;
+    private LoggerInterface $logger;
+    private Database $db;
+    private EventDispatcher $eventDispatcher;
+    private ?OutboxService $outbox;
     public function __construct(
-        private CryptoDeposit $depositModel,
-        private CryptoVerificationAdapter $verifier,
-        private ReconciliationService $reconciliationService,
-        private WalletServiceInterface $wallet,
-        private StateMachineService $stateMachine,
-        private IdempotencyService $idempotencyService,
-        private LoggerInterface $logger,
-        private Database $db,
-        private EventDispatcher $eventDispatcher,
-        private ?OutboxService $outbox = null
-    ) {}
+        CryptoDeposit $depositModel,
+        CryptoVerificationAdapter $verifier,
+        ReconciliationService $reconciliationService,
+        WalletServiceInterface $wallet,
+        StateMachineService $stateMachine,
+        IdempotencyService $idempotencyService,
+        LoggerInterface $logger,
+        Database $db,
+        EventDispatcher $eventDispatcher,
+        ?OutboxService $outbox = null
+    ) {        $this->depositModel = $depositModel;
+        $this->verifier = $verifier;
+        $this->reconciliationService = $reconciliationService;
+        $this->wallet = $wallet;
+        $this->stateMachine = $stateMachine;
+        $this->idempotencyService = $idempotencyService;
+        $this->logger = $logger;
+        $this->db = $db;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->outbox = $outbox;
+}
 
     public function handle(array $data = []): array
     {

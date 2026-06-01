@@ -6,9 +6,11 @@ namespace App\Jobs\User;
 
 class AdminChangeUserLevelJob
 {
+    private \Core\Database $db;
     public function __construct(
-        private \Core\Database $db
-    ) {}
+        \Core\Database $db
+    ) {        $this->db = $db;
+}
 
     public function handle(int $userId, string $newSlug, string $reason = ''): bool
     {

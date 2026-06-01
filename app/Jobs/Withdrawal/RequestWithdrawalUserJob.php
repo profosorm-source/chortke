@@ -4,21 +4,48 @@ declare(strict_types=1);
 
 namespace App\Jobs\Withdrawal;
 
+use App\Events\WithdrawalCreatedEvent;
+use App\Events\WithdrawalEvent;
+use App\Exceptions\BusinessException;
+use Core\EventDispatcher;
+
 class RequestWithdrawalUserJob
 {
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\Shared\IdempotencyService $idempotencyService;
+    private \App\Services\KYCService $kycService;
+    private \App\Contracts\WalletServiceInterface $wallet;
+    private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
+    private \App\Services\BankCardService $bankCardService;
+    private \App\Services\Withdrawal\WithdrawalQueryService $queryService;
+    private \App\Models\Withdrawal $model;
+    private \App\Services\FeatureFlagService $featureFlagService;
+    private \Core\RateLimiter $rateLimiter;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Services\Shared\IdempotencyService $idempotencyService,
-        private \App\Services\KYCService $kycService,
-        private \App\Contracts\WalletServiceInterface $wallet,
-        private \App\Services\AntiFraud\FraudGuardService $fraudGuard,
-        private \App\Services\BankCardService $bankCardService,
-        private \App\Services\Withdrawal\WithdrawalQueryService $queryService,
-        private \App\Models\Withdrawal $model,
-        private \App\Services\FeatureFlagService $featureFlagService,
-        private \Core\RateLimiter $rateLimiter
-    ) {}
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Services\Shared\IdempotencyService $idempotencyService,
+        \App\Services\KYCService $kycService,
+        \App\Contracts\WalletServiceInterface $wallet,
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        \App\Services\BankCardService $bankCardService,
+        \App\Services\Withdrawal\WithdrawalQueryService $queryService,
+        \App\Models\Withdrawal $model,
+        \App\Services\FeatureFlagService $featureFlagService,
+        \Core\RateLimiter $rateLimiter
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+        $this->idempotencyService = $idempotencyService;
+        $this->kycService = $kycService;
+        $this->wallet = $wallet;
+        $this->fraudGuard = $fraudGuard;
+        $this->bankCardService = $bankCardService;
+        $this->queryService = $queryService;
+        $this->model = $model;
+        $this->featureFlagService = $featureFlagService;
+        $this->rateLimiter = $rateLimiter;
+}
 
     public function handle(int $userId, array $payload): array
     {
@@ -62,6 +89,17 @@ class RequestWithdrawalUserJob
                         $currency,
                         'pending'
                     )
+                );
+                EventDispatcher::getInstance()->dispatchAsync(
+                    WithdrawalEvent::class,
+                    new WithdrawalEvent([
+                        'action' => 'created',
+                        'user_id' => $userId,
+                        'withdrawal_id' => $result['_withdrawal_id'],
+                        'amount' => (float)$amount,
+                        'currency' => $currency,
+                        'status' => 'pending',
+                    ])
                 );
                 unset($result['_withdrawal_id']);
             }

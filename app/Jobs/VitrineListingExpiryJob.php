@@ -18,11 +18,17 @@ use Core\Database;
  */
 class VitrineListingExpiryJob
 {
+    private Database $db;
+    private WalletServiceInterface $walletService;
+    private LoggerInterface $logger;
     public function __construct(
-        private Database $db,
-        private WalletServiceInterface $walletService,
-        private LoggerInterface $logger
-    ) {}
+        Database $db,
+        WalletServiceInterface $walletService,
+        LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->walletService = $walletService;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {

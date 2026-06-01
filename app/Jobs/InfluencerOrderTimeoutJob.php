@@ -21,12 +21,20 @@ class InfluencerOrderTimeoutJob
     // ساعت تا پرداخت خودکار به اینفلوئنسر پس از اتمام مهلت بررسی buyer
     private const BUYER_REVIEW_AUTO_APPROVE_HOURS = 48;
 
+    private Database $db;
+    private WalletServiceInterface $walletService;
+    private NotificationServiceInterface $notificationService;
+    private LoggerInterface $logger;
     public function __construct(
-        private Database $db,
-        private WalletServiceInterface $walletService,
-        private NotificationServiceInterface $notificationService,
-        private LoggerInterface $logger
-    ) {}
+        Database $db,
+        WalletServiceInterface $walletService,
+        NotificationServiceInterface $notificationService,
+        LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->walletService = $walletService;
+        $this->notificationService = $notificationService;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {

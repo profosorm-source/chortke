@@ -6,10 +6,14 @@ namespace App\Jobs\Seo;
 
 class CompleteSeoTaskJob
 {
+    private \App\Services\Seo\AdsSeoService $adsService;
+    private \Core\EventDispatcher $eventDispatcher;
     public function __construct(
-        private \App\Repositories\SeoRepository $repository,
-        private \Core\EventDispatcher $eventDispatcher
-    ) {}
+        \App\Services\Seo\AdsSeoService $adsService,
+        \Core\EventDispatcher $eventDispatcher
+    ) {        $this->adsService = $adsService;
+        $this->eventDispatcher = $eventDispatcher;
+}
 
 public function handle(int $executionId, int $userId, array $engagementData): array
     {
@@ -20,7 +24,7 @@ public function handle(int $executionId, int $userId, array $engagementData): ar
                 }
         
                 // Mark as processing
-                $this->repository->updateExecutionStatus($executionId, 'processing');
+                $this->adsService->updateExecutionStatus($executionId, 'processing');
 
                 // 🚀 Send heavy work to background queue
                 if ($this->eventDispatcher) {

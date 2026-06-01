@@ -6,10 +6,14 @@ namespace App\Jobs\Referral;
 
 class ProcessMultiTierReferralCommissionsJob
 {
+    private \App\Models\User $userModel;
+    private \App\Services\Settings\AppSettings $appSettings;
     public function __construct(
-        private \App\Models\User $userModel,
-        private \App\Services\Settings\AppSettings $appSettings
-    ) {}
+        \App\Models\User $userModel,
+        \App\Services\Settings\AppSettings $appSettings
+    ) {        $this->userModel = $userModel;
+        $this->appSettings = $appSettings;
+}
 
     public function handle(int $userId, string $amount, string $currency): array
     {

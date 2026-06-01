@@ -20,12 +20,20 @@ class InvestmentProfitDistributionJob
 {
     private const SYSTEM_ADMIN_ID = 0;
 
+    private InvestmentService $investmentService;
+    private Database $db;
+    private AppSettings $appSettings;
+    private LoggerInterface $logger;
     public function __construct(
-        private InvestmentService $investmentService,
-        private Database $db,
-        private AppSettings $appSettings,
-        private LoggerInterface $logger
-    ) {}
+        InvestmentService $investmentService,
+        Database $db,
+        AppSettings $appSettings,
+        LoggerInterface $logger
+    ) {        $this->investmentService = $investmentService;
+        $this->db = $db;
+        $this->appSettings = $appSettings;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {

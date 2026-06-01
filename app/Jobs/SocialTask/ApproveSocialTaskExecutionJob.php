@@ -6,9 +6,11 @@ namespace App\Jobs\SocialTask;
 
 class ApproveSocialTaskExecutionJob
 {
+    private \App\Models\CryptoDeposit $model;
     public function __construct(
-        private \App\Models\CryptoDeposit $model
-    ) {}
+        \App\Models\CryptoDeposit $model
+    ) {        $this->model = $model;
+}
 
     public function handle(int $advertiserId, int $executionId): array
     {

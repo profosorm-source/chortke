@@ -15,10 +15,14 @@ use App\Domain\Financial\Services\FinancialEscrowService;
  */
 class EscrowTimeoutJob
 {
+    private FinancialEscrowService $escrowService;
+    private LoggerInterface $logger;
     public function __construct(
-        private FinancialEscrowService $escrowService,
-        private LoggerInterface $logger
-    ) {}
+        FinancialEscrowService $escrowService,
+        LoggerInterface $logger
+    ) {        $this->escrowService = $escrowService;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {

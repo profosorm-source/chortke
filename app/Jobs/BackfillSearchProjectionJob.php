@@ -30,12 +30,20 @@ final class BackfillSearchProjectionJob
 {
     private const DEFAULT_BATCH = 500;
 
+    private Database $db;
+    private SearchIndexer $indexer;
+    private SchemaInspector $schema;
+    private LoggerInterface $logger;
     public function __construct(
-        private Database $db,
-        private SearchIndexer $indexer,
-        private SchemaInspector $schema,
-        private LoggerInterface $logger
-    ) {
+        Database $db,
+        SearchIndexer $indexer,
+        SchemaInspector $schema,
+        LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->indexer = $indexer;
+        $this->schema = $schema;
+        $this->logger = $logger;
+
     }
 
     public function handle(array $data = []): void

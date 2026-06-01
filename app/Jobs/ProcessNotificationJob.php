@@ -17,11 +17,17 @@ use App\Contracts\LoggerInterface;
  */
 class ProcessNotificationJob extends Job
 {
+    private NotificationDispatcher $dispatcher;
+    private LoggerInterface $logger;
+    private ?SmsNotificationService $smsService;
     public function __construct(
-        private NotificationDispatcher $dispatcher,
-        private LoggerInterface $logger,
-        private ?SmsNotificationService $smsService = null
-    ) {}
+        NotificationDispatcher $dispatcher,
+        LoggerInterface $logger,
+        ?SmsNotificationService $smsService = null
+    ) {        $this->dispatcher = $dispatcher;
+        $this->logger = $logger;
+        $this->smsService = $smsService;
+}
 
     public function handle(array $payload): void
     {

@@ -22,11 +22,17 @@ class SocialTaskApprovalReminderJob
     // ساعت‌هایی که پس از آن auto-approve اعمال می‌شود
     private const AUTO_APPROVE_THRESHOLD_HOURS = 72;
 
+    private Database $db;
+    private NotificationServiceInterface $notificationService;
+    private LoggerInterface $logger;
     public function __construct(
-        private Database $db,
-        private NotificationServiceInterface $notificationService,
-        private LoggerInterface $logger
-    ) {}
+        Database $db,
+        NotificationServiceInterface $notificationService,
+        LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->notificationService = $notificationService;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {

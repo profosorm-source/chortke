@@ -23,11 +23,17 @@ class CacheWarmupJob
     private const CONFIG_TTL        = 3600; // 1 ساعت
     private const DASHBOARD_TTL     = 300;  // 5 دقیقه
 
+    private Database $db;
+    private Cache $cache;
+    private LoggerInterface $logger;
     public function __construct(
-        private Database $db,
-        private Cache $cache,
-        private LoggerInterface $logger
-    ) {}
+        Database $db,
+        Cache $cache,
+        LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->cache = $cache;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {

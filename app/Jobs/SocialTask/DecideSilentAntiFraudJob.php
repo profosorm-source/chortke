@@ -6,10 +6,14 @@ namespace App\Jobs\SocialTask;
 
 class DecideSilentAntiFraudJob
 {
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Services\AuditTrail $auditTrail;
     public function __construct(
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Services\AuditTrail $auditTrail
-    ) {}
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Services\AuditTrail $auditTrail
+    ) {        $this->appSettings = $appSettings;
+        $this->auditTrail = $auditTrail;
+}
 
     public function handle(
         int   $userId,

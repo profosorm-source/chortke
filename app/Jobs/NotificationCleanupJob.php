@@ -16,10 +16,14 @@ class NotificationCleanupJob
 {
     private const DEFAULT_RETENTION_DAYS = 365;
 
+    private Database $db;
+    private LoggerInterface $logger;
     public function __construct(
-        private Database $db,
-        private LoggerInterface $logger
-    ) {}
+        Database $db,
+        LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+}
 
     public function handle(array $data = []): void
     {
