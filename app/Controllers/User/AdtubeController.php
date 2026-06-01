@@ -11,13 +11,21 @@ use App\Services\AdSystemManager;
 
 class AdtubeController extends BaseUserController
 {
+    private SocialTaskService $socialTaskService;
+    private SocialTaskModel $socialTaskModel;
+    private Ads $adModel;
+    private AdSystemManager $adManager;
     public function __construct(
-        private SocialTaskService $socialTaskService,
-        private SocialTaskModel $socialTaskModel,
-        private Ads $adModel,
-        private AdSystemManager $adManager
-    ) {
-        parent::__construct();
+        SocialTaskService $socialTaskService,
+        SocialTaskModel $socialTaskModel,
+        Ads $adModel,
+        AdSystemManager $adManager
+    , ?\App\Contracts\LoggerInterface $logger = null) {        $this->socialTaskService = $socialTaskService;
+        $this->socialTaskModel = $socialTaskModel;
+        $this->adModel = $adModel;
+        $this->adManager = $adManager;
+
+        parent::__construct(null, null, null, null, $logger);
     }
 
     /**

@@ -20,8 +20,8 @@ class KYCController extends BaseUserController
         KYCService      $kycService,
         UploadService   $uploadService,
         RateLimitPolicy $rateLimitPolicy
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->kycModel   = $kycModel;
         $this->kycService = $kycService;
         $this->uploadService = $uploadService;

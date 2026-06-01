@@ -13,6 +13,11 @@ use Core\Response;
  */
 class SecurityController extends BaseController
 {
+    public function __construct(?\App\Contracts\LoggerInterface $logger = null)
+    {
+        parent::__construct(null, null, null, null, $logger);
+    }
+
     /**
      * Handle Content Security Policy violation reports
      */

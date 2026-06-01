@@ -14,13 +14,21 @@ use App\Services\UploadService;
  */
 class BannerController extends BaseUserController
 {
+    private Ads $ads;
+    private BannerPlacement $placement;
+    private AdSystemManager $adManager;
+    private UploadService $uploadService;
     public function __construct(
-        private Ads $ads,
-        private BannerPlacement $placement,
-        private AdSystemManager $adManager,
-        private UploadService $uploadService
-    ) {
-        parent::__construct();
+        Ads $ads,
+        BannerPlacement $placement,
+        AdSystemManager $adManager,
+        UploadService $uploadService
+    , ?\App\Contracts\LoggerInterface $logger = null) {        $this->ads = $ads;
+        $this->placement = $placement;
+        $this->adManager = $adManager;
+        $this->uploadService = $uploadService;
+
+        parent::__construct(null, null, null, null, $logger);
     }
 
     /**

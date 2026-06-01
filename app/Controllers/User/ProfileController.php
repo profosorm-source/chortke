@@ -18,9 +18,9 @@ class ProfileController extends BaseUserController
         \App\Services\UploadService $uploadService,
         \App\Services\User\ProfileService $profileService,
         \App\Services\Auth\SessionService $sessionService
-    )
+    , ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->userService = $userService;
         $this->uploadService = $uploadService;
         $this->profileService = $profileService;

@@ -32,7 +32,7 @@ class CustomTaskController extends BaseUserController
         Ads $adsModel,
         Logger $logger
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->coreService = $coreService;
         $this->executorService = $executorService;
         $this->moderationService = $moderationService;

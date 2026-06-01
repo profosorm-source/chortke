@@ -34,7 +34,7 @@ class ContentController extends BaseUserController
         \Core\CSRF $csrf,
         ?LoggerInterface $logger = null
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->contentRevenueModel = $contentRevenueModel;
         $this->contentSubmissionModel = $contentSubmissionModel;
         $this->contentService = $contentService;

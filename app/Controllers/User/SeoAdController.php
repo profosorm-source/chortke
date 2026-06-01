@@ -30,8 +30,9 @@ class SeoAdController extends BaseUserController
         SeoPayoutService $p,
         AdSystemManager $adManager,
         \App\Services\Seo\AdsSeoService $seoService,
+        ?\App\Contracts\LoggerInterface $logger = null
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->model = $m;
         $this->executionModel = $e;
         $this->wallet = $w;

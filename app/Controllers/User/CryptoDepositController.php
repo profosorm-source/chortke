@@ -8,17 +8,17 @@ use App\Controllers\User\BaseUserController;
 class CryptoDepositController extends BaseUserController
 {
     private CryptoDeposit $depositModel;
-    private \Core\IdempotencyKey $idempotencyKey;
+    private \App\Services\Shared\IdempotencyService $idempotencyService;
     private \App\Services\CryptoDeposit\CryptoDepositService $depositService;
 
     public function __construct(
         \App\Models\CryptoDeposit $depositModel,
-        \Core\IdempotencyKey $idempotencyKey,
+        \App\Services\Shared\IdempotencyService $idempotencyService,
         \App\Services\CryptoDeposit\CryptoDepositService $depositService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->depositModel = $depositModel;
-        $this->idempotencyKey = $idempotencyKey;
+        $this->idempotencyService = $idempotencyService;
         $this->depositService = $depositService;
     }
 
@@ -157,13 +157,13 @@ class CryptoDepositController extends BaseUserController
             return;
         }
 
-        // Use IdempotencyKey wrapper to prevent duplicate API submissions
-        $idempotencyKey = $this->request->header('Idempotency-Key') ?: \Core\IdempotencyKey::generateFromPayload('crypto_deposit_store', array_merge($data, ['user_id' => $userId]));
+        // Use shared IdempotencyService to prevent duplicate API submissions
+        $explicitKey = $this->request->header('Idempotency-Key') ?: null;
 
         try {
-            $result = $this->idempotencyKey->wrapInstance($idempotencyKey, $userId, 'crypto_deposit_store', function() use ($userId, $data) {
+            $result = $this->idempotencyService->execute('crypto_deposit_store', $userId, $data, function() use ($userId, $data) {
                 return $this->depositService->createDeposit($userId, $data);
-            }, $data);
+            }, $explicitKey);
 
             if ($result['success'] ?? false) {
                 $this->session->setFlash('success', $result['message']);

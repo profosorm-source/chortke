@@ -17,8 +17,8 @@ class LevelController extends BaseUserController
         \App\Services\User\UserLevelService $levelService,
         \App\Models\UserLevel $levelModel,
         \App\Models\UserLevelHistory $historyModel
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->levelService  = $levelService;
         $this->levelModel    = $levelModel;
         $this->historyModel  = $historyModel;

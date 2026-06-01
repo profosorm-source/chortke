@@ -9,15 +9,15 @@ use App\Services\User\UserDashboardService;
  *
  * وابستگی‌ها از طریق constructor injection (Container auto-wire):
  *   UserDashboardService → inject می‌شود
- *   BaseUserController   → parent::__construct() از Container می‌گیرد
+ *   BaseUserController   → parent::__construct(null, null, null, null, $logger) از Container می‌گیرد
  */
 class DashboardController extends BaseUserController
 {
     private UserDashboardService $dashboardService;
 
-    public function __construct(UserDashboardService $dashboardService)
+    public function __construct(UserDashboardService $dashboardService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->dashboardService = $dashboardService;
     }
 

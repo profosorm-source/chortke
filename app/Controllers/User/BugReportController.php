@@ -16,9 +16,9 @@ class BugReportController extends BaseUserController
     public function __construct(
         TicketService $ticketService,
         UploadService $uploadService
-    )
+    , ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->ticketService = $ticketService;
         $this->uploadService = $uploadService;
     }

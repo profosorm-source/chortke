@@ -19,9 +19,9 @@ class SearchController extends BaseController
     public function __construct(
         SearchOrchestrator $searchService,
         \Core\RateLimiter $rateLimiter
-    )
+    , ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->searchService = $searchService;
         $this->rateLimiter = $rateLimiter;
     }

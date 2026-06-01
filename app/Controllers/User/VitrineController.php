@@ -22,8 +22,8 @@ class VitrineController extends BaseUserController
     public function __construct(
         VitrineService     $service,
         FeatureFlagService $flags
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->service      = $service;
         $this->flags        = $flags;
     }

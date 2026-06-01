@@ -10,9 +10,9 @@ class SessionController extends BaseUserController
     private SessionService $sessionService;
 
     public function __construct(
-        \App\Services\Auth\SessionService $sessionService)
+        \App\Services\Auth\SessionService $sessionService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->sessionService = $sessionService;
     }
 

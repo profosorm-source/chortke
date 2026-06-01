@@ -12,10 +12,12 @@ use App\Services\UnifiedTaskService;
  */
 class TaskFeedController extends BaseController
 {
+    private UnifiedTaskService $taskService;
     public function __construct(
-        private UnifiedTaskService $taskService
-    ) {
-        parent::__construct();
+        UnifiedTaskService $taskService
+    , ?\App\Contracts\LoggerInterface $logger = null) {        $this->taskService = $taskService;
+
+        parent::__construct(null, null, null, null, $logger);
     }
 
     /**

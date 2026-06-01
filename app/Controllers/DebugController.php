@@ -6,15 +6,18 @@ use App\Controllers\BaseController;
 
 class DebugController extends BaseController
 {
-    public function __construct()
+    public function __construct(?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
     }
 
     public function router(): void
 {
-    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
-    if (!\in_array($ip, ['127.0.0.1', '::1'], true)) {
+    $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
+    $clientIp = function_exists('get_client_ip') ? get_client_ip() : $remoteAddr;
+    $allowedProxies = (array)config('app.trusted_proxies', ['127.0.0.1', '::1']);
+
+    if (!\in_array($remoteAddr, $allowedProxies, true) && $remoteAddr !== '127.0.0.1' && $remoteAddr !== '::1') {
         $this->response->html('Forbidden', 403);
         return;
     }
@@ -39,7 +42,8 @@ class DebugController extends BaseController
     $ok = \preg_match($safe, $path, $m) === 1;
 
     $out = "=== APP ROUTER DEBUG ===\n";
-    $out .= "IP: {$ip}\n";
+    $out .= "Remote addr: {$remoteAddr}\n";
+    $out .= "Resolved client IP: {$clientIp}\n";
     $out .= "Input path: {$rawPath}\n";
     $out .= "Sanitized path: {$path}\n\n";
     $out .= "[SAFE] => " . ($ok ? '1' : '0') . "\n";

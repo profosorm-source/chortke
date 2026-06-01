@@ -17,9 +17,9 @@ class TokenController extends BaseApiController
     private ApiTokenService $service;
     private \Core\RateLimiter $rateLimiter;
 
-    public function __construct(ApiTokenService $service, \Core\RateLimiter $rateLimiter)
+    public function __construct(ApiTokenService $service, \Core\RateLimiter $rateLimiter, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->service = $service;
         $this->rateLimiter = $rateLimiter;
     }

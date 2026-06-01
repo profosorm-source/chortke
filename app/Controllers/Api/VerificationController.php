@@ -13,9 +13,9 @@ class VerificationController extends BaseApiController
 {
     private VerificationService $verification;
 
-    public function __construct(VerificationService $verification)
+    public function __construct(VerificationService $verification, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->verification = $verification;
     }
 

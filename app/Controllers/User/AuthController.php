@@ -22,21 +22,37 @@ use App\Validators\LoginRequest;
  */
 class AuthController extends BaseController
 {
+    private UserService $userService;
+    private \App\Services\CaptchaService $captchaService;
+    private AuthService $authService;
+    private LoginRiskService $loginRiskService;
+    private \App\Services\AntiFraud\FraudGuardService $fraudGuard;
+    private \Core\RateLimiter $rateLimiter;
+    private \App\Services\EmailService $emailService;
+    private \App\Models\SecurityModel $securityModel;
     public function __construct(
         \Core\Session $session,
         \Core\Request $request,
         \Core\Response $response,
         \App\Services\Shared\PolicyService $policyService,
         \App\Contracts\LoggerInterface $logger,
-        private UserService $userService,
-        private \App\Services\CaptchaService $captchaService,
-        private AuthService $authService,
-        private LoginRiskService $loginRiskService,
-        private \App\Services\AntiFraud\FraudGuardService $fraudGuard,
-        private \Core\RateLimiter $rateLimiter,
-        private \App\Services\EmailService $emailService,
-        private \App\Models\SecurityModel $securityModel
-    ) {
+        UserService $userService,
+        \App\Services\CaptchaService $captchaService,
+        AuthService $authService,
+        LoginRiskService $loginRiskService,
+        \App\Services\AntiFraud\FraudGuardService $fraudGuard,
+        \Core\RateLimiter $rateLimiter,
+        \App\Services\EmailService $emailService,
+        \App\Models\SecurityModel $securityModel
+    ) {        $this->userService = $userService;
+        $this->captchaService = $captchaService;
+        $this->authService = $authService;
+        $this->loginRiskService = $loginRiskService;
+        $this->fraudGuard = $fraudGuard;
+        $this->rateLimiter = $rateLimiter;
+        $this->emailService = $emailService;
+        $this->securityModel = $securityModel;
+
         parent::__construct($session, $request, $response, $policyService, $logger);
     }
 

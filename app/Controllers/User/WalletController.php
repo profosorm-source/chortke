@@ -9,9 +9,9 @@ class WalletController extends BaseUserController
 {
     private WalletServiceInterface $walletService;
 
-    public function __construct(\App\Services\Wallet\WalletServiceInterface $walletService)
+    public function __construct(WalletServiceInterface $walletService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->walletService = $walletService;
     }
 

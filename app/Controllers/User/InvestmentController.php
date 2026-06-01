@@ -10,11 +10,12 @@ use App\Models\InvestmentWithdrawal;
 use App\Services\InvestmentService;
 use App\Services\ApiRateLimiter;
 use App\Controllers\User\BaseUserController;
+use App\Contracts\WalletServiceInterface;
 
 class InvestmentController extends BaseUserController
 {
     private \App\Services\Notification\NotificationService $notificationService;
-    private \App\Services\Wallet\WalletServiceInterface $walletService;
+    private WalletServiceInterface $walletService;
     private \App\Models\TradingRecord $tradingRecordModel;
     private \App\Models\InvestmentWithdrawal $investmentWithdrawalModel;
     private \App\Models\InvestmentProfit $investmentProfitModel;
@@ -26,11 +27,11 @@ class InvestmentController extends BaseUserController
         \App\Models\InvestmentProfit $investmentProfitModel,
         \App\Models\InvestmentWithdrawal $investmentWithdrawalModel,
         \App\Models\TradingRecord $tradingRecordModel,
-        \App\Services\Wallet\WalletServiceInterface $walletService,
+        WalletServiceInterface $walletService,
         \App\Services\Notification\NotificationService $notificationService,
-        \App\Services\InvestmentService $investmentService)
+        \App\Services\InvestmentService $investmentService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->investmentService = $investmentService;
         $this->investmentModel = $investmentModel;
         $this->investmentProfitModel = $investmentProfitModel;

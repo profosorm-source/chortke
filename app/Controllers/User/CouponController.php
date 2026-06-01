@@ -16,8 +16,8 @@ class CouponController extends BaseUserController
         Coupon $couponModel,
         CouponRedemption $redemptionModel,
         CouponService $couponService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->couponService = $couponService;
         $this->redemptionModel = $redemptionModel;
     }

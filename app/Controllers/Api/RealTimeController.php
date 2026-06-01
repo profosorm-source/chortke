@@ -13,9 +13,9 @@ class RealTimeController extends BaseApiController
 {
     private WebSocketService $realTime;
 
-    public function __construct(WebSocketService $realTime)
+    public function __construct(WebSocketService $realTime, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->realTime = $realTime;
     }
 

@@ -23,9 +23,9 @@ class TicketController extends BaseUserController
         \App\Models\TicketMessage $messageModel,
         \App\Models\TicketCategory $categoryModel,
         \App\Services\TicketService $ticketService,
-        \App\Services\UploadService $uploadService)
+        \App\Services\UploadService $uploadService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->ticketModel = $ticketModel;
         $this->messageModel = $messageModel;
         $this->categoryModel = $categoryModel;

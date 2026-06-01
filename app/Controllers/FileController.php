@@ -65,8 +65,8 @@ class FileController extends BaseController
     public function __construct(
         UploadService $uploadService,
         FileAccessService $fileAccessService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->uploadService = $uploadService;
         $this->fileAccessService = $fileAccessService;
     }

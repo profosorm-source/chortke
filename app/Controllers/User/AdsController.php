@@ -14,12 +14,18 @@ use App\Models\BannerPlacement;
  */
 class AdsController extends BaseController
 {
+    private AdSystemManager $adManager;
+    private Ads $adModel;
+    private BannerPlacement $placementModel;
     public function __construct(
-        private AdSystemManager $adManager,
-        private Ads $adModel,
-        private BannerPlacement $placementModel
-    ) {
-        parent::__construct();
+        AdSystemManager $adManager,
+        Ads $adModel,
+        BannerPlacement $placementModel
+    , ?\App\Contracts\LoggerInterface $logger = null) {        $this->adManager = $adManager;
+        $this->adModel = $adModel;
+        $this->placementModel = $placementModel;
+
+        parent::__construct(null, null, null, null, $logger);
     }
 
     /**

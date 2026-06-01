@@ -27,9 +27,9 @@ class LotteryController extends BaseUserController
         \App\Models\LotteryRound $lotteryRoundModel,
         \App\Models\LotteryVote $lotteryVoteModel,
         \App\Services\Lottery\LotteryService $lotteryService,
-        \App\Services\Lottery\LotteryParticipationService $participationService)
+        \App\Services\Lottery\LotteryParticipationService $participationService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
 
         $this->lotteryDailyNumberModel = $lotteryDailyNumberModel;
         $this->lotteryParticipationModel = $lotteryParticipationModel;

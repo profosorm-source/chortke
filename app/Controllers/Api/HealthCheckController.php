@@ -11,9 +11,9 @@ class HealthCheckController extends BaseController
 {
     private HealthCheckService $healthService;
 
-    public function __construct(HealthCheckService $healthService)
+    public function __construct(HealthCheckService $healthService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->healthService = $healthService;
     }
 

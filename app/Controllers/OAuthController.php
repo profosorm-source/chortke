@@ -16,9 +16,9 @@ class OAuthController extends BaseController
 {
     private OAuthService $oauthService;
 
-    public function __construct(OAuthService $oauthService)
+    public function __construct(OAuthService $oauthService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->oauthService = $oauthService;
     }
 

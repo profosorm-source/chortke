@@ -20,8 +20,8 @@ class ReferralController extends BaseUserController
     public function __construct(
         ReferralCommission $referralCommissionModel,
         ReferralService    $referralService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->referralCommissionModel = $referralCommissionModel;
         $this->referralService = $referralService;
     }

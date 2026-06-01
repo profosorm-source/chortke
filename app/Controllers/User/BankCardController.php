@@ -10,9 +10,9 @@ class BankCardController extends BaseUserController
 {
     private BankCardService $bankCardService;
 
-    public function __construct(BankCardService $bankCardService)
+    public function __construct(BankCardService $bankCardService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->bankCardService = $bankCardService;
     }
 

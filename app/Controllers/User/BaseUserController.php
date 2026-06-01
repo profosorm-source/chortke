@@ -14,7 +14,7 @@ use App\Services\User\UserService;
  *
  *   Container::make(SomeUserController)
  *       └─→ SomeController::__construct(...services)
- *               └─→ parent::__construct()   ← بدون پارامتر
+ *               └─→ parent::__construct(null, null, null, null, $logger)   ← بدون پارامتر
  *                       └─→ BaseController::__construct()
  *                               └─→ از Container: Request, Response, Session
  *

@@ -31,7 +31,7 @@ class WithdrawalController extends BaseUserController
         UserService $userService,
         Logger $logger
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->bankCardService = $bankCardService;
         $this->walletService = $walletService;
         $this->riskDecisionService = $riskDecisionService;

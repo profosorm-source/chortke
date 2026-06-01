@@ -28,7 +28,10 @@ class MetricsController extends \App\Controllers\BaseController
         $token = $_GET['token'] ?? '';
         $expectedToken = config('health.check_token');
 
-        if (!in_array($clientIp, $allowedIps, true) && (!empty($expectedToken) && $token !== $expectedToken)) {
+        $isIpAllowed = in_array($clientIp, $allowedIps, true);
+        $isTokenValid = !empty($expectedToken) && hash_equals((string)$expectedToken, (string)$token);
+
+        if (!$isIpAllowed && !$isTokenValid) {
             http_response_code(403);
             exit('Forbidden');
         }
@@ -81,7 +84,10 @@ class MetricsController extends \App\Controllers\BaseController
         $token = $_GET['token'] ?? '';
         $expectedToken = config('health.check_token');
 
-        if (!in_array($clientIp, $allowedIps, true) && (!empty($expectedToken) && $token !== $expectedToken)) {
+        $isIpAllowed = in_array($clientIp, $allowedIps, true);
+        $isTokenValid = !empty($expectedToken) && hash_equals((string)$expectedToken, (string)$token);
+
+        if (!$isIpAllowed && !$isTokenValid) {
             http_response_code(403);
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode(['status' => 'error', 'message' => 'Forbidden']);

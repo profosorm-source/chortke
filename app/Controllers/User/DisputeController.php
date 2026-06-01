@@ -12,10 +12,12 @@ use App\Services\Shared\DisputeService;
  */
 class DisputeController extends BaseController
 {
+    private DisputeService $disputeService;
     public function __construct(
-        private DisputeService $disputeService
-    ) {
-        parent::__construct();
+        DisputeService $disputeService
+    , ?\App\Contracts\LoggerInterface $logger = null) {        $this->disputeService = $disputeService;
+
+        parent::__construct(null, null, null, null, $logger);
     }
 
     /**

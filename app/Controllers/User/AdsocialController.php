@@ -13,12 +13,18 @@ use App\Models\Ads;
  */
 class AdsocialController extends BaseUserController
 {
+    private SocialTaskService $socialTaskService;
+    private AdSystemManager $adManager;
+    private Ads $adModel;
     public function __construct(
-        private SocialTaskService $socialTaskService,
-        private AdSystemManager $adManager,
-        private Ads $adModel
-    ) {
-        parent::__construct();
+        SocialTaskService $socialTaskService,
+        AdSystemManager $adManager,
+        Ads $adModel
+    , ?\App\Contracts\LoggerInterface $logger = null) {        $this->socialTaskService = $socialTaskService;
+        $this->adManager = $adManager;
+        $this->adModel = $adModel;
+
+        parent::__construct(null, null, null, null, $logger);
     }
 
     /**

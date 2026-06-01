@@ -10,9 +10,9 @@ class TestCaptchaController extends BaseController
     private CaptchaService $captchaService;
     
     public function __construct(
-        \App\Services\CaptchaService $captchaService)
+        \App\Services\CaptchaService $captchaService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->captchaService = $captchaService;
     }
     

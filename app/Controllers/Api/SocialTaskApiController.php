@@ -46,8 +46,8 @@ class SocialTaskApiController extends BaseApiController
         SilentAntiFraudService $antiFraud,
         TrustService           $trust,
         UserService            $userService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->service     = $service;
         $this->antiFraud   = $antiFraud;
         $this->trust       = $trust;

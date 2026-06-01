@@ -11,9 +11,9 @@ class SocialTaskController extends BaseUserController
 {
     private SocialTaskService $socialTaskService;
 
-    public function __construct(SocialTaskService $socialTaskService)
+    public function __construct(SocialTaskService $socialTaskService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->socialTaskService = $socialTaskService;
     }
 

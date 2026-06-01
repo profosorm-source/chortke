@@ -23,8 +23,8 @@ class InteractionApiController extends BaseApiController
         FavoriteService $favoriteService,
         RatingService $ratingService,
         ReportService $reportService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->favoriteService = $favoriteService;
         $this->ratingService = $ratingService;
         $this->reportService = $reportService;

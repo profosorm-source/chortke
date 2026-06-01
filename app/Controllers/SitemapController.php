@@ -9,9 +9,9 @@ class SitemapController extends BaseController
 {
     private SitemapService $sitemapService;
     
-    public function __construct(SitemapService $sitemapService)
+    public function __construct(SitemapService $sitemapService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->sitemapService = $sitemapService;
     }
     

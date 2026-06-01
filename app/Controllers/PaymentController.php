@@ -22,8 +22,8 @@ class PaymentController extends BaseController
         PaymentService $paymentService,
         ReconciliationService $reconciliationService,
         \Core\Cache $cache
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->walletService = $walletService;
         $this->paymentService = $paymentService;
         $this->reconciliationService = $reconciliationService;

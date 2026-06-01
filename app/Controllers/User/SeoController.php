@@ -25,8 +25,8 @@ class SeoController extends BaseUserController
         SearchOrchestrator $searchService,
         SeoService $seoService,
         DashboardStatsService $analytics
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->adModel = $adModel;
         $this->executionModel = $executionModel;
         $this->searchService = $searchService;

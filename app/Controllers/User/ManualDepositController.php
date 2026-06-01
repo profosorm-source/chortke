@@ -13,19 +13,20 @@ class ManualDepositController extends BaseUserController
     private ManualDepositService $depositService;
     private BankCardService $cardService;
     private UploadService $uploadService;
-    private \Core\IdempotencyKey $idempotencyKey;
+    private \App\Services\Shared\IdempotencyService $idempotencyService;
 
     public function __construct(
         ManualDepositService $depositService,
         BankCardService $cardService,
         \App\Services\UploadService $uploadService,
-        \Core\IdempotencyKey $idempotencyKey)
+        ?\App\Services\Shared\IdempotencyService $idempotencyService = null,
+        ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->depositService = $depositService;
         $this->cardService = $cardService;
         $this->uploadService = $uploadService;
-        $this->idempotencyKey = $idempotencyKey;
+        $this->idempotencyService = $idempotencyService ?? \Core\Container::getInstance()->make(\App\Services\Shared\IdempotencyService::class);
     }
 
     /**
@@ -148,13 +149,13 @@ class ManualDepositController extends BaseUserController
             }
 
             // تولید کلید قطعی در صورت عدم ارسال
-            $effectiveIdempotencyKey = $idempotencyKey ?: hash('sha256', implode('|', [$userId, $data['tracking_code'], $data['amount'], $data['bank_card_id']]));
+            $effectiveIdempotencyKey = $idempotencyKey ?: null;
 
-            // استفاده از Core\IdempotencyKey برای بسته‌بندی امن و تضمین Idempotency
-            $result = $this->idempotencyKey->wrapInstance(
-                $effectiveIdempotencyKey,
+            // استفاده از IdempotencyService برای بسته‌بندی امن و تضمین Idempotency
+            $result = $this->idempotencyService->executeWithTransaction(
+                'manual_deposit.create',
                 $userId,
-                'manual_deposit_create',
+                $data,
                 function() use ($userId, $data, $receiptPath) {
                     return $this->depositService->create($userId, [
                         'bank_card_id' => (int)$data['bank_card_id'],
@@ -163,7 +164,7 @@ class ManualDepositController extends BaseUserController
                         'user_description' => (string)($data['user_description'] ?? ''),
                     ], $receiptPath);
                 },
-                $data
+                $effectiveIdempotencyKey
             );
 
             if (!($result['success'] ?? false)) {

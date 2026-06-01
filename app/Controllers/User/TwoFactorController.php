@@ -27,8 +27,8 @@ class TwoFactorController extends BaseUserController
         ActivityLog $activityLog,
         TwoFactorService $twoFactorService,
         \Core\RateLimiter $rateLimiter
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->activityLog      = $activityLog;
         $this->twoFactorService = $twoFactorService;
         $this->rateLimiter      = $rateLimiter;

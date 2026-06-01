@@ -47,20 +47,30 @@ class InfluencerController extends BaseApiController
     private ScoreService $scoreService;
     private VerificationService         $verificationService;
     private UploadService               $uploadService;
+    private InfluencerModel             $profileModel;
+    private StoryOrder                  $orderModel;
+    private Dispute                     $disputeModel;
 
     public function __construct(
         InfluencerService       $promotionService,
         DisputeService              $disputeService,
         ScoreService $scoreService,
         VerificationService         $verificationService,
-        UploadService               $uploadService
+        UploadService               $uploadService,
+        InfluencerModel             $profileModel,
+        StoryOrder                  $orderModel,
+        Dispute                     $disputeModel,
+        ?\App\Contracts\LoggerInterface $logger = null
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->promotionService  = $promotionService;
         $this->disputeService    = $disputeService;
         $this->scoreService = $scoreService;
         $this->verificationService = $verificationService;
         $this->uploadService     = $uploadService;
+        $this->profileModel      = $profileModel;
+        $this->orderModel        = $orderModel;
+        $this->disputeModel      = $disputeModel;
     }
 
     // ══════════════════════════════════════════════════════

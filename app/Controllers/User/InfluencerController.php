@@ -39,7 +39,7 @@ class InfluencerController extends BaseUserController
         UploadService               $upload,
         Logger                      $logger
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->profileModel        = $profileModel;
         $this->orderModel          = $orderModel;
         $this->disputeModel        = $disputeModel;

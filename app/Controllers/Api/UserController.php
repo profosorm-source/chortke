@@ -18,9 +18,9 @@ class UserController extends BaseApiController
 
     public function __construct(
         \App\Models\Notification $notifModel
-    )
+    , ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->notifModel = $notifModel;
     }
 

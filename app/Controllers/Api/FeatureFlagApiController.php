@@ -13,9 +13,9 @@ class FeatureFlagApiController extends BaseApiController
 {
     private FeatureFlagService $featureService;
     
-    public function __construct(FeatureFlagService $featureService)
+    public function __construct(FeatureFlagService $featureService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->featureService = $featureService;
         
         // API Authentication check

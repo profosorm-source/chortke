@@ -27,8 +27,8 @@ class CustomTaskAdController extends BaseUserController
         BrowserFingerprintService $fingerprintService,
         AdSystemManager $adManager,
         Ads $adsModel
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->coreService = $coreService;
         $this->moderationService = $moderationService;
         $this->ipQualityService = $ipQualityService;

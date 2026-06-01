@@ -15,8 +15,8 @@ class SocialAccountController extends BaseUserController
 
     public function __construct(
         \App\Services\SocialAccountService $socialAccountService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->socialAccountService = $socialAccountService;
         $this->service = $socialAccountService;
     }

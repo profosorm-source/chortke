@@ -15,9 +15,9 @@ class PageController extends BaseController
 	 
 	private Page $pageModel;
 
-    public function __construct(\App\Models\Page $pageModel)
+    public function __construct(\App\Models\Page $pageModel, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->pageModel = $pageModel;
     }
 

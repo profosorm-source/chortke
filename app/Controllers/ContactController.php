@@ -10,9 +10,9 @@ class ContactController extends BaseController
 {
     private \App\Services\ContactService $contactService;
 
-    public function __construct(\App\Services\ContactService $contactService)
+    public function __construct(\App\Services\ContactService $contactService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->contactService = $contactService;
     }
 
