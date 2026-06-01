@@ -17,10 +17,14 @@ use App\Jobs\BackfillSearchProjectionJob;
  */
 final class BackfillSearchProjectionCommand
 {
+    private BackfillSearchProjectionJob $job;
+    private LoggerInterface $logger;
     public function __construct(
-        private BackfillSearchProjectionJob $job,
-        private LoggerInterface $logger
-    ) {
+        BackfillSearchProjectionJob $job,
+        LoggerInterface $logger
+    ) {        $this->job = $job;
+        $this->logger = $logger;
+
     }
 
     public function run(array $argv): void

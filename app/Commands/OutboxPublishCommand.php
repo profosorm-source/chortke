@@ -15,10 +15,14 @@ use App\Services\OutboxPublisher;
  */
 class OutboxPublishCommand
 {
+    private OutboxPublisher $publisher;
+    private LoggerInterface $logger;
     public function __construct(
-        private OutboxPublisher $publisher,
-        private LoggerInterface $logger
-    ) {}
+        OutboxPublisher $publisher,
+        LoggerInterface $logger
+    ) {        $this->publisher = $publisher;
+        $this->logger = $logger;
+}
 
     public function run(array $argv): void
     {

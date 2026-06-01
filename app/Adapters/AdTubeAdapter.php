@@ -8,18 +8,28 @@ use App\Contracts\ValidatorFactoryInterface;
 use Core\Database;
 use App\Services\Settings\AppSettings;
 use App\Constants\PercentageConstants;
+use App\Services\Shared\IdempotencyService;
 use App\Models\Ads;
 
 class AdTubeAdapter extends AdapterBase implements AdSystemContract
 {
+    private Ads $adModel;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private Database $db;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private Ads $adModel,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private Database $db,
+        Ads $adModel,
+        \App\Contracts\WalletServiceInterface $walletService,
+        Database $db,
         LoggerInterface $logger,
         AppSettings $appSettings,
-        ValidatorFactoryInterface $validatorFactory
-    ) {
+        ValidatorFactoryInterface $validatorFactory,
+        IdempotencyService $idempotencyService
+    ) {        $this->adModel = $adModel;
+        $this->walletService = $walletService;
+        $this->db = $db;
+        $this->idempotencyService = $idempotencyService;
+
         parent::__construct($logger, $settingService, $validatorFactory);
     }
 
@@ -43,21 +53,24 @@ class AdTubeAdapter extends AdapterBase implements AdSystemContract
         try {
             $this->db->beginTransaction();
 
-            $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('adtube_budget', [
+            $payload = [
                 'user_id' => $userId,
-                'title' => $data['title'] ?? 'untitled',
-                'amount' => $totalWithFee
-            ]);
-
-            $txId = $this->walletService->withdraw(
-                $userId,
-                $totalWithFee,
-                $currency,
-                [
+                'amount' => $totalWithFee,
+                'currency' => $currency,
+                'metadata' => [
                     'type' => 'adtube_budget',
+                    'title' => $data['title'] ?? 'untitled',
                     'description' => "شارژ بودجه تبلیغ ویدیویی: {$data['title']}",
-                    'idempotency_key' => $idempotencyKey,
-                ]
+                ],
+            ];
+
+            $txId = $this->idempotencyService->executeWithTransaction(
+                'adtube_budget',
+                $userId,
+                $payload,
+                function () use ($userId, $totalWithFee, $currency, $payload) {
+                    return $this->walletService->withdraw($userId, $totalWithFee, $currency, $payload['metadata']);
+                }
             );
 
             if (!$txId) {

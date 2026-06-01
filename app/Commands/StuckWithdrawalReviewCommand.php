@@ -24,11 +24,17 @@ use App\Services\Withdrawal\WithdrawalAdminService;
  */
 class StuckWithdrawalReviewCommand
 {
+    private ReconciliationService $reconciliation;
+    private WithdrawalAdminService $withdrawalAdminService;
+    private LoggerInterface $logger;
     public function __construct(
-        private ReconciliationService $reconciliation,
-        private WithdrawalAdminService $withdrawalAdminService,
-        private LoggerInterface $logger
-    ) {}
+        ReconciliationService $reconciliation,
+        WithdrawalAdminService $withdrawalAdminService,
+        LoggerInterface $logger
+    ) {        $this->reconciliation = $reconciliation;
+        $this->withdrawalAdminService = $withdrawalAdminService;
+        $this->logger = $logger;
+}
 
     public function run(array $argv): void
     {

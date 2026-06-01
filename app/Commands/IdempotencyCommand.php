@@ -16,10 +16,14 @@ use Core\IdempotencyKey;
  */
 class IdempotencyCommand
 {
+    private IdempotencyKey $idempotency;
+    private LoggerInterface $logger;
     public function __construct(
-        private IdempotencyKey $idempotency,
-        private LoggerInterface $logger
-    ) {}
+        IdempotencyKey $idempotency,
+        LoggerInterface $logger
+    ) {        $this->idempotency = $idempotency;
+        $this->logger = $logger;
+}
 
     public function run(array $argv): void
     {

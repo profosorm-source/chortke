@@ -59,6 +59,10 @@ class CryptoExplorerAdapter implements CryptoVerificationAdapter
      */
     private function getExplorerUrl(string $network, string $txHash): string
     {
+        if (!$this->isValidTxHashForNetwork($network, $txHash)) {
+            return '#';
+        }
+
         $map = [
             'TRC20' => 'https://tronscan.org/#/transaction/',
             'BNB20' => 'https://bscscan.com/tx/',
@@ -66,7 +70,59 @@ class CryptoExplorerAdapter implements CryptoVerificationAdapter
             'TON'   => 'https://tonscan.org/tx/',
             'SOL'   => 'https://explorer.solana.com/tx/',
         ];
-        return ($map[$network] ?? '#') . $txHash;
+
+        if (!isset($map[$network])) {
+            return '#';
+        }
+
+        return $map[$network] . rawurlencode($txHash);
+    }
+
+    private function isValidTxHashForNetwork(string $network, string $txHash): bool
+    {
+        $network = strtoupper($network);
+        $txHash = trim($txHash);
+
+        if ($txHash === '') {
+            return false;
+        }
+
+        switch ($network) {
+            case 'BNB20':
+            case 'ERC20':
+                return (bool)preg_match('/^0x[a-f0-9]{64}$/i', $txHash);
+            case 'TRC20':
+                return (bool)preg_match('/^[a-f0-9]{64}$/i', $txHash);
+            case 'SOL':
+                return (bool)preg_match('/^[1-9A-HJ-NP-Za-km-z]{88}$/', $txHash);
+            case 'TON':
+                return (bool)preg_match('/^[a-f0-9]{64}$/i', $txHash)
+                    || (bool)preg_match('/^[A-Za-z0-9\/\+]{43}=$/', $txHash);
+            default:
+                return false;
+        }
+    }
+
+    private function assertAllowedExplorerUrl(string $url): bool
+    {
+        $allowedHosts = [
+            'tronscan.org',
+            'bscscan.com',
+            'etherscan.io',
+            'tonscan.org',
+            'explorer.solana.com',
+        ];
+
+        $parts = parse_url($url);
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            return false;
+        }
+
+        if (strtolower($parts['scheme']) !== 'https') {
+            return false;
+        }
+
+        return in_array(strtolower($parts['host']), $allowedHosts, true);
     }
 
     /**
@@ -74,11 +130,19 @@ class CryptoExplorerAdapter implements CryptoVerificationAdapter
      */
     private function fetchPage(string $url): ?string
     {
+        if (!$this->assertAllowedExplorerUrl($url)) {
+            return null;
+        }
+
         $ch = \curl_init($url);
         \curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        \curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        \curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
         \curl_setopt($ch, CURLOPT_TIMEOUT, 5);
         \curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        \curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+        if (defined('CURLOPT_REDIR_PROTOCOLS')) {
+            \curl_setopt($ch, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
+        }
         \curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge([
             'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
             'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -92,7 +156,7 @@ class CryptoExplorerAdapter implements CryptoVerificationAdapter
         $httpCode = \curl_getinfo($ch, CURLINFO_HTTP_CODE);
         \curl_close($ch);
 
-        if ($httpCode !== 200 || $response === false) {
+        if ($response === false || $httpCode !== 200) {
             return null;
         }
 

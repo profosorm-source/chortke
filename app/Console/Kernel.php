@@ -706,6 +706,36 @@ if (
     return ['cleaned_kyc_files' => $cleaned];
 }, 'cleanup_kyc_files');
 
+// ✅ **Idempotency Key Cleanup - مهم برای جلوگیری از رشد نامحدود DB**
+// حذف کلیدهای منقضی‌شده (۹۰ روز برای عملیات مالی)
+$scheduler->daily('03:45', function () {
+    try {
+        $idempotencyKey = \Core\Container::getInstance()->make(\Core\IdempotencyKey::class);
+        $deleted = $idempotencyKey->cleanup(false); // Live delete
+        
+        if ($deleted > 0) {
+            logger()->info('idempotency.cleanup.completed', [
+                'channel' => 'maintenance',
+                'deleted_keys' => $deleted,
+                'timestamp' => date('Y-m-d H:i:s'),
+            ]);
+        }
+        
+        return [
+            'deleted_idempotency_keys' => $deleted,
+            'retention_days' => 90,
+        ];
+    } catch (\Throwable $e) {
+        logger()->error('idempotency.cleanup.failed', [
+            'channel' => 'maintenance',
+            'error' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+        ]);
+        return ['error' => $e->getMessage()];
+    }
+}, 'idempotency_cleanup');
+
 /**
  * ─────────────────────────────────────────
  * روزانه ساعت ۰۴:۰۰ - ریست ماهانه

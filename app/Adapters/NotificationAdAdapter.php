@@ -9,6 +9,7 @@ use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use App\Models\Ads;
 use App\Contracts\WalletServiceInterface;
+use App\Services\Shared\IdempotencyService;
 use Core\Database;
 use App\Services\Settings\AppSettings;
 use Core\Exceptions\ValidationException;
@@ -18,14 +19,23 @@ use Core\Exceptions\ValidationException;
  */
 class NotificationAdAdapter extends AdapterBase implements AdSystemContract
 {
+    private Ads $adModel;
+    private WalletServiceInterface $walletService;
+    private Database $db;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private Ads $adModel,
-        private WalletServiceInterface $walletService,
-        private Database $db,
+        Ads $adModel,
+        WalletServiceInterface $walletService,
+        Database $db,
         LoggerInterface $logger,
         AppSettings $appSettings,
-        ValidatorFactoryInterface $validatorFactory
-    ) {
+        ValidatorFactoryInterface $validatorFactory,
+        IdempotencyService $idempotencyService
+    ) {        $this->adModel = $adModel;
+        $this->walletService = $walletService;
+        $this->db = $db;
+        $this->idempotencyService = $idempotencyService;
+
         parent::__construct($logger, $settingService, $validatorFactory);
     }
 
@@ -53,18 +63,22 @@ class NotificationAdAdapter extends AdapterBase implements AdSystemContract
         try {
             $this->db->beginTransaction();
 
-            // 2. Execute Atomic Financial Withdraw
-            $txId = $this->walletService->withdraw(
-                $userId,
-                $totalWithFee,
-                'irt',
-                [
+            $payload = [
+                'user_id' => $userId,
+                'amount' => $totalWithFee,
+                'currency' => 'irt',
+                'metadata' => [
                     'type' => 'notification_ad_budget',
-                    'idempotency_key' => \Core\IdempotencyKey::generateFromPayload('push_ad_v1', [
-                        'user' => $userId,
-                        'time' => microtime(true)
-                    ])
-                ]
+                ],
+            ];
+
+            $txId = $this->idempotencyService->executeWithTransaction(
+                'notification_ad_budget',
+                $userId,
+                $payload,
+                function () use ($userId, $totalWithFee) {
+                    return $this->walletService->withdraw($userId, $totalWithFee, 'irt', ['type' => 'notification_ad_budget']);
+                }
             );
 
             if (!$txId) {

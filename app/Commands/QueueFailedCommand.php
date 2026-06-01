@@ -16,11 +16,17 @@ use App\Contracts\LoggerInterface;
  */
 class QueueFailedCommand extends Command
 {
+    private Database $db;
+    private Queue $queue;
+    private LoggerInterface $logger;
     public function __construct(
-        private Database $db,
-        private Queue $queue,
-        private LoggerInterface $logger
-    ) {}
+        Database $db,
+        Queue $queue,
+        LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->queue = $queue;
+        $this->logger = $logger;
+}
 
     /**
      * لیست کردن آخرین جاب‌های شکست خورده

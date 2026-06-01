@@ -28,12 +28,18 @@ class LogNotificationAdapter
      */
     protected CircuitBreaker $circuit;
 
+    private Notification $notification;
+    private SystemTelemetryModel $telemetry;
+    private Logger $logger;
     public function __construct(
-        private Notification $notification,
-        private SystemTelemetryModel $telemetry,
-        private Logger $logger,
+        Notification $notification,
+        SystemTelemetryModel $telemetry,
+        Logger $logger,
         CircuitBreaker $circuit
-    ) {
+    ) {        $this->notification = $notification;
+        $this->telemetry = $telemetry;
+        $this->logger = $logger;
+
         $this->circuit = $circuit;
     }
 

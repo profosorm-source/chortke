@@ -15,10 +15,14 @@ use App\Contracts\LoggerInterface;
  */
 class DlqWorkCommand
 {
+    private DlqWorker $worker;
+    private LoggerInterface $logger;
     public function __construct(
-        private DlqWorker $worker,
-        private LoggerInterface $logger
-    ) {}
+        DlqWorker $worker,
+        LoggerInterface $logger
+    ) {        $this->worker = $worker;
+        $this->logger = $logger;
+}
 
     /**
      * Executes the CLI command.

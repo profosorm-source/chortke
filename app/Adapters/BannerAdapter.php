@@ -9,6 +9,7 @@ use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use App\Models\Ads;
 use App\Contracts\WalletServiceInterface;
+use App\Services\Shared\IdempotencyService;
 use Core\Database;
 use App\Services\Settings\AppSettings;
 use Core\Exceptions\ValidationException;
@@ -24,14 +25,23 @@ use Core\Exceptions\ValidationException;
  */
 class BannerAdapter extends AdapterBase implements AdSystemContract
 {
+    private Ads $bannerModel;
+    private WalletServiceInterface $walletService;
+    private Database $db;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private Ads $bannerModel,
-        private WalletServiceInterface $walletService,
-        private Database $db,
+        Ads $bannerModel,
+        WalletServiceInterface $walletService,
+        Database $db,
         LoggerInterface $logger,
         AppSettings $appSettings,
-        ValidatorFactoryInterface $validatorFactory
-    ) {
+        ValidatorFactoryInterface $validatorFactory,
+        IdempotencyService $idempotencyService
+    ) {        $this->bannerModel = $bannerModel;
+        $this->walletService = $walletService;
+        $this->db = $db;
+        $this->idempotencyService = $idempotencyService;
+
         parent::__construct($logger, $settingService, $validatorFactory);
     }
 
@@ -64,18 +74,24 @@ class BannerAdapter extends AdapterBase implements AdSystemContract
             $this->db->beginTransaction();
 
             // 2. Atomic Wallet Withdrawal using centralized Strategy pattern
-            $txId = $this->walletService->withdraw(
-                $userId,
-                $totalWithFee,
-                'irt',
-                [
+            $payload = [
+                'user_id' => $userId,
+                'amount' => $totalWithFee,
+                'currency' => 'irt',
+                'metadata' => [
                     'type' => 'banner_budget',
-                    'idempotency_key' => \Core\IdempotencyKey::generateFromPayload('banner_v2_budget', [
-                        'user_id' => $userId,
-                        'ts'      => microtime(true),
-                        'amount'  => $totalWithFee
-                    ])
-                ]
+                    'placement' => $placement,
+                    'amount' => $totalWithFee,
+                ],
+            ];
+
+            $txId = $this->idempotencyService->executeWithTransaction(
+                'banner_budget',
+                $userId,
+                $payload,
+                function () use ($userId, $totalWithFee) {
+                    return $this->walletService->withdraw($userId, $totalWithFee, 'irt', ['type' => 'banner_budget']);
+                }
             );
 
             if (!$txId) {

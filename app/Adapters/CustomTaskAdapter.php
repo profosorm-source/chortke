@@ -15,14 +15,20 @@ use App\Services\Settings\AppSettings;
  */
 class CustomTaskAdapter extends AdapterBase implements AdSystemContract
 {
+    private Ads $taskModel;
+    private WalletServiceInterface $walletService;
+    private Database $db;
     public function __construct(
-        private Ads $taskModel,
-        private WalletServiceInterface $walletService,
-        private Database $db,
+        Ads $taskModel,
+        WalletServiceInterface $walletService,
+        Database $db,
         LoggerInterface $logger,
         AppSettings $appSettings,
         ValidatorFactoryInterface $validatorFactory
-    ) {
+    ) {        $this->taskModel = $taskModel;
+        $this->walletService = $walletService;
+        $this->db = $db;
+
         parent::__construct($logger, $settingService, $validatorFactory);
     }
 

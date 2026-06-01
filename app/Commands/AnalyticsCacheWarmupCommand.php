@@ -14,10 +14,14 @@ use App\Contracts\LoggerInterface;
  */
 class AnalyticsCacheWarmupCommand
 {
+    private AnalyticsService $analytics;
+    private LoggerInterface $logger;
     public function __construct(
-        private AnalyticsService $analytics,
-        private LoggerInterface $logger
-    ) {}
+        AnalyticsService $analytics,
+        LoggerInterface $logger
+    ) {        $this->analytics = $analytics;
+        $this->logger = $logger;
+}
 
     /**
      * اجرای فرایند پیش‌گرمایش

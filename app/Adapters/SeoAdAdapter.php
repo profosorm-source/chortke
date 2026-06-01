@@ -7,19 +7,29 @@ use App\Contracts\LoggerInterface;
 use App\Contracts\ValidatorFactoryInterface;
 use App\Models\Ads;
 use App\Contracts\WalletServiceInterface;
+use App\Services\Shared\IdempotencyService;
 use Core\Database;
 use App\Services\Settings\AppSettings;
 
 class SeoAdAdapter extends AdapterBase implements AdSystemContract
 {
+    private Ads $adModel;
+    private WalletServiceInterface $walletService;
+    private Database $db;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private Ads $adModel,
-        private WalletServiceInterface $walletService,
-        private Database $db,
+        Ads $adModel,
+        WalletServiceInterface $walletService,
+        Database $db,
         LoggerInterface $logger,
         AppSettings $appSettings,
-        ValidatorFactoryInterface $validatorFactory
-    ) {
+        ValidatorFactoryInterface $validatorFactory,
+        IdempotencyService $idempotencyService
+    ) {        $this->adModel = $adModel;
+        $this->walletService = $walletService;
+        $this->db = $db;
+        $this->idempotencyService = $idempotencyService;
+
         parent::__construct($logger, $settingService, $validatorFactory);
     }
 
@@ -40,19 +50,24 @@ class SeoAdAdapter extends AdapterBase implements AdSystemContract
         try {
             $this->db->beginTransaction();
 
-            $txId = $this->walletService->withdraw(
+            $payload = [
+                'user_id' => $userId,
+                'amount' => $totalWithFee,
+                'currency' => 'irt',
+                'metadata' => [
+                    'type' => 'seo_ad_budget',
+                    'title' => $data['title'] ?? 'untitled',
+                    'amount' => $totalWithFee,
+                ],
+            ];
+
+            $txId = $this->idempotencyService->executeWithTransaction(
+                'seo_ad_budget',
                 $userId,
-                $totalWithFee,
-                'irt',
-                [
-                    'type' => 'seo_ad_budget', 
-                    'idempotency_key' => \Core\IdempotencyKey::generateFromPayload('seo_ad_budget', [
-                        'user_id' => $userId,
-                        'ts'      => microtime(true),
-                        'title' => $data['title'] ?? 'untitled',
-                        'amount' => $totalWithFee
-                    ])
-                ]
+                $payload,
+                function () use ($userId, $totalWithFee) {
+                    return $this->walletService->withdraw($userId, $totalWithFee, 'irt', ['type' => 'seo_ad_budget']);
+                }
             );
 
             if (!$txId) {

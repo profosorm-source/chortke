@@ -324,15 +324,17 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
             // Check amount using integer raw comparisons (H-02, M-05)
             $decimals = (int)($tx['tokenDecimal'] ?? 18);
             $amountRaw = $tx['value'] ?? '0';
-            $expectedRaw = \Core\ValueObjects\Money::fromString((string)((string)$expectedAmount))->multiply((string)(bcpow('10'))->getAmount()$decimals, 0), 0);
-            $toleranceRaw = \Core\ValueObjects\Money::fromString((string)('0.01'))->multiply((string)(bcpow('10'))->getAmount()$decimals, 0), 0);
 
-            $diff = \Core\ValueObjects\Money::fromString((string)($amountRaw))->subtract(\Core\ValueObjects\Money::fromString((string)($expectedRaw)))->getAmount();
+            // Convert expected amount to raw token units using BCMath to avoid float issues
+            $expectedRaw = bcmul((string)$expectedAmount, bcpow('10', $decimals), 0);
+            $toleranceRaw = bcmul('0.01', bcpow('10', $decimals), 0);
+
+            $diff = bcsub((string)$amountRaw, (string)$expectedRaw, 0);
             if (str_starts_with($diff, '-')) {
                 $diff = substr($diff, 1);
             }
 
-            if (\Core\ValueObjects\Money::fromString((string)($diff))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($toleranceRaw)))) {
+            if (bccomp($diff, $toleranceRaw, 0) === 1) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 
@@ -397,15 +399,17 @@ class CryptoApiAdapter implements CryptoVerificationAdapter
 
             $decimals = (int)($tx['tokenDecimal'] ?? 6);
             $amountRaw = $tx['value'] ?? '0';
-            $expectedRaw = \Core\ValueObjects\Money::fromString((string)((string)$expectedAmount))->multiply((string)(bcpow('10'))->getAmount()$decimals, 0), 0);
-            $toleranceRaw = \Core\ValueObjects\Money::fromString((string)('0.01'))->multiply((string)(bcpow('10'))->getAmount()$decimals, 0), 0);
 
-            $diff = \Core\ValueObjects\Money::fromString((string)($amountRaw))->subtract(\Core\ValueObjects\Money::fromString((string)($expectedRaw)))->getAmount();
+            // Convert expected amount to raw token units using BCMath
+            $expectedRaw = bcmul((string)$expectedAmount, bcpow('10', $decimals), 0);
+            $toleranceRaw = bcmul('0.01', bcpow('10', $decimals), 0);
+
+            $diff = bcsub((string)$amountRaw, (string)$expectedRaw, 0);
             if (str_starts_with($diff, '-')) {
                 $diff = substr($diff, 1);
             }
 
-            if (\Core\ValueObjects\Money::fromString((string)($diff))->isGreaterThan(\Core\ValueObjects\Money::fromString((string)($toleranceRaw)))) {
+            if (bccomp($diff, $toleranceRaw, 0) === 1) {
                 return ['status' => 'mismatch', 'reason' => 'مبلغ تراکنش مطابقت ندارد'];
             }
 

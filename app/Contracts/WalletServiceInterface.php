@@ -23,6 +23,8 @@ interface WalletServiceInterface
     public function completeWithdrawal(int $userId, string $amount, string $currency, ?string $transactionId): bool;
     
     public function cancelWithdrawal(int $userId, string $amount, string $currency, ?string $transactionId): bool;
+
+    public function reverseTransaction(string $transactionId, ?int $adminId = null, string $reason = ''): bool;
     
     public function canWithdraw(int $userId, string $amount, string $currency = 'irt'): array;
     

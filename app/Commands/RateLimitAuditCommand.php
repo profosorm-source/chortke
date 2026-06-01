@@ -17,7 +17,12 @@ use App\Contracts\LoggerInterface;
  */
 class RateLimitAuditCommand
 {
-    public function __construct(private LoggerInterface $logger) {}
+    private LoggerInterface $logger;
+
+    public function __construct(LoggerInterface $logger)
+    {
+        $this->logger = $logger;
+    }
 
     public function run(array $argv): void
     {

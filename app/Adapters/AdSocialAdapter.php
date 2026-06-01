@@ -10,6 +10,7 @@ use App\Contracts\ValidatorFactoryInterface;
 use Core\Database;
 use App\Services\Settings\AppSettings;
 use App\Constants\PercentageConstants;
+use App\Services\Shared\IdempotencyService;
 use App\Models\Ads;
 
 /**
@@ -17,14 +18,23 @@ use App\Models\Ads;
  */
 class AdSocialAdapter extends AdapterBase implements AdSystemContract
 {
+    private Ads $adModel;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private Database $db;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private Ads $adModel,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private Database $db,
+        Ads $adModel,
+        \App\Contracts\WalletServiceInterface $walletService,
+        Database $db,
         LoggerInterface $logger,
         AppSettings $appSettings,
-        ValidatorFactoryInterface $validatorFactory
-    ) {
+        ValidatorFactoryInterface $validatorFactory,
+        IdempotencyService $idempotencyService
+    ) {        $this->adModel = $adModel;
+        $this->walletService = $walletService;
+        $this->db = $db;
+        $this->idempotencyService = $idempotencyService;
+
         parent::__construct($logger, $settingService, $validatorFactory);
     }
 
@@ -52,22 +62,24 @@ class AdSocialAdapter extends AdapterBase implements AdSystemContract
         try {
             $this->db->beginTransaction();
 
-            $idempotencyKey = \Core\IdempotencyKey::generateFromPayload('social_task_budget', [
+            $payload = [
                 'user_id' => $userId,
-                'platform' => $data['platform'] ?? 'unknown',
-                'amount' => $totalWithFee
-            ]);
-
-            // کسر متمرکز وجه از کیف پول کاربر (اتمی)
-            $txId = $this->walletService->withdraw(
-                $userId,
-                $totalWithFee,
-                $currency,
-                [
+                'amount' => $totalWithFee,
+                'currency' => $currency,
+                'metadata' => [
                     'type' => 'social_task_budget',
+                    'platform' => $data['platform'] ?? 'unknown',
                     'description' => "بودجه تسک شبکه اجتماعی ({$data['platform']}): {$data['title']}",
-                    'idempotency_key' => $idempotencyKey,
-                ]
+                ],
+            ];
+
+            $txId = $this->idempotencyService->executeWithTransaction(
+                'social_task_budget',
+                $userId,
+                $payload,
+                function () use ($userId, $totalWithFee, $currency, $payload) {
+                    return $this->walletService->withdraw($userId, $totalWithFee, $currency, $payload['metadata']);
+                }
             );
 
             if (!$txId) {

@@ -15,10 +15,14 @@ use App\Contracts\LoggerInterface;
  */
 class QueueWorkCommand
 {
+    private QueueWorker $worker;
+    private LoggerInterface $logger;
     public function __construct(
-        private QueueWorker $worker,
-        private LoggerInterface $logger
-    ) {}
+        QueueWorker $worker,
+        LoggerInterface $logger
+    ) {        $this->worker = $worker;
+        $this->logger = $logger;
+}
 
     /**
      * Executes the CLI command.

@@ -37,6 +37,8 @@ class RouteAuditCommand
             }
         }
 
+        $this->verifyRouteFiles($routeFiles);
+
         // 2. اعتبارسنجی دستی اندپوینت‌های کلیدی سیستم
         echo "\n\033[1;36mVerifying Critical API Endpoints...\033[0m\n";
 
@@ -71,6 +73,62 @@ class RouteAuditCommand
         }
 
         echo "\033[1;32m\n✅ All critical routes verified successfully!\033[0m\n";
+    }
+
+    private function verifyRouteFiles(array $routeFiles): void
+    {
+        echo "\n\033[1;36mVerifying route definitions in route files...\033[0m\n";
+
+        foreach ($routeFiles as $file) {
+            if (!file_exists($file)) {
+                continue;
+            }
+
+            $contents = file_get_contents($file);
+            if ($contents === false) {
+                $this->warnings[] = "⚠️ Could not read route file: {$file}";
+                continue;
+            }
+
+            $aliasMap = $this->parseUseAliases($contents);
+
+            preg_match_all('/\[\s*([\\A-Za-z0-9_]+)::class\s*,\s*["\']([A-Za-z0-9_]+)["\']\s*\]/', $contents, $matches, PREG_SET_ORDER);
+            foreach ($matches as $match) {
+                [$raw, $className, $method] = $match;
+                $resolvedClass = $this->resolveRouteClass($className, $aliasMap);
+                if ($resolvedClass === null) {
+                    $this->errors[] = "❌ {$file}: Route references unimported controller alias '{$className}::class'";
+                    continue;
+                }
+                $this->verifyRoute('UNKNOWN', $file, $resolvedClass, $method);
+            }
+        }
+    }
+
+    private function parseUseAliases(string $contents): array
+    {
+        $aliases = [];
+        preg_match_all('/^use\s+([^;]+);/m', $contents, $matches, PREG_SET_ORDER);
+        foreach ($matches as $match) {
+            $useStatement = trim($match[1]);
+            if (stripos($useStatement, ' as ') !== false) {
+                [$fqcn, $alias] = preg_split('/\s+as\s+/i', $useStatement, 2);
+            } else {
+                $fqcn = $useStatement;
+                $parts = explode('\\', $fqcn);
+                $alias = end($parts);
+            }
+            $aliases[$alias] = ltrim($fqcn, '\\');
+        }
+        return $aliases;
+    }
+
+    private function resolveRouteClass(string $className, array $aliasMap): ?string
+    {
+        if (str_contains($className, '\\')) {
+            return ltrim($className, '\\');
+        }
+        return $aliasMap[$className] ?? null;
     }
 
     private function verifyRoute(string $method, string $path, string $controllerClass, string $controllerMethod): void
