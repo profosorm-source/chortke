@@ -24,8 +24,16 @@ class IdempotencyKey
     
     // تنظیمات
     private const TIMEOUT_SECONDS = 300; // 5 دقیقه
-    private const CLEANUP_DAYS = 7;
+    private const RETRY_DELAY_SECONDS = 60; // پس از چه مدت خطای retryable قابل تلاش دوباره است
+    private const CLEANUP_DAYS = 90; // نگهداری پیش‌فرض برای عملیات مالی
     private const MAX_RETRIES = 3;
+
+    private const STATUS_PENDING = 'pending';
+    private const STATUS_COMPLETED = 'completed';
+    private const STATUS_FAILED_RETRYABLE = 'failed_retryable';
+    private const STATUS_FAILED_FINAL = 'failed_final';
+    private const STATUS_LEGACY_PROCESSING = 'processing';
+    private const STATUS_LEGACY_FAILED = 'failed';
 
     public function __construct(Database $db, Cache $cache)
     {
@@ -142,7 +150,7 @@ class IdempotencyKey
             // تا شناسه دقیق سطر را بگیریم و با FOR UPDATE قفل کنیم
             $insertSql = "INSERT INTO {$this->table}
                           (`key`, `user_id`, `action`, `status`, `request_data`, `created_at`, `expires_at`)
-                          VALUES (:key, :user_id, :action, 'processing', :request_data, NOW(),
+                          VALUES (:key, :user_id, :action, '" . self::STATUS_PENDING . "', :request_data, NOW(),
                                   DATE_ADD(NOW(), INTERVAL " . self::CLEANUP_DAYS . " DAY))
                           ON DUPLICATE KEY UPDATE `id` = LAST_INSERT_ID(`id`)";
 
@@ -157,7 +165,6 @@ class IdempotencyKey
             $lastId = (int)$this->db->lastInsertId();
             $wasInserted = ($stmt->rowCount() === 1);
 
-            // حالا با FOR UPDATE وضعیت واقعی را می‌خوانیم
             $selectSql = "SELECT * FROM {$this->table}
                           WHERE `id` = :id
                           FOR UPDATE";
@@ -171,7 +178,6 @@ class IdempotencyKey
                 throw new \RuntimeException("Idempotency key not found after insert: {$key}");
             }
 
-            // CORE-049: Verify signature exact matches if the row pre-existed (stops payload manipulation)
             if (!$wasInserted) {
                 $storedSignature = json_decode($existing['request_data'] ?? '', true);
                 if (is_array($storedSignature)) {
@@ -179,7 +185,7 @@ class IdempotencyKey
                     $storedMethod = $storedSignature['method'] ?? '';
                     $storedPayload = $storedSignature['data'] ?? [];
 
-                    if ($storedUri !== ($payloadSignature['uri']) || $storedMethod !== ($payloadSignature['method'])) {
+                    if ($storedUri !== $payloadSignature['uri'] || $storedMethod !== $payloadSignature['method']) {
                         $this->db->commit();
                         throw new \RuntimeException("Idempotency Collision: Reusing key '{$key}' for a different URI/Method footprint.", 409);
                     }
@@ -191,7 +197,6 @@ class IdempotencyKey
                 }
             }
 
-            // ردیف جدید درج شد — درخواست اول
             if ($wasInserted) {
                 $this->logEvent('idempotency.key.created', [
                     'log_id' => $logId,
@@ -199,82 +204,116 @@ class IdempotencyKey
                     'action' => $action,
                 ]);
                 $this->db->commit();
-                return ['is_duplicate' => false];
+                return ['is_duplicate' => false, 'status' => self::STATUS_PENDING];
             }
 
-            // ردیف قبلاً وجود داشت — بررسی وضعیت
+            $status = $existing['status'] ?? '';
             $this->logEvent('idempotency.key.exists', [
                 'log_id' => $logId,
                 'key'    => $key,
-                'status' => $existing['status'] ?? null,
+                'status' => $status,
             ]);
 
-            if ($existing['status'] === 'completed') {
-                $result = json_decode($existing['result'], true) ?? ['error' => 'Invalid result format'];
+            $result = null;
+            if (!empty($existing['result'])) {
+                $decoded = json_decode($existing['result'], true);
+                $result = json_last_error() === JSON_ERROR_NONE ? $decoded : $existing['result'];
+            }
+
+            if ($status === self::STATUS_COMPLETED) {
                 $this->db->commit();
                 return [
                     'is_duplicate' => true,
+                    'status'       => self::STATUS_COMPLETED,
                     'result'       => $result,
                     'cached_at'    => $existing['completed_at'] ?? $existing['created_at'],
+                    'http_status'  => 200, // 200 OK: returning cached successful result
                 ];
             }
 
-            if ($existing['status'] === 'failed') {
-                $elapsed = time() - strtotime($existing['created_at']);
-                if ($elapsed > 60) {
-                    $this->updateStatus($key, $userId, 'processing');
-                    $this->db->commit();
-                    return ['is_duplicate' => false];
-                }
-                $result = json_decode($existing['result'], true) ?? ['error' => 'Unknown error'];
+            if ($status === self::STATUS_FAILED_FINAL || $status === self::STATUS_LEGACY_FAILED) {
                 $this->db->commit();
-                return ['is_duplicate' => true, 'result' => $result, 'is_error' => true];
+                return [
+                    'is_duplicate' => true,
+                    'status'       => self::STATUS_FAILED_FINAL,
+                    'result'       => $result,
+                    'is_error'     => true,
+                    'http_status'  => 400, // 400 Bad Request: unrecoverable failure, do not retry
+                    'retry_allowed' => false,
+                ];
             }
 
-            if ($existing['status'] === 'processing') {
+            if ($status === self::STATUS_FAILED_RETRYABLE) {
+                $elapsed = time() - strtotime($existing['created_at']);
+                $retryAfter = max(0, self::RETRY_DELAY_SECONDS - $elapsed);
+                
+                if ($elapsed > self::RETRY_DELAY_SECONDS) {
+                    // Sufficient time has passed, allow retry
+                    $this->updateStatusWithMetadata($key, $userId, self::STATUS_PENDING, [
+                        'retry_allowed' => true,
+                        'previous_attempt_at' => $existing['created_at'],
+                        'elapsed_seconds' => $elapsed,
+                    ]);
+                    $this->db->commit();
+                    return ['is_duplicate' => false, 'status' => self::STATUS_PENDING];
+                }
+
+                // Still within cooldown period
+                $this->db->commit();
+                return [
+                    'is_duplicate' => true,
+                    'status'       => self::STATUS_FAILED_RETRYABLE,
+                    'result'       => $result,
+                    'is_error'     => true,
+                    'http_status'  => 202, // 202 Accepted: still processing, retry later
+                    'retry_after'  => $retryAfter,
+                    'retry_allowed' => true,
+                ];
+            }
+
+            if ($status === self::STATUS_PENDING || $status === self::STATUS_LEGACY_PROCESSING) {
                 $elapsed = time() - strtotime($existing['created_at']);
                 if ($elapsed < self::TIMEOUT_SECONDS) {
+                    // Operation still in progress
                     $this->db->commit();
                     return [
                         'is_duplicate'  => true,
+                        'status'        => self::STATUS_PENDING,
                         'result'        => [
                             'success'         => false,
                             'message'         => 'درخواست شما در حال پردازش است. لطفاً صبر کنید.',
                             'elapsed_seconds' => $elapsed,
-                            'retry_after'     => 30,
+                            'retry_after'     => min(self::TIMEOUT_SECONDS - $elapsed, 30),
                         ],
                         'is_processing' => true,
+                        'http_status'   => 409, // 409 Conflict: operation already in progress
                     ];
                 }
-                // Timeout — اجازه retry
-                $this->updateStatus($key, $userId, 'processing', ['timeout_occurred' => true]);
+
+                // Timeout occurred, reset to allow retry
+                $this->updateStatusWithMetadata($key, $userId, self::STATUS_PENDING, ['timeout_occurred' => true]);
                 $this->db->commit();
-                return ['is_duplicate' => false];
+                return ['is_duplicate' => false, 'status' => self::STATUS_PENDING];
             }
 
             $this->db->commit();
-            return ['is_duplicate' => false];
+            return ['is_duplicate' => false, 'status' => self::STATUS_PENDING];
 
         } catch (\Throwable $e) {
-            // Rollback active transaction safely
             if ($this->db->inTransaction()) {
                 $this->db->rollback();
             }
 
-            // FIX C-3: Fail-Closed — فقط duplicate key خطا را retry می‌کنیم.
-            // سایر خطاهای DB را به بالا پرتاب می‌کنیم تا عملیات مالی
-            // بدون چک idempotency اجرا نشود (fail-open خطرناک است).
             if (($e instanceof \PDOException) && ($e->getCode() == 23000 || str_contains($e->getMessage(), 'Duplicate entry'))) {
                 $this->logEvent('idempotency.key.race_retry', [
                     'log_id' => $logId,
                     'key'    => $key,
                     'retry'  => $retryCount,
                 ], 'warning');
-                usleep(50000 * ($retryCount + 1)); // backoff تدریجی
+                usleep(50000 * ($retryCount + 1));
                 return $this->check($key, $userId, $action, $requestData, $retryCount + 1);
             }
 
-            // FIX C-3: خطای واقعی — throw می‌کنیم، fail-open نیستیم
             $this->logEvent('idempotency.check.database_error', [
                 'log_id' => $logId,
                 'key'    => $key,
@@ -295,28 +334,6 @@ class IdempotencyKey
                 $this->cache->unlock($lockKey);
             }
         }
-    }
-
-    protected function logEvent(string $event, array $context = [], string $level = 'info'): void
-    {
-        if (function_exists('logger')) {
-            $payload = array_merge(['channel' => 'idempotency'], $context);
-
-            if ($level === 'error') {
-                logger()->error($event, $payload);
-                return;
-            }
-
-            if ($level === 'warning') {
-                logger()->warning($event, $payload);
-                return;
-            }
-            logger()->info($event, $payload);
-            return;
-        }
-
-        $line = '[' . date('Y-m-d H:i:s') . '] ' . strtoupper($level) . ' ' . $event . ' ' . json_encode($context, JSON_UNESCAPED_UNICODE) . PHP_EOL;
-        @file_put_contents(__DIR__ . '/../storage/logs/_idempotency_fallback.log', $line, FILE_APPEND | LOCK_EX);
     }
 
     /**
@@ -344,6 +361,99 @@ class IdempotencyKey
         return $stmt->execute($params);
     }
 
+    private function isRetryableException(\Throwable $exception): bool
+    {
+        // ✅ **Explicit Retryable Exceptions** — عملیات دوباره قابل تلاش است
+        if ($exception instanceof \Core\Exceptions\TransientException) {
+            return true;  // Temporary failures (network timeouts, brief unavailability)
+        }
+
+        if ($exception instanceof \Core\Exceptions\RateLimitedFailure) {
+            return true;  // Rate limiting — retry after backoff
+        }
+
+        if ($exception instanceof \Core\Exceptions\ProviderUnavailable) {
+            return true;  // Gateway/provider temporarily unavailable
+        }
+
+        if ($exception instanceof \PDOException) {
+            return true;  // Database errors (connection timeout, deadlock, etc.)
+        }
+
+        // ✅ **Non-Retryable Exceptions** — خطاهایی که دوباره تلاش مفید نیست
+        if ($exception instanceof \Core\Exceptions\BusinessException) {
+            return false;  // Business logic violations (insufficient balance, invalid state)
+        }
+
+        if ($exception instanceof \Core\Exceptions\ValidationException) {
+            return false;  // Validation errors (invalid input, schema mismatch)
+        }
+
+        // ❌ **Default: Non-Retryable**
+        // اگر exception نوع شناخت‌شده‌ای نیست، آن را non-retryable فرض می‌کنیم
+        // تا عملیات مالی به دلایل نامعلوم دوباره اجرا نشوند
+        return false;
+    }
+
+    private function prepareResultForStorage($result)
+    {
+        if (is_array($result) || is_object($result)) {
+            return json_encode($this->normalizeResultForStorage($result), JSON_UNESCAPED_UNICODE);
+        }
+
+        if (is_bool($result) || is_numeric($result)) {
+            return json_encode($result, JSON_UNESCAPED_UNICODE);
+        }
+
+        return (string)$result;
+    }
+
+    private function normalizeResultForStorage($result): array
+    {
+        $payload = is_object($result) ? get_object_vars($result) : $result;
+        $allowed = [
+            'transaction_id', 'escrow_id', 'status', 'success', 'ok', 'message', 'error',
+            'amount', 'currency', 'net_amount', 'commission', 'refund_amount',
+            'wallet_transaction', 'request_id', 'order_id', 'listing_id', 'execution_id',
+            'to_user_id', 'from_user_id', 'seller_id', 'buyer_id'
+        ];
+
+        $normalized = [];
+        foreach ($payload as $key => $value) {
+            if (is_scalar($value) || $value === null) {
+                $normalized[$key] = $value;
+                continue;
+            }
+
+            if (is_array($value) && $this->isFlatScalarArray($value)) {
+                $normalized[$key] = $value;
+                continue;
+            }
+
+            $normalized[$key] = [
+                'type' => is_object($value) ? 'object' : 'array',
+                'count' => is_countable($value) ? count($value) : null,
+            ];
+        }
+
+        if (count($normalized) > 20) {
+            $normalized = array_slice($normalized, 0, 20, true);
+            $normalized['truncated'] = true;
+        }
+
+        return $normalized;
+    }
+
+    private function isFlatScalarArray(array $value): bool
+    {
+        foreach ($value as $item) {
+            if (is_array($item) || is_object($item)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * ذخیره نتیجه موفق
      * 
@@ -355,37 +465,35 @@ class IdempotencyKey
     public function complete(string $key, $result, int $userId): bool
     {
         try {
-            // H18 Fix: اجباری شدن user_id در تمام کوئری‌ها برای جلوگیری از اورراید شدن کلیدهای سایر کاربران
             $sql = "UPDATE {$this->table} 
-                    SET `status` = 'completed',
+                    SET `status` = :status,
                         `result` = :result,
                         `completed_at` = NOW()
                     WHERE `key` = :key AND `user_id` = :user_id";
-            
+
             $params = [
                 'key' => $key,
                 'user_id' => $userId,
-                'result' => is_array($result) || is_object($result) 
-                    ? json_encode($result, JSON_UNESCAPED_UNICODE) 
-                    : $result
+                'status' => self::STATUS_COMPLETED,
+                'result' => $this->prepareResultForStorage($result),
             ];
-            
+
             $stmt = $this->db->prepare($sql);
             $success = $stmt->execute($params);
-            
+
             if ($success) {
                 $this->logEvent('idempotency.key.completed', [
-    'key' => $key,
-]);
+                    'key' => $key,
+                ]);
             }
-            
+
             return $success;
-            
+
         } catch (\PDOException $e) {
             $this->logEvent('idempotency.complete.failed', [
-    'key' => $key,
-    'error' => $e->getMessage(),
-], 'error');
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ], 'error');
             return false;
         }
     }
@@ -398,40 +506,42 @@ class IdempotencyKey
      * @param int|null $userId
      * @return bool
      */
-    public function fail(string $key, $error, int $userId): bool
+    public function fail(string $key, $error, int $userId, bool $retryable = false): bool
     {
         try {
             $errorData = is_array($error) ? $error : ['error' => $error];
-            
-            // H18 Fix: اجباری شدن user_id
+            $status = $retryable ? self::STATUS_FAILED_RETRYABLE : self::STATUS_FAILED_FINAL;
+
             $sql = "UPDATE {$this->table} 
-                    SET `status` = 'failed',
+                    SET `status` = :status,
                         `result` = :result,
                         `completed_at` = NOW()
                     WHERE `key` = :key AND `user_id` = :user_id";
-            
+
             $params = [
                 'key' => $key,
                 'user_id' => $userId,
-                'result' => json_encode($errorData, JSON_UNESCAPED_UNICODE)
+                'status' => $status,
+                'result' => $this->prepareResultForStorage($errorData),
             ];
-            
+
             $stmt = $this->db->prepare($sql);
             $success = $stmt->execute($params);
-            
+
             if ($success) {
                 $this->logEvent('idempotency.key.failed', [
-    'key' => $key,
-], 'warning');
+                    'key' => $key,
+                    'status' => $status,
+                ], 'warning');
             }
-            
+
             return $success;
-            
+
         } catch (\PDOException $e) {
             $this->logEvent('idempotency.fail_mark.failed', [
-    'key' => $key,
-    'error' => $e->getMessage(),
-], 'error');
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ], 'error');
             return false;
         }
     }
@@ -633,7 +743,11 @@ class IdempotencyKey
             return $result;
             
         } catch (\Exception $e) {
-            $this->abort($key, $userId);
+            $retryable = $this->isRetryableException($e);
+            $this->fail($key, [
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+            ], $userId, $retryable);
 
             logger()->error('callback.failed', [
                 'channel' => 'payment_callback',
@@ -645,6 +759,7 @@ class IdempotencyKey
                 'exception' => get_class($e),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
+                'retryable' => $retryable,
             ]);
 
             throw $e;

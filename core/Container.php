@@ -522,6 +522,47 @@ class Container
         }
     }
 
+    /**
+     * Validate registered container bindings for integrity.
+     *
+     * This method verifies that string bindings point to existing classes,
+     * and that closure bindings with declared return types are compatible
+     * with the requested abstract.
+     *
+     * @throws \RuntimeException
+     */
+    public function validateBindings(): void
+    {
+        foreach ($this->bindings as $abstract => $concrete) {
+            if ($concrete instanceof \Closure) {
+                $reflection = new \ReflectionFunction($concrete);
+                $returnType = $reflection->getReturnType();
+                if ($returnType instanceof \ReflectionNamedType && !$returnType->isBuiltin()) {
+                    $returnTypeName = $returnType->getName();
+                    if (class_exists($abstract) || interface_exists($abstract)) {
+                        if (!is_a($returnTypeName, $abstract, true)) {
+                            throw new \RuntimeException("[Container] Closure binding for '{$abstract}' declares return type '{$returnTypeName}' incompatible with '{$abstract}'.");
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (is_string($concrete) && $concrete !== $abstract) {
+                if (!class_exists($concrete) && !interface_exists($concrete)) {
+                    throw new \RuntimeException("[Container] Container binding for '{$abstract}' points to missing class or interface '{$concrete}'.");
+                }
+                continue;
+            }
+
+            if (is_string($concrete) && $concrete === $abstract) {
+                if (!class_exists($abstract) && !interface_exists($abstract)) {
+                    throw new \RuntimeException("[Container] Container binding for '{$abstract}' references missing class or interface.");
+                }
+            }
+        }
+    }
+
     /** فهرست binding‌های ثبت‌شده — فقط برای Debug */
     public function getBindings(): array
     {

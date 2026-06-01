@@ -10,6 +10,7 @@ class EventDispatcher
 {
     private static $instance = null;
     private $listeners = [];
+    private $patternListeners = [];  // Store pattern-based listeners for wildcard support
     private array $bootstrapListeners = [];
     private Queue $queue;
     private ?\App\Services\AuditTrail $auditTrail = null;
@@ -46,7 +47,7 @@ class EventDispatcher
     }
 
     /**
-     * ثبت Listener
+     * ثبت Listener (مستقیم بر اساس نام دقیق رویداد)
      */
     public function listen($eventName, $listener, $priority = 0)
     {
@@ -73,6 +74,33 @@ class EventDispatcher
     }
 
     /**
+     * ثبت Listener بر اساس الگوی wildcard (مثل: wallet.*, *.revenue.*)
+     * از fnmatch() استفاده می‌کند برای مطابقت‌دهی الگو.
+     * Listeners منطبق فقط برای رویدادهای جدید اجرا می‌شوند، نه برای قدیمی‌ها.
+     */
+    public function listenPattern(string $pattern, $listener, $priority = 0)
+    {
+        if (!isset($this->patternListeners[$pattern])) {
+            $this->patternListeners[$pattern] = [];
+        }
+
+        foreach ($this->patternListeners[$pattern] as $existing) {
+            if ($existing['listener'] === $listener) {
+                return;
+            }
+        }
+
+        $this->patternListeners[$pattern][] = [
+            'listener' => $listener,
+            'priority' => $priority
+        ];
+
+        usort($this->patternListeners[$pattern], function($a, $b) {
+            return $b['priority'] <=> $a['priority'];
+        });
+    }
+
+    /**
      * ثبت شنوندگان پایه به عنوان مرجع برای ریست کردن (Snapshot)
      */
     public function snapshotBootstrapState(): void
@@ -88,6 +116,10 @@ class EventDispatcher
         // بازگردانی شنونده‌ها به حالت اولیه (حذف هرگونه Closure اضافه شده در Job)
         $this->listeners = $this->bootstrapListeners;
         
+        // نمی‌خواهیم الگوی listeners را ریست کنیم؛ آنها runtime pattern listeners هستند
+        // و باید برای تمام درخواست‌های بعدی فعال بمانند.
+        // $this->patternListeners = [];
+        
         // پاکسازی وابستگی‌های کش شده داخل این سینگلتون برای جلوگیری از نشت مموری
         $this->auditTrail = null;
     }
@@ -97,16 +129,32 @@ class EventDispatcher
      */
     public function dispatch($eventName, $event = null)
     {
-        if (!isset($this->listeners[$eventName])) {
+        // جمع‌آوری تمام Listeners: هم دقیق و هم الگو‌based
+        $allListeners = [];
+
+        // Exact listeners
+        if (isset($this->listeners[$eventName])) {
+            $allListeners = array_merge($allListeners, $this->listeners[$eventName]);
+        }
+
+        // Pattern-based listeners (خیلی جستجو می‌شود نه efficient نیست اما انعطاف‌پذیر)
+        foreach ($this->patternListeners as $pattern => $listeners) {
+            if (fnmatch($pattern, $eventName)) {
+                $allListeners = array_merge($allListeners, $listeners);
+            }
+        }
+
+        // اگر هیچ Listener نبود
+        if (empty($allListeners)) {
             return;
         }
-        
+
         // اگر Event شیء نبود، آن را به آرایه تبدیل کن
         if (!$event instanceof Event) {
             $event = new GenericEvent($event);
         }
         
-        foreach ($this->listeners[$eventName] as $item) {
+        foreach ($allListeners as $item) {
             $listener = $item['listener'];
             
             $startTime = microtime(true);

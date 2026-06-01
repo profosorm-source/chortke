@@ -61,7 +61,6 @@ class Database
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_OBJ, // ✅ Object به جای Array
             \PDO::ATTR_EMULATE_PREPARES => false,
             \PDO::ATTR_TIMEOUT => 2, // ✅ Strict timeout to protect against Time-Based SQLi DoS
-            \PDO::ATTR_PERSISTENT => true, // ✅ Connection Pool Manager (Persistent Connections)
         ];
 
         if (defined('\PDO::MYSQL_ATTR_INIT_COMMAND')) {
