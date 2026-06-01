@@ -23,10 +23,6 @@ use App\Controllers\Admin\OnlinePaymentController as AdminOnlinePaymentControlle
 use App\Controllers\Admin\SocialAccountController as AdminSocialAccountController;
 use App\Controllers\Admin\AdTaskController        as AdminAdTaskController;
 use App\Controllers\Admin\ExecutorTaskController  as AdminExecutorTaskController;
-use App\Controllers\Admin\TaskExecutionController as AdminTaskExecutionController;
-use App\Controllers\Admin\TaskDisputeController   as AdminTaskDisputeController;
-use App\Controllers\Admin\TaskRecheckController   as AdminTaskRecheckController;
-use App\Controllers\Admin\SEOKeywordController;
 use App\Controllers\Admin\RoleController          as AdminRoleController;
 use App\Controllers\Admin\ReferralController      as AdminReferralController;
 use App\Controllers\Admin\LevelController         as AdminLevelController;
@@ -38,10 +34,11 @@ use App\Controllers\Admin\BannerController        as AdminBannerController;
 use App\Controllers\Admin\BugReportController     as AdminBugReportController;
 use App\Controllers\Admin\KpiController;
 use App\Controllers\Admin\SystemSettingController;
-use App\Controllers\Admin\PageController          as AdminPageController;
 use App\Controllers\Admin\TicketController        as AdminTicketController;
 use App\Controllers\Admin\CouponController        as AdminCouponController;
 use App\Controllers\Admin\FraudController;
+use App\Controllers\Admin\FraudDashboardController;
+use App\Controllers\Admin\FraudManagementController;
 
 use App\Controllers\Admin\AuditTrailController;
 use App\Controllers\Admin\AdminExportController;
@@ -178,28 +175,8 @@ $r->post('/admin/custom-tasks/submissions/force-reject', [AdminExecutorTaskContr
 $r->get('/admin/custom-tasks/stats', [AdminAdTaskController::class, 'stats'], array_merge($admin, [PermissionMiddleware::class . ':tasks.view']));
 $r->post('/admin/custom-tasks/disputes/resolve',  [AdminExecutorTaskController::class, 'resolveDispute'], array_merge($admin, [PermissionMiddleware::class . ':tasks.manage']));
 
-$r->get('/admin/task-executions',                [AdminTaskExecutionController::class, 'index'],   $admin);
-$r->get('/admin/task-executions/{id}',           [AdminTaskExecutionController::class, 'show'],    $admin);
-$r->post('/admin/task-executions/{id}/approve',  [AdminTaskExecutionController::class, 'approve'], $admin);
-$r->post('/admin/task-executions/{id}/reject',   [AdminTaskExecutionController::class, 'reject'],  $admin);
-
-$r->get('/admin/task-disputes',                             [AdminTaskDisputeController::class, 'index'],               $admin);
-$r->get('/admin/task-disputes/{id}',                        [AdminTaskDisputeController::class, 'show'],                $admin);
-$r->post('/admin/task-disputes/{id}/resolve-executor',      [AdminTaskDisputeController::class, 'resolveForExecutor'],  $admin);
-$r->post('/admin/task-disputes/{id}/resolve-advertiser',    [AdminTaskDisputeController::class, 'resolveForAdvertiser'],$admin);
-
-$r->get('/admin/task-rechecks',          [AdminTaskRecheckController::class, 'index'], $admin);
-$r->post('/admin/task-rechecks/{id}/pass',[AdminTaskRecheckController::class, 'pass'], $admin);
-$r->post('/admin/task-rechecks/{id}/fail',[AdminTaskRecheckController::class, 'fail'], $admin);
-
-// ── SEO Keywords ─────────────────────────────────────────────────────────────
-$r->get('/admin/seo-keywords',                [SEOKeywordController::class, 'index'],        $admin);
-$r->get('/admin/seo-keywords/create',         [SEOKeywordController::class, 'showCreate'],   $admin);
-$r->post('/admin/seo-keywords/store',         [SEOKeywordController::class, 'store'],        $admin);
-$r->get('/admin/seo-keywords/{id}/edit',      [SEOKeywordController::class, 'showEdit'],     $admin);
-$r->post('/admin/seo-keywords/{id}/update',   [SEOKeywordController::class, 'update'],       $admin);
-$r->post('/admin/seo-keywords/{id}/toggle',   [SEOKeywordController::class, 'toggleActive'], $admin);
-$r->post('/admin/seo-keywords/{id}/delete',   [SEOKeywordController::class, 'delete'],       $admin);
+// Stale admin route definitions removed: task-execution, task-dispute, task-recheck, and SEO keyword management
+// These controllers do not exist in app/Controllers/Admin and appear to be orphaned legacy routes.
 
 // ── نقش‌ها ──────────────────────────────────────────────────────────────────
 $r->get('/admin/roles',              [AdminRoleController::class, 'index'],  array_merge($admin, [PermissionMiddleware::class . ':roles.view']));
@@ -315,12 +292,7 @@ $r->post('/admin/settings/upload-image', [SystemSettingController::class, 'uploa
 $r->post('/admin/settings/remove-image', [SystemSettingController::class, 'removeImage'], array_merge($admin, [PermissionMiddleware::class . ':admin.edit_settings']));
 
 // ── صفحات استاتیک ─────────────────────────────────────────────────────────────
-$r->get('/admin/pages',             [AdminPageController::class, 'index'],  $admin);
-$r->get('/admin/pages/create',      [AdminPageController::class, 'create'], $admin);
-$r->post('/admin/pages/store',      [AdminPageController::class, 'store'],  $admin);
-$r->get('/admin/pages/edit/{id}',   [AdminPageController::class, 'edit'],   $admin);
-$r->post('/admin/pages/update/{id}',[AdminPageController::class, 'update'], $admin);
-$r->post('/admin/pages/delete',     [AdminPageController::class, 'delete'], $admin);
+// Stale admin legacy page management routes removed: Admin\PageController does not exist.
 
 // ── تیکت‌ها (ادمین فقط) ───────────────────────────────────────────────────────────────────
 $r->get('/admin/tickets',                  [AdminTicketController::class, 'index'],        $admin);

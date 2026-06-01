@@ -221,10 +221,10 @@ $container->singleton(\App\Adapters\CryptoApiAdapter::class, function($c) {
 
 // Bank Inquiry Adapter (Automatic Fallback enabled)
 $container->bind(\App\Adapters\BankInquiryAdapter::class, function($c) {
-    $logger = $c->get(\App\Contracts\LoggerInterface::class);
+    $logger = $c->make(\App\Contracts\LoggerInterface::class);
     return new \App\Adapters\BankInquiryManager($logger, [
-        $c->get(\App\Adapters\JibitInquiryAdapter::class),
-        $c->get(\App\Adapters\VandarInquiryAdapter::class),
+        $c->make(\App\Adapters\JibitInquiryAdapter::class),
+        $c->make(\App\Adapters\VandarInquiryAdapter::class),
     ]);
 });
 
@@ -464,7 +464,7 @@ $container->singleton(App\Services\UnifiedTaskService::class);
 // Binding for non-existent XPEngine removed
 $container->singleton(\App\Services\User\UserLevelService::class);
 
-$container->singleton(\App\Services\CronService::class);
+$container->singleton(\App\Services\Cron\CronService::class);
 
 // Controllers
 
@@ -710,11 +710,7 @@ $container->singleton(\Core\EventDispatcher::class, function($c) {
 $container->singleton(\App\Services\OutboxService::class);
 
 $container->singleton(\App\Contracts\OutboxServiceInterface::class, function($c) {
-    try {
-        return $c->make(\App\Services\OutboxService::class);
-    } catch (\Throwable $e) {
-        return null;
-    }
+    return $c->make(\App\Services\OutboxService::class);
 });
 
 $container->singleton(\App\Services\OutboxPublisher::class);
@@ -1020,7 +1016,8 @@ $container->singleton(\App\Contracts\AdsRepositoryInterface::class, \App\Models\
 
 $container->singleton(\App\Services\AdSystemManager::class, function($c) {
     return new \App\Services\AdSystemManager(
-        $c->make(\Core\InfrastructureContext::class),
+        $c->make(\Core\Database::class),
+        $c->make(\App\Contracts\LoggerInterface::class),
         [
             'custom_task' => $c->make(\App\Adapters\CustomTaskAdapter::class),
             'seo' => $c->make(\App\Adapters\SeoAdAdapter::class),
@@ -1125,7 +1122,7 @@ $dispatcher = $container->make(\Core\EventDispatcher::class);
 $investmentEventListeners = $container->make(\App\Listeners\InvestmentEventListeners::class);
 $dispatcher->listen(\App\Events\InvestmentCreatedEvent::class, [$investmentEventListeners, 'handleInvestmentCreated']);
 
-$container->singleton(\App\Services\LotteryService::class);
+$container->singleton(\App\Services\Lottery\LotteryService::class);
 
 $container->singleton(\App\Services\ManualDepositService::class);
 
@@ -1148,7 +1145,7 @@ $container->singleton(\App\Services\ScheduledPaymentService::class);
 
 $container->singleton(\App\Services\SeoPayoutService::class);
 
-$container->singleton(\App\Services\SeoService::class);
+$container->singleton(\App\Services\Seo\SeoService::class);
 
 $container->singleton(\App\Services\TicketService::class);
 
@@ -1252,6 +1249,9 @@ $container->singleton(\App\Services\User\AccountDeletionService::class);
 
 $container->singleton(\App\Services\User\UserSettingsService::class);
 
+if (config('app.env') !== 'production' || getenv('DI_VALIDATE_BINDINGS') === '1') {
+    $container->validateBindings();
+}
 
 // ðŸ›¡ï¸ Register global exception tracking and internal performance monitors
 try {
@@ -1371,13 +1371,14 @@ try {
     
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // ðŸ“‹ Event Sourcing: Events as Source of Truth for Audit Trail
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•ââ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // Event audit is now handled centrally by Core\EventDispatcher for all dispatched events.
     
     // ðŸ’³ Withdrawal Events - Decouples withdrawal domain from notifications & auditing
     $withdrawalListener = $container->make(\App\Listeners\WithdrawalListener::class);
     $dispatcher->listen(\App\Events\WithdrawalCreatedEvent::class, [$withdrawalListener, 'handleWithdrawalCreated']);
     $dispatcher->listen(\App\Events\WithdrawalApprovedEvent::class, [$withdrawalListener, 'handleWithdrawalApproved']);
+    $dispatcher->listen(\App\Events\WithdrawalEvent::class, [$withdrawalListener, 'handleWithdrawalEvent']);
 
     // âœ… Task Completion - XP awards, trust score, notifications
     $taskListener = $container->make(\App\Listeners\TaskCompletedListener::class);
@@ -1399,15 +1400,9 @@ try {
     $kycListener = $container->make(\App\Listeners\KYCListener::class);
     $dispatcher->listen(\App\Events\KYCApprovedEvent::class, [$kycListener, 'handle']);
 
-    // Ú©Ù„Ø§Ø³â€ŒÙ…Ø­ÙˆØ±: Ù†Ù…ÙˆÙ†Ù‡â€ŒÛŒ DomainActivityListener Ø¨Ø±Ø§ÛŒ Ø³Ø§Ø²Ú¯Ø§Ø±ÛŒ Ø¨Ø§ Ú©Ù„Ø§Ø³ EventÙ‡Ø§
-    $domainActivityListener = $container->make(\App\Listeners\DomainActivityListener::class);
-    // DEPRECATED: WithdrawalCreatedEvent is now handled by WithdrawalListener above
-    // $dispatcher->listen(\App\Events\WithdrawalCreatedEvent::class, [$domainActivityListener, 'handle']);
-    $dispatcher->listen(\App\Events\WithdrawalApprovedEvent::class, [$domainActivityListener, 'handle']);
-    $dispatcher->listen(\App\Events\KYCApprovedEvent::class, [$domainActivityListener, 'handle']);
-    $dispatcher->listen(\App\Events\EscrowReleasedEvent::class, [$domainActivityListener, 'handle']);
-    $dispatcher->listen(\App\Events\ScoreUpdatedEvent::class, [$domainActivityListener, 'handle']);
-    $dispatcher->listen(\App\Events\TaskCompletedEvent::class, [$domainActivityListener, 'handle']);
+    // ✅ Domain-specific listeners now handle their own events exclusively
+    // to prevent duplicate side effects (notifications, score updates, wallet operations).
+    // DomainActivityListener is deprecated for these events.
 
     // Notification request listener - routes notification requests through NotificationService
     $notificationRequestListener = $container->make(\App\Listeners\NotificationRequestListener::class);
@@ -1431,11 +1426,21 @@ try {
     $dispatcher->listen('wallet.deposit.requested', [$walletDepositRequestListener, 'handle']);
     
     // Map EDA Financial Events to WalletDepositRequestListener
+    // استفاده از الگوهای wildcard برای forward-compatibility
+    $walletDepositRequestListener = $container->make(\App\Listeners\WalletDepositRequestListener::class);
+    
+    // ثبت دقیق listeners برای رویدادهای موجود
     $financialEvents = \App\Events\Registry\EventRegistry::getDepositTriggerEvents();
     foreach ($financialEvents as $fEvent) {
         if ($fEvent !== 'wallet.deposit.requested') {
             $dispatcher->listen($fEvent, [$walletDepositRequestListener, 'handle']);
         }
+    }
+
+    // ثبت pattern listeners برای جذب خودکار رویدادهای جدید تحت namespaces عمومی
+    $patterns = \App\Events\Registry\EventRegistry::getDepositTriggerPatterns();
+    foreach ($patterns as $pattern) {
+        $dispatcher->listenPattern($pattern, [$walletDepositRequestListener, 'handle']);
     }
 
     // Persist audit records listener - centralizes audit persistence for audit events

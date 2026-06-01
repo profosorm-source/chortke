@@ -18,6 +18,12 @@ $r = app()->router;
 $r->group(['prefix' => '/api/v1'], function ($r) {
 
     /**
+     * HEALTH CHECKS
+     */
+    $r->get('/health/live', [\App\Controllers\Api\HealthCheckController::class, 'live']);
+    $r->get('/health/ready', [\App\Controllers\Api\HealthCheckController::class, 'ready']);
+
+    /**
      * AUTH (Public)
      */
     $r->post('/auth/token', [TokenController::class, 'issue'], [\App\Middleware\RateLimitMiddleware::class]);

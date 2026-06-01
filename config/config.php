@@ -32,6 +32,8 @@ return [
         'user' => env('DB_USER', 'root'),
         'pass' => env('DB_PASS', ''),
         'charset' => env('DB_CHARSET', 'utf8mb4'),
+        'mysqldump_path' => env('DB_DUMP_PATH', 'mysqldump'),
+        'mysql_path' => env('DB_MYSQL_PATH', 'mysql'),
     ],
     
     'session' => [

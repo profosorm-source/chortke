@@ -241,7 +241,7 @@ if (!function_exists('config_reload')) {
 if (!function_exists('settings')) {
     function settings(bool $forceReload = false): array
     {
-        $service = app(\App\Services\SettingService::class);
+        $service = app(\App\Services\Settings\AppSettings::class);
         if ($forceReload) {
             $service->clearCache();
         }
