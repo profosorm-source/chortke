@@ -6,16 +6,32 @@ namespace App\Jobs\Investment;
 
 class CreateInvestmentJob
 {
+    private \App\Services\Settings\AppSettings $appSettings;
+    private ?\App\Services\Financial\CurrencyService $currencyService;
+    private ?\App\Services\Shared\IdempotencyService $idempotencyService;
+    private \Core\Database $db;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \App\Models\Investment $investmentModel;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Services\Settings\AppSettings $appSettings,
-        private ?\App\Services\Financial\CurrencyService $currencyService = null,
-        private ?\App\Services\Shared\IdempotencyService $idempotencyService = null,
-        private \Core\Database $db,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \App\Models\Investment $investmentModel,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \App\Services\Settings\AppSettings $appSettings,
+        ?\App\Services\Financial\CurrencyService $currencyService = null,
+        ?\App\Services\Shared\IdempotencyService $idempotencyService = null,
+        \Core\Database $db,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \App\Models\Investment $investmentModel,
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->appSettings = $appSettings;
+        $this->currencyService = $currencyService;
+        $this->idempotencyService = $idempotencyService;
+        $this->db = $db;
+        $this->walletService = $walletService;
+        $this->investmentModel = $investmentModel;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->logger = $logger;
+}
 
     public function handle(int $userId, array $data, ?string $idempotencyKey = null): array
     {
@@ -39,9 +55,7 @@ class CreateInvestmentJob
             'currency' => 'usdt',
         ];
 
-        $explicitKey = $idempotencyKey !== null && $idempotencyKey !== ''
-            ? $idempotencyKey
-            : \Core\IdempotencyKey::generateFromPayload('investment_creation', $payload);
+        $explicitKey = $idempotencyKey !== null && $idempotencyKey !== '' ? $idempotencyKey : null;
 
         return $this->idempotencyService->execute('investment.create', $userId, $payload, function () use (
             $userId,

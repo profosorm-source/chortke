@@ -6,14 +6,26 @@ namespace App\Jobs\Prediction;
 
 class PlaceBetJob
 {
+    private ?\App\Services\Shared\IdempotencyService $idempotencyService;
+    private ?\App\Services\DistributedLockService $lockService;
+    private \Core\Database $db;
+    private \App\Models\PredictionBet $betModel;
+    private ?\App\Domain\Financial\Services\FinancialEscrowService $escrowService;
+    private \App\Contracts\WalletServiceInterface $walletService;
     public function __construct(
-        private ?\App\Services\Shared\IdempotencyService $idempotencyService = null,
-        private ?\App\Services\DistributedLockService $lockService = null,
-        private \Core\Database $db,
-        private \App\Models\PredictionBet $betModel,
-        private ?\App\Domain\Financial\Services\FinancialEscrowService $escrowService = null,
-        private \App\Contracts\WalletServiceInterface $walletService
-    ) {}
+        ?\App\Services\Shared\IdempotencyService $idempotencyService = null,
+        ?\App\Services\DistributedLockService $lockService = null,
+        \Core\Database $db,
+        \App\Models\PredictionBet $betModel,
+        ?\App\Domain\Financial\Services\FinancialEscrowService $escrowService = null,
+        \App\Contracts\WalletServiceInterface $walletService
+    ) {        $this->idempotencyService = $idempotencyService;
+        $this->lockService = $lockService;
+        $this->db = $db;
+        $this->betModel = $betModel;
+        $this->escrowService = $escrowService;
+        $this->walletService = $walletService;
+}
 
     public function handle(int $userId, int $gameId, string $prediction, float $amount, ?string $idempotencyKey = null): array
     {
@@ -33,9 +45,7 @@ class PlaceBetJob
             'amount' => $amount,
         ];
 
-        $explicitKey = $idempotencyKey !== null && $idempotencyKey !== ''
-            ? $idempotencyKey
-            : \Core\IdempotencyKey::generateFromPayload('prediction_place_bet', $payload);
+        $explicitKey = $idempotencyKey !== null && $idempotencyKey !== '' ? $idempotencyKey : null;
 
         return $this->idempotencyService->execute('prediction.placeBet', $userId, $payload, function () use (
             $userId,

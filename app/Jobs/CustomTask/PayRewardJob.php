@@ -8,19 +8,35 @@ use App\Models\CustomTaskSubmissionModel;
 use App\Models\User;
 use App\Contracts\WalletServiceInterface;
 use App\Services\Shared\ReferralService;
+use App\Services\Shared\IdempotencyService;
 use Core\Logger;
 use App\Services\OutboxService;
 
 class PayRewardJob
 {
+    private CustomTaskSubmissionModel $submissionModel;
+    private User $userModel;
+    private WalletServiceInterface $walletService;
+    private ReferralService $referralService;
+    private Logger $logger;
+    private ?OutboxService $outbox;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private CustomTaskSubmissionModel $submissionModel,
-        private User $userModel,
-        private WalletServiceInterface $walletService,
-        private ReferralService $referralService,
-        private Logger $logger,
-        private ?OutboxService $outbox = null
-    ) {}
+        CustomTaskSubmissionModel $submissionModel,
+        User $userModel,
+        WalletServiceInterface $walletService,
+        ReferralService $referralService,
+        Logger $logger,
+        ?OutboxService $outbox = null,
+        IdempotencyService $idempotencyService
+    ) {        $this->submissionModel = $submissionModel;
+        $this->userModel = $userModel;
+        $this->walletService = $walletService;
+        $this->referralService = $referralService;
+        $this->logger = $logger;
+        $this->outbox = $outbox;
+        $this->idempotencyService = $idempotencyService;
+}
 
     public function handle(object $submission): void
     {
@@ -50,16 +66,16 @@ class PayRewardJob
                     $this->logger->error('custom_task.outbox_record_failed', ['submission_id' => $submission->id]);
                 }
             } else {
-                // Fallback: synchronous deposit
-                $txId = $this->walletService->deposit(
+                // Fallback: synchronous deposit via IdempotencyService
+                $payload['metadata']['idempotency_key'] = $idempotencyKey;
+                $txId = $this->idempotencyService->executeWithTransaction(
+                    'wallet.deposit',
                     $submission->worker_id,
-                    $submission->reward_amount,
-                    $submission->reward_currency,
-                    [
-                        'type' => 'task_reward',
-                        'description' => "پاداش وظیفه #{$submission->task_id}",
-                        'idempotency_key' => $idempotencyKey,
-                    ]
+                    $payload,
+                    function () use ($submission, $payload) {
+                        return $this->walletService->deposit($submission->worker_id, $submission->reward_amount, $submission->reward_currency, $payload['metadata']);
+                    },
+                    $idempotencyKey
                 );
 
                 if (isset($txId['success']) && $txId['success']) {

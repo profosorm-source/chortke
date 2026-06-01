@@ -6,9 +6,11 @@ namespace App\Jobs\Notification;
 
 class SendToSegmentNotificationJob
 {
+    private \App\Models\CryptoDeposit $model;
     public function __construct(
-        private \App\Models\CryptoDeposit $model
-    ) {}
+        \App\Models\CryptoDeposit $model
+    ) {        $this->model = $model;
+}
 
     public function handle(
         string  $segment,

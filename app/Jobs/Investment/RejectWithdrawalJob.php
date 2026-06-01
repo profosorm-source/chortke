@@ -6,13 +6,23 @@ namespace App\Jobs\Investment;
 
 class RejectWithdrawalJob
 {
+    private \Core\Database $db;
+    private \App\Models\Investment $investmentModel;
+    private \App\Models\InvestmentWithdrawal $withdrawalModel;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Models\Investment $investmentModel,
-        private \App\Models\InvestmentWithdrawal $withdrawalModel,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\Database $db,
+        \App\Models\Investment $investmentModel,
+        \App\Models\InvestmentWithdrawal $withdrawalModel,
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->investmentModel = $investmentModel;
+        $this->withdrawalModel = $withdrawalModel;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->logger = $logger;
+}
 
     public function handle(int $withdrawalId, int $adminId, string $reason): array
     {

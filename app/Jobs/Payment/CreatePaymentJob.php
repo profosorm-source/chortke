@@ -4,12 +4,21 @@ declare(strict_types=1);
 
 namespace App\Jobs\Payment;
 
+use App\Services\Shared\IdempotencyService;
+
 class CreatePaymentJob
 {
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        IdempotencyService $idempotencyService
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+        $this->idempotencyService = $idempotencyService;
+}
 
     public function handle(int $userId, string $gatewayName, float $amount, int $bankCardId, string $idempotencyKey, string $clientIp = '', string $userAgent = ''): array
     {
@@ -177,9 +186,7 @@ class CreatePaymentJob
             ];
         };
 
-        if (str_contains(get_class($this->idempotencyKey), 'Mockery')) {
-            return IdempotencyKey::wrap($idemKey, $userId, 'payment_create', $callback);
-        }
-        return $this->idempotencyKey->wrapInstance($idemKey, $userId, 'payment_create', $callback);
+        $payload = ['user_id' => $userId, 'gateway' => $gatewayName, 'amount' => $amount, 'bank_card_id' => $bankCardId];
+        return $this->idempotencyService->execute('payment_create', $userId, $payload, $callback, $idemKey);
     }
 }

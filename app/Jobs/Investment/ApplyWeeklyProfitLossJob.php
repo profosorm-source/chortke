@@ -6,12 +6,20 @@ namespace App\Jobs\Investment;
 
 class ApplyWeeklyProfitLossJob
 {
+    private \App\Models\TradingRecord $tradingModel;
+    private \App\Models\Investment $investmentModel;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Models\TradingRecord $tradingModel,
-        private \App\Models\Investment $investmentModel,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \App\Models\TradingRecord $tradingModel,
+        \App\Models\Investment $investmentModel,
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->tradingModel = $tradingModel;
+        $this->investmentModel = $investmentModel;
+        $this->appSettings = $appSettings;
+        $this->logger = $logger;
+}
 
     public function handle(int $adminId, int $tradingRecordId, float $profitLossPercent, string $period): array
     {

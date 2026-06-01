@@ -6,12 +6,20 @@ namespace App\Jobs\Payment;
 
 class CreateCryptoDepositJob
 {
+    private \App\Models\CryptoDeposit $depositModel;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\TransactionWrapper $transactionWrapper;
     public function __construct(
-        private \App\Models\CryptoDeposit $depositModel,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\TransactionWrapper $transactionWrapper
-    ) {}
+        \App\Models\CryptoDeposit $depositModel,
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Contracts\LoggerInterface $logger,
+        \Core\TransactionWrapper $transactionWrapper
+    ) {        $this->depositModel = $depositModel;
+        $this->appSettings = $appSettings;
+        $this->logger = $logger;
+        $this->transactionWrapper = $transactionWrapper;
+}
 
     public function handle(int $userId, array $data): array
     {

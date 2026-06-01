@@ -6,11 +6,17 @@ namespace App\Jobs\Payment;
 
 class CreateCryptoDepositIntentJob
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Models\CryptoDepositIntent $intentModel;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Models\CryptoDepositIntent $intentModel
-    ) {}
+        \App\Contracts\LoggerInterface $logger,
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Models\CryptoDepositIntent $intentModel
+    ) {        $this->logger = $logger;
+        $this->appSettings = $appSettings;
+        $this->intentModel = $intentModel;
+}
 
     public function handle(
         int $userId,

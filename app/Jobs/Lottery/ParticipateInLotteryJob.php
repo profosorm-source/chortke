@@ -6,12 +6,20 @@ namespace App\Jobs\Lottery;
 
 class ParticipateInLotteryJob
 {
+    private \App\Services\Shared\IdempotencyService $idempotencyService;
+    private \Core\Database $db;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Services\Shared\IdempotencyService $idempotencyService,
-        private \Core\Database $db,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \App\Services\Shared\IdempotencyService $idempotencyService,
+        \Core\Database $db,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->idempotencyService = $idempotencyService;
+        $this->db = $db;
+        $this->walletService = $walletService;
+        $this->logger = $logger;
+}
 
 public function handle(int $userId, int $roundId, ?string $idempotencyKey = null): array
     {
@@ -49,9 +57,7 @@ public function handle(int $userId, int $roundId, ?string $idempotencyKey = null
                 'currency' => $round->currency,
             ];
 
-            $explicitKey = $idempotencyKey !== null && $idempotencyKey !== ''
-                ? $idempotencyKey
-                : \Core\IdempotencyKey::generateFromPayload('lottery_participation', $payload);
+            $explicitKey = $idempotencyKey !== null && $idempotencyKey !== '' ? $idempotencyKey : null;
 
             return $this->idempotencyService->execute('lottery.participate', $userId, $payload, function () use (
                 $userId,

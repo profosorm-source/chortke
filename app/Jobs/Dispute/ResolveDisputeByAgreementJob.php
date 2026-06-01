@@ -6,10 +6,14 @@ namespace App\Jobs\Dispute;
 
 class ResolveDisputeByAgreementJob
 {
+    private \App\Models\Dispute $disputeModel;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Models\Dispute $disputeModel,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \App\Models\Dispute $disputeModel,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->disputeModel = $disputeModel;
+        $this->logger = $logger;
+}
 
     public function handle(int $disputeId, int $initiatorId, string $resolution, string $verdict): array
     {

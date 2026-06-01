@@ -6,15 +6,29 @@ namespace App\Jobs\Payment;
 
 class ApproveManualDepositJob
 {
+    private \Core\Database $db;
+    private \App\Models\ManualDeposit $model;
+    private \App\Contracts\WalletServiceInterface $wallet;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\Payment\ReconciliationService $reconciliationService;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Services\UploadService $uploadService;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Models\ManualDeposit $model,
-        private \App\Contracts\WalletServiceInterface $wallet,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Services\Payment\ReconciliationService $reconciliationService,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Services\UploadService $uploadService
-    ) {}
+        \Core\Database $db,
+        \App\Models\ManualDeposit $model,
+        \App\Contracts\WalletServiceInterface $wallet,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Services\Payment\ReconciliationService $reconciliationService,
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Services\UploadService $uploadService
+    ) {        $this->db = $db;
+        $this->model = $model;
+        $this->wallet = $wallet;
+        $this->logger = $logger;
+        $this->reconciliationService = $reconciliationService;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->uploadService = $uploadService;
+}
 
     public function handle(int $adminId, int $depositId, ?string $note): array
     {

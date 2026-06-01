@@ -6,17 +6,35 @@ namespace App\Jobs\Investment;
 
 class ApplyProfitLossToBatchJob
 {
+    private \Core\Database $db;
+    private \App\Models\Investment $investmentModel;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private ?\App\Services\FeatureFlagService $featureFlagService;
+    private \App\Models\InvestmentProfit $profitModel;
+    private \App\Services\StateMachineService $stateMachine;
+    private ?\App\Services\Financial\CurrencyService $currencyService;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Models\Investment $investmentModel,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private ?\App\Services\FeatureFlagService $featureFlagService = null,
-        private \App\Models\InvestmentProfit $profitModel,
-        private \App\Services\StateMachineService $stateMachine,
-        private ?\App\Services\Financial\CurrencyService $currencyService = null,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\Database $db,
+        \App\Models\Investment $investmentModel,
+        \App\Services\Settings\AppSettings $appSettings,
+        ?\App\Services\FeatureFlagService $featureFlagService = null,
+        \App\Models\InvestmentProfit $profitModel,
+        \App\Services\StateMachineService $stateMachine,
+        ?\App\Services\Financial\CurrencyService $currencyService = null,
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->investmentModel = $investmentModel;
+        $this->appSettings = $appSettings;
+        $this->featureFlagService = $featureFlagService;
+        $this->profitModel = $profitModel;
+        $this->stateMachine = $stateMachine;
+        $this->currencyService = $currencyService;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->logger = $logger;
+}
 
     public function handle(array $investmentIds, int $tradingRecordId, float $percent, string $period, int $adminId): array
     {

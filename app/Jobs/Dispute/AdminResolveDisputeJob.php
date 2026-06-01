@@ -6,13 +6,23 @@ namespace App\Jobs\Dispute;
 
 class AdminResolveDisputeJob
 {
+    private \App\Models\Dispute $disputeModel;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Models\Transaction $transactionModel;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \Core\TransactionWrapper $transactionWrapper;
     public function __construct(
-        private \App\Models\Dispute $disputeModel,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Models\Transaction $transactionModel,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \Core\TransactionWrapper $transactionWrapper
-    ) {}
+        \App\Models\Dispute $disputeModel,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Models\Transaction $transactionModel,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \Core\TransactionWrapper $transactionWrapper
+    ) {        $this->disputeModel = $disputeModel;
+        $this->logger = $logger;
+        $this->transactionModel = $transactionModel;
+        $this->walletService = $walletService;
+        $this->transactionWrapper = $transactionWrapper;
+}
 
     public function handle(int $disputeId, int $adminId, string $verdict, string $note, float $refundPercent = 0): array
     {

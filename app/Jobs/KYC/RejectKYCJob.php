@@ -6,11 +6,17 @@ namespace App\Jobs\KYC;
 
 class RejectKYCJob
 {
+    private \Core\Database $db;
+    private \App\Models\User $userModel;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Models\User $userModel,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\Database $db,
+        \App\Models\User $userModel,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->userModel = $userModel;
+        $this->logger = $logger;
+}
 
 public function handle(int $kycId, int $adminId, string $reason): array
 {

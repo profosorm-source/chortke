@@ -6,16 +6,32 @@ namespace App\Jobs\Investment;
 
 class ApproveWithdrawalJob
 {
+    private \Core\Database $db;
+    private ?\App\Contracts\OutboxServiceInterface $outboxService;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \App\Models\InvestmentWithdrawal $withdrawalModel;
+    private \App\Services\StateMachineService $stateMachine;
+    private \App\Models\Investment $investmentModel;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private ?\App\Contracts\OutboxServiceInterface $outboxService = null,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \App\Models\InvestmentWithdrawal $withdrawalModel,
-        private \App\Services\StateMachineService $stateMachine,
-        private \App\Models\Investment $investmentModel,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\Database $db,
+        ?\App\Contracts\OutboxServiceInterface $outboxService = null,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \App\Models\InvestmentWithdrawal $withdrawalModel,
+        \App\Services\StateMachineService $stateMachine,
+        \App\Models\Investment $investmentModel,
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->outboxService = $outboxService;
+        $this->walletService = $walletService;
+        $this->withdrawalModel = $withdrawalModel;
+        $this->stateMachine = $stateMachine;
+        $this->investmentModel = $investmentModel;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->logger = $logger;
+}
 
     public function handle(int $withdrawalId, int $adminId): array
     {

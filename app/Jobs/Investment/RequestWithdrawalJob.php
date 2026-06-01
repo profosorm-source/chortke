@@ -6,11 +6,17 @@ namespace App\Jobs\Investment;
 
 class RequestWithdrawalJob
 {
+    private \Core\Database $db;
+    private \App\Models\Investment $investmentModel;
+    private \App\Models\InvestmentWithdrawal $withdrawalModel;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Models\Investment $investmentModel,
-        private \App\Models\InvestmentWithdrawal $withdrawalModel
-    ) {}
+        \Core\Database $db,
+        \App\Models\Investment $investmentModel,
+        \App\Models\InvestmentWithdrawal $withdrawalModel
+    ) {        $this->db = $db;
+        $this->investmentModel = $investmentModel;
+        $this->withdrawalModel = $withdrawalModel;
+}
 
     public function handle(int $userId, array $data): array
     {

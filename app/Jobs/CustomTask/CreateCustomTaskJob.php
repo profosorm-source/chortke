@@ -14,16 +14,37 @@ use App\Services\EscrowService;
 
 class CreateCustomTaskJob
 {
+    private RateLimiter $rateLimiter;
+    private AppSettings $appSettings;
+    private Database $db;
+    private User $userModel;
+    private Ads $taskModel;
+    private EscrowService $escrowService;
+    private Logger $logger;
+    private EventDispatcher $eventDispatcher;
+    private ?\App\Services\Shared\IdempotencyService $idempotencyService;
     public function __construct(
-        private RateLimiter $rateLimiter,
-        private AppSettings $appSettings,
-        private Database $db,
-        private User $userModel,
-        private Ads $taskModel,
-        private EscrowService $escrowService,
-        private Logger $logger,
-        private EventDispatcher $eventDispatcher
-    ) {}
+        RateLimiter $rateLimiter,
+        AppSettings $appSettings,
+        Database $db,
+        User $userModel,
+        Ads $taskModel,
+        EscrowService $escrowService,
+        Logger $logger,
+        EventDispatcher $eventDispatcher,
+        ?\App\Services\Shared\IdempotencyService $idempotencyService = null
+    ) {        $this->rateLimiter = $rateLimiter;
+        $this->appSettings = $appSettings;
+        $this->db = $db;
+        $this->userModel = $userModel;
+        $this->taskModel = $taskModel;
+        $this->escrowService = $escrowService;
+        $this->logger = $logger;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->idempotencyService = $idempotencyService;
+
+        $this->idempotencyService = $idempotencyService ?? \Core\Container::getInstance()->make(\App\Services\Shared\IdempotencyService::class);
+    }
 
     public function handle(array $payload): array
     {
@@ -68,90 +89,98 @@ class CreateCustomTaskJob
 
             $this->userModel->findByIdForUpdate($creatorId);
 
-            $idempotencyKey = \Core\IdempotencyKey::generateFromPayload("task_budget_allocation", [
+            $explicitKey = $payload['idempotency_key'] ?? null;
+            $idempotencyPayload = [
                 "creator_id" => $creatorId,
                 "title" => $data["title"] ?? "untitled",
                 "amount" => $totalWithFee,
                 "currency" => $currency
-            ]);
-
-            $status = $this->appSettings->get("custom_task_auto_approve", 0) ? "active" : "pending_review";
-            
-            $task = $this->taskModel->create([
-                "type" => "custom_task",
-                "user_id" => $creatorId,
-                "title" => $data["title"],
-                "description" => $data["description"],
-                "link" => $data["link"] ?? null,
-                "task_type" => $data["task_type"] ?? "custom",
-                "proof_type" => $data["proof_type"] ?? "screenshot",
-                "proof_description" => $data["proof_description"] ?? null,
-                "sample_image" => $data["sample_image"] ?? null,
-                "price_per_task" => $pricePerTask,
-                "currency" => $currency,
-                "total_budget" => $totalBudget,
-                "remaining_budget" => $totalBudget,
-                "total_count" => $quantity,
-                "remaining_count" => $quantity,
-                "deadline_hours" => $data["deadline_hours"] ?? 24,
-                "country_restriction" => $data["country_restriction"] ?? null,
-                "device_restriction" => $data["device_restriction"] ?? "all",
-                "os_restriction" => $data["os_restriction"] ?? null,
-                "status" => ($status === "pending_review") ? "pending" : $status,
-                "site_commission_percent" => $feePercent,
-                "restrictions" => json_encode([
-                    "daily_limit_per_user" => $data["daily_limit_per_user"] ?? 1,
-                    "site_fee_amount" => $feeAmount,
-                ]),
-            ]);
-
-            if (!$task) {
-                throw new \Exception("خطا در ذخیره وظیفه.");
-            }
-            
-            $escrowResult = $this->escrowService->holdFunds(
-                (int)$task->id,
-                "custom_task_budget",
-                $creatorId, 
-                0, 
-                (string)$totalWithFee,
-                $currency
-            );
-
-            if (empty($escrowResult["ok"])) {
-                throw new \Exception($escrowResult["error"] ?? "خطا در مسدودسازی مبلغ بودجه وظیفه.");
-            }
-
-            $this->db->commit();
-
-            $this->logger->info("Custom task created and budget escrowed", [
-                "task_id" => $task->id,
-                "creator_id" => $creatorId,
-                "budget" => $totalWithFee,
-                "escrow_id" => $escrowResult["escrow_id"] ?? null
-            ]);
-
-            try {
-                $this->eventDispatcher->dispatchAsync("custom_task.created", [
-                    "task_id" => $task->id,
-                    "module" => "custom_task",
-                    "type" => "custom_task"
-                ]);
-            } catch (\Throwable $evtErr) {
-                $this->logger->warning("custom_task.create.event_failed", [
-                    "task_id" => $task->id,
-                    "error" => $evtErr->getMessage()
-                ]);
-            }
-
-            return [
-                "success" => true,
-                "message" => "وظیفه با موفقیت ثبت شد.",
-                "task" => $task,
             ];
 
+            $result = $this->idempotencyService->executeWithTransaction('task.create', $creatorId, $idempotencyPayload, function() use (
+                $creatorId, $data, $currency, $pricePerTask, $quantity, $feePercent, $totalBudget, $feeAmount, $totalWithFee
+            ) {
+                $status = $this->appSettings->get("custom_task_auto_approve", 0) ? "active" : "pending_review";
+                
+                $task = $this->taskModel->create([
+                    "type" => "custom_task",
+                    "user_id" => $creatorId,
+                    "title" => $data["title"],
+                    "description" => $data["description"],
+                    "link" => $data["link"] ?? null,
+                    "task_type" => $data["task_type"] ?? "custom",
+                    "proof_type" => $data["proof_type"] ?? "screenshot",
+                    "proof_description" => $data["proof_description"] ?? null,
+                    "sample_image" => $data["sample_image"] ?? null,
+                    "price_per_task" => $pricePerTask,
+                    "currency" => $currency,
+                    "total_budget" => $totalBudget,
+                    "remaining_budget" => $totalBudget,
+                    "total_count" => $quantity,
+                    "remaining_count" => $quantity,
+                    "deadline_hours" => $data["deadline_hours"] ?? 24,
+                    "country_restriction" => $data["country_restriction"] ?? null,
+                    "device_restriction" => $data["device_restriction"] ?? "all",
+                    "os_restriction" => $data["os_restriction"] ?? null,
+                    "status" => ($status === "pending_review") ? "pending" : $status,
+                    "site_commission_percent" => $feePercent,
+                    "restrictions" => json_encode([
+                        "daily_limit_per_user" => $data["daily_limit_per_user"] ?? 1,
+                        "site_fee_amount" => $feeAmount,
+                    ]),
+                ]);
+
+                if (!$task) {
+                    throw new \Exception("خطا در ذخیره وظیفه.");
+                }
+                
+                $escrowResult = $this->escrowService->holdFunds(
+                    (int)$task->id,
+                    "custom_task_budget",
+                    $creatorId, 
+                    0, 
+                    (string)$totalWithFee,
+                    $currency
+                );
+
+                if (empty($escrowResult["ok"])) {
+                    throw new \Exception($escrowResult["error"] ?? "خطا در مسدودسازی مبلغ بودجه وظیفه.");
+                }
+
+                $this->logger->info("Custom task created and budget escrowed", [
+                    "task_id" => $task->id,
+                    "creator_id" => $creatorId,
+                    "budget" => $totalWithFee,
+                    "escrow_id" => $escrowResult["escrow_id"] ?? null
+                ]);
+
+                try {
+                    $this->eventDispatcher->dispatchAsync("custom_task.created", [
+                        "task_id" => $task->id,
+                        "module" => "custom_task",
+                        "type" => "custom_task"
+                    ]);
+                } catch (\Throwable $evtErr) {
+                    $this->logger->warning("custom_task.create.event_failed", [
+                        "task_id" => $task->id,
+                        "error" => $evtErr->getMessage()
+                    ]);
+                }
+
+                return [
+                    "success" => true,
+                    "message" => "وظیفه با موفقیت ثبت شد.",
+                    "task" => $task,
+                ];
+            }, $explicitKey);
+
+            $this->db->commit();
+            return $result;
+
         } catch (\Exception $e) {
-            $this->db->rollBack();
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             $this->logger->error("task.create.failed", [
                 "channel" => "task",
                 "error" => $e->getMessage(),

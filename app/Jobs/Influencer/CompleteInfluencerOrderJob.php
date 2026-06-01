@@ -6,13 +6,23 @@ namespace App\Jobs\Influencer;
 
 class CompleteInfluencerOrderJob
 {
+    private \App\Models\InfluencerOrder $orderModel;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\TransactionWrapper $transactionWrapper;
     public function __construct(
-        private \App\Models\InfluencerOrder $orderModel,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\TransactionWrapper $transactionWrapper
-    ) {}
+        \App\Models\InfluencerOrder $orderModel,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Contracts\LoggerInterface $logger,
+        \Core\TransactionWrapper $transactionWrapper
+    ) {        $this->orderModel = $orderModel;
+        $this->walletService = $walletService;
+        $this->appSettings = $appSettings;
+        $this->logger = $logger;
+        $this->transactionWrapper = $transactionWrapper;
+}
 
     public function handle(int $orderId, int $actorId, string $reason = 'completed'): array
 {

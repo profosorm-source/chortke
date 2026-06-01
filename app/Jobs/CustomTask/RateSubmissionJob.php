@@ -14,15 +14,29 @@ use Core\EventDispatcher;
 
 class RateSubmissionJob
 {
+    private Ads $taskModel;
+    private CustomTaskSubmissionModel $submissionModel;
+    private RatingService $ratingService;
+    private AppSettings $appSettings;
+    private Database $db;
+    private Logger $logger;
+    private EventDispatcher $eventDispatcher;
     public function __construct(
-        private Ads $taskModel,
-        private CustomTaskSubmissionModel $submissionModel,
-        private RatingService $ratingService,
-        private AppSettings $appSettings,
-        private Database $db,
-        private Logger $logger,
-        private EventDispatcher $eventDispatcher
-    ) {}
+        Ads $taskModel,
+        CustomTaskSubmissionModel $submissionModel,
+        RatingService $ratingService,
+        AppSettings $appSettings,
+        Database $db,
+        Logger $logger,
+        EventDispatcher $eventDispatcher
+    ) {        $this->taskModel = $taskModel;
+        $this->submissionModel = $submissionModel;
+        $this->ratingService = $ratingService;
+        $this->appSettings = $appSettings;
+        $this->db = $db;
+        $this->logger = $logger;
+        $this->eventDispatcher = $eventDispatcher;
+}
 
     public function handle(int $submissionId, int $raterId, array $ratingData): array
     {

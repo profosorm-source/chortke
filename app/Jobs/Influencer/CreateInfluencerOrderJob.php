@@ -6,14 +6,26 @@ namespace App\Jobs\Influencer;
 
 class CreateInfluencerOrderJob
 {
+    private \App\Services\Settings\AppSettings $appSettings;
+    private \App\Models\InfluencerOrder $orderModel;
+    private \App\Services\Shared\EscrowService $escrowService;
+    private \App\Contracts\WalletServiceInterface $walletService;
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\TransactionWrapper $transactionWrapper;
     public function __construct(
-        private \App\Services\Settings\AppSettings $appSettings,
-        private \App\Models\InfluencerOrder $orderModel,
-        private \App\Services\Shared\EscrowService $escrowService,
-        private \App\Contracts\WalletServiceInterface $walletService,
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\TransactionWrapper $transactionWrapper
-    ) {}
+        \App\Services\Settings\AppSettings $appSettings,
+        \App\Models\InfluencerOrder $orderModel,
+        \App\Services\Shared\EscrowService $escrowService,
+        \App\Contracts\WalletServiceInterface $walletService,
+        \App\Contracts\LoggerInterface $logger,
+        \Core\TransactionWrapper $transactionWrapper
+    ) {        $this->appSettings = $appSettings;
+        $this->orderModel = $orderModel;
+        $this->escrowService = $escrowService;
+        $this->walletService = $walletService;
+        $this->logger = $logger;
+        $this->transactionWrapper = $transactionWrapper;
+}
 
     public function handle(int $customerId, int $influencerId, array $data): array
     {

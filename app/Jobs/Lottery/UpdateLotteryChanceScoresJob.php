@@ -6,11 +6,17 @@ namespace App\Jobs\Lottery;
 
 class UpdateLotteryChanceScoresJob
 {
+    private \Core\Database $db;
+    private \App\Services\ScoreService $scoreService;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Services\ScoreService $scoreService,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\Database $db,
+        \App\Services\ScoreService $scoreService,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->scoreService = $scoreService;
+        $this->logger = $logger;
+}
 
 public function handle(int $roundId, string $date): array
     {

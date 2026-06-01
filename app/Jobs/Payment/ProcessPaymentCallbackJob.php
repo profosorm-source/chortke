@@ -4,12 +4,21 @@ declare(strict_types=1);
 
 namespace App\Jobs\Payment;
 
+use App\Services\Shared\IdempotencyService;
+
 class ProcessPaymentCallbackJob
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private \Core\Database $db;
+    private IdempotencyService $idempotencyService;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private \Core\Database $db
-    ) {}
+        \App\Contracts\LoggerInterface $logger,
+        \Core\Database $db,
+        IdempotencyService $idempotencyService
+    ) {        $this->logger = $logger;
+        $this->db = $db;
+        $this->idempotencyService = $idempotencyService;
+}
 
     public function handle(string $gatewayName, array $callbackData, ?int $sessionUserId = null, string $clientIp = '', string $userAgent = ''): array
     {
@@ -97,9 +106,12 @@ class ProcessPaymentCallbackJob
         }
     };
 
-    if (str_contains(get_class($this->idempotencyKey), 'Mockery')) {
-        return IdempotencyKey::wrap($idemKey, $userId, 'payment_callback', $callback, $callbackData);
-    }
-    return $this->idempotencyKey->wrapInstance($idemKey, $userId, 'payment_callback', $callback, $callbackData);
+    return $this->idempotencyService->executeWithTransaction(
+        'payment_callback',
+        $userId,
+        array_merge($callbackData, ['authority' => $authority]),
+        $callback,
+        $idemKey
+    );
 }
 }

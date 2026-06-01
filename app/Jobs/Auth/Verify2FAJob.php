@@ -6,11 +6,17 @@ namespace App\Jobs\Auth;
 
 class Verify2FAJob
 {
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Models\User $userModel;
+    private \App\Services\Auth\TwoFactorService $twoFactorService;
     public function __construct(
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Models\User $userModel,
-        private \App\Services\Auth\TwoFactorService $twoFactorService
-    ) {}
+        \App\Contracts\LoggerInterface $logger,
+        \App\Models\User $userModel,
+        \App\Services\Auth\TwoFactorService $twoFactorService
+    ) {        $this->logger = $logger;
+        $this->userModel = $userModel;
+        $this->twoFactorService = $twoFactorService;
+}
 
     public function handle(string $code): array
     {

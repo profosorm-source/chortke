@@ -6,9 +6,11 @@ namespace App\Jobs\Notification;
 
 class SendToAllNotificationJob
 {
+    private \App\Models\CryptoDeposit $model;
     public function __construct(
-        private \App\Models\CryptoDeposit $model
-    ) {}
+        \App\Models\CryptoDeposit $model
+    ) {        $this->model = $model;
+}
 
     public function handle(
         string  $title,

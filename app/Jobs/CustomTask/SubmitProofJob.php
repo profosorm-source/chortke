@@ -12,14 +12,26 @@ use App\Services\Settings\AppSettings;
 
 class SubmitProofJob
 {
+    private RateLimiter $rateLimiter;
+    private CustomTaskSubmissionModel $submissionModel;
+    private Ads $taskModel;
+    private AppSettings $appSettings;
+    private Logger $logger;
+    private EventDispatcher $eventDispatcher;
     public function __construct(
-        private RateLimiter $rateLimiter,
-        private CustomTaskSubmissionModel $submissionModel,
-        private Ads $taskModel,
-        private AppSettings $appSettings,
-        private Logger $logger,
-        private EventDispatcher $eventDispatcher
-    ) {}
+        RateLimiter $rateLimiter,
+        CustomTaskSubmissionModel $submissionModel,
+        Ads $taskModel,
+        AppSettings $appSettings,
+        Logger $logger,
+        EventDispatcher $eventDispatcher
+    ) {        $this->rateLimiter = $rateLimiter;
+        $this->submissionModel = $submissionModel;
+        $this->taskModel = $taskModel;
+        $this->appSettings = $appSettings;
+        $this->logger = $logger;
+        $this->eventDispatcher = $eventDispatcher;
+}
 
     public function handle(array $payload): array
     {

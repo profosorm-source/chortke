@@ -19,12 +19,20 @@ class HandleFacebookCallbackJob
         // Actually, registerFromOAuth is a private method in OAuthService. Let's just copy it to the Jobs that need it.
         return \Core\Container::getInstance()->make(\App\Services\OAuthService::class)->registerFromOAuth($userData);
     }
+    private \Core\Session $session;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Services\AuditTrail $auditTrail;
+    private array $oAuthConfig;
     public function __construct(
-        private \Core\Session $session,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Services\AuditTrail $auditTrail,
-        private array $oAuthConfig = []
-    ) {
+        \Core\Session $session,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Services\AuditTrail $auditTrail,
+        array $oAuthConfig = []
+    ) {        $this->session = $session;
+        $this->logger = $logger;
+        $this->auditTrail = $auditTrail;
+        $this->oAuthConfig = $oAuthConfig;
+
         $this->googleClientId = (string)($this->oAuthConfig['google_client_id'] ?? '');
         $this->googleClientSecret = (string)($this->oAuthConfig['google_client_secret'] ?? '');
         $this->googleRedirectUri = (string)($this->oAuthConfig['google_redirect_uri'] ?? '');

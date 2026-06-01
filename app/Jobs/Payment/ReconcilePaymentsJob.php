@@ -6,12 +6,20 @@ namespace App\Jobs\Payment;
 
 class ReconcilePaymentsJob
 {
+    private \Core\Database $db;
+    private \App\Contracts\LoggerInterface $logger;
+    private \App\Models\PaymentLog $log;
+    private \Core\EventDispatcher $eventDispatcher;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Contracts\LoggerInterface $logger,
-        private \App\Models\PaymentLog $log,
-        private \Core\EventDispatcher $eventDispatcher
-    ) {}
+        \Core\Database $db,
+        \App\Contracts\LoggerInterface $logger,
+        \App\Models\PaymentLog $log,
+        \Core\EventDispatcher $eventDispatcher
+    ) {        $this->db = $db;
+        $this->logger = $logger;
+        $this->log = $log;
+        $this->eventDispatcher = $eventDispatcher;
+}
 
     public function handle(): array
     {

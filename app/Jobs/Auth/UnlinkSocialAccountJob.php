@@ -19,10 +19,14 @@ class UnlinkSocialAccountJob
         // Actually, registerFromOAuth is a private method in OAuthService. Let's just copy it to the Jobs that need it.
         return \Core\Container::getInstance()->make(\App\Services\OAuthService::class)->registerFromOAuth($userData);
     }
+    private \Core\Database $db;
+    private array $oAuthConfig;
     public function __construct(
-        private \Core\Database $db,
-        private array $oAuthConfig = []
-    ) {
+        \Core\Database $db,
+        array $oAuthConfig = []
+    ) {        $this->db = $db;
+        $this->oAuthConfig = $oAuthConfig;
+
         $this->googleClientId = (string)($this->oAuthConfig['google_client_id'] ?? '');
         $this->googleClientSecret = (string)($this->oAuthConfig['google_client_secret'] ?? '');
         $this->googleRedirectUri = (string)($this->oAuthConfig['google_redirect_uri'] ?? '');

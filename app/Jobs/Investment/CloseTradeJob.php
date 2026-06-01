@@ -6,10 +6,14 @@ namespace App\Jobs\Investment;
 
 class CloseTradeJob
 {
+    private \App\Models\TradingRecord $tradingModel;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \App\Models\TradingRecord $tradingModel,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \App\Models\TradingRecord $tradingModel,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->tradingModel = $tradingModel;
+        $this->logger = $logger;
+}
 
     public function handle(int $tradeId, int $adminId, array $data): array
     {

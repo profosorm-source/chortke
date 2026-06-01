@@ -6,13 +6,23 @@ namespace App\Jobs\Prediction;
 
 class SettleGameJob
 {
+    private \Core\Database $db;
+    private \App\Services\StateMachineService $stateMachine;
+    private \App\Models\PredictionBet $betModel;
+    private \App\Services\AuditTrail $auditTrail;
+    private ?\App\Services\ScoreService $scoreService;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Services\StateMachineService $stateMachine,
-        private \App\Models\PredictionBet $betModel,
-        private \App\Services\AuditTrail $auditTrail,
-        private ?\App\Services\ScoreService $scoreService = null
-    ) {}
+        \Core\Database $db,
+        \App\Services\StateMachineService $stateMachine,
+        \App\Models\PredictionBet $betModel,
+        \App\Services\AuditTrail $auditTrail,
+        ?\App\Services\ScoreService $scoreService = null
+    ) {        $this->db = $db;
+        $this->stateMachine = $stateMachine;
+        $this->betModel = $betModel;
+        $this->auditTrail = $auditTrail;
+        $this->scoreService = $scoreService;
+}
 
     public function handle(int $gameId, string $result, int $adminId): array
     {

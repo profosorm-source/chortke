@@ -6,9 +6,11 @@ namespace App\Jobs\Influencer;
 
 class ConfirmInfluencerOrderJob
 {
+    private \App\Models\InfluencerOrder $orderModel;
     public function __construct(
-        private \App\Models\InfluencerOrder $orderModel
-    ) {}
+        \App\Models\InfluencerOrder $orderModel
+    ) {        $this->orderModel = $orderModel;
+}
 
     public function handle(int $orderId, int $customerId): array
     {

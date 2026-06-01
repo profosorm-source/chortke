@@ -12,13 +12,23 @@ use Core\EventDispatcher;
 
 class CronSubmissionsJob
 {
+    private CustomTaskSubmissionModel $submissionModel;
+    private CustomTaskModerationService $moderationService;
+    private AppSettings $appSettings;
+    private Logger $logger;
+    private EventDispatcher $eventDispatcher;
     public function __construct(
-        private CustomTaskSubmissionModel $submissionModel,
-        private CustomTaskModerationService $moderationService,
-        private AppSettings $appSettings,
-        private Logger $logger,
-        private EventDispatcher $eventDispatcher
-    ) {}
+        CustomTaskSubmissionModel $submissionModel,
+        CustomTaskModerationService $moderationService,
+        AppSettings $appSettings,
+        Logger $logger,
+        EventDispatcher $eventDispatcher
+    ) {        $this->submissionModel = $submissionModel;
+        $this->moderationService = $moderationService;
+        $this->appSettings = $appSettings;
+        $this->logger = $logger;
+        $this->eventDispatcher = $eventDispatcher;
+}
 
     public function autoApproveOldSubmissions(): int
     {

@@ -6,11 +6,17 @@ namespace App\Jobs\Prediction;
 
 class CancelGameJob
 {
+    private \Core\Database $db;
+    private \App\Services\StateMachineService $stateMachine;
+    private \App\Models\PredictionBet $betModel;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Services\StateMachineService $stateMachine,
-        private \App\Models\PredictionBet $betModel
-    ) {}
+        \Core\Database $db,
+        \App\Services\StateMachineService $stateMachine,
+        \App\Models\PredictionBet $betModel
+    ) {        $this->db = $db;
+        $this->stateMachine = $stateMachine;
+        $this->betModel = $betModel;
+}
 
     public function handle(int $gameId, int $adminId): array
     {

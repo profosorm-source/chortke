@@ -6,10 +6,14 @@ namespace App\Jobs\Influencer;
 
 class DisputeInfluencerOrderJob
 {
+    private \App\Models\InfluencerOrder $orderModel;
+    private \App\Services\Settings\AppSettings $appSettings;
     public function __construct(
-        private \App\Models\InfluencerOrder $orderModel,
-        private \App\Services\Settings\AppSettings $appSettings
-    ) {}
+        \App\Models\InfluencerOrder $orderModel,
+        \App\Services\Settings\AppSettings $appSettings
+    ) {        $this->orderModel = $orderModel;
+        $this->appSettings = $appSettings;
+}
 
     public function handle(int $orderId, int $customerId, string $reason): array
     {

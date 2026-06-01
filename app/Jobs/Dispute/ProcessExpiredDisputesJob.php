@@ -6,11 +6,17 @@ namespace App\Jobs\Dispute;
 
 class ProcessExpiredDisputesJob
 {
+    private \Core\Database $db;
+    private \App\Models\Dispute $disputeModel;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Models\Dispute $disputeModel,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\Database $db,
+        \App\Models\Dispute $disputeModel,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->disputeModel = $disputeModel;
+        $this->logger = $logger;
+}
 
     public function handle(): int
     {

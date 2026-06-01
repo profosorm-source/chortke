@@ -6,12 +6,20 @@ namespace App\Jobs\Payment;
 
 class RejectManualDepositJob
 {
+    private \Core\Database $db;
+    private \App\Models\ManualDeposit $model;
+    private \Core\EventDispatcher $eventDispatcher;
+    private \App\Contracts\LoggerInterface $logger;
     public function __construct(
-        private \Core\Database $db,
-        private \App\Models\ManualDeposit $model,
-        private \Core\EventDispatcher $eventDispatcher,
-        private \App\Contracts\LoggerInterface $logger
-    ) {}
+        \Core\Database $db,
+        \App\Models\ManualDeposit $model,
+        \Core\EventDispatcher $eventDispatcher,
+        \App\Contracts\LoggerInterface $logger
+    ) {        $this->db = $db;
+        $this->model = $model;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->logger = $logger;
+}
 
     public function handle(int $adminId, int $depositId, string $reason): array
     {
