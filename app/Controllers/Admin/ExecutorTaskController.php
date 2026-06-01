@@ -20,8 +20,8 @@ class ExecutorTaskController extends BaseAdminController
         CustomTaskSubmissionModel $submissionModel,
         DisputeService $disputeService,
         InteractionModel $interactionModel
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->customTaskService = $customTaskService;
         $this->submissionModel = $submissionModel;
         $this->disputeService = $disputeService;

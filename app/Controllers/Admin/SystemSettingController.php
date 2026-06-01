@@ -11,15 +11,18 @@ use Core\PathResolver;
 
 class SystemSettingController extends BaseAdminController
 {
-    private AppSettings $appSettings, SettingsManager $settingsManager;
+    private AppSettings $appSettings;
+    private SettingsManager $settingsManager;
     private UploadService $uploadService;
     private PathResolver $pathResolver;
     
     public function __construct(
-        AppSettings $appSettings, SettingsManager $settingsManager,
-        UploadService $uploadService
+        AppSettings $appSettings,
+        SettingsManager $settingsManager,
+        UploadService $uploadService,
+        ?\App\Contracts\LoggerInterface $logger = null
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->appSettings = $appSettings;
         $this->settingsManager = $settingsManager;
         $this->uploadService  = $uploadService;

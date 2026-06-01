@@ -15,9 +15,9 @@ class FraudController extends BaseAdminController
 {
     private FraudDetectionService $fraudService;
 
-    public function __construct(FraudDetectionService $fraudService)
+    public function __construct(FraudDetectionService $fraudService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->fraudService = $fraudService;
     }
 

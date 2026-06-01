@@ -25,7 +25,7 @@ class AccountDeletionManagementController extends BaseAdminController
         AccountDeletionService $deletionService,
         Logger $logger
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->userService = $userService;
         $this->deletionLogModel = $deletionLogModel;
         $this->deletionService = $deletionService;

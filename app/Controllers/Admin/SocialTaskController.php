@@ -36,8 +36,8 @@ class SocialTaskController extends BaseAdminController
         WalletServiceInterface $wallet,
         Database               $db,
         AuditTrail             $auditTrail
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->searchService = $searchService;
         $this->service       = $service;
         $this->trust         = $trust;

@@ -10,9 +10,9 @@ use App\Controllers\Admin\BaseAdminController;
  */
 class MaintenanceController extends BaseAdminController
 {
-    public function __construct()
+    public function __construct(?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
     }
 
     /**

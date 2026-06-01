@@ -22,9 +22,9 @@ class TicketController extends BaseAdminController
         \App\Models\TicketMessage $messageModel,
         \App\Models\TicketCategory $categoryModel,
         \App\Services\TicketService $ticketService,
-        SearchOrchestrator $searchService)
+        SearchOrchestrator $searchService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->ticketModel = $ticketModel;
         $this->messageModel = $messageModel;
         $this->categoryModel = $categoryModel;

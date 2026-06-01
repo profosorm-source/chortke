@@ -13,9 +13,9 @@ class RoleController extends BaseAdminController
     private \App\Models\Permission $permissionModel;
     public function __construct(
         \App\Models\Permission $permissionModel,
-        \App\Models\Role $roleModel)
+        \App\Models\Role $roleModel, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->permissionModel = $permissionModel;
         $this->roleModel = $roleModel;
     }

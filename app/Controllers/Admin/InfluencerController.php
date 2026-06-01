@@ -32,8 +32,8 @@ class InfluencerController extends BaseAdminController
         VerificationService      $verificationService,
         AuditTrail               $auditTrail,
         SearchOrchestrator $searchService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->profileModel       = $profileModel;
         $this->orderModel         = $orderModel;
         $this->disputeModel       = $disputeModel;

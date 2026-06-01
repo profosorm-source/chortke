@@ -6,11 +6,12 @@ use App\Models\UserLevel;
 use App\Models\UserLevelHistory;
 use App\Services\User\UserLevelService;
 use App\Controllers\Admin\BaseAdminController;
+use App\Contracts\WalletServiceInterface;
 
 class LevelController extends BaseAdminController
 {
     private \App\Services\Shared\ReferralService $referralService;
-    private \App\Services\Wallet\WalletServiceInterface $walletService;
+    private WalletServiceInterface $walletService;
     private \App\Services\User\UserLevelService $userLevelService;
     private \App\Models\UserLevelHistory $userLevelHistoryModel;
     private \App\Models\UserLevel $userLevelModel;
@@ -19,11 +20,11 @@ class LevelController extends BaseAdminController
         \App\Models\UserLevel $userLevelModel,
         \App\Models\UserLevelHistory $userLevelHistoryModel,
         \App\Services\User\UserLevelService $userLevelService,
-        \App\Services\Wallet\WalletServiceInterface $walletService,
+        WalletServiceInterface $walletService,
         \App\Services\Shared\ReferralService $referralService,
-        \App\Services\User\UserService $userService)
+        \App\Services\User\UserService $userService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->userLevelModel = $userLevelModel;
         $this->userLevelHistoryModel = $userLevelHistoryModel;
         $this->userLevelService = $userLevelService;

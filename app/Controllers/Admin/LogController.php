@@ -17,9 +17,9 @@ class LogController extends BaseAdminController
 {
     private LogService $logService;
 
-    public function __construct(LogService $logService)
+    public function __construct(LogService $logService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->logService = $logService;
     }
 
@@ -170,12 +170,17 @@ class LogController extends BaseAdminController
             return;
         }
 
-        // TODO: باید متدی برای دریافت یک لاگ خاص در LogService اضافه شود
-        
+        $log = $this->logService->findById($id, $type);
+        if (!$log) {
+            $this->session->setFlash('error', 'لاگ مورد نظر یافت نشد.');
+            redirect('/admin/logs/' . $type);
+            return;
+        }
+
         view('admin/logs/show', [
             'title' => 'جزئیات لاگ',
             'type' => $type,
-            'id' => $id,
+            'log' => $log,
         ]);
     }
 
@@ -284,12 +289,12 @@ class LogController extends BaseAdminController
      */
     private function getLogTypes(): array
     {
-        $types = [
-    LogService::TYPE_SYSTEM => 'لاگ‌های سیستم',
-    LogService::TYPE_ACTIVITY => 'لاگ‌های فعالیت',
-    LogService::TYPE_SECURITY => 'لاگ‌های امنیتی',
-    LogService::TYPE_PERFORMANCE => 'لاگ‌های عملکرد',
-];
+        return [
+            LogService::TYPE_SYSTEM => 'لاگ‌های سیستم',
+            LogService::TYPE_ACTIVITY => 'لاگ‌های فعالیت',
+            LogService::TYPE_SECURITY => 'لاگ‌های امنیتی',
+            LogService::TYPE_PERFORMANCE => 'لاگ‌های عملکرد',
+        ];
     }
 }
 

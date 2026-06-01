@@ -19,8 +19,8 @@ class CouponController extends BaseAdminController
         CouponRedemption $redemptionModel,
         CouponService $couponService,
         \App\Services\AuditTrail $auditTrail
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->couponModel     = $couponModel;
         $this->redemptionModel = $redemptionModel;
         $this->couponService   = $couponService;

@@ -21,8 +21,8 @@ class BannerController extends BaseAdminController
         SearchOrchestrator $searchService,
         \App\Models\Ads $banner,
         \App\Models\BannerPlacement $placement
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->bannerService = $bannerService;
         $this->uploadService = $uploadService;
         $this->searchService = $searchService;

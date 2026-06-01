@@ -22,9 +22,9 @@ class LotteryController extends BaseAdminController
         \App\Models\LotteryDailyNumber $lotteryDailyNumberModel,
         \App\Models\LotteryParticipation $lotteryParticipationModel,
         \App\Models\LotteryRound $lotteryRoundModel,
-        \App\Services\Lottery\LotteryService $lotteryService)
+        \App\Services\Lottery\LotteryService $lotteryService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->lotteryService = $lotteryService;
         $this->lotteryDailyNumberModel = $lotteryDailyNumberModel;
         $this->lotteryParticipationModel = $lotteryParticipationModel;

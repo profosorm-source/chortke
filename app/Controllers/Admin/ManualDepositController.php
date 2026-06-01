@@ -23,11 +23,11 @@ class ManualDepositController extends BaseAdminController
     BankCard $BankCardModel,
     UserService $userService,
     \App\Models\ManualDeposit $depositModel,
-    \App\Services\Wallet\WalletServiceInterface $walletService,
+    WalletServiceInterface $walletService,
     ManualDepositService $manualDepositService,
 	Logger $logger,
 ) {
-    parent::__construct();
+    parent::__construct(null, null, null, null, $logger);
     $this->BankCardModel = $BankCardModel;
     $this->userService = $userService;
     $this->depositModel = $depositModel;

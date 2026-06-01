@@ -20,7 +20,7 @@ class OnlinePaymentController extends BaseAdminController
         UserService $userService,
         Logger $logger
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->paymentService = $paymentService;
         $this->userService = $userService;
         $this->logger = $logger;

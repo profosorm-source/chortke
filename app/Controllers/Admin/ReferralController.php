@@ -7,10 +7,11 @@ use App\Services\User\UserService;
 use App\Models\ReferralCommission;
 use App\Services\Shared\ReferralService;
 use App\Controllers\Admin\BaseAdminController;
+use App\Contracts\WalletServiceInterface;
 
 class ReferralController extends BaseAdminController
 {
-    private \App\Services\Wallet\WalletServiceInterface $walletService;
+    private WalletServiceInterface $walletService;
     private ReferralService $referralService;
     private \App\Models\ReferralCommission $referralCommissionModel;
     private UserService $userService;
@@ -19,8 +20,8 @@ class ReferralController extends BaseAdminController
         \App\Models\ReferralCommission $referralCommissionModel,
         UserService $userService,
         ReferralService $referralService,
-        \App\Services\Wallet\WalletServiceInterface $walletService){
-        parent::__construct();
+        WalletServiceInterface $walletService, ?\App\Contracts\LoggerInterface $logger = null){
+        parent::__construct(null, null, null, null, $logger);
         $this->db = $db;
         $this->referralCommissionModel = $referralCommissionModel;
         $this->userService = $userService;

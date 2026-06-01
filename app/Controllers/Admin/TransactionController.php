@@ -12,9 +12,9 @@ class TransactionController extends BaseAdminController
     private WalletServiceInterface $walletService;
 
     public function __construct(UserService $userService,
-        WalletServiceInterface $walletService)
+        WalletServiceInterface $walletService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->userService = $userService;
         $this->walletService = $walletService;
     }

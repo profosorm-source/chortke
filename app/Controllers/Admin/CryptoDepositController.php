@@ -19,11 +19,11 @@ class CryptoDepositController extends BaseAdminController
     public function __construct(
     UserService $userService,
     \App\Models\CryptoDeposit $depositModel,
-    \App\Services\Wallet\WalletServiceInterface $walletService,
+    WalletServiceInterface $walletService,
     \App\Services\CryptoDeposit\CryptoDepositService $cryptoDepositService,
 	 Logger $logger,
 ) {
-    parent::__construct();
+    parent::__construct(null, null, null, null, $logger);
     $this->userService = $userService;
     $this->depositModel = $depositModel;
     $this->walletService = $walletService;

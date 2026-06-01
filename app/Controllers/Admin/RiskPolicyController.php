@@ -9,9 +9,9 @@ class RiskPolicyController extends BaseAdminController
 {
     private RiskPolicyService $policyService;
 
-    public function __construct(RiskPolicyService $policyService)
+    public function __construct(RiskPolicyService $policyService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->policyService = $policyService;
     }
 

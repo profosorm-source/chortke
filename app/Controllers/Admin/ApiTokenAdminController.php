@@ -14,8 +14,8 @@ class ApiTokenAdminController extends BaseAdminController
         ApiTokenService $apiTokenService,
         SearchOrchestrator $searchService,
         \App\Services\AuditTrail $auditTrail
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->apiTokenService = $apiTokenService;
         $this->searchService = $searchService;
         $this->auditTrail = $auditTrail;

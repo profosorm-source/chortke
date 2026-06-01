@@ -28,8 +28,8 @@ class ContentController extends BaseAdminController
         ContentService $contentService,
         BulkOperationsService $bulkService,
         SearchOrchestrator $searchService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->contentService = $contentService;
         $this->contentAgreementModel = $contentAgreementModel;
         $this->contentRevenueModel = $contentRevenueModel;

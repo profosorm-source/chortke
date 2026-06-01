@@ -8,7 +8,7 @@ class ScoreManagementController
 {
     private ScoreService $scoreService;
 
-    public function __construct(ScoreService $scoreService)
+    public function __construct(ScoreService $scoreService, ?\App\Contracts\LoggerInterface $logger = null)
     {
         $this->scoreService = $scoreService;
     }

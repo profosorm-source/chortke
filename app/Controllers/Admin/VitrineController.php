@@ -26,8 +26,8 @@ class VitrineController extends BaseAdminController
         VitrineSettingsService $settingsService,
         WalletServiceInterface $wallet,
         AuditTrail $auditTrail
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->service          = $service;
         $this->settingsService  = $settingsService;
         $this->wallet           = $wallet;

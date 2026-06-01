@@ -27,7 +27,7 @@ class AuditTrailController extends BaseAdminController
         AuditEvent $auditEventModel,
         SearchOrchestrator $searchService
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->exportService = $exportService;
         $this->logger = $logger;
         $this->auditTrail = $auditTrail;

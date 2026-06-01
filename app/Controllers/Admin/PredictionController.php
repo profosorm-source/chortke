@@ -21,12 +21,18 @@ class PredictionController extends BaseAdminController
         'other'      => 'سایر',
     ];
 
+    private PredictionGame $gameModel;
+    private PredictionBet $betModel;
+    private PredictionService $predictionService;
     public function __construct(
-        private PredictionGame    $gameModel,
-        private PredictionBet     $betModel,
-        private PredictionService $predictionService
-    ) {
-        parent::__construct();
+        PredictionGame $gameModel,
+        PredictionBet $betModel,
+        PredictionService $predictionService
+    , ?\App\Contracts\LoggerInterface $logger = null) {        $this->gameModel = $gameModel;
+        $this->betModel = $betModel;
+        $this->predictionService = $predictionService;
+
+        parent::__construct(null, null, null, null, $logger);
     }
 
     // ─── لیست بازی‌ها ─────────────────────────────────────────────────

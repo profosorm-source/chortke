@@ -29,7 +29,7 @@ class WithdrawalController extends BaseAdminController
         \Core\Logger $logger,
         ReconciliationService $reconciliationService
     ) {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->walletService = $walletService;
         $this->userService = $userService;
         $this->cardService = $bankCardService;

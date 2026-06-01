@@ -9,9 +9,9 @@ class PlacementController extends BaseAdminController
 {
     private BannerPlacement $placement;
 
-    public function __construct(BannerPlacement $placement)
+    public function __construct(BannerPlacement $placement, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->placement = $placement;
     }
 

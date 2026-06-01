@@ -18,7 +18,7 @@ class AdminAnalyticsController extends BaseAdminController
 
     public function __construct(AnalyticsService $analyticsService, Logger $logger)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->analyticsService = $analyticsService;
         $this->logger          = $logger;
     }

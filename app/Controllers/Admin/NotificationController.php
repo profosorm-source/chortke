@@ -14,8 +14,8 @@ class NotificationController extends BaseAdminController
     public function __construct(
         Notification        $model,
         NotificationService $notificationService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->model              = $model;
         $this->notificationService = $notificationService;
     }

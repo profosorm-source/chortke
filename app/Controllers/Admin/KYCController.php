@@ -16,9 +16,9 @@ class KYCController extends BaseAdminController
     public function __construct(
         UserService $userService,
         KYCService $kycService,
-        ValidatorFactoryInterface $validatorFactory)
+        ValidatorFactoryInterface $validatorFactory, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->userService = $userService;
         $this->kycService = $kycService;
         $this->validatorFactory = $validatorFactory;

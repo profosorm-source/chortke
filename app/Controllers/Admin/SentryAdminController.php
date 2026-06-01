@@ -29,8 +29,8 @@ class SentryAdminController extends BaseAdminController
         EscalationManager $escalation,
         AdvancedAuditTrail $audit,
         SentryModel $model
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->dashboard = $dashboard;
         $this->trendAnalyzer = $trendAnalyzer;
         $this->alertRules = $alertRules;

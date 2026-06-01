@@ -16,9 +16,9 @@ class UserController extends BaseAdminController
         UserService $userService,
         \App\Services\User\AccountDeletionService $deletionService,
         ValidatorFactoryInterface $validatorFactory
-    )
+    , ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->userService = $userService;
         $this->deletionService = $deletionService;
         $this->validatorFactory = $validatorFactory;

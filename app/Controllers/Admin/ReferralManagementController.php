@@ -9,9 +9,9 @@ class ReferralManagementController extends BaseAdminController
 {
     private ReferralManagementService $referralManagementService;
 
-    public function __construct(ReferralManagementService $referralManagementService)
+    public function __construct(ReferralManagementService $referralManagementService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->referralManagementService = $referralManagementService;
     }
 

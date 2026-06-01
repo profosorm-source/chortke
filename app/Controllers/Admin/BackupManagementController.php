@@ -16,7 +16,7 @@ class BackupManagementController extends BaseAdminController
 
     public function __construct(DatabaseService $databaseService, Logger $logger)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->databaseService = $databaseService;
         $this->logger = $logger;
     }

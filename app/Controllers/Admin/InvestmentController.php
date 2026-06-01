@@ -26,9 +26,9 @@ class InvestmentController extends BaseAdminController
         \App\Models\InvestmentWithdrawal $investmentWithdrawalModel,
         \App\Models\TradingRecord $tradingRecordModel,
         \App\Services\InvestmentService $investmentService,
-        SearchOrchestrator $searchService)
+        SearchOrchestrator $searchService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->investmentService = $investmentService;
         $this->investmentModel = $investmentModel;
         $this->investmentProfitModel = $investmentProfitModel;

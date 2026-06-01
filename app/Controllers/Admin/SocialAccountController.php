@@ -10,9 +10,9 @@ class SocialAccountController extends BaseAdminController
 {
     private SocialAccountService $socialAccountService;
 
-    public function __construct(SocialAccountService $socialAccountService)
+    public function __construct(SocialAccountService $socialAccountService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->socialAccountService = $socialAccountService;
     }
 

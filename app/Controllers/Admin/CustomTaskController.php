@@ -32,8 +32,8 @@ class CustomTaskController extends BaseAdminController
         CustomTaskSubmissionModel $submissionModel,
         DisputeService $disputeService,
         InteractionModel $interactionModel
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->searchService = $searchService;
         $this->customTaskService = $customTaskService;
         $this->analyticsService = $analyticsService;

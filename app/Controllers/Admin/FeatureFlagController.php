@@ -11,9 +11,9 @@ class FeatureFlagController extends BaseAdminController
     private FeatureFlagService $featureService;
     private FeatureFlagPolicy $policy;
     
-    public function __construct(FeatureFlagService $featureService, FeatureFlagPolicy $policy)
+    public function __construct(FeatureFlagService $featureService, FeatureFlagPolicy $policy, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->featureService = $featureService;
         $this->policy = $policy;
     }

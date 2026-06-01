@@ -19,8 +19,8 @@ class EmailQueueController extends BaseAdminController
         EmailService     $emailService,
         RedisEmailQueueService $emailQueueService,
         SearchOrchestrator $searchService
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->model = $model;
         $this->emailService = $emailService;
         $this->emailQueueService = $emailQueueService;

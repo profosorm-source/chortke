@@ -19,8 +19,8 @@ class SeoAdController extends BaseAdminController
         SeoExecution $e,
         DashboardStatsService $a,
         \App\Services\Seo\AdsSeoService $s
-    ) {
-        parent::__construct();
+    , ?\App\Contracts\LoggerInterface $logger = null) {
+        parent::__construct(null, null, null, null, $logger);
         $this->model = $m;
         $this->executionModel = $e;
         $this->analytics = $a;

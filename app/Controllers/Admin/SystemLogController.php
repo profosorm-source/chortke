@@ -16,7 +16,7 @@ class SystemLogController extends BaseAdminController
 
     public function __construct(Logger $logger, ExportService $exportService)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->logger = $logger;
         $this->exportService = $exportService;
     }

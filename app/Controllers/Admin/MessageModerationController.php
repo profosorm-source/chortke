@@ -14,9 +14,9 @@ class MessageModerationController extends BaseAdminController
 {
     protected MessageModerationService $moderationService;
 
-    public function __construct(MessageModerationService $moderationService)
+    public function __construct(MessageModerationService $moderationService, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->moderationService = $moderationService;
     }
 

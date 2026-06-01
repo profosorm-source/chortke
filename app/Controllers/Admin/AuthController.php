@@ -26,9 +26,9 @@ class AuthController extends BaseController
     private AuthService $authService;
     private RateLimiter $rateLimiter;
 
-    public function __construct(AuditTrail $auditTrail, AuthService $authService, RateLimiter $rateLimiter)
+    public function __construct(AuditTrail $auditTrail, AuthService $authService, RateLimiter $rateLimiter, ?\App\Contracts\LoggerInterface $logger = null)
     {
-        parent::__construct();
+        parent::__construct(null, null, null, null, $logger);
         $this->authService = $authService;
         $this->auditTrail = $auditTrail;
         $this->rateLimiter = $rateLimiter;
